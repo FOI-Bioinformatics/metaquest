@@ -86,12 +86,11 @@ _For each sub-command, use the `-h` or `--help` flag to get a detailed list of o
 
 ## Contributing
 
-Contributions to MetaQuest are highly appreciated! If you're interested in contributing, here's how you can do it:
+We welcome contributions to `metaquest`! Here's how you can help:
 
-1. **Fork** the repository.
-2. **Create** a new branch for your contributions.
-3. **Commit** your changes.
-4. **Open** a pull request.
-5. After a review and successful CI checks, your contributions will be merged.
-
-Please ensure you follow the coding conventions and guidelines.
+1. **Fork** the repository on GitHub.
+2. **Clone** your fork and create a new branch: `git checkout -b my-feature-branch`.
+3. Make your changes, **commit** them, and **push** the branch.
+4. Open a **pull request** against the `main` branch of the `metaquest` repository.
+5. Ensure your changes pass all checks and address any feedback provided by the maintainers.
+6. Once approved, your contribution will be merged. Thank you for contributing!
