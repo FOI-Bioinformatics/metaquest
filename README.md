@@ -1,7 +1,3 @@
-I understand now. Let's expand on the examples by explicitly stating the default values in the command examples. 
-
----
-
 # metaquest
 
 `metaquest` is a command-line tool designed to help users search through all SRA datasets to find containment of specified genomes. By analyzing the metadata information, it provides insights into where different species may be found.
@@ -85,8 +81,4 @@ We welcome contributions to `metaquest`! Whether you want to report a bug, sugge
 5. **Push to Your Fork**: Push your changes to your fork on GitHub.
 6. **Create a Pull Request**: From your fork, open a new pull request in the `metaquest` repository.
 
-Please ensure your code adheres to our coding conventions and standards. Before submitting a pull request, make sure all tests pass.
 
----
-
-This should provide a clearer picture for users who want to understand the default values used in each command.
