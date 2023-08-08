@@ -4,4 +4,7 @@ seaborn
 numpy
 umap-learn
 scikit-learn
+biopython
+upsetplot
+lxml
 # other dependencies
