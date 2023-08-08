@@ -157,7 +157,7 @@ def download_metadata(args):
     metadata_folder = Path(args.metadata_folder)
     metadata_folder.mkdir(exist_ok=True)
 
-    Entrez.email = "andreas.sjodin@gmail.com"  # Please replace with your email address
+    Entrez.email = args.email
 
     total_unique_accessions = 0
     accessions_to_download = 0
@@ -462,6 +462,7 @@ parser_heatmap.add_argument('--threshold', type=float, default=0.1, help='Thresh
 parser_heatmap.set_defaults(func=plot_heatmap)
 
 parser_download_metadata = subparsers.add_parser('download-metadata', help='Download metadata for each SRA accession in the .csv files in the matches directory')
+parser_download_metadata.add_argument('--email', required=True, help='Your email address for NCBI API access.')
 parser_download_metadata.add_argument('--matches_folder', default='matches', help='Folder containing match .csv files')
 parser_download_metadata.add_argument('--metadata_folder', default='metadata', help='Folder to save downloaded metadata')
 parser_download_metadata.add_argument('--dry-run', action='store_true', help='If enabled, no downloads are performed. Only calculates the total number of accessions and the number of accessions to download.')
