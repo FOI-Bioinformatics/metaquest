@@ -1,96 +1,92 @@
-# MetaQuest
+I understand now. Let's expand on the examples by explicitly stating the default values in the command examples. 
 
-**MetaQuest** is a unique tool designed to explore the Sequence Read Archive (SRA) datasets for containment of specified genomes. With the immense amount of data available in the SRA, it's crucial to discern where specific species may be found. MetaQuest simplifies this process by analyzing the metadata information, revealing the distribution and prevalence of particular genomes across multiple datasets.
+---
 
-## Features
+# metaquest
 
-- **Deep Dive into SRA**: Query the SRA database for genomes of interest efficiently.
-- **Summarize Data**: Generate concise reports detailing the containment of genomes across datasets.
-- **Advanced Visualizations**: Create UpSet plots, heatmaps, PCA, and UMAP to provide insights into data distribution.
+`metaquest` is a command-line tool designed to help users search through all SRA datasets to find containment of specified genomes. By analyzing the metadata information, it provides insights into where different species may be found.
 
 ## Installation
 
-_(Installation steps or instructions.)_
+```bash
+pip install metaquest
+```
 
 ## Usage
 
-The primary command-line interface for MetaQuest:
+### Running mastiff on genome data
 
-```
-metaquest.py <sub-command> [options]
-```
-
-### Sub-commands:
-
-#### 1. `mastiff`
-Runs mastiff on the genome data in the specified directory.
-```
-metaquest.py mastiff [options]
+```bash
+metaquest mastiff --genome-folder genomes --output-folder matches
 ```
 
-#### 2. `summarize`
-Summarizes the data from the `.csv` files in the matches directory.
-```
-metaquest.py summarize [options]
+### Summarizing the data
+
+```bash
+metaquest summarize --matches-folder matches --output-file summary.txt
 ```
 
-#### 3. `plot-upset`
-Generates an UpSet plot from the summary file.
-```
-metaquest.py plot-upset [options]
+### Generating UpSet plot from summary
+
+```bash
+metaquest plot-upset --summary-file summary.txt --upset-plot-file upset.png
 ```
 
-#### 4. `plot_heatmap`
-Creates a heatmap from the summary file with a user-defined threshold.
-```
-metaquest.py plot_heatmap [options]
+### Generating a heatmap
+
+```bash
+metaquest plot_heatmap --summary-file summary.txt --heatmap-file heatmap.png --threshold 0.1
 ```
 
-#### 5. `download-metadata`
-Downloads metadata for each SRA accession in the `.csv` files in the matches directory.
-```
-metaquest.py download-metadata [options]
+### Downloading metadata for each SRA accession
+
+```bash
+metaquest download-metadata --matches-folder matches --output-folder metadata
 ```
 
-#### 6. `parse-metadata`
-Parses metadata for each `*_metadata.xml` file in the designated directory.
-```
-metaquest.py parse-metadata [options]
+### Parsing metadata
+
+```bash
+metaquest parse-metadata --metadata-folder metadata
 ```
 
-#### 7. `single_sample`
-Counts the occurrences of unique values in a column for an individual sample.
-```
-metaquest.py single_sample [options]
+### Counting occurrences for a single sample
+
+```bash
+metaquest single_sample --sample-file sample.csv
 ```
 
-#### 8. `genome_count`
-Collates genome counts and exports a table with sample files.
-```
-metaquest.py genome_count [options]
+### Collecting genome counts
+
+```bash
+metaquest genome_count --matches-folder matches --output-file genome_count.txt
 ```
 
-#### 9. `download-sra`
-Downloads SRA data for each unique SRA accession in the `.csv` files in the matches directory.
-```
-metaquest.py download-sra [options]
+### Downloading SRA data
+
+```bash
+metaquest download-sra --matches-folder matches --output-folder fastq
 ```
 
-#### 10. `assemble`
-Assembles datasets for each `.fastq.gz` file in the fastq folder.
-```
-metaquest.py assemble [options]
-```
+### Assembling datasets
 
-_For each sub-command, use the `-h` or `--help` flag to get a detailed list of options._
+```bash
+metaquest assemble --fastq-folder fastq --output-folder assemblies
+```
 
 ## Contributing
 
-We welcome contributions to `metaquest`! Here's how you can help:
+We welcome contributions to `metaquest`! Whether you want to report a bug, suggest a feature, or contribute code, your input is valuable. Here's how to get started:
 
-1. **Fork** the repository on GitHub.
-2. **Clone** your fork and create a new branch: `git checkout -b my-feature-branch`.
-3. Make your changes, **commit** them, and **push** the branch.
-4. Open a **pull request** against the `main` branch of the `metaquest` repository.
-5. Ensure your changes pass all checks and address any feedback provided by the maintainers.
-6. Once approved, your contribution will be merged. Thank you for contributing!
+1. **Fork the Repository**: Create your own fork of the `metaquest` repository.
+2. **Clone Your Fork**: Clone your fork to your local machine and set the upstream repository.
+3. **Create a New Branch**: Make a new branch for your feature or bugfix.
+4. **Make Your Changes**: Implement your feature or fix the bug and commit your changes.
+5. **Push to Your Fork**: Push your changes to your fork on GitHub.
+6. **Create a Pull Request**: From your fork, open a new pull request in the `metaquest` repository.
+
+Please ensure your code adheres to our coding conventions and standards. Before submitting a pull request, make sure all tests pass.
+
+---
+
+This should provide a clearer picture for users who want to understand the default values used in each command.
