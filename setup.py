@@ -25,6 +25,9 @@ setup(
         'numpy',
         'umap-learn',
         'scikit-learn',
+        'biopython',
+        'upsetplot',
+        'lxml',
         # other dependencies
     ],
     python_requires='>=3.6',
