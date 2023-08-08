@@ -24,6 +24,22 @@ from sklearn.preprocessing import StandardScaler
 # Sets up the logging module to write the logging output to 'pipeline.log' file. The log messages are set to level INFO.
 logging.basicConfig(filename='pipeline.log', level=logging.INFO)
 
+
+def download_fasta(args):
+    Entrez.email = args.email  # Set the email
+    
+    with open(args.accession_file, 'r') as f:
+        accessions = [line.strip() for line in f.readlines()]
+
+    for accession in accessions:
+        handle = Entrez.efetch(db="nucleotide", id=accession, rettype="fasta", retmode="text")
+        record = SeqIO.read(handle, "fasta")
+        handle.close()
+        filename = f"{args.output_folder}/{accession}.fasta"
+        with open(filename, "w") as f:
+            SeqIO.write(record, f, "fasta")
+        print(f"{accession} downloaded and saved as {filename}")
+
 # Function 'run_mastiff' runs the 'mastiff' command on each '.fasta' file in the 'genomes_folder'.
 
 def run_mastiff(args):
@@ -435,6 +451,13 @@ parser = argparse.ArgumentParser()
 subparsers = parser.add_subparsers()
 
 # Each subparser corresponds to a function that the script can perform.
+
+parser_download_fasta = subparsers.add_parser('download-fasta', help='Download fasta files from NCBI based on accessions.')
+parser_download_fasta.add_argument('--email', required=True, help='Your email address for NCBI API access.')
+parser_download_fasta.add_argument('--accession-file', required=True, help='File containing accessions, one per line.')
+parser_download_fasta.add_argument('--output-folder', default='genomes', help='Folder to save downloaded fasta files.')
+parser_download_fasta.set_defaults(func=download_fasta)
+
 
 parser_mastiff = subparsers.add_parser('mastiff', help='Runs mastiff on the genome data in the specified folder.')
 parser_mastiff.add_argument('--genomes-folder', default='genomes', help='Folder containing the genomes to be analyzed.')
