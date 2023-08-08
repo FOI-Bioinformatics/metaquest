@@ -1,65 +1,97 @@
-# METAQUEST: Metagenomic Table Query and Extraction System for Public Datasets
+# MetaQuest
 
-## Introduction
+**MetaQuest** is a unique tool designed to explore the Sequence Read Archive (SRA) datasets for containment of specified genomes. With the immense amount of data available in the SRA, it's crucial to discern where specific species may be found. MetaQuest simplifies this process by analyzing the metadata information, revealing the distribution and prevalence of particular genomes across multiple datasets.
 
-METAQUEST is a command-line tool designed to fetch, analyze, and visualize data from metagenomic datasets. It can run various operations such as fetching metadata, summarizing matches, generating plots, downloading sequence read archives (SRA) data, and assembling datasets.
+## Features
 
-## Requirements
-
-- Python 3.6 or later
-- BioPython
-- upsetplot
-- pandas
-- numpy
-- lxml
-
-These dependencies can be installed automatically when you install METAQUEST.
+- **Deep Dive into SRA**: Query the SRA database for genomes of interest efficiently.
+- **Summarize Data**: Generate concise reports detailing the containment of genomes across datasets.
+- **Advanced Visualizations**: Create UpSet plots, heatmaps, PCA, and UMAP to provide insights into data distribution.
 
 ## Installation
 
-First, download the METAQUEST software. Then navigate to the directory containing the `setup.py` file and run the following commands:
-
-```bash
-python setup.py sdist bdist_wheel
-pip install .
-```
+_(Installation steps or instructions.)_
 
 ## Usage
 
-METAQUEST provides several commands, each corresponding to a different function of the software:
+The primary command-line interface for MetaQuest:
 
-1. **mastiff**: Runs the 'mastiff' command on each '.fasta' file in the 'genomes_folder'.
+```
+metaquest.py <sub-command> [options]
+```
 
-    Example: `metaquest mastiff --genomes-folder genomes --matches-folder matches`
+### Sub-commands:
 
-2. **summarize**: Reads the '.csv' files in the 'matches_folder' and creates a summary dataframe.
+#### 1. `mastiff`
+Runs mastiff on the genome data in the specified directory.
+```
+metaquest.py mastiff [options]
+```
 
-    Example: `metaquest summarize --matches-folder matches --summary-file SRA-summary.txt`
+#### 2. `summarize`
+Summarizes the data from the `.csv` files in the matches directory.
+```
+metaquest.py summarize [options]
+```
 
-3. **plot-upset**: Reads the summary file and generates an UpSet plot.
+#### 3. `plot-upset`
+Generates an UpSet plot from the summary file.
+```
+metaquest.py plot-upset [options]
+```
 
-    Example: `metaquest plot-upset --summary-file SRA-summary.txt --upset-plot-file upset_plot.png`
+#### 4. `plot_heatmap`
+Creates a heatmap from the summary file with a user-defined threshold.
+```
+metaquest.py plot_heatmap [options]
+```
 
-4. **download-metadata**: Downloads the metadata for each SRA accession in the '.csv' files in the 'matches_folder'.
+#### 5. `download-metadata`
+Downloads metadata for each SRA accession in the `.csv` files in the matches directory.
+```
+metaquest.py download-metadata [options]
+```
 
-    Example: `metaquest download-metadata --matches-folder matches --metadata-folder metadata --dry-run`
+#### 6. `parse-metadata`
+Parses metadata for each `*_metadata.xml` file in the designated directory.
+```
+metaquest.py parse-metadata [options]
+```
 
-5. **parse-metadata**: Parses the metadata for each '_metadata.xml' file in the 'metadata_folder'.
+#### 7. `single_sample`
+Counts the occurrences of unique values in a column for an individual sample.
+```
+metaquest.py single_sample [options]
+```
 
-    Example: `metaquest parse-metadata --metadata-folder metadata --metadata-table-file metadata_table.txt`
+#### 8. `genome_count`
+Collates genome counts and exports a table with sample files.
+```
+metaquest.py genome_count [options]
+```
 
-6. **download-sra**: Downloads the SRA data for each unique SRA accession in the '.csv' files in the 'matches_folder'.
+#### 9. `download-sra`
+Downloads SRA data for each unique SRA accession in the `.csv` files in the matches directory.
+```
+metaquest.py download-sra [options]
+```
 
-    Example: `metaquest download-sra --matches-folder matches --fastq-folder fastq`
+#### 10. `assemble`
+Assembles datasets for each `.fastq.gz` file in the fastq folder.
+```
+metaquest.py assemble [options]
+```
 
-7. **assemble**: Assembles datasets for each '.fastq.gz' file in the 'fastq_folder'.
+_For each sub-command, use the `-h` or `--help` flag to get a detailed list of options._
 
-    Example: `metaquest assemble`
+## Contributing
 
-If you do not provide any command, METAQUEST will print a usage message.
+Contributions to MetaQuest are highly appreciated! If you're interested in contributing, here's how you can do it:
 
-Each command also accepts arguments to customize its behavior. To see a list of available arguments for a command, use the `-h` or `--help` option with the command, like so: `metaquest command --help`.
+1. **Fork** the repository.
+2. **Create** a new branch for your contributions.
+3. **Commit** your changes.
+4. **Open** a pull request.
+5. After a review and successful CI checks, your contributions will be merged.
 
-## Conclusion
-
-METAQUEST is a powerful tool for working with metagenomic datasets. It provides a range of functionalities and is customizable via command-line arguments. This makes it a versatile tool for many bioinformatics workflows.
+Please ensure you follow the coding conventions and guidelines.
