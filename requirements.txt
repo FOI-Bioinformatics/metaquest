@@ -1,0 +1,7 @@
+pandas
+matplotlib
+seaborn
+numpy
+umap-learn
+scikit-learn
+# other dependencies
