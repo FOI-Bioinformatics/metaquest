@@ -32,7 +32,7 @@ jobs:
         chmod +x mastiff
         mkdir -p $HOME/.local/bin
         cp mastiff $HOME/.local/bin/mastiff
-        echo ::add-path::$HOME/.local/bin
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
         mastiff --version
 
     - name: Download Fasta from NCBI
