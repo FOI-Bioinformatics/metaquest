@@ -50,4 +50,4 @@ jobs:
       run: metaquest download-metadata --email andreas.sjodin@gmail.com --matches_folder matches --metadata_folder metadata --threshold 0.95
 
     - name: Parse Metadata
-      run: parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
+      run: metaquest parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
