@@ -30,7 +30,9 @@ jobs:
       run: |
         curl -o mastiff -L https://github.com/sourmash-bio/mastiff/releases/latest/download/mastiff-client-x86_64-unknown-linux-musl
         chmod +x mastiff
-        echo "$PWD" >> $GITHUB_PATH
+        mkdir -p $HOME/.local/bin
+        cp mastiff $HOME/.local/bin/mastiff
+        echo ::add-path::$HOME/.local/bin
         mastiff --version
 
     - name: Download Fasta from NCBI
