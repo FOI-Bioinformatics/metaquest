@@ -1,0 +1,53 @@
+name: MetaQuest Automation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  run_metaquest:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v2
+      
+    - name: Setup Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
+
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Install metaquest
+      run: |
+        pip install .
+
+    - name: Download and setup Mastiff
+      run: |
+        curl -o mastiff -L https://github.com/sourmash-bio/mastiff/releases/latest/download/mastiff-client-x86_64-unknown-linux-musl
+        chmod +x mastiff
+        mkdir -p $HOME/.local/bin
+        cp mastiff $HOME/.local/bin/mastiff
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        mastiff --version
+
+    - name: Download Fasta from NCBI
+      run: |
+        metaquest  download-test-genome
+
+    - name: Run Mastiff
+      run: |
+        metaquest mastiff --genomes-folder genomes --matches-folder matches
+
+    - name: Summarize
+      run: metaquest summarize --matches-folder matches --summary-file summary.txt --containment-file containment.txt
+
+    - name: Download Metadata
+      run: metaquest download-metadata --email andreas.sjodin@gmail.com --matches_folder matches --metadata_folder metadata --threshold 0.95
+
+    - name: Parse Metadata
+      run: metaquest parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
