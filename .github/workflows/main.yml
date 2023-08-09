@@ -26,6 +26,13 @@ jobs:
       run: |
         pip install .
 
+    - name: Download and setup Mastiff
+      run: |
+        curl -o mastiff -L https://github.com/sourmash-bio/mastiff/releases/latest/download/mastiff-client-x86_64-unknown-linux-musl
+        chmod +x mastiff
+        echo "$(pwd)" >> $GITHUB_PATH  # Add the current directory to the PATH
+        mastiff --version
+
     - name: Download Fasta from NCBI
       run: |
         metaquest  download-test-genome
