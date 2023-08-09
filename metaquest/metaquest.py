@@ -29,26 +29,27 @@ logging.basicConfig(filename='pipeline.log', level=logging.INFO)
 
 def download_test_genome(args):
     url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/008/985/GCF_000008985.1_ASM898v1/GCF_000008985.1_ASM898v1_genomic.fna.gz"
+    output_folder = Path(args.output_folder)
+    output_folder.mkdir(exist_ok=True)  # Ensure the output directory exists
 
-    # Define the local file path for temporary storage of the gzipped file
-    local_gz_file = os.path.join(args.output_folder, "temp_genome.fna.gz")
+    # Define the local gz file path
+    local_gz_file = output_folder / "temp_genome.fna.gz"
 
-    # Download the compressed fasta file and save it temporarily
+    # Download the compressed fasta file
     urllib.request.urlretrieve(url, local_gz_file)
 
-    # Define the path for the decompressed output
-    output_path = os.path.join(args.output_folder, "GCF_000008985.1.fasta")
-
     # Decompress the fasta file and save it to the output folder
-    with gzip.open(local_gz_file, 'rt') as fh:
-        with open(output_path, 'w') as out:
-            out.write(fh.read())
+    with gzip.open(local_gz_file, 'rt') as fh:  # Open the gzip file in text mode for reading
+        genome_data = fh.read()
 
-    # Remove the temporary gzipped file
-    os.remove(local_gz_file)
+    output_path = output_folder / "GCF_000008985.1.fasta"
+    with open(output_path, 'w') as out:
+        out.write(genome_data)
+
+    # Optionally, remove the temporary compressed file
+    local_gz_file.unlink()
 
     print(f"Downloaded and saved test genome to {output_path}")
-
 
 
 # Function 'run_mastiff' runs the 'mastiff' command on each '.fasta' file in the 'genomes_folder'.
