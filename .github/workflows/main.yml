@@ -51,3 +51,9 @@ jobs:
 
     - name: Parse Metadata
       run: metaquest parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
+
+    - name: Genome Count
+      run: metaquest genome_count --summary-file summary.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95  --output-file genome_counts.txt
+
+    - name: Single Sample
+      run: metaquest single_sample --summary-file summary.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column  Sample_Scientific_Name  --threshold 0.95
