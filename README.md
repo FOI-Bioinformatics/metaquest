@@ -6,7 +6,7 @@
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/<your_username>/MetaQuest.git
+git clone https://github.com/FOI-Bioinformatics/MetaQuest.git
 cd MetaQuest
 ```
 
