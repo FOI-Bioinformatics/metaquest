@@ -4,71 +4,96 @@
 
 ## Installation
 
+1. Clone the repository:
 ```bash
-pip install metaquest
+git clone https://github.com/<your_username>/MetaQuest.git
+cd MetaQuest
 ```
+
+2. Install the requirements:
+```bash
+pip install -r requirements.txt
+```
+
+3. Install MetaQuest:
+```bash
+python setup.py install
+```
+
 
 ## Usage
 
-### Running mastiff on genome data
+### 1. Downloading Test Genome
+To get started, you can download a test genome using the `download-test-genome` command. This command fetches a sample genome from NCBI based on a predefined accession number.
 
 ```bash
-metaquest mastiff --genome-folder genomes --output-folder matches
+metaquest download-test-genome
 ```
 
-### Summarizing the data
+### 2. Running Mastiff
+
+After acquiring the genome, you can run the `mastiff` command to search for matches in the SRA.
 
 ```bash
-metaquest summarize --matches-folder matches --output-file summary.txt
+metaquest mastiff --genomes-folder genomes --matches-folder matches
 ```
 
-### Generating UpSet plot from summary
+* `genomes-folder`: The directory where genome files are located.
+* `matches-folder`: The directory where the results will be saved.
+
+### 3. Summarizing Results
+
+After the `mastiff` run, you can summarize the results using the `summarize` command. This will generate a summary file and a containment file.
 
 ```bash
-metaquest plot-upset --summary-file summary.txt --upset-plot-file upset.png
+metaquest summarize --matches-folder matches --summary-file summary.txt --containment-file containment.txt
 ```
 
-### Generating a heatmap
+*Example output:* summary.txt and containment.txt
+
+### 4. Downloading Metadata
+
+To get additional information about each SRA dataset, you can download metadata using the `download-metadata` command.
 
 ```bash
-metaquest plot_heatmap --summary-file summary.txt --heatmap-file heatmap.png --threshold 0.1
+metaquest download-metadata --matches-folder matches --metadata-folder metadata --threshold 0.95
 ```
 
-### Downloading metadata for each SRA accession
+* `matches-folder`: Directory containing match files.
+* `metadata-folder`: Directory where the metadata files will be saved.
+* `threshold`: Only consider matches with containment above this threshold.
+
+### 5. Parsing Metadata
+
+Once the metadata is downloaded, you can parse it to generate a more concise and readable format.
 
 ```bash
-metaquest download-metadata --matches-folder matches --output-folder metadata
+metaquest parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
 ```
 
-### Parsing metadata
+*Example output:* parsed_metadata.txt
+
+### 6. Genome Count
+
+This step helps in understanding the distribution of genomes across different datasets.
 
 ```bash
-metaquest parse-metadata --metadata-folder metadata
+metaquest genome_count --summary-file summary.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95  --output-file genome_counts.txt
 ```
 
-### Counting occurrences for a single sample
+*Example output:* genome_counts.txt
+
+### 7. Single Sample Analysis
+
+To analyze a single sample from the summary, you can use the `single_sample` command.
 
 ```bash
-metaquest single_sample --sample-file sample.csv
+metaquest single_sample --summary-file summary.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column Sample_Scientific_Name --threshold 0.95
 ```
 
-### Collecting genome counts
+*Example output:* collected_stats.txt
 
-```bash
-metaquest genome_count --matches-folder matches --output-file genome_count.txt
-```
 
-### Downloading SRA data
-
-```bash
-metaquest download-sra --matches-folder matches --output-folder fastq
-```
-
-### Assembling datasets
-
-```bash
-metaquest assemble --fastq-folder fastq --output-folder assemblies
-```
 
 ## Contributing
 
