@@ -2,6 +2,12 @@
 import pandas as pd
 from Bio import Entrez
 from pathlib import Path
+import csv
+import logging
+from urllib.error import HTTPError
+import time
+from lxml import etree
+
 
 
 def download_metadata(args):
