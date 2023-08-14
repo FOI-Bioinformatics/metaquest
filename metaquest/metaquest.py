@@ -2,7 +2,7 @@
 import argparse
 from metaquest.data_processing import summarize, count_single_sample, download_test_genome, run_mastiff
 from metaquest.visualization import plot_heatmap
-from metaquest.metadata_handler import download_metadata, parse_metadata
+from metaquest.metadata import download_metadata, parse_metadata
 
 # argparse setup
 def main():
