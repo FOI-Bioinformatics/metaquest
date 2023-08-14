@@ -24,43 +24,66 @@ def main():
     parser_mastiff.set_defaults(func=run_mastiff)
     
     # Summarize command
-    parser_summarize = subparsers.add_parser('summarize', help='Summarize matches from MASH')
-    parser_summarize.add_argument('--matches-folder', required=True, help='Folder containing _matches.csv files from MASH')
-    parser_summarize.add_argument('--summary-file', required=True, help='Output summary file')
-    parser_summarize.add_argument('--containment-file', required=True, help='Output containment file')
+    parser_summarize = subparsers.add_parser('summarize',
+                                             help='Summarizes the data from the .csv files in the matches directory.')
+    parser_summarize.add_argument('--matches-folder', default='matches',
+                                  help='Folder containing the matches to be summarized.')
+    parser_summarize.add_argument('--summary-file', default='SRA-summary.txt',
+                                  help='File where the summary will be stored.')
+    parser_summarize.add_argument('--containment-file', default='top_containments.txt',
+                                  help='File where the top containments will be stored.')
     parser_summarize.set_defaults(func=summarize)
 
     # Download metadata command
-    parser_download_metadata = subparsers.add_parser('download-metadata', help='Download metadata from NCBI')
-    parser_download_metadata.add_argument('--email', required=True, help='Email for NCBI Entrez')
-    parser_download_metadata.add_argument('--matches-folder', required=True, help='Folder containing _matches.csv files')
-    parser_download_metadata.add_argument('--metadata-folder', required=True, help='Folder to save metadata')
-    parser_download_metadata.add_argument('--threshold', type=float, default=0.0, help='Containment threshold')
+    parser_download_metadata = subparsers.add_parser('download-metadata',
+                                                     help='Download metadata for each SRA accession in the .csv files in the matches directory')
+    parser_download_metadata.add_argument('--email', required=True, help='Your email address for NCBI API access.')
+    parser_download_metadata.add_argument('--matches_folder', default='matches',
+                                          help='Folder containing match .csv files')
+    parser_download_metadata.add_argument('--metadata_folder', default='metadata',
+                                          help='Folder to save downloaded metadata')
+    parser_download_metadata.add_argument('--threshold', type=float, default=0.0,
+                                          help="Threshold for containment values (default: 0.0)")
+    parser_download_metadata.add_argument('--dry-run', action='store_true',
+                                          help='If enabled, no downloads are performed. Only calculates the total number of accessions and the number of accessions to download.')
     parser_download_metadata.set_defaults(func=download_metadata)
 
     # Parse metadata command
-    parser_parse_metadata = subparsers.add_parser('parse-metadata', help='Parse metadata from XML')
-    parser_parse_metadata.add_argument('--metadata-folder', required=True, help='Folder containing downloaded metadata XML files')
-    parser_parse_metadata.add_argument('--metadata-table-file', required=True, help='Output metadata table file')
+    parser_parse_metadata = subparsers.add_parser('parse-metadata',
+                                                  help='Parse metadata for each *_metadata.xml file in the specified directory')
+    parser_parse_metadata.add_argument('--metadata-folder', default='metadata',
+                                       help='Folder containing *_metadata.xml files to parse')
+    parser_parse_metadata.add_argument('--metadata-table-file', default='metadata_table.txt',
+                                       help='File where the parsed metadata will be stored')
     parser_parse_metadata.set_defaults(func=parse_metadata)
 
     # Count single sample command
-    parser_count_single_sample = subparsers.add_parser('count_single_sample', help='Count single sample')
-    parser_count_single_sample.add_argument('--summary-file', required=True, help='Input summary file')
-    parser_count_single_sample.add_argument('--metadata-file', required=True, help='Input metadata file')
-    parser_count_single_sample.add_argument('--metadata-column', required=True, help='Column in metadata file to count')
-    parser_count_single_sample.add_argument('--threshold', type=float, default=0.0, help='Containment threshold')
-    parser_count_single_sample.add_argument('--output-file', required=True, help='Output file for genome counts')
-    parser_count_single_sample.set_defaults(func=count_single_sample)
+    parser_single_sample = subparsers.add_parser('single_sample',
+                                                 help='Counts the occurrences of unique values in a column for a single sample.')
+    parser_single_sample.add_argument('--summary-file', default='SRA-summary.txt', help='Path to the summary file.')
+    parser_single_sample.add_argument('--metadata-file', default='metadata_table.txt',
+                                      help='Path to the metadata file.')
+    parser_single_sample.add_argument('--summary-column', required=True,
+                                      help='Name of the column in the summary file to compare with the threshold.')
+    parser_single_sample.add_argument('--metadata-column', required=True,
+                                      help='Name of the column in the metadata file to count the unique values of.')
+    parser_single_sample.add_argument('--threshold', type=float, default=0.1,
+                                      help='Threshold for the column in the summary file.')
+    parser_single_sample.add_argument('--top-n', type=int, default=100, help='Number of top items to keep.')
+    parser_single_sample.set_defaults(func=count_single_sample)
 
     # Collect genome counts command
-    parser_collect_genome_counts = subparsers.add_parser('collect_genome_counts', help='Collect genome counts')
-    parser_collect_genome_counts.add_argument('--summary-file', required=True, help='Input summary file')
-    parser_collect_genome_counts.add_argument('--metadata-file', required=True, help='Input metadata file')
-    parser_collect_genome_counts.add_argument('--metadata-column', required=True, help='Column in metadata file to count')
-    parser_collect_genome_counts.add_argument('--threshold', type=float, default=0.0, help='Containment threshold')
-    parser_collect_genome_counts.add_argument('--output-file', required=True, help='Output file for genome counts')
-    parser_collect_genome_counts.set_defaults(func=collect_genome_counts)
+    parser_genome_count = subparsers.add_parser('genome_count',
+                                                help='Collects genome counts and outputs a table with sample files.')
+    parser_genome_count.add_argument('--summary-file', default='SRA-summary.txt', help='Path to the summary file.')
+    parser_genome_count.add_argument('--metadata-file', default='metadata_table.txt', help='Path to the metadata file.')
+    parser_genome_count.add_argument('--metadata-column', required=True, help='Name of the column in th metadata fil.')
+    parser_genome_count.add_argument('--threshold', type=float, default=0.5,
+                                     help='Threshold for the column in the summary file.')
+    parser_genome_count.add_argument('--output-file', default='collected_table.txt', help='Path to the output file.')
+    parser_genome_count.add_argument('--stat-file', default="collected_stats.txt", help='Path to the statistics file.')
+    parser_genome_count.set_defaults(func=collect_genome_counts)
+
     
     # Plot heatmap command
     parser_plot_heatmap = subparsers.add_parser('plot_heatmap', help='Plot heatmap from summary')
