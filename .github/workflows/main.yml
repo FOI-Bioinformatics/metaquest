@@ -37,7 +37,7 @@ jobs:
 
     - name: Download Fasta from NCBI
       run: |
-        metaquest  download-test-genome
+        metaquest download_test_genome
 
     - name: Run Mastiff
       run: |
