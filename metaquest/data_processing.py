@@ -4,6 +4,48 @@ import pandas as pd
 import numpy as np
 
 
+
+def download_test_genome(args):
+    url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/008/985/GCF_000008985.1_ASM898v1/GCF_000008985.1_ASM898v1_genomic.fna.gz"
+    output_folder = Path(args.output_folder)
+    output_folder.mkdir(exist_ok=True)  # Ensure the output directory exists
+
+    # Define the local gz file path
+    local_gz_file = output_folder / "temp_genome.fna.gz"
+
+    # Download the compressed fasta file
+    urllib.request.urlretrieve(url, local_gz_file)
+
+    # Decompress the fasta file and save it to the output folder
+    with gzip.open(local_gz_file, 'rt') as fh:  # Open the gzip file in text mode for reading
+        genome_data = fh.read()
+
+    output_path = output_folder / "GCF_000008985.1.fasta"
+    with open(output_path, 'w') as out:
+        out.write(genome_data)
+
+    # Optionally, remove the temporary compressed file
+    local_gz_file.unlink()
+
+    print(f"Downloaded and saved test genome to {output_path}")
+
+
+# Function 'run_mastiff' runs the 'mastiff' command on each '.fasta' file in the 'genomes_folder'.
+
+def run_mastiff(args):
+    genomes_folder = Path(args.genomes_folder)
+    matches_folder = Path(args.matches_folder)
+    matches_folder.mkdir(exist_ok=True)
+
+    for fasta_file in genomes_folder.glob('*.fasta'):
+        output_file = matches_folder / f'{fasta_file.stem}_matches.csv'
+        if not output_file.exists():
+            logging.info(f'Running mastiff on {fasta_file.name}')
+            subprocess.run(['mastiff', str(fasta_file), '-o', str(output_file)], check=True)
+        else:
+            logging.info(f'Skipping mastiff on {fasta_file.name} because output file already exists')
+
+
 def summarize(args):
     """Generate summary and containment files from MASH matches.
     
@@ -204,10 +246,6 @@ def assemble_datasets(args):
         else:
             logging.info(f'Assembling Nanopore dataset for {fastq_file.name}')
             subprocess.run(['flye', '--nano-raw', str(fastq_file), '--out-dir', f'{fastq_file.stem}_flye', '--meta'], check=True)
-
-
-
-
 
 
 def download_sra(args):

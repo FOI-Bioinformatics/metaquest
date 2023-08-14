@@ -1,8 +1,8 @@
 
 import argparse
-from .data_processing import summarize, count_single_sample
-from .visualization import plot_heatmap
-from .metadata_handler import download_metadata, parse_metadata, download_test_genome, run_mastiff
+from data_processing import summarize, count_single_sample, download_test_genome, run_mastiff
+from visualization import plot_heatmap
+from metadata_handler import download_metadata, parse_metadata
 
 # argparse setup
 def main():

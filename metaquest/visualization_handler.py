@@ -1,8 +1,10 @@
 
 import pandas as pd
-import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from upsetplot import UpSet
 
 
 def plot_heatmap(args):
@@ -20,7 +22,6 @@ def plot_heatmap(args):
     plt.figure(figsize=(10, 10))
     sns.clustermap(df, cmap='viridis')
     plt.savefig(args.heatmap_file)
-
 
 
 def plot_pca(args):
@@ -45,7 +46,6 @@ def plot_pca(args):
     ax.set_title('2 Component PCA', fontsize=20)
     ax.scatter(principalDf['PC1'], principalDf['PC2'])
     plt.savefig(args.pca_file)
-
 
 
 def plot_upset(args):
