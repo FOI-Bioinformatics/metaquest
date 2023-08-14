@@ -16,8 +16,12 @@ def main():
     parser_download_test_genome.set_defaults(func=download_test_genome)
 
     # Run mastiff command
-    parser_run_mastiff = subparsers.add_parser('run_mastiff', help='Run MASTIFF')
-    parser_run_mastiff.set_defaults(func=run_mastiff)
+    parser_mastiff = subparsers.add_parser('mastiff', help='Runs mastiff on the genome data in the specified folder.')
+    parser_mastiff.add_argument('--genomes-folder', default='genomes',
+                                help='Folder containing the genomes to be analyzed.')
+    parser_mastiff.add_argument('--matches-folder', default='matches',
+                                help='Folder where the output matches will be stored.')
+    parser_mastiff.set_defaults(func=run_mastiff)
     
     # Summarize command
     parser_summarize = subparsers.add_parser('summarize', help='Summarize matches from MASH')
