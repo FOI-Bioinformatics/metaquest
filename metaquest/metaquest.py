@@ -11,6 +11,8 @@ def main():
 
     # Download test genome command
     parser_download_test_genome = subparsers.add_parser('download_test_genome', help='Download test genome')
+    parser_download_test_genome.add_argument('--output-folder', default='genomes',
+                                             help='Folder to save the downloaded fasta files.')
     parser_download_test_genome.set_defaults(func=download_test_genome)
 
     # Run mastiff command
