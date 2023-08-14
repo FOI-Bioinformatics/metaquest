@@ -1,7 +1,7 @@
 
 import argparse
-from metaquest.data_processing import summarize, count_single_sample, download_test_genome, run_mastiff
-from metaquest.visualization import plot_heatmap
+from metaquest.data_processing import run_mastiff, summarize, count_single_sample, download_test_genome, collect_genome_counts, download_sra, assemble_datasets
+from metaquest.visualization import plot_heatmap, plot_pca, plot_upset
 from metaquest.metadata import download_metadata, parse_metadata
 
 # argparse setup
