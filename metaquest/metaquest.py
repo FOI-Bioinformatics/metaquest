@@ -107,9 +107,16 @@ def main():
     parser_plot_pca.set_defaults(func=plot_pca)
     
     # Download SRA argparse setup
-    parser_download_sra = subparsers.add_parser('download_sra', help='Download Sequence Read Archive (SRA) data given its accession number.')
-    parser_download_sra.add_argument('--sra-number', required=True, help='Accession number of the SRA data to be downloaded.')
-    parser_download_sra.add_argument('--output-folder', required=True, help='Directory to save the downloaded SRA data.')
+    parser_download_sra = subparsers.add_parser('download_sra', help='Download SRA datasets with optimization features.')
+    parser_download_sra.add_argument('--summary_file', type=str, required=True, help='Path to the summary.txt file.')
+    parser_download_sra.add_argument('--fastq_folder', type=str, required=True,
+                            help='Path to the folder where FASTQ files should be saved.')
+    parser_download_sra.add_argument('--max_downloads', type=int, default=None,
+                            help='Maximum number of datasets to download. Default is to download all.')
+    parser_download_sra.add_argument('--threshold', type=float, default=0.0,
+                            help='Threshold for max_containment. Only accessions with max_containment greater than this threshold will be downloaded.')
+    parser_download_sra.add_argument('--dry-run', action='store_true',default=False,
+                            help='Only check and log the number of datasets left to download without actually downloading them.')
     parser_download_sra.set_defaults(func=download_sra)
 
     # Assemble datasets argparse setup

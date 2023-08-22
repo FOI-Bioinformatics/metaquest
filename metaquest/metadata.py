@@ -127,6 +127,11 @@ def parse_metadata(args):
         experiment_library_source = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE")
         experiment_library_selection = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION")
 
+        # Extract the second SRAFile URL (SRA Normalized URL)
+        srafile_elements = tree.findall(".//RUN/SRAFiles/SRAFile")
+        sra_normalized_url = None
+        if len(srafile_elements) > 1:
+            sra_normalized_url = srafile_elements[1].get("url")
 
 
         # Add to metadata table
@@ -157,7 +162,8 @@ def parse_metadata(args):
             "Experiment_Library_Name": experiment_library_name,
             "Experiment_Library_Strategy": experiment_library_strategy,
             "Experiment_Library_Source": experiment_library_source,
-            "Experiment_Library_Selection": experiment_library_selection
+            "Experiment_Library_Selection": experiment_library_selection,
+            "SRA_Normalized_URL": sra_normalized_url
         })
 
         parsed_files_count += 1  # Increment the counter each time a file is parsed
