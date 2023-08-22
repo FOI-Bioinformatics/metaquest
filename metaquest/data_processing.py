@@ -252,40 +252,49 @@ def assemble_datasets(args):
             logging.info(f'Assembling Nanopore dataset for {fastq_file.name}')
             subprocess.run(['flye', '--nano-raw', str(fastq_file), '--out-dir', f'{fastq_file.stem}_flye', '--meta'], check=True)
 
+def download_accession(accession, fastq_folder):
+    """
+    Download the SRA dataset for the given accession.
+    Saves the downloaded FASTQ file in the specified fastq_folder.
+    Returns True if the download was successful, otherwise False.
+    """
+    output_file = fastq_folder / f'{accession}.fastq.gz'
+    try:
+        logging.info(f'Downloading SRA for {accession}')
+        subprocess.run(['fastq-dump', '--gzip', '--split-files', accession, '-O', str(fastq_folder)], check=True)
+        return True
+    except subprocess.CalledProcessError:
+        logging.error(f'Error downloading SRA for {accession}')
+        return False
 
 def download_sra(args):
-    """Download Sequence Read Archive (SRA) data given its accession number.
-    
-    Parameters:
-    - args (Namespace): An argparse Namespace object containing the following attributes:
-        * sra_number (str): Accession number of the SRA data to be downloaded.
-        * output_folder (str): Directory to save the downloaded SRA data.
-
-    The function fetches the SRA data corresponding to the provided accession number.
-    The downloaded data is stored in the specified output directory.
     """
-    matches_folder = Path(args.matches_folder)
+    Download SRA datasets based on the accessions in the summary.txt file.
+    Only accessions with max_containment greater than the threshold will be considered.
+    Limit the number of downloads with the max_downloads parameter.
+    If dry_run is True, only log the number of datasets left to download without actually downloading them.
+    """
     fastq_folder = Path(args.fastq_folder)
     fastq_folder.mkdir(exist_ok=True)
 
-    unique_accessions = set()
-    for csv_file in matches_folder.glob('*.csv'):
-        print(csv_file)
-        with open(csv_file, 'r') as f:
-            reader = csv.reader(f)
-            next(reader)  # Skip header
-            for row in reader:
-                unique_accessions.add(row[0])
+    # Load the summary.txt file without headers for the first column
+    summary_df = pd.read_csv(args.summary_file, sep='\t', header=None, skiprows=1,
+                             names=['accession', 'max_containment', 'max_containment_annotation1',
+                                    'max_containment_annotation2'])
+    accessions_to_download = summary_df[summary_df['max_containment'] > args.threshold]['accession'].tolist()
 
-    print(f"Number of unique accessions: {len(unique_accessions)}")
+    if args.dry_run:
+        logging.info(f"DRY RUN: {len(accessions_to_download)} datasets left to download.")
+        print(len(accessions_to_download))
+        return len(accessions_to_download)
 
-    with open('unique_accessions.txt', 'w') as file:
-        file.writelines(accession + '\n' for accession in unique_accessions)
+    download_count = 0
+    for accession in accessions_to_download:
+        # Check if we've reached the maximum downloads for this call
+        if args.max_downloads and download_count >= args.max_downloads:
+            break
 
-    for accession in unique_accessions:
-        output_file = fastq_folder / f'{accession}.fastq.gz'
-        if not output_file.exists():
-            logging.info(f'Downloading SRA for {accession}')
-            subprocess.run(['fastq-dump', '--gzip', '--split-files', accession, '-O', str(fastq_folder)], check=True)
+        if download_accession(accession, fastq_folder):
+            download_count += 1
 
-
+    return download_count
