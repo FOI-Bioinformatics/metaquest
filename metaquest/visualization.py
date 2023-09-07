@@ -1,39 +1,36 @@
-
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from upsetplot import UpSet
+import logging
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def plot_heatmap(args):
-    """Plot heatmap for the summary file.
-    
-    Parameters:
-    - args (Namespace): An argparse Namespace object containing the required attributes.
-    """
-    df = pd.read_csv(args.summary_file, sep='	', index_col=0)
+def load_and_filter_data(summary_file, threshold):
+    """Load and filter the summary data."""
+    df = pd.read_csv(summary_file, sep='\t', index_col=0)
     df = df[[col for col in df.columns if 'GCF' in col or 'GCA' in col]]
     df.fillna(0, inplace=True)
-    df[df < args.threshold] = 0
+    df[df < threshold] = 0
     df = df.loc[:, (df != 0).any(axis=0)]
     df = df.loc[(df != 0).any(axis=1), :]
+    return df
+
+def plot_heatmap(args):
+    """Plot heatmap for the summary file."""
+    logging.info("Generating heatmap...")
+    df = load_and_filter_data(args.summary_file, args.threshold)
     plt.figure(figsize=(10, 10))
     sns.clustermap(df, cmap='viridis')
     plt.savefig(args.heatmap_file)
-
+    logging.info(f"Heatmap saved to {args.heatmap_file}")
 
 def plot_pca(args):
-    """Plot PCA for the summary file.
-    
-    Parameters:
-    - args (Namespace): An argparse Namespace object containing the required attributes.
-    """
-    df = pd.read_csv(args.summary_file, sep='	', index_col=0)
-    df = df[[col for col in df.columns if 'GCF' in col or 'GCA' in col]]
-    df.fillna(0, inplace=True)
-    df[df < args.threshold] = 0
+    """Plot PCA for the summary file."""
+    logging.info("Generating PCA plot...")
+    df = load_and_filter_data(args.summary_file, args.threshold)
     df_T = df.T
     X = StandardScaler().fit_transform(df_T)
     pca = PCA(n_components=2)
@@ -46,32 +43,13 @@ def plot_pca(args):
     ax.set_title('2 Component PCA', fontsize=20)
     ax.scatter(principalDf['PC1'], principalDf['PC2'])
     plt.savefig(args.pca_file)
-
+    logging.info(f"PCA plot saved to {args.pca_file}")
 
 def plot_upset(args):
-    """Generate an UpSet plot based on the summary data.
-    
-    Parameters:
-    - args (Namespace): An argparse Namespace object containing the following attributes:
-        * summary_file (str): Path to the summary data file.
-        * output_file (str): Path to save the generated UpSet plot.
-        * threshold (float): Minimum value to consider for the plot.
-
-    The function reads the summary data, processes it, and then generates an UpSet plot.
-    The resulting plot is saved to the specified output path.
-    """
-    df = pd.read_csv(args.summary_file, sep='	', index_col=0)
-    # only keep columns containing GCF or GCA
-    df = df[[col for col in df.columns if 'GCF' in col or 'GCA' in col]]
-    # replace missing values with 0
-    df.fillna(0, inplace=True)
-    # set values less than the threshold to 0
-    df[df < args.threshold] = 0
-    # remove rows and columns that only contain 0
-    df = df.loc[:, (df != 0).any(axis=0)]
-    df = df.loc[(df != 0).any(axis=1), :]
-    
-    # UpSet plot
+    """Generate an UpSet plot based on the summary data."""
+    logging.info("Generating UpSet plot...")
+    df = load_and_filter_data(args.summary_file, args.threshold)
     upset = UpSet(df, subset_size='auto')
     upset.plot()
     plt.savefig(args.output_file)
+    logging.info(f"UpSet plot saved to {args.output_file}")
