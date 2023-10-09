@@ -100,22 +100,27 @@ def download_metadata(email: str, matches_folder: Union[str, Path], metadata_fol
     logging.info(f"Failed downloads: {failed_downloads}")  # Print the number of failed downloads
 
 
-def parse_metadata(args):
-    """Parse metadata files to produce a consolidated metadata table.
-    
+def parse_metadata(metadata_folder: str, metadata_table_file: str) -> None:
+    """
+    Parse metadata files to produce a consolidated metadata table.
+
     Parameters:
-    - args (Namespace): An argparse Namespace object containing the following attributes:
-        * metadata_folder (str): Path to the folder containing metadata files.
-        * metadata_table_file (str): Path to save the consolidated metadata table.
-        
+    - metadata_folder (str): Path to the folder containing metadata files.
+    - metadata_table_file (str): Path to save the consolidated metadata table.
+
     This function reads individual metadata files, extracts relevant information,
     and produces a consolidated table. The resulting table is saved to the specified file.
     """
-    metadata_folder = Path(args.metadata_folder)
-    metadata_table = []
+
+    metadata_folder = Path(metadata_folder)
+    metadata_table: List[Dict[str, str]] = []
     start_time = time.time()  # Start time of parsing operation
+
+    logging.info(f"Starting metadata parsing from folder {metadata_folder}")
+
     # Initialize a counter for parsed files
     parsed_files_count = 0
+
     for metadata_file in metadata_folder.glob('*.xml'):
         tree = etree.parse(str(metadata_file))
 
@@ -161,7 +166,6 @@ def parse_metadata(args):
         if len(srafile_elements) > 1:
             sra_normalized_url = srafile_elements[1].get("url")
 
-
         # Add to metadata table
         metadata_table.append({
             "Run_ID": run_id,
@@ -195,14 +199,15 @@ def parse_metadata(args):
         })
 
         parsed_files_count += 1  # Increment the counter each time a file is parsed
+        if parsed_files_count % 100 == 0:
+            logging.info(f"Parsed {parsed_files_count} files so far.")
 
     # Convert to DataFrame and save as a .txt file
     metadata_df = pd.DataFrame(metadata_table)
-    metadata_df.to_csv(args.metadata_table_file, sep="\t", index=False)
+    metadata_df.to_csv(metadata_table_file, sep="\t", index=False)
 
     end_time = time.time()  # End time of parsing operation
     elapsed_time = end_time - start_time  # Elapsed time
-    print(f'Parsed {parsed_files_count} files in {elapsed_time} seconds.')
 
-
+    logging.info(f'Parsing completed. Parsed {parsed_files_count} files in {elapsed_time} seconds.')
 

@@ -7,7 +7,8 @@ import subprocess
 import urllib.request
 import gzip
 from collections import defaultdict
-from typing import Dict, Union, List, NoReturn
+from typing import Dict, Union, List, NoReturn, Set
+
 
 
 def download_test_genome(output_folder: Union[str, Path]) -> None:
@@ -157,122 +158,116 @@ def summarize(matches_folder: Union[str, Path], summary_file: Union[str, Path],
     logging.info(f"Containment counts saved to {containment_file}")
 
 
-def count_single_sample(args):
-    """Count occurrences for a single sample in the summary and metadata files.
-    
-    Parameters:
-    - args (Namespace): An argparse Namespace object containing the following attributes:
-        * summary_file (str): Path to the summary file.
-        * metadata_file (str): Path to the metadata file.
-        * summary_column (str): Column name in the summary file to be considered.
-        * metadata_column (str): Column name in the metadata file to be matched against the summary column.
-        * threshold (float): Containment threshold for counting.
-
-    The function counts occurrences for a single sample based on the specified threshold.
-    It matches data between the summary and metadata files based on the provided column names.
+def count_single_sample(summary_file: str, metadata_file: str, summary_column: str, metadata_column: str,
+                        threshold: float, top_n: int) -> Dict[str, int]:
     """
+    Count occurrences for a single sample based on a containment threshold and match data between summary and metadata files.
+
+    Parameters:
+    - summary_file (str): Path to the summary file.
+    - metadata_file (str): Path to the metadata file.
+    - summary_column (str): Column name in the summary file to be considered.
+    - metadata_column (str): Column name in the metadata file to be matched against the summary column.
+    - threshold (float): Containment threshold for counting.
+    - top_n (int): Number of top items to display.
+
+    Returns:
+    - Dict[str, int]: A dictionary of unique values in the metadata column with their counts.
+    """
+
+    logging.info(f"Starting the count_single_sample function with threshold: {threshold}")
+
     # Load the summary and metadata dataframes
-    summary_df = pd.read_csv(args.summary_file, sep="\t", index_col=0)
-    metadata_df = pd.read_csv(args.metadata_file, sep="\t", index_col=0)
+    summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
+    metadata_df = pd.read_csv(metadata_file, sep="\t", index_col=0)
 
     # Join the dataframes on the index (SRA accession)
-    df = summary_df.join(metadata_df)
+    df = summary_df.join(metadata_df, how='inner')
 
     # Select the accessions where the specified column in summary_df is greater than the threshold
-    selected_accessions = df[df[args.summary_column] > args.threshold].index
-    print(f'Number of accessions with {args.summary_column} > {args.threshold}: {len(selected_accessions)}')
+    selected_accessions = df[df[summary_column] > threshold].index
+    logging.info(f'Number of accessions with {summary_column} > {threshold}: {len(selected_accessions)}')
 
     # Select the rows from the metadata dataframe where the accession is in the selected accessions
     selected_metadata_df = metadata_df[metadata_df.index.isin(selected_accessions)]
-    print(f'Number of rows in selected metadata dataframe: {len(selected_metadata_df)}')
 
     # Count the number of unique values in the specified column in metadata_df
-    count_dict = selected_metadata_df[args.metadata_column].value_counts().to_dict()
+    count_dict = selected_metadata_df[metadata_column].value_counts().to_dict()
 
     # Get the top n items
-    top_n = dict(list(count_dict.items())[:args.top_n])
+    top_n_items = dict(sorted(count_dict.items(), key=lambda x: x[1], reverse=True)[:top_n])
 
-    # Print the top n
-    for key, value in top_n.items():
-        print(f'{key}: {value}')
+    # Log the top n
+    for key, value in top_n_items.items():
+        logging.info(f'{key}: {value}')
 
     return count_dict
 
 
-
-def collect_genome_counts(args):
-    """Count occurrences of genomes based on a threshold from summary and metadata files.
-    
-    Parameters:
-    - args (Namespace): An argparse Namespace object containing the following attributes:
-        * summary_file (str): Path to the summary file.
-        * metadata_file (str): Path to the metadata file.
-        * metadata_column (str): Column name in the metadata file to be considered.
-        * threshold (float): Containment threshold for counting.
-        * output_file (str): Path to save the output file with genome counts.
-
-    The function counts occurrences of genomes based on the specified threshold.
-    It matches data between the summary and metadata files based on the provided column name.
-    The results are saved to the specified output file.
+def collect_genome_counts(
+        summary_file: str,
+        metadata_file: str,
+        metadata_column: str,
+        threshold: float,
+        output_file: str,
+        stat_file: str
+    ) -> pd.DataFrame:
     """
+    Count occurrences of genomes based on a threshold from summary and metadata files.
+
+    Parameters:
+    - summary_file (str): Path to the summary file.
+    - metadata_file (str): Path to the metadata file.
+    - metadata_column (str): Column name in the metadata file to be considered.
+    - threshold (float): Containment threshold for counting.
+    - output_file (str): Path to save the output file with genome counts.
+    - stat_file (str): Path to save the statistics file.
+
+    Returns:
+    - pd.DataFrame: The resulting DataFrame containing genome counts.
+
+    This function counts occurrences of genomes based on the specified threshold.
+    It matches data between the summary and metadata files based on the provided column name.
+    The results are saved to the specified output and statistics files.
+    """
+    logging.info("Starting collection of genome counts.")
+
     # Load the summary and metadata dataframes
-    summary_df = pd.read_csv(args.summary_file, sep="\t", index_col=0)
-    metadata_df = pd.read_csv(args.metadata_file, sep="\t", index_col=0)
+    summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
+    metadata_df = pd.read_csv(metadata_file, sep="\t", index_col=0)
 
-    # Create a list to store the DataFrames for each sample column
-    df_list = []
+    # Lists and sets to store intermediate results
+    df_list: List[pd.DataFrame] = []
+    unique_accessions: Set[str] = set()
 
-    # Create a set to store unique accessions after filtering
-    unique_accessions = set()
+    # Iterate through all relevant columns in the summary DataFrame
+    for sample_column in [col for col in summary_df.columns if "GCF" in col or "GCA" in col]:
+        # Logic remains largely unchanged, optimized for clarity
+        selected_accessions = summary_df.loc[summary_df[sample_column] > threshold].index
+        unique_accessions.update(selected_accessions)
 
-    # Iterate through all sample columns in the summary DataFrame that contain "GCF" or "GCA"
-    for sample_column in summary_df.columns:
-        if "GCF" in sample_column or "GCA" in sample_column:
-            # Select the accessions where the current sample column is greater than the threshold
-            selected_accessions = summary_df[summary_df[sample_column] > args.threshold].index
+        selected_metadata_df = metadata_df.loc[metadata_df.index.isin(selected_accessions)]
+        count_series = selected_metadata_df[metadata_column].value_counts()
+        sample_df = pd.DataFrame({sample_column: count_series})
+        df_list.append(sample_df)
 
-            # Update the set of unique accessions
-            unique_accessions.update(selected_accessions)
+    # Post-processing and output generation
+    result_df = pd.concat(df_list, axis=1).fillna(0).astype(int)
+    result_df.to_csv(output_file, sep="\t")
 
-            # Select the rows from the metadata dataframe where the accession is in the selected accessions
-            selected_metadata_df = metadata_df[metadata_df.index.isin(selected_accessions)]
+    logging.info(f"Table with sample files has been saved to {output_file}")
 
-            # Count the number of unique values in the specified column in metadata_df
-            count_series = selected_metadata_df[args.metadata_column].value_counts()
+    total_counts = result_df.values.sum()
+    logging.info(f"Total number of genome counts in the table: {total_counts}")
 
-            # Add the counts for the current sample column to a new DataFrame
-            sample_df = pd.DataFrame({sample_column: count_series})
+    logging.info(f"Total number of unique accessions after filtering: {len(unique_accessions)}")
 
-            # Add the DataFrame to the list
-            df_list.append(sample_df)
-
-    # Concatenate the DataFrames along the index (SRA accession) axis
-    result_df = pd.concat(df_list, axis=1)
-
-    # Fill missing values with 0 and convert the entire DataFrame to integers
-    result_df = result_df.fillna(0).astype(int)
-
-    # Output the result DataFrame to a tab-delimited text file
-    output_path = args.output_file
-    result_df.to_csv(output_path, sep="\t")
-
-    print(f"Table with sample files has been saved to {output_path}")
-
-    # Calculate and print the total number of counts in the table
-    total_counts = result_df.sum().sum()
-    print(f"Total number of genome counts in the table: {total_counts}")
-
-    # Print the total number of unique accessions after filtering
-    print(f"Total number of unique accessions after filtering: {len(unique_accessions)}")
-
-    # Calculate and save the counts per column to a statistics file
     column_counts = result_df.sum().sort_values(ascending=False)
-    column_counts.to_csv(args.stat_file, sep="\t", header=False)
+    column_counts.to_csv(stat_file, sep="\t", header=False)
 
-    print(f"Statistics have been saved to {args.stat_file}")
+    logging.info(f"Statistics have been saved to {stat_file}")
 
     return result_df
-
 
 
 
