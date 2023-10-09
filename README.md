@@ -56,7 +56,7 @@ metaquest summarize --matches-folder matches --summary-file summary.txt --contai
 To get additional information about each SRA dataset, you can download metadata using the `download-metadata` command.
 
 ```bash
-metaquest download-metadata --matches-folder matches --metadata-folder metadata --threshold 0.95
+metaquest download-metadata --matches_folder matches --metadata_folder metadata --threshold 0.95 --email [EMAIL]
 ```
 
 * `matches-folder`: Directory containing match files.
