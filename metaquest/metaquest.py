@@ -7,6 +7,7 @@ from metaquest.data_processing import (
 )
 from metaquest.visualization import plot_heatmap, plot_pca, plot_upset
 from metaquest.metadata import download_metadata, parse_metadata
+from argparse import Namespace
 
 
 # Wrapper functions
@@ -30,6 +31,66 @@ def summarize_wrapper(args):
 def download_metadata_wrapper(args):
     download_metadata(email=args.email, matches_folder=args.matches_folder, metadata_folder=args.metadata_folder,
                       threshold=args.threshold, dry_run=args.dry_run)
+
+
+def parse_metadata_wrapper(args):
+    """Wrapper function for parse_metadata.
+
+    This function extracts individual arguments from the argparse Namespace object and passes them to parse_metadata.
+    It also includes any additional logic before or after calling parse_metadata, if needed.
+    """
+    # Extract individual arguments from the argparse Namespace object
+    metadata_folder = args.metadata_folder
+    metadata_table_file = args.metadata_table_file
+
+    # Add any pre-call logic here, if needed
+
+    # Call the original function
+    parse_metadata(metadata_folder, metadata_table_file)
+
+    # Add any post-call logic here, if needed
+    logging.info("Metadata parsing completed and table saved.")
+
+def count_single_sample_wrapper(args):
+    """
+    Wrapper function for count_single_sample to be used with argparse.
+
+    Parameters:
+    - args (Namespace): Namespace object from argparse containing the command-line arguments.
+
+    Calls count_single_sample function with unpacked arguments from the Namespace object.
+    """
+
+    # Unpack arguments from the Namespace object
+    summary_file = args.summary_file
+    metadata_file = args.metadata_file
+    summary_column = args.summary_column
+    metadata_column = args.metadata_column
+    threshold = args.threshold
+    top_n = args.top_n
+
+    # Call the original function
+    count_dict = count_single_sample(summary_file, metadata_file, summary_column, metadata_column, threshold, top_n)
+
+    # You can log or print `count_dict` here, if needed.
+    logging.info(f"Count dictionary generated: {count_dict}")
+
+
+def collect_genome_counts_wrapper(args: Namespace) -> None:
+    """
+    Wrapper function for collect_genome_counts to be called from the command-line interface.
+
+    Parameters:
+    - args (Namespace): An argparse Namespace object containing all the required arguments.
+    """
+    collect_genome_counts(
+        summary_file=args.summary_file,
+        metadata_file=args.metadata_file,
+        metadata_column=args.metadata_column,
+        threshold=args.threshold,
+        output_file=args.output_file,
+        stat_file=args.stat_file
+    )
 
 
 # argparse setup
@@ -81,11 +142,11 @@ def main():
     # Parse metadata command
     parser_parse_metadata = subparsers.add_parser('parse-metadata',
                                                   help='Parse metadata for each *_metadata.xml file in the specified directory')
-    parser_parse_metadata.add_argument('--metadata-folder', default='metadata',
+    parser_parse_metadata.add_argument('--metadata_folder', default='metadata',
                                        help='Folder containing *_metadata.xml files to parse')
-    parser_parse_metadata.add_argument('--metadata-table-file', default='metadata_table.txt',
+    parser_parse_metadata.add_argument('--metadata_table_file', default='metadata_table.txt',
                                        help='File where the parsed metadata will be stored')
-    parser_parse_metadata.set_defaults(func=parse_metadata)
+    parser_parse_metadata.set_defaults(func=parse_metadata_wrapper)
 
     # Count single sample command
     parser_single_sample = subparsers.add_parser('single_sample',
@@ -100,19 +161,20 @@ def main():
     parser_single_sample.add_argument('--threshold', type=float, default=0.1,
                                       help='Threshold for the column in the summary file.')
     parser_single_sample.add_argument('--top-n', type=int, default=100, help='Number of top items to keep.')
-    parser_single_sample.set_defaults(func=count_single_sample)
+    parser_single_sample.set_defaults(func=count_single_sample_wrapper)
 
     # Collect genome counts command
     parser_genome_count = subparsers.add_parser('genome_count',
                                                 help='Collects genome counts and outputs a table with sample files.')
     parser_genome_count.add_argument('--summary-file', default='SRA-summary.txt', help='Path to the summary file.')
     parser_genome_count.add_argument('--metadata-file', default='metadata_table.txt', help='Path to the metadata file.')
-    parser_genome_count.add_argument('--metadata-column', required=True, help='Name of the column in th metadata fil.')
+    parser_genome_count.add_argument('--metadata-column', required=True,
+                                     help='Name of the column in the metadata file.')
     parser_genome_count.add_argument('--threshold', type=float, default=0.5,
                                      help='Threshold for the column in the summary file.')
     parser_genome_count.add_argument('--output-file', default='collected_table.txt', help='Path to the output file.')
     parser_genome_count.add_argument('--stat-file', default="collected_stats.txt", help='Path to the statistics file.')
-    parser_genome_count.set_defaults(func=collect_genome_counts)
+    parser_genome_count.set_defaults(func=collect_genome_counts_wrapper)
 
     
     # Plot heatmap command
