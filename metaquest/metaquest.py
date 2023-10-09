@@ -1,11 +1,40 @@
-
+import logging
 import argparse
-from metaquest.data_processing import run_mastiff, summarize, count_single_sample, download_test_genome, collect_genome_counts, download_sra, assemble_datasets
+from metaquest.data_processing import (
+    run_mastiff, summarize, count_single_sample,
+    download_test_genome, collect_genome_counts,
+    download_sra, assemble_datasets
+)
 from metaquest.visualization import plot_heatmap, plot_pca, plot_upset
 from metaquest.metadata import download_metadata, parse_metadata
 
+
+# Wrapper functions
+def download_test_genome_wrapper(args):
+    # Add additional logic here if needed.
+    print("Starting the download of the test genome.")
+
+    # Unpack the arguments and call the original function
+    download_test_genome(args.output_folder)
+
+    # Add any post-call logic here if needed.
+    print("Successfully downloaded the test genome.")
+
+def run_mastiff_wrapper(args):
+    # Add additional logic here if needed
+    run_mastiff(args.genomes_folder, args.matches_folder)
+
+def summarize_wrapper(args):
+    summarize(args.matches_folder, args.summary_file, args.containment_file)
+
+def download_metadata_wrapper(args):
+    download_metadata(email=args.email, matches_folder=args.matches_folder, metadata_folder=args.metadata_folder,
+                      threshold=args.threshold, dry_run=args.dry_run)
+
+
 # argparse setup
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     parser = argparse.ArgumentParser(description='MetaQuest: A toolkit for handling genomic metadata.')
     subparsers = parser.add_subparsers(title='commands', description='valid commands', help='additional help')
 
@@ -13,7 +42,8 @@ def main():
     parser_download_test_genome = subparsers.add_parser('download_test_genome', help='Download test genome')
     parser_download_test_genome.add_argument('--output-folder', default='genomes',
                                              help='Folder to save the downloaded fasta files.')
-    parser_download_test_genome.set_defaults(func=download_test_genome)
+    parser_download_test_genome.set_defaults(func=download_test_genome_wrapper)
+
 
     # Run mastiff command
     parser_mastiff = subparsers.add_parser('mastiff', help='Runs mastiff on the genome data in the specified folder.')
@@ -21,8 +51,8 @@ def main():
                                 help='Folder containing the genomes to be analyzed.')
     parser_mastiff.add_argument('--matches-folder', default='matches',
                                 help='Folder where the output matches will be stored.')
-    parser_mastiff.set_defaults(func=run_mastiff)
-    
+    parser_mastiff.set_defaults(func=run_mastiff_wrapper)
+
     # Summarize command
     parser_summarize = subparsers.add_parser('summarize',
                                              help='Summarizes the data from the .csv files in the matches directory.')
@@ -32,7 +62,7 @@ def main():
                                   help='File where the summary will be stored.')
     parser_summarize.add_argument('--containment-file', default='top_containments.txt',
                                   help='File where the top containments will be stored.')
-    parser_summarize.set_defaults(func=summarize)
+    parser_summarize.set_defaults(func=summarize_wrapper)
 
     # Download metadata command
     parser_download_metadata = subparsers.add_parser('download-metadata',
@@ -46,7 +76,7 @@ def main():
                                           help="Threshold for containment values (default: 0.0)")
     parser_download_metadata.add_argument('--dry-run', action='store_true',
                                           help='If enabled, no downloads are performed. Only calculates the total number of accessions and the number of accessions to download.')
-    parser_download_metadata.set_defaults(func=download_metadata)
+    parser_download_metadata.set_defaults(func=download_metadata_wrapper)
 
     # Parse metadata command
     parser_parse_metadata = subparsers.add_parser('parse-metadata',

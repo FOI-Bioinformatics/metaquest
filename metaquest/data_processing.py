@@ -7,76 +7,124 @@ import subprocess
 import urllib.request
 import gzip
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, Union, List, NoReturn
 
 
-def download_test_genome(args):
-    url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/008/985/GCF_000008985.1_ASM898v1/GCF_000008985.1_ASM898v1_genomic.fna.gz"
-    output_folder = Path(args.output_folder)
+def download_test_genome(output_folder: Union[str, Path]) -> None:
+    logging.info("Starting the download of the test genome.")
+
+    output_folder = Path(output_folder)
+    output_path = output_folder / "GCF_000008985.1.fasta"
+
+    # Check if the file already exists
+    if output_path.exists():
+        logging.info(f"Genome file already exists at {output_path}. Skipping download.")
+        return
+
     output_folder.mkdir(exist_ok=True)  # Ensure the output directory exists
+    logging.info(f"Output folder is set to {output_folder}")
+
+    url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/008/985/GCF_000008985.1_ASM898v1/GCF_000008985.1_ASM898v1_genomic.fna.gz"
 
     # Define the local gz file path
     local_gz_file = output_folder / "temp_genome.fna.gz"
 
     # Download the compressed fasta file
+    logging.info("Starting the download of the compressed fasta file.")
     urllib.request.urlretrieve(url, local_gz_file)
+    logging.info("Successfully downloaded the compressed fasta file.")
 
     # Decompress the fasta file and save it to the output folder
+    logging.info("Starting the decompression of the fasta file.")
     with gzip.open(local_gz_file, 'rt') as fh:  # Open the gzip file in text mode for reading
         genome_data = fh.read()
+    logging.info("Successfully decompressed the fasta file.")
 
-    output_path = output_folder / "GCF_000008985.1.fasta"
     with open(output_path, 'w') as out:
         out.write(genome_data)
+    logging.info(f"Saved the decompressed fasta file to {output_path}")
 
     # Optionally, remove the temporary compressed file
     local_gz_file.unlink()
+    logging.info("Removed the temporary compressed file.")
 
-    print(f"Downloaded and saved test genome to {output_path}")
-
+    logging.info(f"Downloaded and saved test genome to {output_path}")
 
 # Function 'run_mastiff' runs the 'mastiff' command on each '.fasta' file in the 'genomes_folder'.
 
-def run_mastiff(args):
-    genomes_folder = Path(args.genomes_folder)
-    matches_folder = Path(args.matches_folder)
-    matches_folder.mkdir(exist_ok=True)
+def run_mastiff(genomes_folder: Union[str, Path], matches_folder: Union[str, Path]) -> None:
+    """
+    Run mastiff on all fasta files in a given folder and save the matches in another folder.
+
+    Parameters:
+    - genomes_folder (Union[str, Path]): The path to the folder containing the genome files.
+    - matches_folder (Union[str, Path]): The path to the folder where match results will be saved.
+
+    Returns:
+    None
+    """
+    logging.info("Starting mastiff on genomes.")
+
+    genomes_folder = Path(genomes_folder)
+    matches_folder = Path(matches_folder)
+    matches_folder.mkdir(exist_ok=True)  # Ensure the output directory exists
+
+    logging.info(f"Genomes folder is set to {genomes_folder}")
+    logging.info(f"Matches folder is set to {matches_folder}")
 
     for fasta_file in genomes_folder.glob('*.fasta'):
         output_file = matches_folder / f'{fasta_file.stem}_matches.csv'
+
+        # Check if the output file already exists
         if not output_file.exists():
             logging.info(f'Running mastiff on {fasta_file.name}')
             subprocess.run(['mastiff', str(fasta_file), '-o', str(output_file)], check=True)
+            logging.info(f'Successfully ran mastiff on {fasta_file.name}')
         else:
             logging.info(f'Skipping mastiff on {fasta_file.name} because output file already exists')
 
 
-def summarize(args):
-    """Generate summary and containment files from MASH matches.
-    
+def summarize(matches_folder: Union[str, Path], summary_file: Union[str, Path],
+              containment_file: Union[str, Path]) -> None:
+    """
+    Generate summary and containment files from MASH matches.
+
     Parameters:
-    - args (Namespace): An argparse Namespace object containing the following attributes:
-        * matches_folder (str): Path to the folder containing _matches.csv files from MASH.
-        * summary_file (str): Path to save the output summary file.
-        * containment_file (str): Path to save the output containment file.
-        
+    - matches_folder (Union[str, Path]): The path to the folder containing _matches.csv files from MASH.
+    - summary_file (Union[str, Path]): The path to save the output summary file.
+    - containment_file (Union[str, Path]): The path to save the output containment file.
+
+    Returns:
+    None
+
     The function aggregates information from the MASH matches, computes the containment score,
     and saves the summary and containment data in the respective output files.
     """
-    matches_folder = Path(args.matches_folder)
-    summary: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)
+    logging.info("Starting to summarize MASH matches.")
+
+    matches_folder = Path(matches_folder)
+    summary: Dict[str, Dict[str, float]] = defaultdict(dict)
+
+    logging.info(f"Scanning matches folder: {matches_folder}")
+
     for csv_file in matches_folder.glob('*.csv'):
         file_id = csv_file.stem.replace("_matches", "")
+        logging.info(f"Processing file: {file_id}")
+
         with open(csv_file, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 accession = row['SRA accession']
                 containment = float(row['containment'])
+
                 if file_id not in summary[accession]:
                     summary[accession][file_id] = containment
                 else:
                     summary[accession][file_id] = max(summary[accession][file_id], containment)
 
+    logging.info("Completed processing of all match files.")
+
+    # Create DataFrame from summary dict
     summary_df = pd.DataFrame.from_dict(summary, orient='index')
 
     # Fill NA/NaN values with 0
@@ -91,11 +139,12 @@ def summarize(args):
     # Sort DataFrame by 'max_containment' column in descending order
     summary_df.sort_values(by='max_containment', ascending=False, inplace=True)
 
-    summary_df.to_csv(args.summary_file, sep="\t")
-    print(f"Summary saved to {args.summary_file}")
+    # Save the summary DataFrame to a CSV file
+    summary_df.to_csv(summary_file, sep="\t")
+    logging.info(f"Summary saved to {summary_file}")
 
     # Open the containment-file in write mode
-    with open(args.containment_file, 'w') as f:
+    with open(containment_file, 'w') as f:
         # Write header
         f.write("Threshold\tCount\n")
 
@@ -105,10 +154,7 @@ def summarize(args):
             count = len(summary_df[summary_df['max_containment'] > threshold])
             f.write(f"{threshold}\t{count}\n")
 
-    print(f"Containment counts saved to {args.containment_file}")
-
-
-
+    logging.info(f"Containment counts saved to {containment_file}")
 
 
 def count_single_sample(args):

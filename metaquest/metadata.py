@@ -7,69 +7,97 @@ import logging
 from urllib.error import HTTPError
 import time
 from lxml import etree
+from typing import Dict, Union, List, NoReturn
+from time import sleep
 
+MAX_RETRIES = 3  # Number of times to retry a failed download
 
+def download_metadata(email: str, matches_folder: Union[str, Path], metadata_folder: Union[str, Path],
+                      threshold: float, dry_run: bool = False) -> None:
+    """
+    Downloads metadata for each unique SRA accession in the given matches folder.
 
-def download_metadata(args):
-    matches_folder = Path(args.matches_folder)
-    metadata_folder = Path(args.metadata_folder)
-    metadata_folder.mkdir(exist_ok=True)
+    Parameters:
+    - email (str): Your email address for NCBI API access.
+    - matches_folder (Union[str, Path]): The path to the folder containing match .csv files.
+    - metadata_folder (Union[str, Path]): The path to the folder where metadata will be saved.
+    - threshold (float): Threshold for containment values.
+    - dry_run (bool): If True, does not download metadata but shows information about what would be downloaded.
 
-    Entrez.email = args.email
+    Returns:
+    None
+
+    This function scans all CSV files in the matches folder, identifies unique accessions
+    based on a containment threshold, and downloads their metadata from NCBI.
+    """
+    logging.info("Starting metadata download.")
+
+    matches_folder = Path(matches_folder)
+    metadata_folder = Path(metadata_folder)
+    metadata_folder.mkdir(exist_ok=True)  # Ensure the output directory exists
+    Entrez.email = email
 
     total_unique_accessions = 0
     accessions_to_download = 0
     unique_accessions = set()
 
+    logging.info(f"Scanning matches folder: {matches_folder}")
+
     for csv_file in matches_folder.glob('*.csv'):
-        print(f"Processing file: {csv_file}")
+        logging.info(f"Processing file: {csv_file}")
         with open(csv_file, 'r') as f:
             reader = csv.reader(f)
             next(reader)  # Skip header
             for row in reader:
                 accession = row[0]
                 containment = float(row[1])
-                if containment > args.threshold:
+                if containment > threshold:
                     unique_accessions.add(accession)
 
     total_unique_accessions = len(unique_accessions)
+
+    logging.info(f"Total number of unique accessions: {total_unique_accessions}")
 
     for accession in unique_accessions:
         metadata_file = metadata_folder / f"{accession}_metadata.xml"
         if not metadata_file.exists():
             accessions_to_download += 1
 
-    if args.dry_run:
-        print("Dry run enabled, not downloading metadata.")
-        print(f"Total number of unique accessions: {total_unique_accessions}")
-        print(f"Accessions to download: {accessions_to_download}")
+    if dry_run:
+        logging.info("Dry run enabled, not downloading metadata.")
+        logging.info(f"Total number of unique accessions: {total_unique_accessions}")
+        logging.info(f"Accessions to download: {accessions_to_download}")
         return
 
-    downloaded_accessions = 0 # Counter for downloaded accessions
-    failed_downloads = 0  # Counter for failed downloads
+    downloaded_accessions = 0
+    failed_downloads = 0
 
     for accession in unique_accessions:
         metadata_file = metadata_folder / f"{accession}_metadata.xml"
         if not metadata_file.exists():
-            try:
-                logging.info(f'Downloading metadata for {accession}')
-                handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
-                metadata = handle.read().decode()  # Decode bytes to string
-                with open(metadata_file, "w") as out_handle:
-                    out_handle.write(metadata)
-                downloaded_accessions += 1
-                if downloaded_accessions % 100 == 0:
-                    print(f"Downloaded metadata for {downloaded_accessions} accessions.")
-            except HTTPError:
-                logging.error(f"Failed to download metadata for {accession}. Skipping to next accession.")
-                failed_downloads += 1  # Increment the counter for each failed download
+            retries = 0
+            while retries < MAX_RETRIES:
+                try:
+                    logging.info(f"Downloading metadata for {accession}")
+                    handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
+                    metadata = handle.read().decode()  # Decode bytes to string
+                    with open(metadata_file, "w") as out_handle:
+                        out_handle.write(metadata)
+                    downloaded_accessions += 1
+                    if downloaded_accessions % 100 == 0:
+                        logging.info(f"Downloaded metadata for {downloaded_accessions} accessions.")
+                    break  # Successful download, break the retry loop
+                except HTTPError as e:
+                    retries += 1
+                    logging.warning(f"Failed to download metadata for {accession}. Retrying ({retries}/{MAX_RETRIES}). Error: {e}")
+                    sleep(2 ** retries)  # Exponential backoff
+            else:  # No break means all retries failed
+                logging.error(f"Failed to download metadata for {accession} after {MAX_RETRIES} retries.")
+                failed_downloads += 1
 
-    print(f"Total number of unique accessions: {total_unique_accessions}")
-    print(f"Accessions to download: {accessions_to_download}")
-    print(f"Failed downloads: {failed_downloads}")  # Print the number of failed downloads
-
-
-
+    logging.info(f"Total number of unique accessions: {total_unique_accessions}")
+    logging.info(f"Accessions to download: {accessions_to_download}")
+    logging.info(f"Failed downloads: {failed_downloads}")  # Print the number of failed downloads
 
 
 def parse_metadata(args):
