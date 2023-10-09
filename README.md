@@ -68,7 +68,7 @@ metaquest download-metadata --matches_folder matches --metadata_folder metadata 
 Once the metadata is downloaded, you can parse it to generate a more concise and readable format.
 
 ```bash
-metaquest parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
+metaquest parse-metadata --metadata_folder metadata --metadata_table_file parsed_metadata.txt
 ```
 
 *Example output:* parsed_metadata.txt
