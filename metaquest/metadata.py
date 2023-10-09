@@ -7,7 +7,7 @@ import logging
 from urllib.error import HTTPError
 import time
 from lxml import etree
-from typing import Dict, Union, List, NoReturn
+from typing import Dict, Union, List, NoReturn, Set
 from time import sleep
 
 MAX_RETRIES = 3  # Number of times to retry a failed download
@@ -121,6 +121,12 @@ def parse_metadata(metadata_folder: str, metadata_table_file: str) -> None:
     # Initialize a counter for parsed files
     parsed_files_count = 0
 
+    # Collect unique sample attributes
+    # Get unique sample attributes from all XML files in the folder
+    unique_sample_attributes = get_unique_sample_attributes(metadata_folder)
+    logging.info(f"Number of unique sample attributes: {len(unique_sample_attributes)}")
+
+
     for metadata_file in metadata_folder.glob('*.xml'):
         tree = etree.parse(str(metadata_file))
 
@@ -136,7 +142,7 @@ def parse_metadata(metadata_folder: str, metadata_table_file: str) -> None:
         sample_scientific_name = tree.findtext(".//SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME")
         sample_title = tree.findtext(".//SAMPLE/TITLE")
 
-
+        # Run Information
         run_id = tree.findtext(".//RUN/IDENTIFIERS/PRIMARY_ID")
         run_total_spots = tree.findtext(".//RUN/Total_spots")
         run_total_bases = tree.findtext(".//RUN/Total_bases")
@@ -160,14 +166,23 @@ def parse_metadata(metadata_folder: str, metadata_table_file: str) -> None:
         experiment_library_source = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE")
         experiment_library_selection = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION")
 
+
         # Extract the second SRAFile URL (SRA Normalized URL)
         srafile_elements = tree.findall(".//RUN/SRAFiles/SRAFile")
         sra_normalized_url = None
         if len(srafile_elements) > 1:
             sra_normalized_url = srafile_elements[1].get("url")
 
+        # Sample attributes
+        sample_attributes = {}
+        for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE"):
+            tag = attribute.findtext("TAG")
+            value = attribute.findtext("VALUE")
+            if tag in unique_sample_attributes:
+                sample_attributes[tag] = value
+
         # Add to metadata table
-        metadata_table.append({
+        metadata_dict = {
             "Run_ID": run_id,
             "Run_Total_Spots": run_total_spots,
             "Run_Total_Bases": run_total_bases,
@@ -196,7 +211,13 @@ def parse_metadata(metadata_folder: str, metadata_table_file: str) -> None:
             "Experiment_Library_Source": experiment_library_source,
             "Experiment_Library_Selection": experiment_library_selection,
             "SRA_Normalized_URL": sra_normalized_url
-        })
+        }
+
+        # Add sample attributes to metadata_dict
+        for attribute in unique_sample_attributes:
+            metadata_dict[attribute] = sample_attributes.get(attribute, None)
+
+        metadata_table.append(metadata_dict)
 
         parsed_files_count += 1  # Increment the counter each time a file is parsed
         if parsed_files_count % 100 == 0:
@@ -211,3 +232,15 @@ def parse_metadata(metadata_folder: str, metadata_table_file: str) -> None:
 
     logging.info(f'Parsing completed. Parsed {parsed_files_count} files in {elapsed_time} seconds.')
 
+
+
+def get_unique_sample_attributes(folder_path: str) -> List[str]:
+    """
+    Scans all XML files in the given folder to find all unique sample attribute tags.
+    """
+    unique_attributes = set()
+    for metadata_file in Path(folder_path).glob('*.xml'):
+        tree = etree.parse(str(metadata_file))
+        for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"):
+            unique_attributes.add(attribute.text)
+    return list(unique_attributes)
