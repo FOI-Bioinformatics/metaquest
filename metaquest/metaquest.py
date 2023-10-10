@@ -3,11 +3,11 @@ import argparse
 from typing import Dict
 
 from metaquest.data_processing import (
-    run_mastiff, summarize, count_single_sample,
+    run_mastiff, parse_containment, count_single_sample,
     download_test_genome, collect_genome_counts,
     download_sra, assemble_datasets
 )
-from metaquest.visualization import plot_metadata_counts, plot_heatmap, plot_pca, plot_upset
+from metaquest.visualization import plot_containment_column, plot_metadata_counts, plot_heatmap, plot_pca, plot_upset
 from metaquest.metadata import download_metadata, parse_metadata, count_metadata_attributes
 from argparse import Namespace
 
@@ -27,8 +27,8 @@ def run_mastiff_wrapper(args):
     # Add additional logic here if needed
     run_mastiff(args.genomes_folder, args.matches_folder)
 
-def summarize_wrapper(args):
-    summarize(args.matches_folder, args.summary_file, args.containment_file)
+def parse_containment_wrapper(args):
+    parse_containment(args.matches_folder, args.parsed_containment_file, args.summary_containment_file, args.step_size)
 
 def download_metadata_wrapper(args):
     download_metadata(email=args.email, matches_folder=args.matches_folder, metadata_folder=args.metadata_folder,
@@ -108,6 +108,14 @@ def count_metadata_attributes_wrapper(args) -> Dict[str, int]:
     print(f"Summary saved to {args.output_file}")
     return sorted_summary
 
+def plot_containment_column_wrapper(args):
+    """
+    Wrapper function for plot_containment_column to use with argparse.
+    """
+    plot_containment_column(file_path=args.file_path, column=args.column, title=args.title,
+                            colors=args.colors, show_title=args.show_title, save_format=args.save_format,
+                            threshold=args.threshold, plot_type=args.plot_type)
+
 
 # argparse setup
 def main():
@@ -131,15 +139,30 @@ def main():
     parser_mastiff.set_defaults(func=run_mastiff_wrapper)
 
     # Summarize command
-    parser_summarize = subparsers.add_parser('summarize',
-                                             help='Summarizes the data from the .csv files in the matches directory.')
-    parser_summarize.add_argument('--matches-folder', default='matches',
-                                  help='Folder containing the matches to be summarized.')
-    parser_summarize.add_argument('--summary-file', default='SRA-summary.txt',
-                                  help='File where the summary will be stored.')
-    parser_summarize.add_argument('--containment-file', default='top_containments.txt',
+    parser_parse_containment = subparsers.add_parser('parse_containment',
+                                             help='Parse the containment data from the .csv files in the matches directory.')
+    parser_parse_containment.add_argument('--matches_folder', default='matches',
+                                  help='Folder containing the containment matches to be parsed.')
+    parser_parse_containment.add_argument('--parsed_containment_file', default='parsed_containment.txt',
+                                  help='File where the parsed containment will be stored.')
+    parser_parse_containment.add_argument('--summary_containment_file', default='top_containments.txt',
                                   help='File where the top containments will be stored.')
-    parser_summarize.set_defaults(func=summarize_wrapper)
+    parser_parse_containment.add_argument('--step_size', default='0.1', type=float,
+                                          help='Size of steps for the containment values.')
+    parser_parse_containment.set_defaults(func=parse_containment_wrapper)
+
+    # Plot containment column command
+    parser_plot_containment = subparsers.add_parser('plot_containment',
+                                                    help='Plot containment column from summary file')
+    parser_plot_containment.add_argument('--file_path', required=True, help='Path to the summary file.')
+    parser_plot_containment.add_argument('--column', default='max_containment', help='Column to plot. Defaults to max_containment.')
+    parser_plot_containment.add_argument('--title', help='Title of the plot.')
+    parser_plot_containment.add_argument('--colors', help='Colors to use in the plot.')
+    parser_plot_containment.add_argument('--show_title', action='store_true', help='Whether to display the title.')
+    parser_plot_containment.add_argument('--save_format', help='Format in which to save the plot (e.g., png).')
+    parser_plot_containment.add_argument('--threshold', type=float, help='Minimum value to be included in the plot.')
+    parser_plot_containment.add_argument('--plot_type', default='rank', help="Type of plot to generate. Options are 'rank', 'histogram', 'box', 'violin'.")
+    parser_plot_containment.set_defaults(func=plot_containment_column_wrapper)
 
     # Download metadata command
     parser_download_metadata = subparsers.add_parser('download-metadata',
@@ -156,7 +179,7 @@ def main():
     parser_download_metadata.set_defaults(func=download_metadata_wrapper)
 
     # Parse metadata command
-    parser_parse_metadata = subparsers.add_parser('parse-metadata',
+    parser_parse_metadata = subparsers.add_parser('parse_metadata',
                                                   help='Parse metadata for each *_metadata.xml file in the specified directory')
     parser_parse_metadata.add_argument('--metadata_folder', default='metadata',
                                        help='Folder containing *_metadata.xml files to parse')
@@ -199,7 +222,7 @@ def main():
     parser_genome_count.add_argument('--threshold', type=float, default=0.5,
                                      help='Threshold for the column in the summary file.')
     parser_genome_count.add_argument('--output-file', default='collected_table.txt', help='Path to the output file.')
-    parser_genome_count.add_argument('--stat-file', default="collected_stats.txt", help='Path to the statistics file.')
+    parser_genome_count.add_argument('--stat-file', default=None, help='Path to the statistics file.')
     parser_genome_count.set_defaults(func=collect_genome_counts_wrapper)
 
     # Plot metadata counts command
