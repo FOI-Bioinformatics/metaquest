@@ -1,4 +1,4 @@
-
+import os
 import pandas as pd
 from pathlib import Path
 import csv
@@ -85,8 +85,8 @@ def run_mastiff(genomes_folder: Union[str, Path], matches_folder: Union[str, Pat
             logging.info(f'Skipping mastiff on {fasta_file.name} because output file already exists')
 
 
-def summarize(matches_folder: Union[str, Path], summary_file: Union[str, Path],
-              containment_file: Union[str, Path]) -> None:
+def parse_containment(matches_folder: Union[str, Path], parsed_containment_file: Union[str, Path],
+              summary_containment_file: Union[str, Path], step_size=0.1) -> None:
     """
     Generate summary and containment files from MASH matches.
 
@@ -141,21 +141,22 @@ def summarize(matches_folder: Union[str, Path], summary_file: Union[str, Path],
     summary_df.sort_values(by='max_containment', ascending=False, inplace=True)
 
     # Save the summary DataFrame to a CSV file
-    summary_df.to_csv(summary_file, sep="\t")
-    logging.info(f"Summary saved to {summary_file}")
+    summary_df.to_csv(parsed_containment_file, sep="\t")
+    logging.info(f"Summary saved to {parsed_containment_file}")
 
     # Open the containment-file in write mode
-    with open(containment_file, 'w') as f:
+    with open(summary_containment_file, 'w') as f:
         # Write header
         f.write("Threshold\tCount\n")
 
         # Check different thresholds and write the count to the containment-file
-        for i in range(9, -1, -1):
-            threshold = i / 10
+        for i in range(int(1 / step_size), -1, -1):
+            threshold = i * step_size
+            rounded_threshold = round(threshold, 2)  # Round to two decimal places
             count = len(summary_df[summary_df['max_containment'] > threshold])
-            f.write(f"{threshold}\t{count}\n")
+            f.write(f"{rounded_threshold}\t{count}\n")
 
-    logging.info(f"Containment counts saved to {containment_file}")
+    logging.info(f"Containment counts saved to {summary_containment_file}")
 
 
 def count_single_sample(summary_file: str, metadata_file: str, summary_column: str, metadata_column: str,
@@ -210,7 +211,7 @@ def collect_genome_counts(
         metadata_column: str,
         threshold: float,
         output_file: str,
-        stat_file: str
+        stat_file: str = None
     ) -> pd.DataFrame:
     """
     Count occurrences of genomes based on a threshold from summary and metadata files.
@@ -231,6 +232,12 @@ def collect_genome_counts(
     The results are saved to the specified output and statistics files.
     """
     logging.info("Starting collection of genome counts.")
+
+    # If stat_file is not provided, generate it from output_file
+    if stat_file is None:
+        base_name, ext = os.path.splitext(output_file)
+        stat_file = f"{base_name}_stats{ext}"
+    print(stat_file)
 
     # Load the summary and metadata dataframes
     summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
