@@ -244,3 +244,41 @@ def get_unique_sample_attributes(folder_path: str) -> List[str]:
         for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"):
             unique_attributes.add(attribute.text)
     return list(unique_attributes)
+
+
+def count_metadata_attributes(file_path: str, output_file: str) -> Dict[str, int]:
+    """
+    Summarize the parsed metadata from a given file and save the summary to an output file.
+
+    This function counts the number of non-empty entries for each column, excluding columns
+    that start with 'Run_', 'Project_', 'Sample_', or 'Experiment_', and sorts them by count.
+
+    Parameters:
+        file_path (str): The file path to the parsed_metadata.txt file.
+                         The first column is assumed to be the ID.
+
+        output_file (str): The file path where the summary will be saved.
+
+    Returns:
+        Dict[str, int]: A dictionary where the keys are the column names and the values are
+                        the count of non-empty entries in each column, sorted by count.
+    """
+
+    # Load the data
+    df = pd.read_csv(file_path, sep='\t', index_col=0)
+
+    # Filter out unwanted columns
+    filtered_columns = [col for col in df.columns if not col.startswith(('Run_', 'Project_', 'Sample_', 'Experiment_'))]
+
+    # Count non-empty entries for each filtered column
+    summary = {col: df[col].count() for col in filtered_columns}
+
+    # Sort the summary by count
+    sorted_summary = {k: v for k, v in sorted(summary.items(), key=lambda item: item[1], reverse=True)}
+
+    # Save the sorted summary to an output file
+    with open(output_file, 'w') as f:
+        for key, value in sorted_summary.items():
+            f.write(f"{key}\t{value}\n")
+
+    return sorted_summary

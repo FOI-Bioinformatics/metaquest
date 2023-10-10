@@ -1,12 +1,14 @@
 import logging
 import argparse
+from typing import Dict
+
 from metaquest.data_processing import (
     run_mastiff, summarize, count_single_sample,
     download_test_genome, collect_genome_counts,
     download_sra, assemble_datasets
 )
-from metaquest.visualization import plot_heatmap, plot_pca, plot_upset
-from metaquest.metadata import download_metadata, parse_metadata
+from metaquest.visualization import plot_metadata_counts, plot_heatmap, plot_pca, plot_upset
+from metaquest.metadata import download_metadata, parse_metadata, count_metadata_attributes
 from argparse import Namespace
 
 
@@ -92,6 +94,20 @@ def collect_genome_counts_wrapper(args: Namespace) -> None:
         stat_file=args.stat_file
     )
 
+def plot_metadata_counts_wrapper(args):
+    plot_metadata_counts(file_path=args.file_path,
+                         title=args.title,
+                         plot_type=args.plot_type,
+                         colors=args.colors,
+                         show_title=args.show_title,
+                         save_format=args.save_format)
+
+# Wrapper function for count_metadata_attributes
+def count_metadata_attributes_wrapper(args) -> Dict[str, int]:
+    sorted_summary = count_metadata_attributes(file_path=args.file_path, output_file=args.output_file)
+    print(f"Summary saved to {args.output_file}")
+    return sorted_summary
+
 
 # argparse setup
 def main():
@@ -148,6 +164,16 @@ def main():
                                        help='File where the parsed metadata will be stored')
     parser_parse_metadata.set_defaults(func=parse_metadata_wrapper)
 
+    # Subparser for count_metadata_attributes
+    parser_count_metadata = subparsers.add_parser('count_metadata',
+                                                  help='Count metadata attributes from a parsed metadata file')
+    parser_count_metadata.add_argument('--file-path', required=True,
+                                       help='Path to the input parsed_metadata.txt file')
+    parser_count_metadata.add_argument('--output-file', default='metadata_counts.txt',
+                                       help='Path to the output summary file')
+    parser_count_metadata.set_defaults(func=count_metadata_attributes_wrapper)
+
+
     # Count single sample command
     parser_single_sample = subparsers.add_parser('single_sample',
                                                  help='Counts the occurrences of unique values in a column for a single sample.')
@@ -176,7 +202,22 @@ def main():
     parser_genome_count.add_argument('--stat-file', default="collected_stats.txt", help='Path to the statistics file.')
     parser_genome_count.set_defaults(func=collect_genome_counts_wrapper)
 
-    
+    # Plot metadata counts command
+    parser_plot_metadata = subparsers.add_parser('plot_metadata_counts',
+                                                 help='Plot metadata counts as bar, pie, or radar chart.')
+    parser_plot_metadata.add_argument('--file_path', required=True, help='Path to the metadata counts file.')
+    parser_plot_metadata.add_argument('--title', default=None,
+                                      help='Title for the plot. Default is the header of the first column.')
+    parser_plot_metadata.add_argument('--plot_type', default='bar', choices=['bar', 'pie', 'radar'],
+                                      help='Type of plot to generate. Choices are bar, pie, and radar. Default is bar.')
+    parser_plot_metadata.add_argument('--colors', default=None,
+                                      help='List of colors or colormap name. Default is viridis.')
+    parser_plot_metadata.add_argument('--show_title', type=bool, default=True,
+                                      help='Whether to display the title on the plot. Default is True.')
+    parser_plot_metadata.add_argument('--save_format', default=None, choices=['png', 'jpg', 'pdf'],
+                                      help='Format to save the figure. Choices are png, jpg, and pdf. Default is None (do not save).')
+    parser_plot_metadata.set_defaults(func=plot_metadata_counts_wrapper)
+
     # Plot heatmap command
     parser_plot_heatmap = subparsers.add_parser('plot_heatmap', help='Plot heatmap from summary')
     parser_plot_heatmap.add_argument('--summary-file', required=True, help='Input summary file')
