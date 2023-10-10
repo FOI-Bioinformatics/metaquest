@@ -116,6 +116,14 @@ def plot_containment_column_wrapper(args):
                             colors=args.colors, show_title=args.show_title, save_format=args.save_format,
                             threshold=args.threshold, plot_type=args.plot_type)
 
+def download_sra_wrapper(args):
+    return download_sra(
+        fastq_folder=args.fastq_folder,
+        accessions_file=args.accessions_file,
+        max_downloads=args.max_downloads,
+        dry_run=args.dry_run,
+        num_threads=args.num_threads
+    )
 
 # argparse setup
 def main():
@@ -263,17 +271,19 @@ def main():
     parser_plot_pca.set_defaults(func=plot_pca)
     
     # Download SRA argparse setup
-    parser_download_sra = subparsers.add_parser('download_sra', help='Download SRA datasets with optimization features.')
-    parser_download_sra.add_argument('--summary_file', type=str, required=True, help='Path to the summary.txt file.')
-    parser_download_sra.add_argument('--fastq_folder', type=str, required=True,
-                            help='Path to the folder where FASTQ files should be saved.')
+    parser_download_sra = subparsers.add_parser('download-sra',
+                                                help='Download SRA datasets based on the given accessions file.')
+    parser_download_sra.add_argument('--fastq_folder', default='fastq',
+                                     help='Folder to save downloaded FASTQ files.')
+    parser_download_sra.add_argument('--accessions_file', required=True,
+                                     help='File containing SRA accessions, one per line.')
     parser_download_sra.add_argument('--max_downloads', type=int, default=None,
-                            help='Maximum number of datasets to download. Default is to download all.')
-    parser_download_sra.add_argument('--threshold', type=float, default=0.0,
-                            help='Threshold for max_containment. Only accessions with max_containment greater than this threshold will be downloaded.')
-    parser_download_sra.add_argument('--dry-run', action='store_true',default=False,
-                            help='Only check and log the number of datasets left to download without actually downloading them.')
-    parser_download_sra.set_defaults(func=download_sra)
+                                     help='Maximum number of datasets to download.')
+    parser_download_sra.add_argument('--num_threads', type=int, default=4,
+                                     help='Number of threads for fasterq-dump.')
+    parser_download_sra.add_argument('--dry-run', action='store_true',
+                                     help='If enabled, no downloads are performed. Only calculates the total number of accessions.')
+    parser_download_sra.set_defaults(func=download_sra_wrapper)
 
     # Assemble datasets argparse setup
     parser_assemble_datasets = subparsers.add_parser('assemble_datasets', help='Assemble datasets based on input data files.')

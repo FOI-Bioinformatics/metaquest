@@ -300,49 +300,50 @@ def assemble_datasets(args):
             logging.info(f'Assembling Nanopore dataset for {fastq_file.name}')
             subprocess.run(['flye', '--nano-raw', str(fastq_file), '--out-dir', f'{fastq_file.stem}_flye', '--meta'], check=True)
 
-def download_accession(accession, fastq_folder):
+def download_accession(accession, fastq_folder, num_threads):
     """
-    Download the SRA dataset for the given accession.
-    Saves the downloaded FASTQ file in the specified fastq_folder.
+    Download the SRA dataset for the given accession using fasterq-dump.
+    Saves the downloaded FASTQ file in a subfolder named after the accession inside the specified fastq_folder.
     Returns True if the download was successful, otherwise False.
     """
-    output_file = fastq_folder / f'{accession}.fastq.gz'
+    output_folder = fastq_folder / accession
+    output_folder.mkdir(exist_ok=True)
+
     try:
-        logging.info(f'Downloading SRA for {accession}')
-        subprocess.run(['fastq-dump', '--gzip', '--split-files', accession, '-O', str(fastq_folder)], check=True)
+        logging.info(f"Downloading SRA for {accession}")
+        subprocess.run(
+            ["fasterq-dump", "--threads", str(num_threads), "--progress", accession, "-O", str(output_folder)],
+            check=True,
+        )
         return True
     except subprocess.CalledProcessError:
-        logging.error(f'Error downloading SRA for {accession}')
+        logging.error(f"Error downloading SRA for {accession}")
         return False
 
-def download_sra(args):
+def download_sra(fastq_folder, accessions_file, max_downloads=None, dry_run=False, num_threads=4):
     """
-    Download SRA datasets based on the accessions in the summary.txt file.
-    Only accessions with max_containment greater than the threshold will be considered.
+    Download SRA datasets based on the accessions in the accessions_file.
     Limit the number of downloads with the max_downloads parameter.
     If dry_run is True, only log the number of datasets left to download without actually downloading them.
     """
-    fastq_folder = Path(args.fastq_folder)
+    fastq_folder = Path(fastq_folder)
     fastq_folder.mkdir(exist_ok=True)
 
-    # Load the summary.txt file without headers for the first column
-    summary_df = pd.read_csv(args.summary_file, sep='\t', header=None, skiprows=1,
-                             names=['accession', 'max_containment', 'max_containment_annotation1',
-                                    'max_containment_annotation2'])
-    accessions_to_download = summary_df[summary_df['max_containment'] > args.threshold]['accession'].tolist()
+    # Load the accessions from the file
+    with open(accessions_file, "r") as f:
+        accessions_to_download = [line.strip() for line in f]
 
-    if args.dry_run:
+    if dry_run:
         logging.info(f"DRY RUN: {len(accessions_to_download)} datasets left to download.")
-        print(len(accessions_to_download))
         return len(accessions_to_download)
 
     download_count = 0
     for accession in accessions_to_download:
         # Check if we've reached the maximum downloads for this call
-        if args.max_downloads and download_count >= args.max_downloads:
+        if max_downloads and download_count >= max_downloads:
             break
 
-        if download_accession(accession, fastq_folder):
+        if download_accession(accession, fastq_folder, num_threads):
             download_count += 1
 
     return download_count
