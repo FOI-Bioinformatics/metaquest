@@ -246,7 +246,7 @@ def get_unique_sample_attributes(folder_path: str) -> List[str]:
     return list(unique_attributes)
 
 
-def count_metadata_attributes(file_path: str, output_file: str) -> Dict[str, int]:
+def check_metadata_attributes(file_path: str, output_file: str) -> Dict[str, int]:
     """
     Summarize the parsed metadata from a given file and save the summary to an output file.
 

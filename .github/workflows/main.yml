@@ -43,17 +43,23 @@ jobs:
       run: |
         metaquest mastiff --genomes-folder genomes --matches-folder matches
 
-    - name: Summarize
-      run: metaquest summarize --matches-folder matches --summary-file summary.txt --containment-file containment.txt
+    - name: parse_containment
+      run: metaquest parse_containment --matches_folder matches --parsed_containment_file parsed_containment.txt --summary_containment_file summary_containment.txt
+
+    - name: Plot containment
+      run: metaquest plot_containment --file_path parsed_containment.txt --colors black --save_format png --threshold 0.05 --plot_type rank
 
     - name: Download Metadata
-      run: metaquest download-metadata --email andreas.sjodin@gmail.com --matches_folder matches --metadata_folder metadata --threshold 0.95
+      run: metaquest download_metadata --email andreas.sjodin@gmail.com --matches_folder matches --metadata_folder metadata --threshold 0.95
 
     - name: Parse Metadata
-      run: metaquest parse-metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
+      run: metaquest parse_metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
 
-    - name: Genome Count
-      run: metaquest genome_count --summary-file summary.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95  --output-file genome_counts.txt
+    - name: Calculate metadata Count
+      run: metaquest genome_count --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95  --output-file counts_Sample_Scientific_Name.txt
+
+    - name: Plot metadata counts
+      run: metaquest plot_metadata_counts --file_path counts_Sample_Scientific_Name.txt --plot_type bar --save_format png --colors black
 
     - name: Single Sample
-      run: metaquest single_sample --summary-file summary.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column  Sample_Scientific_Name  --threshold 0.95
+      run: metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column  Sample_Scientific_Name  --threshold 0.95

@@ -4,11 +4,11 @@ from typing import Dict
 
 from metaquest.data_processing import (
     run_mastiff, parse_containment, count_single_sample,
-    download_test_genome, collect_genome_counts,
+    download_test_genome, count_metadata,
     download_sra, assemble_datasets
 )
 from metaquest.visualization import plot_containment_column, plot_metadata_counts, plot_heatmap, plot_pca, plot_upset
-from metaquest.metadata import download_metadata, parse_metadata, count_metadata_attributes
+from metaquest.metadata import download_metadata, parse_metadata, check_metadata_attributes
 from argparse import Namespace
 
 
@@ -78,14 +78,14 @@ def count_single_sample_wrapper(args):
     logging.info(f"Count dictionary generated: {count_dict}")
 
 
-def collect_genome_counts_wrapper(args: Namespace) -> None:
+def count_metadata_wrapper(args: Namespace) -> None:
     """
     Wrapper function for collect_genome_counts to be called from the command-line interface.
 
     Parameters:
     - args (Namespace): An argparse Namespace object containing all the required arguments.
     """
-    collect_genome_counts(
+    count_metadata(
         summary_file=args.summary_file,
         metadata_file=args.metadata_file,
         metadata_column=args.metadata_column,
@@ -103,8 +103,8 @@ def plot_metadata_counts_wrapper(args):
                          save_format=args.save_format)
 
 # Wrapper function for count_metadata_attributes
-def count_metadata_attributes_wrapper(args) -> Dict[str, int]:
-    sorted_summary = count_metadata_attributes(file_path=args.file_path, output_file=args.output_file)
+def check_metadata_attributes_wrapper(args) -> Dict[str, int]:
+    sorted_summary = check_metadata_attributes(file_path=args.file_path, output_file=args.output_file)
     print(f"Summary saved to {args.output_file}")
     return sorted_summary
 
@@ -173,7 +173,7 @@ def main():
     parser_plot_containment.set_defaults(func=plot_containment_column_wrapper)
 
     # Download metadata command
-    parser_download_metadata = subparsers.add_parser('download-metadata',
+    parser_download_metadata = subparsers.add_parser('download_metadata',
                                                      help='Download metadata for each SRA accession in the .csv files in the matches directory')
     parser_download_metadata.add_argument('--email', required=True, help='Your email address for NCBI API access.')
     parser_download_metadata.add_argument('--matches_folder', default='matches',
@@ -195,14 +195,14 @@ def main():
                                        help='File where the parsed metadata will be stored')
     parser_parse_metadata.set_defaults(func=parse_metadata_wrapper)
 
-    # Subparser for count_metadata_attributes
-    parser_count_metadata = subparsers.add_parser('count_metadata',
-                                                  help='Count metadata attributes from a parsed metadata file')
-    parser_count_metadata.add_argument('--file-path', required=True,
+    # Subparser for check_metadata_attributes
+    parser_check_metadata_attributes = subparsers.add_parser('check_metadata_attributes',
+                                                  help='Count metadata attribute presence from a parsed metadata file')
+    parser_check_metadata_attributes.add_argument('--file-path', required=True,
                                        help='Path to the input parsed_metadata.txt file')
-    parser_count_metadata.add_argument('--output-file', default='metadata_counts.txt',
+    parser_check_metadata_attributes.add_argument('--output-file', default='metadata_counts.txt',
                                        help='Path to the output summary file')
-    parser_count_metadata.set_defaults(func=count_metadata_attributes_wrapper)
+    parser_check_metadata_attributes.set_defaults(func=check_metadata_attributes_wrapper)
 
 
     # Count single sample command
@@ -221,20 +221,20 @@ def main():
     parser_single_sample.set_defaults(func=count_single_sample_wrapper)
 
     # Collect genome counts command
-    parser_genome_count = subparsers.add_parser('genome_count',
+    parser_count_metadata = subparsers.add_parser('count_metadata',
                                                 help='Collects genome counts and outputs a table with sample files.')
-    parser_genome_count.add_argument('--summary-file', default='SRA-summary.txt', help='Path to the summary file.')
-    parser_genome_count.add_argument('--metadata-file', default='metadata_table.txt', help='Path to the metadata file.')
-    parser_genome_count.add_argument('--metadata-column', required=True,
+    parser_count_metadata.add_argument('--summary-file', default='SRA-summary.txt', help='Path to the summary file.')
+    parser_count_metadata.add_argument('--metadata-file', default='metadata_table.txt', help='Path to the metadata file.')
+    parser_count_metadata.add_argument('--metadata-column', required=True,
                                      help='Name of the column in the metadata file.')
-    parser_genome_count.add_argument('--threshold', type=float, default=0.5,
+    parser_count_metadata.add_argument('--threshold', type=float, default=0.5,
                                      help='Threshold for the column in the summary file.')
-    parser_genome_count.add_argument('--output-file', default='collected_table.txt', help='Path to the output file.')
-    parser_genome_count.add_argument('--stat-file', default=None, help='Path to the statistics file.')
-    parser_genome_count.set_defaults(func=collect_genome_counts_wrapper)
+    parser_count_metadata.add_argument('--output-file', default='collected_table.txt', help='Path to the output file.')
+    parser_count_metadata.add_argument('--stat-file', default=None, help='Path to the statistics file.')
+    parser_count_metadata.set_defaults(func=count_metadata_wrapper)
 
     # Plot metadata counts command
-    parser_plot_metadata = subparsers.add_parser('plot_metadata_counts',
+    parser_plot_metadata = subparsers.add_parser('plot_metadata',
                                                  help='Plot metadata counts as bar, pie, or radar chart.')
     parser_plot_metadata.add_argument('--file_path', required=True, help='Path to the metadata counts file.')
     parser_plot_metadata.add_argument('--title', default=None,
@@ -249,29 +249,29 @@ def main():
                                       help='Format to save the figure. Choices are png, jpg, and pdf. Default is None (do not save).')
     parser_plot_metadata.set_defaults(func=plot_metadata_counts_wrapper)
 
-    # Plot heatmap command
-    parser_plot_heatmap = subparsers.add_parser('plot_heatmap', help='Plot heatmap from summary')
-    parser_plot_heatmap.add_argument('--summary-file', required=True, help='Input summary file')
-    parser_plot_heatmap.add_argument('--heatmap-file', required=True, help='Output heatmap file')
-    parser_plot_heatmap.add_argument('--threshold', type=float, default=0.0, help='Containment threshold')
-    parser_plot_heatmap.set_defaults(func=plot_heatmap)
-
-    # Plot UpSet command
-    parser_plot_upset = subparsers.add_parser('plot_upset', help='Generate an UpSet plot from a summary file')
-    parser_plot_upset.add_argument('--summary-file', required=True, help='Input summary file')
-    parser_plot_upset.add_argument('--output-file', required=True, help='Output file for the UpSet plot')
-    parser_plot_upset.add_argument('--threshold', type=float, default=0.1, help='Containment threshold for the plot')
-    parser_plot_upset.set_defaults(func=plot_upset)
-
-    # Plot PCA command
-    parser_plot_pca = subparsers.add_parser('plot_pca', help='Generate a PCA plot from a summary file')
-    parser_plot_pca.add_argument('--summary-file', required=True, help='Input summary file')
-    parser_plot_pca.add_argument('--pca-file', required=True, help='Output file for the PCA plot')
-    parser_plot_pca.add_argument('--threshold', type=float, default=0.1, help='Containment threshold for the plot')
-    parser_plot_pca.set_defaults(func=plot_pca)
+    # # Plot heatmap command
+    # parser_plot_heatmap = subparsers.add_parser('plot_heatmap', help='Plot heatmap from summary')
+    # parser_plot_heatmap.add_argument('--summary-file', required=True, help='Input summary file')
+    # parser_plot_heatmap.add_argument('--heatmap-file', required=True, help='Output heatmap file')
+    # parser_plot_heatmap.add_argument('--threshold', type=float, default=0.0, help='Containment threshold')
+    # parser_plot_heatmap.set_defaults(func=plot_heatmap)
+    #
+    # # Plot UpSet command
+    # parser_plot_upset = subparsers.add_parser('plot_upset', help='Generate an UpSet plot from a summary file')
+    # parser_plot_upset.add_argument('--summary-file', required=True, help='Input summary file')
+    # parser_plot_upset.add_argument('--output-file', required=True, help='Output file for the UpSet plot')
+    # parser_plot_upset.add_argument('--threshold', type=float, default=0.1, help='Containment threshold for the plot')
+    # parser_plot_upset.set_defaults(func=plot_upset)
+    #
+    # # Plot PCA command
+    # parser_plot_pca = subparsers.add_parser('plot_pca', help='Generate a PCA plot from a summary file')
+    # parser_plot_pca.add_argument('--summary-file', required=True, help='Input summary file')
+    # parser_plot_pca.add_argument('--pca-file', required=True, help='Output file for the PCA plot')
+    # parser_plot_pca.add_argument('--threshold', type=float, default=0.1, help='Containment threshold for the plot')
+    # parser_plot_pca.set_defaults(func=plot_pca)
     
     # Download SRA argparse setup
-    parser_download_sra = subparsers.add_parser('download-sra',
+    parser_download_sra = subparsers.add_parser('download_sra',
                                                 help='Download SRA datasets based on the given accessions file.')
     parser_download_sra.add_argument('--fastq_folder', default='fastq',
                                      help='Folder to save downloaded FASTQ files.')

@@ -205,7 +205,7 @@ def count_single_sample(summary_file: str, metadata_file: str, summary_column: s
     return count_dict
 
 
-def collect_genome_counts(
+def count_metadata(
         summary_file: str,
         metadata_file: str,
         metadata_column: str,
