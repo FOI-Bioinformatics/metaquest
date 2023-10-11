@@ -122,7 +122,8 @@ def download_sra_wrapper(args):
         accessions_file=args.accessions_file,
         max_downloads=args.max_downloads,
         dry_run=args.dry_run,
-        num_threads=args.num_threads
+        num_threads=args.num_threads,
+        max_workers=args.max_workers
     )
 
 # argparse setup
@@ -269,7 +270,7 @@ def main():
     # parser_plot_pca.add_argument('--pca-file', required=True, help='Output file for the PCA plot')
     # parser_plot_pca.add_argument('--threshold', type=float, default=0.1, help='Containment threshold for the plot')
     # parser_plot_pca.set_defaults(func=plot_pca)
-    
+
     # Download SRA argparse setup
     parser_download_sra = subparsers.add_parser('download_sra',
                                                 help='Download SRA datasets based on the given accessions file.')
@@ -280,7 +281,9 @@ def main():
     parser_download_sra.add_argument('--max_downloads', type=int, default=None,
                                      help='Maximum number of datasets to download.')
     parser_download_sra.add_argument('--num_threads', type=int, default=4,
-                                     help='Number of threads for fasterq-dump.')
+                                     help='Number of threads for each fasterq-dump.')
+    parser_download_sra.add_argument('--max_workers', type=int, default=4,
+                                     help='Number of threads for parallel downloads.')
     parser_download_sra.add_argument('--dry-run', action='store_true',
                                      help='If enabled, no downloads are performed. Only calculates the total number of accessions.')
     parser_download_sra.set_defaults(func=download_sra_wrapper)
@@ -299,4 +302,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

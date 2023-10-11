@@ -8,7 +8,7 @@ import urllib.request
 import gzip
 from collections import defaultdict
 from typing import Dict, Union, List, NoReturn, Set
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def download_test_genome(output_folder: Union[str, Path]) -> None:
@@ -282,7 +282,7 @@ def count_metadata(
 
 def assemble_datasets(args):
     """Assemble datasets based on input data files.
-    
+
     Parameters:
     - args (Namespace): An argparse Namespace object containing the following attributes:
         * data_files (List[str]): List of paths to data files.
@@ -307,6 +307,12 @@ def download_accession(accession, fastq_folder, num_threads):
     Returns True if the download was successful, otherwise False.
     """
     output_folder = fastq_folder / accession
+
+    # Skip if the output folder already exists
+    if output_folder.exists():
+        logging.info(f"Skipping {accession}, folder already exists.")
+        return False
+
     output_folder.mkdir(exist_ok=True)
 
     try:
@@ -320,30 +326,54 @@ def download_accession(accession, fastq_folder, num_threads):
         logging.error(f"Error downloading SRA for {accession}")
         return False
 
-def download_sra(fastq_folder, accessions_file, max_downloads=None, dry_run=False, num_threads=4):
+def download_sra(fastq_folder, accessions_file, max_downloads=None, dry_run=False, num_threads=4, max_workers=4):
     """
     Download SRA datasets based on the accessions in the accessions_file.
-    Limit the number of downloads with the max_downloads parameter.
-    If dry_run is True, only log the number of datasets left to download without actually downloading them.
+    Utilizes multi-threading to speed up the download process.
+
+    Parameters:
+    - fastq_folder (str): Path where downloaded FASTQ files should be saved.
+    - accessions_file (str): File containing a list of SRA accessions to download.
+    - max_downloads (int, optional): Maximum number of datasets to download.
+    - dry_run (bool): If True, only logs the total number of accessions without downloading.
+    - num_threads (int): Number of threads per `fasterq-dump` subprocess.
+    - max_workers (int): Number of threads to use for parallel downloads.
+
+    Returns:
+    - download_count (int): The number of successfully downloaded datasets.
     """
     fastq_folder = Path(fastq_folder)
     fastq_folder.mkdir(exist_ok=True)
 
-    # Load the accessions from the file
     with open(accessions_file, "r") as f:
-        accessions_to_download = [line.strip() for line in f]
+        all_accessions = [line.strip() for line in f]
+
+    logging.info(f"Total number of accessions in accession file: {len(all_accessions)}")
+
+    # Filter out accessions that already have a corresponding folder
+    accessions_to_download = [acc for acc in all_accessions if not (fastq_folder / acc).exists()]
+
+    logging.info(f"Total number of accessions to download: {len(accessions_to_download)}")
 
     if dry_run:
         logging.info(f"DRY RUN: {len(accessions_to_download)} datasets left to download.")
         return len(accessions_to_download)
 
     download_count = 0
-    for accession in accessions_to_download:
-        # Check if we've reached the maximum downloads for this call
-        if max_downloads and download_count >= max_downloads:
-            break
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_accession = {executor.submit(download_accession, accession, fastq_folder, num_threads): accession for accession in accessions_to_download}
 
-        if download_accession(accession, fastq_folder, num_threads):
-            download_count += 1
+        for future in as_completed(future_to_accession):
+            accession = future_to_accession[future]
+            try:
+                success = future.result()
+                if success:
+                    download_count += 1
+
+                if max_downloads and download_count >= max_downloads:
+                    logging.info("Reached maximum download limit.")
+                    break
+            except Exception as e:
+                logging.error(f"Error downloading {accession}: {e}")
 
     return download_count
