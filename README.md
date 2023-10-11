@@ -73,7 +73,19 @@ metaquest parse_metadata --metadata_folder metadata --metadata_table_file parsed
 
 *Example output:* parsed_metadata.txt
 
-### 6. Genome Count
+### 6. Check metadata attribures
+
+This step helps in understanding the distribution of metadata attributes.
+
+```bash
+metaquest check_metadata_attributes --file-path parsed_metadata.txt --output-file  parsed_metadata_overview.txt
+```
+
+*Example output:* parsed_metadata_overview.txt
+
+
+
+### 7. Genome Count
 
 This step helps in understanding the distribution of genomes across different datasets.
 
