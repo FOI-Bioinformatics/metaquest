@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 class HeatmapPlugin(Plugin):
     """Plugin for creating heatmap visualizations."""
-    
+
     name = "heatmap"
     description = "Heatmap visualization"
     version = "0.1.0"
-    
+
     @classmethod
     def create_plot(
         cls,
@@ -35,11 +35,11 @@ class HeatmapPlugin(Plugin):
         linewidths: float = 0,
         output_file: Optional[Union[str, Path]] = None,
         output_format: str = "png",
-        **kwargs
+        **kwargs,
     ) -> plt.Figure:
         """
         Create a heatmap visualization.
-        
+
         Args:
             data: DataFrame containing data to plot
             title: Title for the plot
@@ -51,65 +51,58 @@ class HeatmapPlugin(Plugin):
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
             **kwargs: Additional arguments to pass to plotting function
-            
+
         Returns:
             Matplotlib Figure object
-            
+
         Raises:
             VisualizationError: If the plot cannot be created
         """
         try:
             # Prepare data
             df = data.copy()
-            
+
             # Create figure
             fig, ax = plt.subplots(figsize=figsize)
-            
+
             # Create plot
             if cluster:
                 clustergrid = sns.clustermap(
-                    df, 
-                    cmap=cmap,
-                    linewidths=linewidths,
-                    annot=annot,
-                    **kwargs
+                    df, cmap=cmap, linewidths=linewidths, annot=annot, **kwargs
                 )
-                
+
                 # Add title if specified
                 if title:
                     clustergrid.fig.suptitle(title, y=1.02)
-                
+
                 # Get figure from clustergrid
                 fig = clustergrid.fig
-                
+
             else:
                 # Create regular heatmap
                 sns.heatmap(
-                    df,
-                    cmap=cmap,
-                    linewidths=linewidths,
-                    annot=annot,
-                    ax=ax,
-                    **kwargs
+                    df, cmap=cmap, linewidths=linewidths, annot=annot, ax=ax, **kwargs
                 )
-                
+
                 # Add title if specified
                 if title:
                     ax.set_title(title)
-            
+
                 # Adjust layout
                 plt.tight_layout()
-            
+
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches='tight')
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
+                )
                 logger.info(f"Saved heatmap to {output_file}")
-            
+
             return fig
-            
+
         except Exception as e:
             raise VisualizationError(f"Error creating heatmap: {e}")
-    
+
     @classmethod
     def create_presence_heatmap(
         cls,
@@ -122,11 +115,11 @@ class HeatmapPlugin(Plugin):
         cluster_cols: bool = True,
         output_file: Optional[Union[str, Path]] = None,
         output_format: str = "png",
-        **kwargs
+        **kwargs,
     ) -> plt.Figure:
         """
         Create a presence/absence heatmap visualization.
-        
+
         Args:
             data: DataFrame containing containment data
             threshold: Threshold for binary presence
@@ -138,26 +131,26 @@ class HeatmapPlugin(Plugin):
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
             **kwargs: Additional arguments to pass to plotting function
-            
+
         Returns:
             Matplotlib Figure object
-            
+
         Raises:
             VisualizationError: If the plot cannot be created
         """
         try:
             # Prepare data
             df = data.copy()
-            
+
             # Filter out metadata columns if present
-            metadata_cols = ['max_containment', 'max_containment_annotation']
+            metadata_cols = ["max_containment", "max_containment_annotation"]
             for col in metadata_cols:
                 if col in df.columns:
                     df = df.drop(col, axis=1)
-            
+
             # Apply threshold
             binary_df = (df > threshold).astype(int)
-            
+
             # Calculate clustering
             if cluster_rows or cluster_cols:
                 g = sns.clustermap(
@@ -166,49 +159,46 @@ class HeatmapPlugin(Plugin):
                     figsize=figsize,
                     row_cluster=cluster_rows,
                     col_cluster=cluster_cols,
-                    **kwargs
+                    **kwargs,
                 )
-                
+
                 # Add title if specified
                 if title:
                     g.fig.suptitle(title, y=1.02)
-                
+
                 fig = g.fig
-                
+
             else:
                 # Create figure
                 fig, ax = plt.subplots(figsize=figsize)
-                
+
                 # Create plot without clustering
-                sns.heatmap(
-                    binary_df,
-                    cmap=cmap,
-                    ax=ax,
-                    **kwargs
-                )
-                
+                sns.heatmap(binary_df, cmap=cmap, ax=ax, **kwargs)
+
                 # Add title if specified
                 if title:
                     ax.set_title(title)
-                
+
                 # Adjust layout
                 plt.tight_layout()
-            
+
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches='tight')
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
+                )
                 logger.info(f"Saved presence heatmap to {output_file}")
-            
+
             return fig
-            
+
         except Exception as e:
             raise VisualizationError(f"Error creating presence heatmap: {e}")
-    
+
     @classmethod
     def create_correlation_heatmap(
         cls,
         data: pd.DataFrame,
-        method: str = 'pearson',
+        method: str = "pearson",
         title: Optional[str] = None,
         cmap: str = "coolwarm",
         figsize: Tuple[int, int] = (12, 10),
@@ -216,11 +206,11 @@ class HeatmapPlugin(Plugin):
         annot: bool = True,
         output_file: Optional[Union[str, Path]] = None,
         output_format: str = "png",
-        **kwargs
+        **kwargs,
     ) -> plt.Figure:
         """
         Create a correlation heatmap visualization.
-        
+
         Args:
             data: DataFrame containing data to calculate correlations from
             method: Correlation method ('pearson', 'spearman', or 'kendall')
@@ -232,26 +222,26 @@ class HeatmapPlugin(Plugin):
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
             **kwargs: Additional arguments to pass to plotting function
-            
+
         Returns:
             Matplotlib Figure object
-            
+
         Raises:
             VisualizationError: If the plot cannot be created
         """
         try:
             # Calculate correlation matrix
             corr_matrix = data.corr(method=method)
-            
+
             # Create mask for upper triangle if requested
             if mask_upper:
                 mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
             else:
                 mask = None
-            
+
             # Create figure
             fig, ax = plt.subplots(figsize=figsize)
-            
+
             # Create plot
             sns.heatmap(
                 corr_matrix,
@@ -263,24 +253,26 @@ class HeatmapPlugin(Plugin):
                 annot=annot,
                 fmt=".2f",
                 square=True,
-                linewidths=.5,
+                linewidths=0.5,
                 ax=ax,
-                **kwargs
+                **kwargs,
             )
-            
+
             # Add title if specified
             if title:
                 ax.set_title(title)
-            
+
             # Adjust layout
             plt.tight_layout()
-            
+
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches='tight')
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
+                )
                 logger.info(f"Saved correlation heatmap to {output_file}")
-            
+
             return fig
-            
+
         except Exception as e:
             raise VisualizationError(f"Error creating correlation heatmap: {e}")

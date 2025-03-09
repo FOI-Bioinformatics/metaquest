@@ -14,6 +14,7 @@ import datetime
 @dataclass
 class Containment:
     """Represents a containment relationship between a genome and an SRA accession."""
+
     accession: str
     value: float
     genome_id: str
@@ -23,6 +24,7 @@ class Containment:
 @dataclass
 class GenomeInfo:
     """Represents information about a genome."""
+
     genome_id: str
     path: Optional[Path] = None
     description: Optional[str] = None
@@ -34,6 +36,7 @@ class GenomeInfo:
 @dataclass
 class SRAMetadata:
     """Represents metadata for an SRA sample."""
+
     accession: str
     biosample: Optional[str] = None
     bioproject: Optional[str] = None
@@ -43,7 +46,7 @@ class SRAMetadata:
     latitude_longitude: Optional[str] = None
     assay_type: Optional[str] = None
     attributes: Dict[str, str] = field(default_factory=dict)
-    
+
     @property
     def country(self) -> Optional[str]:
         """Extract country from location if available."""
@@ -55,6 +58,7 @@ class SRAMetadata:
 @dataclass
 class ContainmentSummary:
     """Summary of containment data for analysis."""
+
     thresholds: List[float] = field(default_factory=list)
     counts: List[int] = field(default_factory=list)
     max_containment: Dict[str, float] = field(default_factory=dict)

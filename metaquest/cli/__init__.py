@@ -17,6 +17,6 @@ from metaquest.cli.commands import (
     plot_containment_command,
     plot_metadata_counts_command,
     download_sra_command,
-    assemble_datasets_command
+    assemble_datasets_command,
 )
 from metaquest.cli.main import main, create_parser

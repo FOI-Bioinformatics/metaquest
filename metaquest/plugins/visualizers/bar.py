@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 class BarChartPlugin(Plugin):
     """Plugin for creating bar chart visualizations."""
-    
+
     name = "bar"
     description = "Bar chart visualization"
     version = "0.1.0"
-    
+
     @classmethod
     def create_plot(
         cls,
@@ -34,11 +34,11 @@ class BarChartPlugin(Plugin):
         limit: Optional[int] = None,
         output_file: Optional[Union[str, Path]] = None,
         output_format: str = "png",
-        **kwargs
+        **kwargs,
     ) -> plt.Figure:
         """
         Create a bar chart visualization.
-        
+
         Args:
             data: DataFrame containing data to plot
             x_column: Column to use for x-axis (if None, use index)
@@ -51,21 +51,21 @@ class BarChartPlugin(Plugin):
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
             **kwargs: Additional arguments to pass to plotting function
-            
+
         Returns:
             Matplotlib Figure object
-            
+
         Raises:
             VisualizationError: If the plot cannot be created
         """
         try:
             # Prepare data
             df = data.copy()
-            
+
             # Use first column if y_column not specified
             if y_column is None and not df.empty and df.shape[1] > 0:
                 y_column = df.columns[0]
-            
+
             # Use index if x_column not specified
             if x_column is None:
                 if isinstance(df.index, pd.MultiIndex):
@@ -75,62 +75,60 @@ class BarChartPlugin(Plugin):
                 plot_df = df.copy()
             else:
                 plot_df = df.set_index(x_column)
-            
+
             # Apply limit if specified
             if limit is not None and limit > 0:
                 if y_column:
                     plot_df = plot_df.nlargest(limit, y_column)
                 else:
                     plot_df = plot_df.head(limit)
-            
+
             # Create figure
             fig, ax = plt.subplots(figsize=figsize)
-            
+
             # Create plot
             if horizontal:
                 if y_column:
-                    plot_df[y_column].plot(
-                        kind='barh', ax=ax, color=colors, **kwargs
-                    )
+                    plot_df[y_column].plot(kind="barh", ax=ax, color=colors, **kwargs)
                 else:
-                    plot_df.plot(kind='barh', ax=ax, color=colors, **kwargs)
-                
+                    plot_df.plot(kind="barh", ax=ax, color=colors, **kwargs)
+
                 # Add labels
-                ax.set_xlabel('Count')
-                ax.set_ylabel('')
-                
+                ax.set_xlabel("Count")
+                ax.set_ylabel("")
+
             else:
                 if y_column:
-                    plot_df[y_column].plot(
-                        kind='bar', ax=ax, color=colors, **kwargs
-                    )
+                    plot_df[y_column].plot(kind="bar", ax=ax, color=colors, **kwargs)
                 else:
-                    plot_df.plot(kind='bar', ax=ax, color=colors, **kwargs)
-                
+                    plot_df.plot(kind="bar", ax=ax, color=colors, **kwargs)
+
                 # Add labels
-                ax.set_xlabel('')
-                ax.set_ylabel('Count')
-                
+                ax.set_xlabel("")
+                ax.set_ylabel("Count")
+
                 # Rotate x-axis labels for vertical bar chart
-                plt.xticks(rotation=45, ha='right')
-            
+                plt.xticks(rotation=45, ha="right")
+
             # Add title if specified
             if title:
                 ax.set_title(title)
-            
+
             # Adjust layout
             plt.tight_layout()
-            
+
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches='tight')
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
+                )
                 logger.info(f"Saved bar chart to {output_file}")
-            
+
             return fig
-            
+
         except Exception as e:
             raise VisualizationError(f"Error creating bar chart: {e}")
-    
+
     @classmethod
     def create_grouped_bar_chart(
         cls,
@@ -145,11 +143,11 @@ class BarChartPlugin(Plugin):
         limit: Optional[int] = None,
         output_file: Optional[Union[str, Path]] = None,
         output_format: str = "png",
-        **kwargs
+        **kwargs,
     ) -> plt.Figure:
         """
         Create a grouped bar chart visualization.
-        
+
         Args:
             data: DataFrame containing data to plot
             x_column: Column to use for x-axis
@@ -163,66 +161,65 @@ class BarChartPlugin(Plugin):
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
             **kwargs: Additional arguments to pass to plotting function
-            
+
         Returns:
             Matplotlib Figure object
-            
+
         Raises:
             VisualizationError: If the plot cannot be created
         """
         try:
             # Pivot data for grouped bar chart
             pivot_df = data.pivot_table(
-                index=x_column, 
-                columns=group_column, 
-                values=value_column,
-                aggfunc='sum'
+                index=x_column, columns=group_column, values=value_column, aggfunc="sum"
             )
-            
+
             # Apply limit if specified
             if limit is not None and limit > 0:
                 # Sort by sum across all groups
-                pivot_df['_total'] = pivot_df.sum(axis=1)
-                pivot_df = pivot_df.nlargest(limit, '_total')
-                pivot_df = pivot_df.drop('_total', axis=1)
-            
+                pivot_df["_total"] = pivot_df.sum(axis=1)
+                pivot_df = pivot_df.nlargest(limit, "_total")
+                pivot_df = pivot_df.drop("_total", axis=1)
+
             # Create figure
             fig, ax = plt.subplots(figsize=figsize)
-            
+
             # Create plot
             if horizontal:
-                pivot_df.plot(kind='barh', ax=ax, color=colors, **kwargs)
-                
+                pivot_df.plot(kind="barh", ax=ax, color=colors, **kwargs)
+
                 # Add labels
-                ax.set_xlabel('Value')
+                ax.set_xlabel("Value")
                 ax.set_ylabel(x_column)
-                
+
             else:
-                pivot_df.plot(kind='bar', ax=ax, color=colors, **kwargs)
-                
+                pivot_df.plot(kind="bar", ax=ax, color=colors, **kwargs)
+
                 # Add labels
                 ax.set_xlabel(x_column)
-                ax.set_ylabel('Value')
-                
+                ax.set_ylabel("Value")
+
                 # Rotate x-axis labels for vertical bar chart
-                plt.xticks(rotation=45, ha='right')
-            
+                plt.xticks(rotation=45, ha="right")
+
             # Add title if specified
             if title:
                 ax.set_title(title)
-            
+
             # Add legend
             ax.legend(title=group_column)
-            
+
             # Adjust layout
             plt.tight_layout()
-            
+
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches='tight')
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
+                )
                 logger.info(f"Saved grouped bar chart to {output_file}")
-            
+
             return fig
-            
+
         except Exception as e:
             raise VisualizationError(f"Error creating grouped bar chart: {e}")

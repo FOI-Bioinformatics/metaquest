@@ -1,0 +1,59 @@
+name: Branchwater Integration
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Run weekly on Sunday at midnight
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  branchwater-test:
+    name: Branchwater Integration Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: 'pip'
+      
+      - name: Install MetaQuest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      
+      - name: Download test data
+        run: |
+          mkdir -p test_data/branchwater
+          # Create a proper Branchwater-formatted CSV file
+          echo "acc,containment,cANI,biosample,bioproject,assay_type,collection_date_sam,geo_loc_name_country_calc,organism,lat_lon" > test_data/branchwater/example.csv
+          echo "SRR12345678,0.95,0.98,SAMN12345678,PRJNA123456,AMPLICON,2019-05-01,USA,Francisella adeliensis,35.7N 100.2W" >> test_data/branchwater/example.csv
+          echo "SRR87654321,0.92,0.96,SAMN87654321,PRJNA123456,AMPLICON,2019-06-15,USA,Francisella adeliensis,36.1N 99.8W" >> test_data/branchwater/example.csv
+          
+          # Let's also create a debug file to check the content format
+          cat test_data/branchwater/example.csv
+      
+      - name: Process Branchwater files
+        run: |
+          mkdir -p test_data/processed
+          metaquest use_branchwater --branchwater-folder test_data/branchwater --matches-folder test_data/processed
+      
+      - name: Extract metadata
+        run: |
+          mkdir -p test_data/metadata
+          metaquest extract_branchwater_metadata --branchwater-folder test_data/branchwater --metadata-folder test_data/metadata
+      
+      - name: Parse containment
+        run: |
+          # Use proper argument syntax with hyphens instead of underscores
+          metaquest parse_containment --matches-folder test_data/processed --parsed-containment-file test_data/parsed_containment.txt --summary-containment-file test_data/summary_containment.txt
+      
+      - name: Verify outputs
+        run: |
+          # Check if files were created
+          test -f test_data/processed/example.csv && echo "✓ Branchwater file processed successfully" || echo "✗ Branchwater file processing failed"
+          test -f test_data/metadata/branchwater_metadata.txt && echo "✓ Metadata extracted successfully" || echo "✗ Metadata extraction failed"
+          test -f test_data/parsed_containment.txt && echo "✓ Containment parsed successfully" || echo "✗ Containment parsing failed"
+          test -f test_data/summary_containment.txt && echo "✓ Summary created successfully" || echo "✗ Summary creation failed"
