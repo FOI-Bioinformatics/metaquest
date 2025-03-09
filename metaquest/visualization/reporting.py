@@ -1,0 +1,715 @@
+"""
+Report generation for MetaQuest.
+
+This module provides functions for generating reports from analysis results.
+"""
+
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple, Union, Any
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+
+from metaquest.core.exceptions import VisualizationError
+from metaquest.visualization.plots import (
+    plot_containment, plot_metadata_counts, plot_heatmap, plot_correlation_matrix
+)
+
+logger = logging.getLogger(__name__)
+
+# Check if jinja2 is available for HTML reports
+try:
+    import jinja2
+    JINJA2_AVAILABLE = True
+except ImportError:
+    JINJA2_AVAILABLE = False
+    logger.warning("jinja2 not available. HTML report generation will be limited.")
+
+
+def generate_report(
+    title: str,
+    summary_file: Union[str, Path],
+    metadata_file: Optional[Union[str, Path]] = None,
+    metadata_counts_file: Optional[Union[str, Path]] = None,
+    output_file: Union[str, Path] = "report.pdf",
+    format: str = "pdf",
+    threshold: float = 0.1,
+    include_plots: bool = True,
+    include_tables: bool = True
+) -> Union[str, Path]:
+    """
+    Generate a comprehensive report from analysis results.
+    
+    Args:
+        title: Title for the report
+        summary_file: Path to the containment summary file
+        metadata_file: Path to the metadata file
+        metadata_counts_file: Path to the metadata counts file
+        output_file: Path to save the report
+        format: Report format ('pdf' or 'html')
+        threshold: Containment threshold for filtering
+        include_plots: Whether to include plots
+        include_tables: Whether to include tables
+        
+    Returns:
+        Path to the generated report
+        
+    Raises:
+        VisualizationError: If the report generation fails
+    """
+    try:
+        # Check format
+        if format not in ('pdf', 'html'):
+            raise VisualizationError(f"Unsupported report format: {format}")
+        
+        if format == 'html' and not JINJA2_AVAILABLE:
+            raise VisualizationError(
+                "HTML report generation requires jinja2. "
+                "Please install with 'pip install jinja2'"
+            )
+        
+        # Load data files
+        summary_data = pd.read_csv(summary_file, sep='\t', index_col=0)
+        
+        metadata_data = None
+        if metadata_file and Path(metadata_file).exists():
+            metadata_data = pd.read_csv(metadata_file, sep='\t')
+        
+        counts_data = None
+        if metadata_counts_file and Path(metadata_counts_file).exists():
+            counts_data = pd.read_csv(metadata_counts_file, sep='\t')
+        
+        # Generate report based on format
+        if format == 'pdf':
+            return _generate_pdf_report(
+                title=title,
+                summary_data=summary_data,
+                metadata_data=metadata_data,
+                counts_data=counts_data,
+                output_file=output_file,
+                threshold=threshold,
+                include_plots=include_plots,
+                include_tables=include_tables
+            )
+        elif format == 'html':
+            return _generate_html_report(
+                title=title,
+                summary_data=summary_data,
+                metadata_data=metadata_data,
+                counts_data=counts_data,
+                output_file=output_file,
+                threshold=threshold,
+                include_plots=include_plots,
+                include_tables=include_tables
+            )
+        
+    except Exception as e:
+        if isinstance(e, VisualizationError):
+            raise
+        raise VisualizationError(f"Error generating report: {e}")
+
+
+def _generate_pdf_report(
+    title: str,
+    summary_data: pd.DataFrame,
+    metadata_data: Optional[pd.DataFrame],
+    counts_data: Optional[pd.DataFrame],
+    output_file: Union[str, Path],
+    threshold: float,
+    include_plots: bool,
+    include_tables: bool
+) -> Path:
+    """
+    Generate a PDF report from analysis results.
+    
+    Args:
+        title: Title for the report
+        summary_data: Containment summary DataFrame
+        metadata_data: Metadata DataFrame
+        counts_data: Metadata counts DataFrame
+        output_file: Path to save the report
+        threshold: Containment threshold for filtering
+        include_plots: Whether to include plots
+        include_tables: Whether to include tables
+        
+    Returns:
+        Path to the generated PDF
+    """
+    output_path = Path(output_file)
+    
+    with PdfPages(output_path) as pdf:
+        # Title page
+        fig, ax = plt.subplots(figsize=(8.5, 11))
+        ax.axis('off')
+        
+        # Add title
+        ax.text(0.5, 0.7, title, fontsize=24, ha='center')
+        
+        # Add subtitle
+        ax.text(0.5, 0.6, f"Generated by MetaQuest", fontsize=16, ha='center')
+        
+        # Add date
+        ax.text(0.5, 0.55, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", 
+               fontsize=12, ha='center')
+        
+        # Add info on data sources
+        ax.text(0.5, 0.45, f"Containment Summary: {Path(summary_data).name}",
+               fontsize=10, ha='center')
+        
+        if metadata_data is not None:
+            ax.text(0.5, 0.42, f"Metadata: {metadata_data.shape[0]} samples",
+                   fontsize=10, ha='center')
+        
+        pdf.savefig(fig)
+        plt.close(fig)
+        
+        # Containment summary page
+        if include_tables:
+            # Summary statistics
+            fig, ax = plt.subplots(figsize=(8.5, 11))
+            ax.axis('off')
+            
+            ax.text(0.5, 0.95, "Containment Summary", fontsize=18, ha='center')
+            
+            # Filter by threshold
+            filtered_samples = summary_data[summary_data['max_containment'] > threshold]
+            
+            # Add summary statistics
+            ax.text(0.1, 0.9, f"Total samples: {len(summary_data)}")
+            ax.text(0.1, 0.87, f"Samples above threshold ({threshold}): {len(filtered_samples)}")
+            
+            # Get genome columns
+            genome_columns = [col for col in summary_data.columns 
+                             if col not in ('max_containment', 'max_containment_annotation')
+                             and ('GCF' in col or 'GCA' in col)]
+            
+            # Add genome counts
+            ax.text(0.1, 0.84, f"Number of genomes: {len(genome_columns)}")
+            
+            # Top 10 samples by containment
+            ax.text(0.1, 0.8, "Top 10 samples by containment:", fontsize=12)
+            
+            top_samples = summary_data.nlargest(10, 'max_containment')
+            
+            # Create table data
+            table_data = []
+            for idx, row in top_samples.iterrows():
+                table_data.append([
+                    idx, 
+                    f"{row['max_containment']:.4f}", 
+                    row['max_containment_annotation']
+                ])
+            
+            # Create table
+            ax.table(
+                cellText=table_data,
+                colLabels=['Sample', 'Containment', 'Top Genome'],
+                loc='center',
+                cellLoc='center',
+                colWidths=[0.3, 0.15, 0.4]
+            )
+            
+            pdf.savefig(fig)
+            plt.close(fig)
+        
+        # Containment plots
+        if include_plots:
+            # Rank plot
+            fig = plot_containment(
+                summary_data,
+                column='max_containment',
+                title="Containment Rank Plot",
+                plot_type='rank',
+                threshold=0
+            )
+            pdf.savefig(fig)
+            plt.close(fig)
+            
+            # Histogram plot
+            fig = plot_containment(
+                summary_data,
+                column='max_containment',
+                title="Containment Histogram",
+                plot_type='histogram',
+                threshold=0
+            )
+            pdf.savefig(fig)
+            plt.close(fig)
+        
+        # Metadata summary
+        if metadata_data is not None and include_tables:
+            fig, ax = plt.subplots(figsize=(8.5, 11))
+            ax.axis('off')
+            
+            ax.text(0.5, 0.95, "Metadata Summary", fontsize=18, ha='center')
+            
+            # Count non-null values in each column
+            non_null_counts = metadata_data.count()
+            
+            # Top 15 columns with most metadata
+            ax.text(0.1, 0.9, "Top metadata fields by availability:", fontsize=12)
+            
+            top_columns = non_null_counts.nlargest(15)
+            
+            # Create table data
+            table_data = []
+            for col, count in top_columns.items():
+                table_data.append([
+                    col,
+                    count,
+                    f"{count / len(metadata_data) * 100:.1f}%"
+                ])
+            
+            # Create table
+            ax.table(
+                cellText=table_data,
+                colLabels=['Field', 'Count', 'Percentage'],
+                loc='center',
+                cellLoc='center',
+                colWidths=[0.5, 0.15, 0.2]
+            )
+            
+            pdf.savefig(fig)
+            plt.close(fig)
+        
+        # Metadata count plots
+        if counts_data is not None and include_plots:
+            try:
+                fig = plot_metadata_counts(
+                    counts_data,
+                    title="Top Categories",
+                    plot_type='bar'
+                )
+                pdf.savefig(fig)
+                plt.close(fig)
+                
+                # Pie chart of top 8 categories
+                fig = plot_metadata_counts(
+                    counts_data.head(8),
+                    title="Top Categories (Pie Chart)",
+                    plot_type='pie'
+                )
+                pdf.savefig(fig)
+                plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Error generating metadata count plots: {e}")
+        
+        # Heatmap of top genomes
+        if include_plots:
+            try:
+                # Get top 20 genomes by max containment
+                genome_columns = [col for col in summary_data.columns 
+                                if col not in ('max_containment', 'max_containment_annotation')
+                                and ('GCF' in col or 'GCA' in col)]
+                
+                if len(genome_columns) > 1:
+                    top_genomes = []
+                    for col in genome_columns:
+                        top_samples = summary_data[summary_data[col] > threshold]
+                        if not top_samples.empty:
+                            top_genomes.append((col, len(top_samples)))
+                    
+                    top_genomes.sort(key=lambda x: x[1], reverse=True)
+                    top_genome_cols = [g[0] for g in top_genomes[:min(20, len(top_genomes))]]
+                    
+                    if len(top_genome_cols) > 1:
+                        # Create heatmap of top genome correlations
+                        correlation_matrix = summary_data[top_genome_cols].corr()
+                        
+                        fig = plot_correlation_matrix(
+                            correlation_matrix,
+                            title="Genome Correlation Matrix"
+                        )
+                        pdf.savefig(fig)
+                        plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Error generating heatmap: {e}")
+    
+    logger.info(f"PDF report saved to {output_path}")
+    return output_path
+
+
+def _generate_html_report(
+    title: str,
+    summary_data: pd.DataFrame,
+    metadata_data: Optional[pd.DataFrame],
+    counts_data: Optional[pd.DataFrame],
+    output_file: Union[str, Path],
+    threshold: float,
+    include_plots: bool,
+    include_tables: bool
+) -> Path:
+    """
+    Generate an HTML report from analysis results.
+    
+    Args:
+        title: Title for the report
+        summary_data: Containment summary DataFrame
+        metadata_data: Metadata DataFrame
+        counts_data: Metadata counts DataFrame
+        output_file: Path to save the report
+        threshold: Containment threshold for filtering
+        include_plots: Whether to include plots
+        include_tables: Whether to include tables
+        
+    Returns:
+        Path to the generated HTML
+    """
+    if not JINJA2_AVAILABLE:
+        raise VisualizationError(
+            "HTML report generation requires jinja2. "
+            "Please install with 'pip install jinja2'"
+        )
+    
+    # Create output directory
+    output_path = Path(output_file)
+    report_dir = output_path.parent
+    report_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create images directory
+    images_dir = report_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+    
+    # Generate plots and save to images directory
+    plot_files = {}
+    
+    if include_plots:
+        try:
+            # Containment rank plot
+            fig = plot_containment(
+                summary_data,
+                column='max_containment',
+                title="Containment Rank Plot",
+                plot_type='rank',
+                threshold=0
+            )
+            rank_plot_file = images_dir / "containment_rank.png"
+            fig.savefig(rank_plot_file, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            plot_files['rank_plot'] = "images/containment_rank.png"
+            
+            # Containment histogram
+            fig = plot_containment(
+                summary_data,
+                column='max_containment',
+                title="Containment Histogram",
+                plot_type='histogram',
+                threshold=0
+            )
+            hist_plot_file = images_dir / "containment_histogram.png"
+            fig.savefig(hist_plot_file, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            plot_files['hist_plot'] = "images/containment_histogram.png"
+            
+            # Metadata counts plot if available
+            if counts_data is not None:
+                try:
+                    fig = plot_metadata_counts(
+                        counts_data,
+                        title="Top Categories",
+                        plot_type='bar'
+                    )
+                    counts_plot_file = images_dir / "metadata_counts.png"
+                    fig.savefig(counts_plot_file, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    plot_files['counts_plot'] = "images/metadata_counts.png"
+                    
+                    # Pie chart
+                    fig = plot_metadata_counts(
+                        counts_data.head(8),
+                        title="Top Categories (Pie Chart)",
+                        plot_type='pie'
+                    )
+                    pie_plot_file = images_dir / "metadata_pie.png"
+                    fig.savefig(pie_plot_file, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    plot_files['pie_plot'] = "images/metadata_pie.png"
+                except Exception as e:
+                    logger.warning(f"Error generating metadata count plots: {e}")
+            
+            # Genome correlation heatmap
+            try:
+                # Get top 20 genomes by max containment
+                genome_columns = [col for col in summary_data.columns 
+                                if col not in ('max_containment', 'max_containment_annotation')
+                                and ('GCF' in col or 'GCA' in col)]
+                
+                if len(genome_columns) > 1:
+                    top_genomes = []
+                    for col in genome_columns:
+                        top_samples = summary_data[summary_data[col] > threshold]
+                        if not top_samples.empty:
+                            top_genomes.append((col, len(top_samples)))
+                    
+                    top_genomes.sort(key=lambda x: x[1], reverse=True)
+                    top_genome_cols = [g[0] for g in top_genomes[:min(20, len(top_genomes))]]
+                    
+                    if len(top_genome_cols) > 1:
+                        # Create heatmap of top genome correlations
+                        correlation_matrix = summary_data[top_genome_cols].corr()
+                        
+                        fig = plot_correlation_matrix(
+                            correlation_matrix,
+                            title="Genome Correlation Matrix"
+                        )
+                        heatmap_file = images_dir / "genome_correlation.png"
+                        fig.savefig(heatmap_file, dpi=300, bbox_inches='tight')
+                        plt.close(fig)
+                        plot_files['heatmap_plot'] = "images/genome_correlation.png"
+            except Exception as e:
+                logger.warning(f"Error generating heatmap: {e}")
+                
+        except Exception as e:
+            logger.warning(f"Error generating plots: {e}")
+    
+    # Prepare data for template
+    template_data = {
+        'title': title,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'plots': plot_files,
+        'include_plots': include_plots,
+        'include_tables': include_tables,
+        'threshold': threshold
+    }
+    
+    # Summary statistics
+    summary_stats = {
+        'total_samples': len(summary_data),
+        'samples_above_threshold': len(summary_data[summary_data['max_containment'] > threshold]),
+        'threshold': threshold
+    }
+    
+    # Get genome columns
+    genome_columns = [col for col in summary_data.columns 
+                     if col not in ('max_containment', 'max_containment_annotation')
+                     and ('GCF' in col or 'GCA' in col)]
+    
+    summary_stats['genome_count'] = len(genome_columns)
+    
+    # Top 10 samples
+    top_samples = summary_data.nlargest(10, 'max_containment')
+    top_samples_list = []
+    
+    for idx, row in top_samples.iterrows():
+        top_samples_list.append({
+            'sample': idx,
+            'containment': f"{row['max_containment']:.4f}",
+            'genome': row['max_containment_annotation']
+        })
+    
+    summary_stats['top_samples'] = top_samples_list
+    template_data['summary'] = summary_stats
+    
+    # Metadata statistics if available
+    if metadata_data is not None:
+        metadata_stats = {
+            'sample_count': len(metadata_data),
+            'column_count': len(metadata_data.columns)
+        }
+        
+        # Non-null counts
+        non_null_counts = metadata_data.count()
+        top_columns = non_null_counts.nlargest(15)
+        
+        top_fields = []
+        for col, count in top_columns.items():
+            top_fields.append({
+                'field': col,
+                'count': count,
+                'percentage': f"{count / len(metadata_data) * 100:.1f}%"
+            })
+        
+        metadata_stats['top_fields'] = top_fields
+        template_data['metadata'] = metadata_stats
+    
+    # Create Jinja2 template
+    template_loader = jinja2.FileSystemLoader(searchpath=str(Path(__file__).parent))
+    template_env = jinja2.Environment(loader=template_loader)
+    
+    # If template doesn't exist, create a default one
+    template_path = Path(__file__).parent / "templates" / "report_template.html"
+    if not template_path.exists():
+        template_path.parent.mkdir(exist_ok=True)
+        
+        default_template = """<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ title }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        .section {
+            margin-bottom: 30px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 20px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+        th, td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .plot-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .plot-container img {
+            max-width: 100%;
+            height: auto;
+        }
+        footer {
+            text-align: center;
+            margin-top: 50px;
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>{{ title }}</h1>
+            <p>Generated by MetaQuest on {{ timestamp }}</p>
+        </header>
+        
+        <div class="section">
+            <h2>Containment Summary</h2>
+            <p>Total samples: {{ summary.total_samples }}</p>
+            <p>Samples above threshold ({{ summary.threshold }}): {{ summary.samples_above_threshold }}</p>
+            <p>Number of genomes: {{ summary.genome_count }}</p>
+            
+            {% if include_tables %}
+            <h3>Top 10 samples by containment:</h3>
+            <table>
+                <tr>
+                    <th>Sample</th>
+                    <th>Containment</th>
+                    <th>Top Genome</th>
+                </tr>
+                {% for sample in summary.top_samples %}
+                <tr>
+                    <td>{{ sample.sample }}</td>
+                    <td>{{ sample.containment }}</td>
+                    <td>{{ sample.genome }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+            
+            {% if include_plots and 'rank_plot' in plots %}
+            <div class="plot-container">
+                <h3>Containment Rank Plot</h3>
+                <img src="{{ plots.rank_plot }}" alt="Containment Rank Plot">
+            </div>
+            {% endif %}
+            
+            {% if include_plots and 'hist_plot' in plots %}
+            <div class="plot-container">
+                <h3>Containment Histogram</h3>
+                <img src="{{ plots.hist_plot }}" alt="Containment Histogram">
+            </div>
+            {% endif %}
+        </div>
+        
+        {% if metadata is defined %}
+        <div class="section">
+            <h2>Metadata Summary</h2>
+            <p>Total samples with metadata: {{ metadata.sample_count }}</p>
+            <p>Total metadata fields: {{ metadata.column_count }}</p>
+            
+            {% if include_tables %}
+            <h3>Top metadata fields by availability:</h3>
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Count</th>
+                    <th>Percentage</th>
+                </tr>
+                {% for field in metadata.top_fields %}
+                <tr>
+                    <td>{{ field.field }}</td>
+                    <td>{{ field.count }}</td>
+                    <td>{{ field.percentage }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+            
+            {% if include_plots and 'counts_plot' in plots %}
+            <div class="plot-container">
+                <h3>Top Categories</h3>
+                <img src="{{ plots.counts_plot }}" alt="Metadata Counts">
+            </div>
+            {% endif %}
+            
+            {% if include_plots and 'pie_plot' in plots %}
+            <div class="plot-container">
+                <h3>Top Categories (Pie Chart)</h3>
+                <img src="{{ plots.pie_plot }}" alt="Metadata Pie Chart">
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        {% if include_plots and 'heatmap_plot' in plots %}
+        <div class="section">
+            <h2>Genome Correlation Analysis</h2>
+            <div class="plot-container">
+                <h3>Genome Correlation Matrix</h3>
+                <img src="{{ plots.heatmap_plot }}" alt="Genome Correlation Matrix">
+            </div>
+        </div>
+        {% endif %}
+        
+        <footer>
+            <p>Generated by MetaQuest on {{ timestamp }}</p>
+        </footer>
+    </div>
+</body>
+</html>
+"""
+        # Create templates directory
+        templates_dir = Path(__file__).parent / "templates"
+        templates_dir.mkdir(exist_ok=True)
+        
+        with open(template_path, 'w') as f:
+            f.write(default_template)
+    
+    # Get template
+    template = template_env.get_template("templates/report_template.html")
+    
+    # Render template
+    output_html = template.render(**template_data)
+    
+    # Write to file
+    with open(output_path, 'w') as f:
+        f.write(output_html)
+    
+    logger.info(f"HTML report saved to {output_path}")
+    return output_path
