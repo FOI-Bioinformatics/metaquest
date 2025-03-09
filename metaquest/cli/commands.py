@@ -14,27 +14,25 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater import (
     process_branchwater_files,
     extract_metadata_from_branchwater,
-    parse_containment_data
+    parse_containment_data,
 )
 from metaquest.processing.containment import (
     download_test_genome as dp_download_test_genome,
-    count_single_sample as dp_count_single_sample
+    count_single_sample as dp_count_single_sample,
 )
-from metaquest.processing.counts import (
-    count_metadata as dp_count_metadata
-)
+from metaquest.processing.counts import count_metadata as dp_count_metadata
 from metaquest.data.metadata import (
     download_metadata as dp_download_metadata,
     parse_metadata as dp_parse_metadata,
-    check_metadata_attributes as dp_check_metadata_attributes
+    check_metadata_attributes as dp_check_metadata_attributes,
 )
 from metaquest.data.sra import (
     download_sra as dp_download_sra,
-    assemble_datasets as dp_assemble_datasets
+    assemble_datasets as dp_assemble_datasets,
 )
 from metaquest.visualization.plots import (
     plot_containment as viz_plot_containment,
-    plot_metadata_counts as viz_plot_metadata_counts
+    plot_metadata_counts as viz_plot_metadata_counts,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,10 +41,10 @@ logger = logging.getLogger(__name__)
 def download_test_genome_command(args: argparse.Namespace) -> int:
     """
     Command handler for download_test_genome.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -61,10 +59,10 @@ def download_test_genome_command(args: argparse.Namespace) -> int:
 def process_branchwater_command(args: argparse.Namespace) -> int:
     """
     Command handler for use_branchwater.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -79,10 +77,10 @@ def process_branchwater_command(args: argparse.Namespace) -> int:
 def extract_branchwater_metadata_command(args: argparse.Namespace) -> int:
     """
     Command handler for extract_branchwater_metadata.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -90,7 +88,7 @@ def extract_branchwater_metadata_command(args: argparse.Namespace) -> int:
         metadata_folder = Path(args.metadata_folder)
         metadata_folder.mkdir(exist_ok=True)
         output_file = metadata_folder / "branchwater_metadata.txt"
-        
+
         extract_metadata_from_branchwater(args.branchwater_folder, output_file)
         return 0
     except MetaQuestError as e:
@@ -101,19 +99,19 @@ def extract_branchwater_metadata_command(args: argparse.Namespace) -> int:
 def parse_containment_command(args: argparse.Namespace) -> int:
     """
     Command handler for parse_containment.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
     try:
         parse_containment_data(
-            args.matches_folder, 
-            args.parsed_containment_file, 
-            args.summary_containment_file, 
-            args.step_size
+            args.matches_folder,
+            args.parsed_containment_file,
+            args.summary_containment_file,
+            args.step_size,
         )
         return 0
     except MetaQuestError as e:
@@ -124,10 +122,10 @@ def parse_containment_command(args: argparse.Namespace) -> int:
 def download_metadata_command(args: argparse.Namespace) -> int:
     """
     Command handler for download_metadata.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -137,7 +135,7 @@ def download_metadata_command(args: argparse.Namespace) -> int:
             matches_folder=args.matches_folder,
             metadata_folder=args.metadata_folder,
             threshold=args.threshold,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
         )
         return 0
     except MetaQuestError as e:
@@ -148,10 +146,10 @@ def download_metadata_command(args: argparse.Namespace) -> int:
 def parse_metadata_command(args: argparse.Namespace) -> int:
     """
     Command handler for parse_metadata.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -166,10 +164,10 @@ def parse_metadata_command(args: argparse.Namespace) -> int:
 def count_metadata_command(args: argparse.Namespace) -> int:
     """
     Command handler for count_metadata.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -180,7 +178,7 @@ def count_metadata_command(args: argparse.Namespace) -> int:
             metadata_column=args.metadata_column,
             threshold=args.threshold,
             output_file=args.output_file,
-            stat_file=args.stat_file
+            stat_file=args.stat_file,
         )
         return 0
     except MetaQuestError as e:
@@ -191,10 +189,10 @@ def count_metadata_command(args: argparse.Namespace) -> int:
 def single_sample_command(args: argparse.Namespace) -> int:
     """
     Command handler for single_sample.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -205,17 +203,17 @@ def single_sample_command(args: argparse.Namespace) -> int:
             summary_column=args.summary_column,
             metadata_column=args.metadata_column,
             threshold=args.threshold,
-            top_n=args.top_n
+            top_n=args.top_n,
         )
-        
+
         if not count_dict:
             logger.warning("No data found above threshold")
             return 0
-            
+
         # Log the top N items
-        for key, value in list(count_dict.items())[:args.top_n]:
+        for key, value in list(count_dict.items())[: args.top_n]:
             logger.info(f"{key}: {value}")
-            
+
         return 0
     except MetaQuestError as e:
         logger.error(f"Error analyzing single sample: {e}")
@@ -225,10 +223,10 @@ def single_sample_command(args: argparse.Namespace) -> int:
 def plot_containment_command(args: argparse.Namespace) -> int:
     """
     Command handler for plot_containment.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -241,7 +239,7 @@ def plot_containment_command(args: argparse.Namespace) -> int:
             show_title=args.show_title,
             save_format=args.save_format,
             threshold=args.threshold,
-            plot_type=args.plot_type
+            plot_type=args.plot_type,
         )
         return 0
     except MetaQuestError as e:
@@ -252,10 +250,10 @@ def plot_containment_command(args: argparse.Namespace) -> int:
 def plot_metadata_counts_command(args: argparse.Namespace) -> int:
     """
     Command handler for plot_metadata_counts.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -266,7 +264,7 @@ def plot_metadata_counts_command(args: argparse.Namespace) -> int:
             plot_type=args.plot_type,
             colors=args.colors,
             show_title=args.show_title,
-            save_format=args.save_format
+            save_format=args.save_format,
         )
         return 0
     except MetaQuestError as e:
@@ -277,10 +275,10 @@ def plot_metadata_counts_command(args: argparse.Namespace) -> int:
 def download_sra_command(args: argparse.Namespace) -> int:
     """
     Command handler for download_sra.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -291,14 +289,14 @@ def download_sra_command(args: argparse.Namespace) -> int:
             max_downloads=args.max_downloads,
             dry_run=args.dry_run,
             num_threads=args.num_threads,
-            max_workers=args.max_workers
+            max_workers=args.max_workers,
         )
-        
+
         if args.dry_run:
             logger.info(f"Would download {download_count} datasets")
         else:
             logger.info(f"Successfully downloaded {download_count} datasets")
-            
+
         return 0
     except MetaQuestError as e:
         logger.error(f"Error downloading SRA data: {e}")
@@ -308,10 +306,10 @@ def download_sra_command(args: argparse.Namespace) -> int:
 def assemble_datasets_command(args: argparse.Namespace) -> int:
     """
     Command handler for assemble_datasets.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """

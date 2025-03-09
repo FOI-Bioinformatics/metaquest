@@ -1,7 +1,7 @@
 """
 MetaQuest - A toolkit for analyzing metagenomic datasets based on genome containment.
 
-MetaQuest helps users search through SRA datasets to find containment of specified 
+MetaQuest helps users search through SRA datasets to find containment of specified
 genomes and analyze associated metadata.
 """
 

@@ -39,6 +39,8 @@ setup(
         'biopython>=1.79',
         'lxml>=4.6.0',
         'upsetplot>=0.6.0',
+        'jinja2>=3.0.0',
+        'cartopy>=0.19.0',
     ],
     extras_require={
         'dev': [
