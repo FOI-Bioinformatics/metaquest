@@ -9,10 +9,9 @@ import gzip
 import urllib.request
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, Optional, Union
 
 from metaquest.core.exceptions import ProcessingError
-from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import ensure_directory
 
 logger = logging.getLogger(__name__)
@@ -181,14 +180,10 @@ def filter_samples_by_containment(
                     f"Available genomes: {', '.join([col for col in summary_df.columns if col not in ('max_containment', 'max_containment_annotation')])}"
                 )
             filtered_df = summary_df[summary_df[genome_id] > threshold]
-            logger.info(
-                f"Found {len(filtered_df)} samples with {genome_id} > {threshold}"
-            )
+            logger.info(f"Found {len(filtered_df)} samples with {genome_id} > {threshold}")
         else:
             filtered_df = summary_df[summary_df["max_containment"] > threshold]
-            logger.info(
-                f"Found {len(filtered_df)} samples with max_containment > {threshold}"
-            )
+            logger.info(f"Found {len(filtered_df)} samples with max_containment > {threshold}")
 
         return filtered_df
 
@@ -247,9 +242,7 @@ def find_co_occurring_genomes(
             return pd.DataFrame()
 
         # Create co-occurrence matrix
-        cooccurrence_matrix = pd.DataFrame(
-            index=frequent_genomes, columns=frequent_genomes
-        )
+        cooccurrence_matrix = pd.DataFrame(index=frequent_genomes, columns=frequent_genomes)
 
         for i in frequent_genomes:
             for j in frequent_genomes:

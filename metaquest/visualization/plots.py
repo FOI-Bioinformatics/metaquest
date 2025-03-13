@@ -8,9 +8,8 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 from metaquest.core.exceptions import VisualizationError
 from metaquest.plugins.base import visualizer_registry

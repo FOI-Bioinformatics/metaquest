@@ -7,7 +7,7 @@ This plugin handles reading and processing Mastiff CSV files.
 import csv
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 from metaquest.core.exceptions import ValidationError
 from metaquest.core.models import Containment, SRAMetadata

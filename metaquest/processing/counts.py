@@ -8,7 +8,7 @@ import logging
 import os
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, Optional, Union
 
 from metaquest.core.exceptions import ProcessingError
 from metaquest.data.file_io import write_csv
