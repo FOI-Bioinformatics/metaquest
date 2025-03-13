@@ -193,6 +193,10 @@ def register_discovered_plugins(
             logger.warning(f"Failed to register plugin {plugin.get_name()}: {e}")
 
 
-# Global plugin registries for different plugin types
-format_registry = PluginRegistry()
-visualizer_registry = PluginRegistry()
+# Define a type variable for the Plugin type
+FormatPluginT = TypeVar("FormatPluginT", bound=Plugin)
+VisualizerPluginT = TypeVar("VisualizerPluginT", bound=Plugin)
+
+# Then change your registry definitions to:
+format_registry: PluginRegistry[Plugin] = PluginRegistry()
+visualizer_registry: PluginRegistry[Plugin] = PluginRegistry()

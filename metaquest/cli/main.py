@@ -358,7 +358,6 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser_download_sra.set_defaults(func=download_sra_command)
 
-
     # Assemble datasets command
     parser_assemble_datasets = subparsers.add_parser(
         "assemble_datasets", help="Assemble datasets from fastq files"

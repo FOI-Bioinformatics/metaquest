@@ -10,10 +10,9 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Union, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import ensure_directory
 
 logger = logging.getLogger(__name__)
@@ -161,7 +160,7 @@ def download_sra(
     force: bool = False,
     max_retries: int = 1,
     temp_folder: Optional[Union[str, Path]] = None,
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
 
