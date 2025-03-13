@@ -283,21 +283,62 @@ def download_sra_command(args: argparse.Namespace) -> int:
         Exit code (0 for success, non-zero for errors)
     """
     try:
-        download_count = dp_download_sra(
+        download_stats = dp_download_sra(
             fastq_folder=args.fastq_folder,
             accessions_file=args.accessions_file,
             max_downloads=args.max_downloads,
             dry_run=args.dry_run,
             num_threads=args.num_threads,
             max_workers=args.max_workers,
+            force=args.force,
+            max_retries=args.max_retries,
+            temp_folder=args.temp_folder,
         )
 
         if args.dry_run:
-            logger.info(f"Would download {download_count} datasets")
+            logger.info(
+                f"Dry run: would download {download_stats['to_download']} of {download_stats['total']} datasets"
+            )
+            logger.info(
+                f"  {download_stats['already_downloaded']} datasets would be skipped (already downloaded)"
+            )
+            if "to_download" in download_stats and download_stats["to_download"] > 0:
+                logger.info(f"  Output folder would be: {args.fastq_folder}")
+                if args.max_downloads:
+                    logger.info(f"  Limited to {args.max_downloads} downloads")
         else:
-            logger.info(f"Successfully downloaded {download_count} datasets")
+            logger.info(f"Download summary:")
+            logger.info(
+                f"  Successfully downloaded: {download_stats['successful']} datasets"
+            )
+            logger.info(f"  Failed downloads: {download_stats['failed']} datasets")
+            logger.info(
+                f"  Already downloaded: {download_stats['already_downloaded']} datasets"
+            )
+            logger.info(f"  Total processed: {download_stats['total']} datasets")
+
+        # Return error if there were failed downloads
+        if not args.dry_run and download_stats["failed"] > 0:
+            logger.warning(
+                "Some downloads failed. Use --force to retry or --max-retries to enable automatic retry."
+            )
+            if (
+                "failed_accessions" in download_stats
+                and download_stats["failed_accessions"]
+            ):
+                # Write failed accessions to file for easier retry
+                failed_file = Path(args.fastq_folder) / "failed_accessions.txt"
+                with open(failed_file, "w") as f:
+                    for acc in download_stats["failed_accessions"]:
+                        f.write(f"{acc}\n")
+                logger.info(f"Failed accessions written to {failed_file}")
+                logger.info(
+                    f"To retry only failed accessions: metaquest download_sra --accessions-file {failed_file} --fastq-folder {args.fastq_folder}"
+                )
+            return 1  # Return error code
 
         return 0
+
     except MetaQuestError as e:
         logger.error(f"Error downloading SRA data: {e}")
         return 1
