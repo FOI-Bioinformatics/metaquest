@@ -10,8 +10,6 @@ __author__ = "Andreas Sjödin"
 __email__ = "andreas.sjodin@gmail.com"
 
 # Import commonly used modules for easier access
-from metaquest.core.exceptions import MetaQuestError, ValidationError
-from metaquest.utils.config import get_config, set_config
 from metaquest.utils.logging import setup_logging
 
 # Initialize logging by default

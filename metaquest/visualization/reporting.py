@@ -43,26 +43,6 @@ def generate_report(
     include_plots: bool = True,
     include_tables: bool = True,
 ) -> Union[str, Path]:
-    """
-    Generate a comprehensive report from analysis results.
-
-    Args:
-        title: Title for the report
-        summary_file: Path to the containment summary file
-        metadata_file: Path to the metadata file
-        metadata_counts_file: Path to the metadata counts file
-        output_file: Path to save the report
-        format: Report format ('pdf' or 'html')
-        threshold: Containment threshold for filtering
-        include_plots: Whether to include plots
-        include_tables: Whether to include tables
-
-    Returns:
-        Path to the generated report
-
-    Raises:
-        VisualizationError: If the report generation fails
-    """
     try:
         # Check format
         if format not in ("pdf", "html"):
@@ -108,6 +88,9 @@ def generate_report(
                 include_plots=include_plots,
                 include_tables=include_tables,
             )
+
+        # Add a default return to satisfy the type checker
+        return Path(output_file)  # This ensures a value is always returned
 
     except Exception as e:
         if isinstance(e, VisualizationError):
@@ -284,7 +267,9 @@ def _generate_pdf_report(
             # Create table data
             table_data = []
             for col, count in top_columns.items():
-                table_data.append([col, count, f"{count / len(metadata_data) * 100:.1f}%"])
+                table_data.append(
+                    [col, count, f"{count / len(metadata_data) * 100:.1f}%"]
+                )
 
             # Create table
             ax.table(
@@ -301,7 +286,9 @@ def _generate_pdf_report(
         # Metadata count plots
         if counts_data is not None and include_plots:
             try:
-                fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
+                fig = plot_metadata_counts(
+                    counts_data, title="Top Categories", plot_type="bar"
+                )
                 pdf.savefig(fig)
                 plt.close(fig)
 
@@ -335,7 +322,9 @@ def _generate_pdf_report(
                             top_genomes.append((col, len(top_samples)))
 
                     top_genomes.sort(key=lambda x: x[1], reverse=True)
-                    top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
+                    top_genome_cols = [
+                        g[0] for g in top_genomes[: min(20, len(top_genomes))]
+                    ]
 
                     if len(top_genome_cols) > 1:
                         # Create heatmap of top genome correlations
@@ -381,7 +370,8 @@ def _generate_html_report(
     """
     if not JINJA2_AVAILABLE:
         raise VisualizationError(
-            "HTML report generation requires jinja2. " "Please install with 'pip install jinja2'"
+            "HTML report generation requires jinja2. "
+            "Please install with 'pip install jinja2'"
         )
 
     # Create output directory
@@ -427,7 +417,9 @@ def _generate_html_report(
             # Metadata counts plot if available
             if counts_data is not None:
                 try:
-                    fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
+                    fig = plot_metadata_counts(
+                        counts_data, title="Top Categories", plot_type="bar"
+                    )
                     counts_plot_file = images_dir / "metadata_counts.png"
                     fig.savefig(counts_plot_file, dpi=300, bbox_inches="tight")
                     plt.close(fig)
@@ -464,7 +456,9 @@ def _generate_html_report(
                             top_genomes.append((col, len(top_samples)))
 
                     top_genomes.sort(key=lambda x: x[1], reverse=True)
-                    top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
+                    top_genome_cols = [
+                        g[0] for g in top_genomes[: min(20, len(top_genomes))]
+                    ]
 
                     if len(top_genome_cols) > 1:
                         # Create heatmap of top genome correlations
@@ -496,7 +490,9 @@ def _generate_html_report(
     # Summary statistics
     summary_stats = {
         "total_samples": len(summary_data),
-        "samples_above_threshold": len(summary_data[summary_data["max_containment"] > threshold]),
+        "samples_above_threshold": len(
+            summary_data[summary_data["max_containment"] > threshold]
+        ),
         "threshold": threshold,
     }
 

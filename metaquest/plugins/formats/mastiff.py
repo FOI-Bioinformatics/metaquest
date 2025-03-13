@@ -135,6 +135,6 @@ class MastiffFormatPlugin(Plugin):
         # Mastiff format doesn't include much metadata
         # Add all available fields to the attributes dictionary
         for key, value in containment.additional_data.items():
-            metadata.attributes[key] = value
+            metadata.attributes[key] = str(value)
 
         return metadata

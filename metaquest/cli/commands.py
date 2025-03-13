@@ -6,9 +6,7 @@ This module provides the implementation for all CLI commands.
 
 import argparse
 import logging
-import os
 from pathlib import Path
-from typing import Dict, Optional
 
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater import (
@@ -24,7 +22,6 @@ from metaquest.processing.counts import count_metadata as dp_count_metadata
 from metaquest.data.metadata import (
     download_metadata as dp_download_metadata,
     parse_metadata as dp_parse_metadata,
-    check_metadata_attributes as dp_check_metadata_attributes,
 )
 from metaquest.data.sra import (
     download_sra as dp_download_sra,
@@ -307,7 +304,7 @@ def download_sra_command(args: argparse.Namespace) -> int:
                 if args.max_downloads:
                     logger.info(f"  Limited to {args.max_downloads} downloads")
         else:
-            logger.info(f"Download summary:")
+            logger.info("Download summary:")
             logger.info(
                 f"  Successfully downloaded: {download_stats['successful']} datasets"
             )

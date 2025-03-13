@@ -196,7 +196,7 @@ def process_files_in_directory(
     Raises:
         DataAccessError: If raise_errors is True and an error occurs
     """
-    results = {}
+    results: Dict[str, T] = {}
     directory_path = Path(directory)
 
     try:
