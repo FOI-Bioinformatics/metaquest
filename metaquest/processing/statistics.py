@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, Tuple, Union
 
 from metaquest.core.exceptions import ProcessingError
 

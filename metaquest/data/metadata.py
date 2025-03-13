@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 import time
 import pandas as pd
-from typing import Dict, List, Optional, Set, Union
+from typing import Dict, List, Union
 
 from Bio import Entrez
 from lxml import etree

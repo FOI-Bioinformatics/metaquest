@@ -10,7 +10,7 @@ import importlib
 import inspect
 import logging
 import pkgutil
-from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Generic
+from typing import Dict, Generic, List, Set, Type, TypeVar
 
 from metaquest.core.exceptions import PluginError
 
