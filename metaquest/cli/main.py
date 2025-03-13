@@ -341,7 +341,23 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Calculate number of accessions without downloading",
     )
+    parser_download_sra.add_argument(
+        "--force",
+        action="store_true",
+        help="Force redownload even if files exist",
+    )
+    parser_download_sra.add_argument(
+        "--max-retries",
+        type=int,
+        default=1,
+        help="Maximum number of retry attempts for failed downloads",
+    )
+    parser_download_sra.add_argument(
+        "--temp-folder",
+        help="Directory to use for fasterq-dump temporary files (must be writable)",
+    )
     parser_download_sra.set_defaults(func=download_sra_command)
+
 
     # Assemble datasets command
     parser_assemble_datasets = subparsers.add_parser(
