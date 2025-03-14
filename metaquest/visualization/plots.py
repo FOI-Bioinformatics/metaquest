@@ -1,406 +1,384 @@
 """
-Plotting functions for MetaQuest.
-
-This module provides functions for creating various types of plots.
+Map visualization plugin for MetaQuest.
 """
 
 import logging
+import re
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 from metaquest.core.exceptions import VisualizationError
-from metaquest.plugins.base import visualizer_registry
-from metaquest.plugins.visualizers.bar import BarChartPlugin
-from metaquest.plugins.visualizers.heatmap import HeatmapPlugin
-from metaquest.plugins.visualizers.map import MapVisualizerPlugin
+from metaquest.plugins.base import Plugin
 
 logger = logging.getLogger(__name__)
 
-# Register visualizer plugins
-visualizer_registry.register(BarChartPlugin)
-visualizer_registry.register(HeatmapPlugin)
-visualizer_registry.register(MapVisualizerPlugin)
+# Conditional import for cartopy
+try:
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    CARTOPY_AVAILABLE = True
+except ImportError:
+    CARTOPY_AVAILABLE = False
+    logger.warning("Cartopy not available. Map visualization will be limited.")
 
 
-def plot_containment(
-    file_path: Union[str, Path],
-    column: str = "max_containment",
-    title: Optional[str] = None,
-    colors: Optional[Union[str, List[str]]] = None,
-    show_title: bool = True,
-    save_format: Optional[str] = None,
-    threshold: Optional[float] = None,
-    plot_type: str = "rank",
-) -> Optional[plt.Figure]:
+def _validate_cartopy_availability():
     """
-    Plot containment data with various plot types.
-
-    Args:
-        file_path: Path to the containment file
-        column: Column to plot
-        title: Title for the plot
-        colors: Colors to use in the plot
-        show_title: Whether to display the title
-        save_format: Format to save the plot (png, jpg, pdf, svg)
-        threshold: Minimum value to be included in the plot
-        plot_type: Type of plot to generate ('rank', 'histogram', 'box', 'violin')
-
-    Returns:
-        Matplotlib Figure if successful, None otherwise
+    Validate that cartopy is available.
 
     Raises:
-        VisualizationError: If the visualization fails
+        VisualizationError: If cartopy is not available
     """
-    try:
-        # Load data
-        df = pd.read_csv(file_path, sep="\t", index_col=0)
-
-        # Check if column exists
-        if column not in df.columns:
-            raise VisualizationError(
-                f"Column '{column}' not found in file. "
-                f"Available columns: {', '.join(df.columns)}"
-            )
-
-        # Apply threshold if specified
-        if threshold is not None:
-            df = df[df[column] >= threshold]
-            if df.empty:
-                logger.warning(f"No data above threshold {threshold}")
-                return None
-
-        # Set title if not specified
-        if title is None and show_title:
-            title = f"{plot_type.capitalize()} Plot of {column}"
-        elif not show_title:
-            title = None
-
-        # Set default colors if not specified
-        if colors is None:
-            colors = "blue"
-
-        # Create figure
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        # Create plot based on plot_type
-        if plot_type == "rank":
-            # Sort data
-            df_sorted = df.sort_values(by=column, ascending=False)
-
-            # Add rank column
-            df_sorted["rank"] = np.arange(1, len(df_sorted) + 1)
-
-            # Plot rank vs value
-            ax.scatter(df_sorted["rank"], df_sorted[column], color=colors)
-            ax.set_xlabel("Rank")
-            ax.set_ylabel(f"{column} Value")
-
-        elif plot_type == "histogram":
-            # Create histogram
-            ax.hist(df[column], bins=20, color=colors, alpha=0.7)
-            ax.set_xlabel(column)
-            ax.set_ylabel("Frequency")
-
-        elif plot_type == "box":
-            # Create box plot
-            ax.boxplot(df[column])
-            ax.set_ylabel(column)
-            ax.set_xticklabels([column])
-
-        elif plot_type == "violin":
-            # Create violin plot
-            ax.violinplot(df[column])
-            ax.set_ylabel(column)
-            ax.set_xticklabels([column])
-
-        else:
-            raise VisualizationError(
-                f"Unknown plot type: {plot_type}. "
-                "Supported types: rank, histogram, box, violin"
-            )
-
-        # Add title if specified
-        if title:
-            ax.set_title(title)
-
-        # Adjust layout
-        plt.tight_layout()
-
-        # Save plot if format specified
-        if save_format:
-            output_file = f"{Path(file_path).stem}_{plot_type}_{column}.{save_format}"
-            plt.savefig(output_file, format=save_format, dpi=300, bbox_inches="tight")
-            logger.info(f"Plot saved to {output_file}")
-
-        return fig
-
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error plotting containment: {e}")
+    if not CARTOPY_AVAILABLE:
+        raise VisualizationError(
+            "Cartopy library is required for map visualization. "
+            "Please install with 'pip install cartopy'"
+        )
 
 
-def plot_metadata_counts(
-    file_path: Union[str, Path],
-    title: Optional[str] = None,
-    plot_type: str = "bar",
-    colors: Optional[Union[str, List[str]]] = None,
-    show_title: bool = True,
-    save_format: Optional[str] = None,
-    limit: int = 20,
-) -> Optional[plt.Figure]:
+def _create_map_figure(figsize, projection):
     """
-    Plot metadata counts with various plot types.
+    Create a map figure with projection.
 
     Args:
-        file_path: Path to the metadata counts file
-        title: Title for the plot
-        plot_type: Type of plot to generate ('bar', 'pie', 'radar')
-        colors: Colors to use in the plot
-        show_title: Whether to display the title
-        save_format: Format to save the plot (png, jpg, pdf, svg)
-        limit: Maximum number of items to include in the plot
+        figsize: Figure size
+        projection: Map projection to use
 
     Returns:
-        Matplotlib Figure if successful, None otherwise
-
-    Raises:
-        VisualizationError: If the visualization fails
+        Figure and axes objects
     """
+    proj_class = getattr(ccrs, projection)
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(1, 1, 1, projection=proj_class())
+    return fig, ax
+
+
+def _add_map_features(ax):
+    """
+    Add standard map features to axes.
+
+    Args:
+        ax: Matplotlib axes with map projection
+    """
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=":")
+
+
+def _parse_coordinate_string(coord_str):
+    """
+    Parse a coordinate string into latitude and longitude.
+
+    Args:
+        coord_str: String containing latitude and longitude
+
+    Returns:
+        Tuple of (latitude, longitude) or (None, None) if parsing fails
+    """
+    if pd.isna(coord_str) or not coord_str:
+        return None, None
+
+    # Try to parse coordinates
     try:
-        # Load data
-        df = pd.read_csv(file_path, sep="\t", header=None)
+        # Handle various formats
+        if "," in coord_str:
+            # Format: "lat, lon"
+            lat_str, lon_str = coord_str.split(",")
+            lat = float(lat_str.strip().rstrip("NS"))
+            lon = float(lon_str.strip().rstrip("EW"))
 
-        # If file has two columns, assume it's [category, count]
-        if df.shape[1] >= 2:
-            # Set column names
-            df.columns = ["category", "count"] + [
-                f"col{i+3}" for i in range(df.shape[1] - 2)
-            ]
+            # Handle N/S and E/W designations
+            if lat_str.strip().endswith("S"):
+                lat = -lat
+            if lon_str.strip().endswith("W"):
+                lon = -lon
 
-            # Sort by count and limit number of items
-            df = df.sort_values(by="count", ascending=False).head(limit)
+        elif " " in coord_str:
+            # Format: "lat lon"
+            lat_str, lon_str = coord_str.split()
+            lat = float(re.sub(r"[NS]", "", lat_str))
+            lon = float(re.sub(r"[EW]", "", lon_str))
 
+            # Handle N/S and E/W designations
+            if "S" in lat_str:
+                lat = -lat
+            if "W" in lon_str:
+                lon = -lon
         else:
-            # Single column format, can't create plot
-            raise VisualizationError(
-                "File must have at least two columns (category and count)"
-            )
+            # Unknown format
+            return None, None
 
-        # Set default title if not specified
-        if title is None and show_title:
-            title = f"Top {len(df)} Categories"
-        elif not show_title:
-            title = None
+        return lat, lon
 
-        # Create plot based on plot_type
-        if plot_type == "bar":
-            # Use bar chart plugin
-            plugin = visualizer_registry.get("bar")
-            fig = plugin.create_plot(
-                data=df,
-                x_column="category",
-                y_column="count",
-                title=title,
-                colors=colors,
-                horizontal=True,
-                output_format=save_format if save_format else None,
-            )
+    except (ValueError, IndexError):
+        return None, None
 
-        elif plot_type == "pie":
-            # Create pie chart (limit to top items for readability)
-            fig, ax = plt.subplots(figsize=(10, 10))
 
-            # Calculate percentage for "Other" category if data was limited
-            total_count = df["count"].sum()
+def _extract_coordinates(data, lat_lon_column):
+    """
+    Extract latitude and longitude from a column.
 
-            # Create pie chart
-            df["category"] = df["category"].astype(str)
-            ax.pie(
-                df["count"],
-                labels=df["category"],
-                autopct="%1.1f%%",
-                startangle=90,
-                colors=colors if colors else plt.cm.tab20.colors,
-            )
-            ax.axis("equal")  # Equal aspect ratio ensures that pie is drawn as a circle
+    Args:
+        data: DataFrame containing data
+        lat_lon_column: Column containing lat/lon data
 
+    Returns:
+        DataFrame with additional latitude and longitude columns
+    """
+    if not lat_lon_column or lat_lon_column not in data.columns:
+        return None
+
+    # Create latitude and longitude columns
+    lats = []
+    lons = []
+
+    for coord_str in data[lat_lon_column]:
+        lat, lon = _parse_coordinate_string(coord_str)
+        lats.append(lat)
+        lons.append(lon)
+
+    # Add to dataframe
+    plot_df = data.copy()
+    plot_df["latitude"] = lats
+    plot_df["longitude"] = lons
+
+    # Filter out rows with missing coordinates
+    plot_df = plot_df.dropna(subset=["latitude", "longitude"])
+
+    return plot_df
+
+
+def _plot_points(ax, plot_df, value_column, marker_size, cmap, **kwargs):
+    """
+    Plot points on a map.
+
+    Args:
+        ax: Matplotlib axes with map projection
+        plot_df: DataFrame with latitude and longitude columns
+        value_column: Column to use for point colors
+        marker_size: Size of markers
+        cmap: Colormap
+        **kwargs: Additional arguments for scatter plot
+
+    Returns:
+        Scatter plot object if successful, None otherwise
+    """
+    if plot_df is None or plot_df.empty:
+        return None
+
+    # Plot points
+    if value_column and value_column in plot_df.columns:
+        # Use values for coloring
+        scatter = ax.scatter(
+            plot_df["longitude"],
+            plot_df["latitude"],
+            transform=ccrs.PlateCarree(),
+            c=plot_df[value_column],
+            s=marker_size,
+            cmap=cmap,
+            **kwargs,
+        )
+
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax, shrink=0.6)
+        cbar.set_label(value_column)
+
+        return scatter
+    else:
+        # Simple scatter plot
+        scatter = ax.scatter(
+            plot_df["longitude"],
+            plot_df["latitude"],
+            transform=ccrs.PlateCarree(),
+            s=marker_size,
+            **kwargs,
+        )
+
+        return scatter
+
+
+class MapVisualizerPlugin(Plugin):
+    """Plugin for creating geographic map visualizations."""
+
+    name = "map"
+    description = "Geographic map visualization"
+    version = "0.1.0"
+
+    @classmethod
+    def create_plot(
+        cls,
+        data: pd.DataFrame,
+        lat_lon_column: Optional[str] = None,
+        country_column: Optional[str] = None,
+        value_column: Optional[str] = None,
+        title: Optional[str] = None,
+        cmap: str = "viridis",
+        figsize: Tuple[int, int] = (12, 8),
+        projection: str = "PlateCarree",
+        marker_size: Union[int, List[int]] = 50,
+        output_file: Optional[Union[str, Path]] = None,
+        output_format: str = "png",
+        **kwargs,
+    ) -> plt.Figure:
+        """
+        Create a map visualization.
+
+        Args:
+            data: DataFrame containing geographic data
+            lat_lon_column: Column containing latitude/longitude as "lat, lon"
+            country_column: Column containing country names
+            value_column: Column containing values for coloring/sizing
+            title: Title for the plot
+            cmap: Colormap to use
+            figsize: Figure size (width, height) in inches
+            projection: Map projection to use
+            marker_size: Size of markers or base size for scaled markers
+            output_file: Path to save the plot
+            output_format: Format to save the plot (png, jpg, pdf, svg)
+            **kwargs: Additional arguments to pass to plotting function
+
+        Returns:
+            Matplotlib Figure object
+
+        Raises:
+            VisualizationError: If the plot cannot be created
+        """
+        _validate_cartopy_availability()
+
+        try:
+            # Create figure with projection
+            fig, ax = _create_map_figure(figsize, projection)
+
+            # Add map features
+            _add_map_features(ax)
+
+            # Extract coordinates if lat_lon_column is provided
+            plot_df = _extract_coordinates(data, lat_lon_column)
+
+            # Plot points
+            _plot_points(ax, plot_df, value_column, marker_size, cmap, **kwargs)
+
+            # Set global extent
+            ax.set_global()
+
+            # Add title if specified
             if title:
                 ax.set_title(title)
 
-        elif plot_type == "radar":
-            # Create radar chart (requires at least 3 categories)
-            if len(df) < 3:
-                logger.warning(
-                    "Radar chart requires at least 3 categories, falling back to bar chart"
+            # Save plot if output_file specified
+            if output_file:
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
                 )
-                return plot_metadata_counts(
-                    file_path, title, "bar", colors, show_title, save_format
-                )
+                logger.info(f"Saved map to {output_file}")
 
-            # Set up radar chart
-            fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
+            return fig
 
-            # Get categories and values
-            categories = df["category"].tolist()
-            values = df["count"].tolist()
+        except Exception as e:
+            raise VisualizationError(f"Error creating map: {e}")
 
-            # Number of categories
-            N = len(categories)
+    @classmethod
+    def create_choropleth(
+        cls,
+        data: pd.DataFrame,
+        country_column: str,
+        value_column: str,
+        title: Optional[str] = None,
+        cmap: str = "viridis",
+        figsize: Tuple[int, int] = (12, 8),
+        projection: str = "Robinson",
+        output_file: Optional[Union[str, Path]] = None,
+        output_format: str = "png",
+        **kwargs,
+    ) -> plt.Figure:
+        """
+        Create a choropleth map visualization.
 
-            # Create angle values
-            angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+        Args:
+            data: DataFrame containing country data
+            country_column: Column containing country names
+            value_column: Column containing values for coloring
+            title: Title for the plot
+            cmap: Colormap to use
+            figsize: Figure size (width, height) in inches
+            projection: Map projection to use
+            output_file: Path to save the plot
+            output_format: Format to save the plot (png, jpg, pdf, svg)
+            **kwargs: Additional arguments to pass to plotting function
 
-            # Make the plot circular by repeating the first value
-            values += [values[0]]
-            angles += [angles[0]]
+        Returns:
+            Matplotlib Figure object
 
-            # Plot data
-            ax.plot(
-                angles,
-                values,
-                "o-",
-                linewidth=2,
-                color=colors if isinstance(colors, str) else "blue",
+        Raises:
+            VisualizationError: If the plot cannot be created
+        """
+        if not CARTOPY_AVAILABLE:
+            raise VisualizationError(
+                "Cartopy library is required for choropleth visualization. "
+                "Please install with 'pip install cartopy'"
             )
-            ax.fill(
-                angles,
-                values,
-                alpha=0.25,
-                color=colors if isinstance(colors, str) else "blue",
+
+        try:
+            # Create figure with projection
+            proj_class = getattr(ccrs, projection)
+            fig = plt.figure(figsize=figsize)
+            ax = fig.add_subplot(1, 1, 1, projection=proj_class())
+
+            # Get natural earth feature
+            countries = cfeature.NaturalEarthFeature(
+                category="cultural",
+                name="admin_0_countries",
+                scale="50m",
+                facecolor="none",
             )
 
-            # Set category labels
-            ax.set_xticks(angles[:-1])
-            ax.set_xticklabels(categories)
+            # Add features
+            ax.add_feature(countries, edgecolor="black")
+            ax.add_feature(cfeature.OCEAN)
+            ax.add_feature(cfeature.COASTLINE)
 
+            # Aggregate data by country
+            country_data = data.groupby(country_column)[value_column].mean().to_dict()
+
+            # Add country polygons
+            for country in countries.geometries():
+                country_name = country.attributes.get("NAME", "")
+                if country_name in country_data:
+                    value = country_data[country_name]
+                    ax.add_geometries(
+                        [country],
+                        ccrs.PlateCarree(),
+                        facecolor=plt.cm.get_cmap(cmap)(value),
+                        edgecolor="black",
+                        **kwargs,
+                    )
+                else:
+                    ax.add_geometries(
+                        [country],
+                        ccrs.PlateCarree(),
+                        facecolor="lightgray",
+                        edgecolor="black",
+                    )
+
+            # Set global extent
+            ax.set_global()
+
+            # Add title if specified
             if title:
                 ax.set_title(title)
 
-        else:
-            raise VisualizationError(
-                f"Unknown plot type: {plot_type}. " "Supported types: bar, pie, radar"
-            )
+            # Save plot if output_file specified
+            if output_file:
+                fig.savefig(
+                    output_file, format=output_format, dpi=300, bbox_inches="tight"
+                )
+                logger.info(f"Saved choropleth map to {output_file}")
 
-        # Save plot if format specified
-        if save_format and plot_type != "bar":  # bar plugin handles saving
-            output_file = f"{Path(file_path).stem}_{plot_type}.{save_format}"
-            plt.savefig(output_file, format=save_format, dpi=300, bbox_inches="tight")
-            logger.info(f"Plot saved to {output_file}")
+            return fig
 
-        return fig
-
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error plotting metadata counts: {e}")
-
-
-def plot_heatmap(
-    data: Union[str, Path, pd.DataFrame],
-    title: Optional[str] = None,
-    threshold: float = 0.0,
-    cluster: bool = True,
-    output_file: Optional[Union[str, Path]] = None,
-    output_format: str = "png",
-) -> Optional[plt.Figure]:
-    """
-    Create a heatmap visualization.
-
-    Args:
-        data: DataFrame or path to data file
-        title: Title for the plot
-        threshold: Minimum value threshold
-        cluster: Whether to cluster rows and columns
-        output_file: Path to save the plot
-        output_format: Format to save the plot
-
-    Returns:
-        Matplotlib Figure if successful, None otherwise
-
-    Raises:
-        VisualizationError: If the visualization fails
-    """
-    try:
-        # Load data if string or Path
-        if isinstance(data, (str, Path)):
-            df = pd.read_csv(data, sep="\t", index_col=0)
-        else:
-            df = data.copy()
-
-        # Apply threshold
-        df = df.applymap(lambda x: x if x > threshold else 0)
-
-        # Remove metadata columns if present
-        metadata_cols = ["max_containment", "max_containment_annotation"]
-        for col in metadata_cols:
-            if col in df.columns:
-                df = df.drop(col, axis=1)
-
-        # Use heatmap plugin
-        plugin = visualizer_registry.get("heatmap")
-        fig = plugin.create_plot(
-            data=df,
-            title=title,
-            cluster=cluster,
-            output_file=output_file,
-            output_format=output_format,
-        )
-
-        return fig
-
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error creating heatmap: {e}")
-
-
-def plot_correlation_matrix(
-    data: Union[str, Path, pd.DataFrame],
-    title: Optional[str] = None,
-    method: str = "pearson",
-    output_file: Optional[Union[str, Path]] = None,
-    output_format: str = "png",
-) -> Optional[plt.Figure]:
-    """
-    Create a correlation matrix visualization.
-
-    Args:
-        data: DataFrame or path to data file
-        title: Title for the plot
-        method: Correlation method ('pearson', 'spearman', 'kendall')
-        output_file: Path to save the plot
-        output_format: Format to save the plot
-
-    Returns:
-        Matplotlib Figure if successful, None otherwise
-
-    Raises:
-        VisualizationError: If the visualization fails
-    """
-    try:
-        # Load data if string or Path
-        if isinstance(data, (str, Path)):
-            df = pd.read_csv(data, sep="\t", index_col=0)
-        else:
-            df = data.copy()
-
-        # Use heatmap plugin to create correlation matrix
-        plugin = visualizer_registry.get("heatmap")
-        fig = plugin.create_correlation_heatmap(
-            data=df,
-            title=title,
-            method=method,
-            output_file=output_file,
-            output_format=output_format,
-        )
-
-        return fig
-
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error creating correlation matrix: {e}")
+        except Exception as e:
+            raise VisualizationError(f"Error creating choropleth map: {e}")

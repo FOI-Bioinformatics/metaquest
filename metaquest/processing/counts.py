@@ -16,6 +16,96 @@ from metaquest.data.file_io import write_csv
 logger = logging.getLogger(__name__)
 
 
+def _validate_metadata_column(metadata_df, metadata_column):
+    """
+    Validate that metadata column exists.
+
+    Args:
+        metadata_df: Metadata DataFrame
+        metadata_column: Column name to validate
+
+    Raises:
+        ProcessingError: If column doesn't exist
+    """
+    if metadata_column not in metadata_df.columns:
+        available_columns = ", ".join(metadata_df.columns)
+        raise ProcessingError(
+            f"Column '{metadata_column}' not found in metadata file. "
+            f"Available columns: {available_columns}"
+        )
+
+
+def _get_genome_columns(summary_df):
+    """
+    Get genome columns from summary DataFrame.
+
+    Args:
+        summary_df: Summary DataFrame
+
+    Returns:
+        List of genome column names
+
+    Raises:
+        ProcessingError: If no genome columns found
+    """
+    genome_columns = [col for col in summary_df.columns if "GCF" in col or "GCA" in col]
+
+    if not genome_columns:
+        raise ProcessingError("No genome columns found in summary file")
+
+    return genome_columns
+
+
+def _process_genome_accessions(
+    genome_column, summary_df, threshold, metadata_df, metadata_column, df_list
+):
+    """
+    Process accessions for a single genome.
+
+    Args:
+        genome_column: Genome column name
+        summary_df: Summary DataFrame
+        threshold: Containment threshold
+        metadata_df: Metadata DataFrame
+        metadata_column: Metadata column to count
+        df_list: List to append count DataFrames to
+
+    Returns:
+        Number of samples processed
+    """
+    try:
+        # Find accessions with containment above threshold
+        selected_accessions = summary_df[summary_df[genome_column] > threshold].index
+
+        # Skip if no matching accessions
+        if len(selected_accessions) == 0:
+            logger.warning(
+                f"No accessions found for {genome_column} above threshold {threshold}"
+            )
+            return 0
+
+        # Filter metadata to selected accessions
+        selected_metadata = metadata_df[metadata_df.index.isin(selected_accessions)]
+
+        # Skip if no matching metadata
+        if selected_metadata.empty:
+            logger.warning(f"No metadata found for {genome_column} accessions")
+            return 0
+
+        # Count values in metadata column
+        count_series = selected_metadata[metadata_column].value_counts()
+
+        # Create DataFrame with counts
+        count_df = pd.DataFrame({genome_column: count_series})
+        df_list.append(count_df)
+
+        return len(selected_accessions)
+
+    except Exception as e:
+        logger.error(f"Error processing genome {genome_column}: {e}")
+        return 0
+
+
 def count_metadata(
     summary_file: Union[str, Path],
     metadata_file: Union[str, Path],
@@ -52,62 +142,31 @@ def count_metadata(
         metadata_df = pd.read_csv(metadata_file, sep="\t", index_col=0)
 
         # Validate metadata column exists
-        if metadata_column not in metadata_df.columns:
-            available_columns = ", ".join(metadata_df.columns)
-            raise ProcessingError(
-                f"Column '{metadata_column}' not found in metadata file. "
-                f"Available columns: {available_columns}"
-            )
+        _validate_metadata_column(metadata_df, metadata_column)
 
         # Get genome columns
-        genome_columns = [
-            col for col in summary_df.columns if "GCF" in col or "GCA" in col
-        ]
-
-        if not genome_columns:
-            raise ProcessingError("No genome columns found in summary file")
-
+        genome_columns = _get_genome_columns(summary_df)
         logger.info(f"Processing {len(genome_columns)} genome columns")
 
         # Create result dataframes for each genome
         df_list = []
         unique_accessions = set()
+        processed_count = 0
 
         for genome_column in genome_columns:
-            try:
-                # Find accessions with containment above threshold
-                selected_accessions = summary_df[
-                    summary_df[genome_column] > threshold
-                ].index
-
-                # Skip if no matching accessions
-                if len(selected_accessions) == 0:
-                    logger.warning(
-                        f"No accessions found for {genome_column} above threshold {threshold}"
-                    )
-                    continue
-
-                unique_accessions.update(selected_accessions)
-
-                # Filter metadata to selected accessions
-                selected_metadata = metadata_df[
-                    metadata_df.index.isin(selected_accessions)
-                ]
-
-                # Skip if no matching metadata
-                if selected_metadata.empty:
-                    logger.warning(f"No metadata found for {genome_column} accessions")
-                    continue
-
-                # Count values in metadata column
-                count_series = selected_metadata[metadata_column].value_counts()
-
-                # Create DataFrame with counts
-                count_df = pd.DataFrame({genome_column: count_series})
-                df_list.append(count_df)
-
-            except Exception as e:
-                logger.error(f"Error processing genome {genome_column}: {e}")
+            selected_count = _process_genome_accessions(
+                genome_column,
+                summary_df,
+                threshold,
+                metadata_df,
+                metadata_column,
+                df_list,
+            )
+            unique_accessions.update(
+                summary_df[summary_df[genome_column] > threshold].index
+            )
+            if selected_count > 0:
+                processed_count += 1
 
         # Skip if no data frames created
         if not df_list:

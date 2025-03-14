@@ -330,7 +330,9 @@ def download_sra_command(args: argparse.Namespace) -> int:
                         f.write(f"{acc}\n")
                 logger.info(f"Failed accessions written to {failed_file}")
                 logger.info(
-                    f"To retry only failed accessions: metaquest download_sra --accessions-file {failed_file} --fastq-folder {args.fastq_folder}"
+                    f"To retry only failed accessions: metaquest download_sra "
+                    f"--accessions-file {failed_file} "
+                    f"--fastq-folder {args.fastq_folder}"
                 )
             return 1  # Return error code
 

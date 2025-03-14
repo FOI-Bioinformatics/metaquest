@@ -104,6 +104,64 @@ def process_branchwater_files(
     return result_files
 
 
+def _process_branchwater_row(row, metadata_records):
+    """
+    Process a single row from a Branchwater CSV and extract metadata.
+
+    Args:
+        row: Row data from Branchwater CSV
+        metadata_records: List to append metadata records to
+    """
+    if "acc" not in row:
+        logger.warning("Row missing 'acc' column. Skipping.")
+        return
+
+    # Basic metadata record
+    metadata_record = {"Run_ID": row["acc"]}
+
+    # Add any other available metadata fields
+    field_mapping = {
+        "biosample": "Sample_ID",
+        "bioproject": "Project_ID",
+        "organism": "Sample_Scientific_Name",
+        "geo_loc_name_country_calc": "geo_loc_name_country_calc",
+        "collection_date_sam": "collection_date_sam",
+        "assay_type": "assay_type",
+        "lat_lon": "lat_lon",
+        "cANI": "cANI",
+    }
+
+    for source_field, target_field in field_mapping.items():
+        if source_field in row and not pd.isna(row[source_field]):
+            metadata_record[target_field] = row[source_field]
+
+    metadata_records.append(metadata_record)
+
+
+def _validate_branchwater_file(csv_file):
+    """
+    Validate if a file is in Branchwater format.
+
+    Args:
+        csv_file: Path to CSV file
+
+    Returns:
+        bool: True if file is valid, False otherwise
+    """
+    # Read the CSV file directly to check its format
+    with open(csv_file, "r") as f:
+        header_line = f.readline().strip()
+        columns = [col.strip() for col in header_line.split(",")]
+
+    # Check if this is a valid Branchwater format file
+    if "acc" not in columns or "containment" not in columns:
+        logger.warning(
+            f"File {csv_file} does not appear to be in Branchwater format. Skipping."
+        )
+        return False
+    return True
+
+
 def extract_metadata_from_branchwater(
     branchwater_folder: Union[str, Path], output_file: Union[str, Path]
 ) -> pd.DataFrame:
@@ -139,16 +197,8 @@ def extract_metadata_from_branchwater(
             try:
                 logger.info(f"Processing file: {csv_file.name}")
 
-                # Read the CSV file directly to check its format
-                with open(csv_file, "r") as f:
-                    header_line = f.readline().strip()
-                    columns = [col.strip() for col in header_line.split(",")]
-
-                # Check if this is a valid Branchwater format file
-                if "acc" not in columns or "containment" not in columns:
-                    logger.warning(
-                        f"File {csv_file} does not appear to be in Branchwater format. Skipping."
-                    )
+                # Validate file format
+                if not _validate_branchwater_file(csv_file):
                     continue
 
                 # Read the CSV with pandas
@@ -156,32 +206,7 @@ def extract_metadata_from_branchwater(
 
                 # Extract metadata from each row
                 for _, row in df.iterrows():
-                    if "acc" not in row:
-                        logger.warning(
-                            f"Row missing 'acc' column in {csv_file}. Skipping."
-                        )
-                        continue
-
-                    # Basic metadata record
-                    metadata_record = {"Run_ID": row["acc"]}
-
-                    # Add any other available metadata fields
-                    field_mapping = {
-                        "biosample": "Sample_ID",
-                        "bioproject": "Project_ID",
-                        "organism": "Sample_Scientific_Name",
-                        "geo_loc_name_country_calc": "geo_loc_name_country_calc",
-                        "collection_date_sam": "collection_date_sam",
-                        "assay_type": "assay_type",
-                        "lat_lon": "lat_lon",
-                        "cANI": "cANI",
-                    }
-
-                    for source_field, target_field in field_mapping.items():
-                        if source_field in row and not pd.isna(row[source_field]):
-                            metadata_record[target_field] = row[source_field]
-
-                    metadata_records.append(metadata_record)
+                    _process_branchwater_row(row, metadata_records)
 
                 processed_count += 1
                 logger.info(f"Extracted metadata from {csv_file}")
@@ -190,48 +215,107 @@ def extract_metadata_from_branchwater(
                 error_count += 1
                 logger.error(f"Error extracting metadata from {csv_file}: {e}")
 
-        logger.info(f"Processed {processed_count} files with {error_count} errors")
-
-        if not metadata_records:
-            logger.warning("No metadata records extracted")
-            # Create an empty DataFrame but save it anyway
-            metadata_df = pd.DataFrame()
-        else:
-            # Create DataFrame from records
-            metadata_df = pd.DataFrame(metadata_records)
-            # Remove duplicates
-            if "Run_ID" in metadata_df.columns:
-                metadata_df = metadata_df.drop_duplicates(subset=["Run_ID"])
-
-        # Save to output file
-        # Ensure directory exists
-        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-        metadata_df.to_csv(output_file, sep="\t", index=False)
-
-        if not metadata_records:
-            logger.info(f"Saved empty metadata file to {output_file}")
-        else:
-            logger.info(
-                f"Extracted metadata saved to {output_file} with {len(metadata_df)} records"
-            )
-
-        return metadata_df
+        return _finalize_metadata_extraction(
+            metadata_records, output_file, processed_count, error_count
+        )
 
     except Exception as e:
         raise DataAccessError(f"Error extracting metadata from Branchwater files: {e}")
 
 
-def parse_containment_data(
-    matches_folder: Union[str, Path],
-    output_file: Union[str, Path],
-    summary_file: Union[str, Path],
-    step_size: float = 0.1,
-) -> ContainmentSummary:
+def _finalize_metadata_extraction(
+    metadata_records, output_file, processed_count, error_count
+):
     """
-    Parse containment data from match files and generate summary.
+    Create and save the final metadata DataFrame.
 
     Args:
-        matches_folder: Folder containing match files
+        metadata_records: List of metadata records
+        output_file: Path to save the output
+        processed_count: Number of processed files
+        error_count: Number of errors encountered
+
+    Returns:
+        pd.DataFrame: The metadata DataFrame
+    """
+    logger.info(f"Processed {processed_count} files with {error_count} errors")
+
+    if not metadata_records:
+        logger.warning("No metadata records extracted")
+        # Create an empty DataFrame but save it anyway
+        metadata_df = pd.DataFrame()
+    else:
+        # Create DataFrame from records
+        metadata_df = pd.DataFrame(metadata_records)
+        # Remove duplicates
+        if "Run_ID" in metadata_df.columns:
+            metadata_df = metadata_df.drop_duplicates(subset=["Run_ID"])
+
+    # Save to output file
+    # Ensure directory exists
+    Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+    metadata_df.to_csv(output_file, sep="\t", index=False)
+
+    if not metadata_records:
+        logger.info(f"Saved empty metadata file to {output_file}")
+    else:
+        logger.info(
+            f"Extracted metadata saved to {output_file} with {len(metadata_df)} records"
+        )
+
+    return metadata_df
+
+
+def _process_genome_containments(csv_file, genome_id, containment_data):
+    """
+    Process containment data from a single genome file.
+
+    Args:
+        csv_file: Path to CSV file
+        genome_id: ID of the genome
+        containment_data: Dictionary to store containment data
+
+    Raises:
+        DataAccessError: If processing fails
+    """
+    try:
+        # Determine file format and use appropriate plugin
+        df_headers = read_csv(csv_file, nrows=0)
+        headers = df_headers.columns.tolist()
+
+        if BranchWaterFormatPlugin.validate_header(headers):
+            format_plugin = BranchWaterFormatPlugin
+        elif MastiffFormatPlugin.validate_header(headers):
+            format_plugin = MastiffFormatPlugin
+        else:
+            raise ValidationError(f"Unknown file format for {csv_file}")
+
+        # Parse file to get containments
+        containments = format_plugin.parse_file(csv_file, genome_id)
+
+        # Add to containment data dictionary
+        for containment in containments:
+            if genome_id not in containment_data[containment.accession]:
+                containment_data[containment.accession][genome_id] = containment.value
+            else:
+                # Keep maximum containment value if multiple entries
+                containment_data[containment.accession][genome_id] = max(
+                    containment_data[containment.accession][genome_id],
+                    containment.value,
+                )
+
+    except Exception as e:
+        raise DataAccessError(f"Error processing {csv_file}: {e}")
+
+
+def _generate_containment_summary(
+    containment_data, output_file, summary_file, step_size
+):
+    """
+    Generate summary data from containment data.
+
+    Args:
+        containment_data: Dictionary of containment data
         output_file: Path to save parsed containment data
         summary_file: Path to save containment summary
         step_size: Step size for threshold calculation
@@ -240,69 +324,8 @@ def parse_containment_data(
         ContainmentSummary object
 
     Raises:
-        DataAccessError: If the parsing fails
+        DataAccessError: If generation fails
     """
-    matches_path = validate_folder(matches_folder)
-
-    # Dictionary to store containment data
-    containment_data = defaultdict(dict)
-
-    # Get all CSV files in the matches folder
-    csv_files = list_files(matches_path, "*.csv")
-    if not csv_files:
-        logger.warning(f"No CSV files found in {matches_path}")
-        return ContainmentSummary()
-
-    processed_count = 0
-    error_count = 0
-
-    for csv_file in csv_files:
-        genome_id = csv_file.stem
-
-        try:
-            # Determine file format and use appropriate plugin
-            try:
-                df_headers = read_csv(csv_file, nrows=0)
-                headers = df_headers.columns.tolist()
-
-                if BranchWaterFormatPlugin.validate_header(headers):
-                    format_plugin = BranchWaterFormatPlugin
-                elif MastiffFormatPlugin.validate_header(headers):
-                    format_plugin = MastiffFormatPlugin
-                else:
-                    raise ValidationError(f"Unknown file format for {csv_file}")
-
-                # Parse file to get containments
-                containments = format_plugin.parse_file(csv_file, genome_id)
-
-                # Add to containment data dictionary
-                for containment in containments:
-                    if genome_id not in containment_data[containment.accession]:
-                        containment_data[containment.accession][
-                            genome_id
-                        ] = containment.value
-                    else:
-                        # Keep maximum containment value if multiple entries
-                        containment_data[containment.accession][genome_id] = max(
-                            containment_data[containment.accession][genome_id],
-                            containment.value,
-                        )
-
-                processed_count += 1
-
-            except Exception as e:
-                raise DataAccessError(f"Error processing {csv_file}: {e}")
-
-        except Exception as e:
-            error_count += 1
-            logger.error(f"Error parsing containment from {csv_file}: {e}")
-
-    logger.info(f"Processed {processed_count} files with {error_count} errors")
-
-    if not containment_data:
-        logger.warning("No valid containment data found")
-        return ContainmentSummary()
-
     try:
         # Create DataFrame from containment data
         df = pd.DataFrame.from_dict(containment_data, orient="index")
@@ -367,3 +390,59 @@ def parse_containment_data(
 
     except Exception as e:
         raise DataAccessError(f"Error generating containment summary: {e}")
+
+
+def parse_containment_data(
+    matches_folder: Union[str, Path],
+    output_file: Union[str, Path],
+    summary_file: Union[str, Path],
+    step_size: float = 0.1,
+) -> ContainmentSummary:
+    """
+    Parse containment data from match files and generate summary.
+
+    Args:
+        matches_folder: Folder containing match files
+        output_file: Path to save parsed containment data
+        summary_file: Path to save containment summary
+        step_size: Step size for threshold calculation
+
+    Returns:
+        ContainmentSummary object
+
+    Raises:
+        DataAccessError: If the parsing fails
+    """
+    matches_path = validate_folder(matches_folder)
+
+    # Dictionary to store containment data
+    containment_data = defaultdict(dict)
+
+    # Get all CSV files in the matches folder
+    csv_files = list_files(matches_path, "*.csv")
+    if not csv_files:
+        logger.warning(f"No CSV files found in {matches_path}")
+        return ContainmentSummary()
+
+    processed_count = 0
+    error_count = 0
+
+    for csv_file in csv_files:
+        genome_id = csv_file.stem
+
+        try:
+            _process_genome_containments(csv_file, genome_id, containment_data)
+            processed_count += 1
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Error parsing containment from {csv_file}: {e}")
+
+    logger.info(f"Processed {processed_count} files with {error_count} errors")
+
+    if not containment_data:
+        logger.warning("No valid containment data found")
+        return ContainmentSummary()
+
+    return _generate_containment_summary(
+        containment_data, output_file, summary_file, step_size
+    )

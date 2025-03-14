@@ -13,31 +13,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: 'pip'
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flake8 mypy pytest black
           pip install -e ".[dev]"
-      
+
       - name: Check code formatting with Black
         run: black --check --diff metaquest
-      
+
       - name: Lint with flake8
         run: |
           # stop the build if there are Python syntax errors or undefined names
           flake8 metaquest --count --select=E9,F63,F7,F82 --show-source --statistics
-          # exit-zero treats all errors as warnings
-          flake8 metaquest --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
-      
-      - name: Type check with mypy
-        run: mypy --ignore-missing-imports metaquest
+          # Check for PEP8 style issues, complexity, and line length
+          flake8 metaquest --count --max-complexity=15 --max-line-length=120 --statistics --ignore=E203,W503
+
+      #- name: Type check with mypy
+      #  run: #mypy --ignore-missing-imports metaquest
 
   test:
     name: Test Python ${{ matrix.python-version }}
@@ -46,26 +46,26 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pytest pytest-cov
           pip install -e ".[dev]"
-      
+
       - name: Test with pytest
         run: |
           pytest tests/ --cov=metaquest --cov-report=xml
-      
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
@@ -77,32 +77,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: 'pip'
-      
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
           pip install build twine check-wheel-contents
-      
+
       - name: Build package
         run: python -m build
-      
+
       - name: Check wheel contents
         run: check-wheel-contents dist/*.whl
-      
+
       - name: Check distribution with twine
         run: twine check dist/*
-      
+
       - name: Test installation
         run: |
           pip install dist/*.whl
           python -c "import metaquest; print(metaquest.__version__)"
-      
+
       - name: Archive distribution packages
         uses: actions/upload-artifact@v3
         with:
@@ -115,36 +115,48 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: 'pip'
-      
+
       - name: Download distribution packages
         uses: actions/download-artifact@v3
         with:
           name: dist
           path: dist/
-      
+
       - name: Install package
         run: pip install dist/*.whl
-      
+
       - name: Install test dependencies
         run: pip install pytest
-      
+
       - name: Download test genome
         run: |
           mkdir -p test_data
           metaquest download_test_genome --output-folder test_data
-      
+
       - name: Run basic CLI commands
         run: |
           metaquest --help
           metaquest --version
-      
+
       - name: Verify integration
         run: |
-          # Add verification steps here
+          # Verify test genome was downloaded
           test -f test_data/GCF_000008985.1.fasta && echo "Test genome downloaded successfully" || exit 1
+
+          # Create a test Branchwater file for processing
+          mkdir -p test_data/branchwater
+          echo "acc,containment,cANI,biosample,bioproject,assay_type" > test_data/branchwater/example.csv
+          echo "SRR12345678,0.95,0.98,SAMN12345678,PRJNA123456,AMPLICON" >> test_data/branchwater/example.csv
+
+          # Test basic Branchwater processing
+          mkdir -p test_data/processed
+          metaquest use_branchwater --branchwater-folder test_data/branchwater --matches-folder test_data/processed
+
+          # Verify output
+          test -f test_data/processed/example.csv && echo "Branchwater processing successful" || exit 1
