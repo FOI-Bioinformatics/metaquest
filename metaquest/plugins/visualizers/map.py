@@ -5,7 +5,6 @@ Map visualization plugin for MetaQuest.
 import logging
 import re
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -24,6 +23,182 @@ try:
 except ImportError:
     CARTOPY_AVAILABLE = False
     logger.warning("Cartopy not available. Map visualization will be limited.")
+
+
+def _validate_cartopy_availability():
+    """
+    Validate that cartopy is available.
+
+    Raises:
+        VisualizationError: If cartopy is not available
+    """
+    if not CARTOPY_AVAILABLE:
+        raise VisualizationError(
+            "Cartopy library is required for map visualization. "
+            "Please install with 'pip install cartopy'"
+        )
+
+
+def _create_map_figure(figsize, projection):
+    """
+    Create a map figure with projection.
+
+    Args:
+        figsize: Figure size
+        projection: Map projection to use
+
+    Returns:
+        Figure and axes objects
+    """
+    proj_class = getattr(ccrs, projection)
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(1, 1, 1, projection=proj_class())
+    return fig, ax
+
+
+def _add_map_features(ax):
+    """
+    Add standard map features to axes.
+
+    Args:
+        ax: Matplotlib axes with map projection
+    """
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=":")
+
+
+def _parse_coordinate_string(coord_str):
+    """
+    Parse a coordinate string into latitude and longitude.
+
+    Args:
+        coord_str: String containing latitude and longitude
+
+    Returns:
+        Tuple of (latitude, longitude) or (None, None) if parsing fails
+    """
+    if pd.isna(coord_str) or not coord_str:
+        return None, None
+
+    # Try to parse coordinates
+    try:
+        # Handle various formats
+        if "," in coord_str:
+            # Format: "lat, lon"
+            lat_str, lon_str = coord_str.split(",")
+            lat = float(lat_str.strip().rstrip("NS"))
+            lon = float(lon_str.strip().rstrip("EW"))
+
+            # Handle N/S and E/W designations
+            if lat_str.strip().endswith("S"):
+                lat = -lat
+            if lon_str.strip().endswith("W"):
+                lon = -lon
+
+        elif " " in coord_str:
+            # Format: "lat lon"
+            lat_str, lon_str = coord_str.split()
+            lat = float(re.sub(r"[NS]", "", lat_str))
+            lon = float(re.sub(r"[EW]", "", lon_str))
+
+            # Handle N/S and E/W designations
+            if "S" in lat_str:
+                lat = -lat
+            if "W" in lon_str:
+                lon = -lon
+        else:
+            # Unknown format
+            return None, None
+
+        return lat, lon
+
+    except (ValueError, IndexError):
+        return None, None
+
+
+def _extract_coordinates(data, lat_lon_column):
+    """
+    Extract latitude and longitude from a column.
+
+    Args:
+        data: DataFrame containing data
+        lat_lon_column: Column containing lat/lon data
+
+    Returns:
+        DataFrame with additional latitude and longitude columns
+    """
+    if not lat_lon_column or lat_lon_column not in data.columns:
+        return None
+
+    # Create latitude and longitude columns
+    lats = []
+    lons = []
+
+    for coord_str in data[lat_lon_column]:
+        lat, lon = _parse_coordinate_string(coord_str)
+        lats.append(lat)
+        lons.append(lon)
+
+    # Add to dataframe
+    plot_df = data.copy()
+    plot_df["latitude"] = lats
+    plot_df["longitude"] = lons
+
+    # Filter out rows with missing coordinates
+    plot_df = plot_df.dropna(subset=["latitude", "longitude"])
+
+    return plot_df
+
+
+def _plot_points(ax, plot_df, value_column, marker_size, cmap, **kwargs):
+    """
+    Plot points on a map.
+
+    Args:
+        ax: Matplotlib axes with map projection
+        plot_df: DataFrame with latitude and longitude columns
+        value_column: Column to use for point colors
+        marker_size: Size of markers
+        cmap: Colormap
+        **kwargs: Additional arguments for scatter plot
+
+    Returns:
+        Scatter plot object if successful, None otherwise
+    """
+    if plot_df is None or plot_df.empty:
+        return None
+
+    # Plot points
+    if value_column and value_column in plot_df.columns:
+        # Use values for coloring
+        scatter = ax.scatter(
+            plot_df["longitude"],
+            plot_df["latitude"],
+            transform=ccrs.PlateCarree(),
+            c=plot_df[value_column],
+            s=marker_size,
+            cmap=cmap,
+            **kwargs,
+        )
+
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax, shrink=0.6)
+        cbar.set_label(value_column)
+
+        return scatter
+    else:
+        # Simple scatter plot
+        scatter = ax.scatter(
+            plot_df["longitude"],
+            plot_df["latitude"],
+            transform=ccrs.PlateCarree(),
+            s=marker_size,
+            **kwargs,
+        )
+
+        return scatter
 
 
 class MapVisualizerPlugin(Plugin):
@@ -72,110 +247,20 @@ class MapVisualizerPlugin(Plugin):
         Raises:
             VisualizationError: If the plot cannot be created
         """
-        if not CARTOPY_AVAILABLE:
-            raise VisualizationError(
-                "Cartopy library is required for map visualization. "
-                "Please install with 'pip install cartopy'"
-            )
+        _validate_cartopy_availability()
 
         try:
             # Create figure with projection
-            proj_class = getattr(ccrs, projection)
-            fig = plt.figure(figsize=figsize)
-            ax = fig.add_subplot(1, 1, 1, projection=proj_class())
+            fig, ax = _create_map_figure(figsize, projection)
 
             # Add map features
-            ax.add_feature(cfeature.LAND)
-            ax.add_feature(cfeature.OCEAN)
-            ax.add_feature(cfeature.COASTLINE)
-            ax.add_feature(cfeature.BORDERS, linestyle=":")
+            _add_map_features(ax)
 
             # Extract coordinates if lat_lon_column is provided
-            if lat_lon_column and lat_lon_column in data.columns:
-                # Create latitude and longitude columns
-                lats = []
-                lons = []
+            plot_df = _extract_coordinates(data, lat_lon_column)
 
-                for coord_str in data[lat_lon_column]:
-                    if pd.isna(coord_str) or not coord_str:
-                        lats.append(np.nan)
-                        lons.append(np.nan)
-                        continue
-
-                    # Try to parse coordinates
-                    try:
-                        # Handle various formats
-                        if "," in coord_str:
-                            # Format: "lat, lon"
-                            lat_str, lon_str = coord_str.split(",")
-                            lat = float(lat_str.strip().rstrip("NS"))
-                            lon = float(lon_str.strip().rstrip("EW"))
-
-                            # Handle N/S and E/W designations
-                            if lat_str.strip().endswith("S"):
-                                lat = -lat
-                            if lon_str.strip().endswith("W"):
-                                lon = -lon
-
-                        elif " " in coord_str:
-                            # Format: "lat lon"
-                            lat_str, lon_str = coord_str.split()
-                            lat = float(re.sub(r"[NS]", "", lat_str))
-                            lon = float(re.sub(r"[EW]", "", lon_str))
-
-                            # Handle N/S and E/W designations
-                            if "S" in lat_str:
-                                lat = -lat
-                            if "W" in lon_str:
-                                lon = -lon
-                        else:
-                            # Unknown format
-                            lats.append(np.nan)
-                            lons.append(np.nan)
-                            continue
-
-                        lats.append(lat)
-                        lons.append(lon)
-
-                    except (ValueError, IndexError):
-                        lats.append(np.nan)
-                        lons.append(np.nan)
-
-                # Add to dataframe
-                plot_df = data.copy()
-                plot_df["latitude"] = lats
-                plot_df["longitude"] = lons
-
-                # Filter out rows with missing coordinates
-                plot_df = plot_df.dropna(subset=["latitude", "longitude"])
-
-                if not plot_df.empty:
-                    # Plot points
-                    if value_column and value_column in plot_df.columns:
-                        # Use values for coloring
-                        scatter = ax.scatter(
-                            plot_df["longitude"],
-                            plot_df["latitude"],
-                            transform=ccrs.PlateCarree(),
-                            c=plot_df[value_column],
-                            s=marker_size,
-                            cmap=cmap,
-                            **kwargs,
-                        )
-
-                        # Add colorbar
-                        cbar = plt.colorbar(scatter, ax=ax, shrink=0.6)
-                        cbar.set_label(value_column)
-
-                    else:
-                        # Simple scatter plot
-                        ax.scatter(
-                            plot_df["longitude"],
-                            plot_df["latitude"],
-                            transform=ccrs.PlateCarree(),
-                            s=marker_size,
-                            **kwargs,
-                        )
+            # Plot points
+            _plot_points(ax, plot_df, value_column, marker_size, cmap, **kwargs)
 
             # Set global extent
             ax.set_global()

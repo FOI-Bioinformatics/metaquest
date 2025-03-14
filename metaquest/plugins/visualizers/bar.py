@@ -14,6 +14,100 @@ from metaquest.plugins.base import Plugin
 logger = logging.getLogger(__name__)
 
 
+def _prepare_plot_data(data, x_column, y_column, limit):
+    """
+    Prepare data for plotting.
+
+    Args:
+        data: DataFrame containing data
+        x_column: Column to use for x-axis
+        y_column: Column to use for y-axis
+        limit: Maximum number of items to plot
+
+    Returns:
+        DataFrame prepared for plotting
+    """
+    df = data.copy()
+
+    # Use first column if y_column not specified
+    if y_column is None and not df.empty and df.shape[1] > 0:
+        y_column = df.columns[0]
+
+    # Use index if x_column not specified
+    if x_column is None:
+        if isinstance(df.index, pd.MultiIndex):
+            raise VisualizationError(
+                "Cannot use MultiIndex for x-axis. Please specify x_column."
+            )
+        plot_df = df.copy()
+    else:
+        plot_df = df.set_index(x_column)
+
+    # Apply limit if specified
+    if limit is not None and limit > 0:
+        if y_column:
+            plot_df = plot_df.nlargest(limit, y_column)
+        else:
+            plot_df = plot_df.head(limit)
+
+    return plot_df, y_column
+
+
+def _create_horizontal_bar(plot_df, y_column, ax, colors, **kwargs):
+    """
+    Create a horizontal bar chart.
+
+    Args:
+        plot_df: DataFrame containing data
+        y_column: Column to plot
+        ax: Matplotlib axes to plot on
+        colors: Colors to use
+        **kwargs: Additional arguments for plotting
+
+    Returns:
+        Matplotlib axes with plot
+    """
+    if y_column:
+        plot_df[y_column].plot(kind="barh", ax=ax, color=colors, **kwargs)
+    else:
+        plot_df.plot(kind="barh", ax=ax, color=colors, **kwargs)
+
+    # Add labels
+    ax.set_xlabel("Count")
+    ax.set_ylabel("")
+
+    return ax
+
+
+def _create_vertical_bar(plot_df, y_column, ax, colors, **kwargs):
+    """
+    Create a vertical bar chart.
+
+    Args:
+        plot_df: DataFrame containing data
+        y_column: Column to plot
+        ax: Matplotlib axes to plot on
+        colors: Colors to use
+        **kwargs: Additional arguments for plotting
+
+    Returns:
+        Matplotlib axes with plot
+    """
+    if y_column:
+        plot_df[y_column].plot(kind="bar", ax=ax, color=colors, **kwargs)
+    else:
+        plot_df.plot(kind="bar", ax=ax, color=colors, **kwargs)
+
+    # Add labels
+    ax.set_xlabel("")
+    ax.set_ylabel("Count")
+
+    # Rotate x-axis labels for vertical bar chart
+    plt.xticks(rotation=45, ha="right")
+
+    return ax
+
+
 class BarChartPlugin(Plugin):
     """Plugin for creating bar chart visualizations."""
 
@@ -60,55 +154,16 @@ class BarChartPlugin(Plugin):
         """
         try:
             # Prepare data
-            df = data.copy()
-
-            # Use first column if y_column not specified
-            if y_column is None and not df.empty and df.shape[1] > 0:
-                y_column = df.columns[0]
-
-            # Use index if x_column not specified
-            if x_column is None:
-                if isinstance(df.index, pd.MultiIndex):
-                    raise VisualizationError(
-                        "Cannot use MultiIndex for x-axis. Please specify x_column."
-                    )
-                plot_df = df.copy()
-            else:
-                plot_df = df.set_index(x_column)
-
-            # Apply limit if specified
-            if limit is not None and limit > 0:
-                if y_column:
-                    plot_df = plot_df.nlargest(limit, y_column)
-                else:
-                    plot_df = plot_df.head(limit)
+            plot_df, y_column = _prepare_plot_data(data, x_column, y_column, limit)
 
             # Create figure
             fig, ax = plt.subplots(figsize=figsize)
 
-            # Create plot
+            # Create plot based on orientation
             if horizontal:
-                if y_column:
-                    plot_df[y_column].plot(kind="barh", ax=ax, color=colors, **kwargs)
-                else:
-                    plot_df.plot(kind="barh", ax=ax, color=colors, **kwargs)
-
-                # Add labels
-                ax.set_xlabel("Count")
-                ax.set_ylabel("")
-
+                ax = _create_horizontal_bar(plot_df, y_column, ax, colors, **kwargs)
             else:
-                if y_column:
-                    plot_df[y_column].plot(kind="bar", ax=ax, color=colors, **kwargs)
-                else:
-                    plot_df.plot(kind="bar", ax=ax, color=colors, **kwargs)
-
-                # Add labels
-                ax.set_xlabel("")
-                ax.set_ylabel("Count")
-
-                # Rotate x-axis labels for vertical bar chart
-                plt.xticks(rotation=45, ha="right")
+                ax = _create_vertical_bar(plot_df, y_column, ax, colors, **kwargs)
 
             # Add title if specified
             if title:

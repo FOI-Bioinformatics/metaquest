@@ -59,6 +59,43 @@ def detect_file_format(file_path: Union[str, Path]) -> str:
         raise FormatError(f"Error reading file {file_path}: {str(e)}")
 
 
+def _check_csv_headers(file_path, headers, required_cols):
+    """
+    Check that CSV headers contain all required columns.
+
+    Args:
+        file_path: Path to the CSV file
+        headers: List of header columns
+        required_cols: List of required columns
+
+    Raises:
+        ValidationError: If required columns are missing
+    """
+    missing_cols = [col for col in required_cols if col not in headers]
+    if missing_cols:
+        raise ValidationError(
+            f"Missing required columns in {file_path}: {', '.join(missing_cols)}\n"
+            f"Headers found: {', '.join(headers)}"
+        )
+
+
+def _check_csv_data(file_path, reader):
+    """
+    Check that CSV file has at least one data row.
+
+    Args:
+        file_path: Path to the CSV file
+        reader: CSV reader object
+
+    Raises:
+        ValidationError: If file has no data rows
+    """
+    try:
+        next(reader)  # Try to read the first data row
+    except StopIteration:
+        raise ValidationError(f"File {file_path} contains headers but no data rows")
+
+
 def validate_csv_file(
     file_path: Union[str, Path], file_format: Optional[str] = None
 ) -> Tuple[str, List[str]]:
@@ -99,20 +136,10 @@ def validate_csv_file(
                 raise ValidationError(f"File {file_path} is empty")
 
             # Check for required columns
-            missing_cols = [col for col in required_cols if col not in headers]
-            if missing_cols:
-                raise ValidationError(
-                    f"Missing required columns in {file_path}: {', '.join(missing_cols)}\n"
-                    f"Expected format: {detected_format}, Headers found: {', '.join(headers)}"
-                )
+            _check_csv_headers(file_path, headers, required_cols)
 
             # Check for data rows
-            try:
-                next(reader)  # Try to read the first data row
-            except StopIteration:
-                raise ValidationError(
-                    f"File {file_path} contains headers but no data rows"
-                )
+            _check_csv_data(file_path, reader)
 
         return detected_format, headers
 

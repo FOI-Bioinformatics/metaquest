@@ -109,6 +109,103 @@ def calculate_enrichment(
         raise ProcessingError(f"Error calculating enrichment: {e}")
 
 
+def _validate_distance_method(method):
+    """
+    Validate the distance calculation method.
+
+    Args:
+        method: Distance method name
+
+    Raises:
+        ProcessingError: If method is invalid
+    """
+    valid_methods = ("jaccard", "dice", "cosine")
+    if method not in valid_methods:
+        raise ProcessingError(
+            f"Invalid distance method: {method}. "
+            f"Valid methods: {', '.join(valid_methods)}"
+        )
+
+
+def _create_binary_presence_matrix(summary_df, genome_columns, threshold):
+    """
+    Create a binary presence/absence matrix.
+
+    Args:
+        summary_df: DataFrame with containment data
+        genome_columns: List of genome column names
+        threshold: Containment threshold
+
+    Returns:
+        DataFrame with binary presence/absence data
+    """
+    presence_df = pd.DataFrame(index=summary_df.index)
+
+    for col in genome_columns:
+        presence_df[col] = (summary_df[col] > threshold).astype(int)
+
+    return presence_df
+
+
+def _calculate_jaccard_distance(vec1, vec2):
+    """
+    Calculate Jaccard distance between two vectors.
+
+    Args:
+        vec1: First binary vector
+        vec2: Second binary vector
+
+    Returns:
+        Jaccard distance value
+    """
+    intersection = np.sum(np.logical_and(vec1, vec2))
+    union = np.sum(np.logical_or(vec1, vec2))
+
+    if union > 0:
+        return 1.0 - (intersection / union)
+    return 1.0
+
+
+def _calculate_dice_distance(vec1, vec2):
+    """
+    Calculate Dice distance between two vectors.
+
+    Args:
+        vec1: First binary vector
+        vec2: Second binary vector
+
+    Returns:
+        Dice distance value
+    """
+    intersection = np.sum(np.logical_and(vec1, vec2))
+    sum1 = np.sum(vec1)
+    sum2 = np.sum(vec2)
+
+    if (sum1 + sum2) > 0:
+        return 1.0 - (2.0 * intersection / (sum1 + sum2))
+    return 1.0
+
+
+def _calculate_cosine_distance(vec1, vec2):
+    """
+    Calculate Cosine distance between two vectors.
+
+    Args:
+        vec1: First binary vector
+        vec2: Second binary vector
+
+    Returns:
+        Cosine distance value
+    """
+    dot_product = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+
+    if norm1 > 0 and norm2 > 0:
+        return 1.0 - (dot_product / (norm1 * norm2))
+    return 1.0
+
+
 def calculate_distance_matrix(
     summary_file: Union[str, Path], threshold: float = 0.1, method: str = "jaccard"
 ) -> pd.DataFrame:
@@ -128,12 +225,7 @@ def calculate_distance_matrix(
     """
     try:
         # Validate method
-        valid_methods = ("jaccard", "dice", "cosine")
-        if method not in valid_methods:
-            raise ProcessingError(
-                f"Invalid distance method: {method}. "
-                f"Valid methods: {', '.join(valid_methods)}"
-            )
+        _validate_distance_method(method)
 
         # Load summary data
         summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
@@ -147,16 +239,23 @@ def calculate_distance_matrix(
             raise ProcessingError("No genome columns found in summary file")
 
         # Create binary presence/absence matrix
-        presence_df = pd.DataFrame(index=summary_df.index)
-
-        for col in genome_columns:
-            presence_df[col] = (summary_df[col] > threshold).astype(int)
+        presence_df = _create_binary_presence_matrix(
+            summary_df, genome_columns, threshold
+        )
 
         # Initialize distance matrix
         sample_count = len(presence_df)
         distance_matrix = pd.DataFrame(
             index=presence_df.index, columns=presence_df.index
         )
+
+        # Calculate distances based on method
+        distance_functions = {
+            "jaccard": _calculate_jaccard_distance,
+            "dice": _calculate_dice_distance,
+            "cosine": _calculate_cosine_distance,
+        }
+        distance_function = distance_functions[method]
 
         # Calculate distances
         for i, sample1 in enumerate(presence_df.index):
@@ -170,37 +269,7 @@ def calculate_distance_matrix(
                 vec2 = presence_df.loc[sample2].values
 
                 # Calculate distance based on method
-                if method == "jaccard":
-                    # Jaccard distance = 1 - (intersection / union)
-                    intersection = np.sum(np.logical_and(vec1, vec2))
-                    union = np.sum(np.logical_or(vec1, vec2))
-
-                    if union > 0:
-                        distance = 1.0 - (intersection / union)
-                    else:
-                        distance = 1.0
-
-                elif method == "dice":
-                    # Dice distance = 1 - (2 * intersection / (sum1 + sum2))
-                    intersection = np.sum(np.logical_and(vec1, vec2))
-                    sum1 = np.sum(vec1)
-                    sum2 = np.sum(vec2)
-
-                    if (sum1 + sum2) > 0:
-                        distance = 1.0 - (2.0 * intersection / (sum1 + sum2))
-                    else:
-                        distance = 1.0
-
-                elif method == "cosine":
-                    # Cosine distance = 1 - (dot product / (norm1 * norm2))
-                    dot_product = np.dot(vec1, vec2)
-                    norm1 = np.linalg.norm(vec1)
-                    norm2 = np.linalg.norm(vec2)
-
-                    if norm1 > 0 and norm2 > 0:
-                        distance = 1.0 - (dot_product / (norm1 * norm2))
-                    else:
-                        distance = 1.0
+                distance = distance_function(vec1, vec2)
 
                 # Set distance (symmetric matrix)
                 distance_matrix.loc[sample1, sample2] = distance

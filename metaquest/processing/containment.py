@@ -175,9 +175,14 @@ def filter_samples_by_containment(
         # Apply filter
         if genome_id is not None:
             if genome_id not in summary_df.columns:
+                genome_cols = [
+                    col
+                    for col in summary_df.columns
+                    if col not in ("max_containment", "max_containment_annotation")
+                ]
                 raise ProcessingError(
                     f"Genome {genome_id} not found in summary file. "
-                    f"Available genomes: {', '.join([col for col in summary_df.columns if col not in ('max_containment', 'max_containment_annotation')])}"
+                    f"Available genomes: {', '.join(genome_cols)}"
                 )
             filtered_df = summary_df[summary_df[genome_id] > threshold]
             logger.info(
