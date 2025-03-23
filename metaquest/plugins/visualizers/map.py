@@ -7,7 +7,8 @@ import re
 import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, cast
+from cartopy.mpl.geoaxes import GeoAxes
 
 from metaquest.core.exceptions import VisualizationError
 from metaquest.plugins.base import Plugin
@@ -53,6 +54,7 @@ def _create_map_figure(figsize, projection):
     proj_class = getattr(ccrs, projection)
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(1, 1, 1, projection=proj_class())
+    ax = cast(GeoAxes, ax)
     return fig, ax
 
 
@@ -327,6 +329,7 @@ class MapVisualizerPlugin(Plugin):
             proj_class = getattr(ccrs, projection)
             fig = plt.figure(figsize=figsize)
             ax = fig.add_subplot(1, 1, 1, projection=proj_class())
+            ax = cast(GeoAxes, ax)
 
             # Get natural earth feature
             countries = cfeature.NaturalEarthFeature(

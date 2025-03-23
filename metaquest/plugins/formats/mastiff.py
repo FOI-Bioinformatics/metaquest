@@ -7,7 +7,7 @@ This plugin handles reading and processing Mastiff CSV files.
 import csv
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Sequence
 
 from metaquest.core.exceptions import ValidationError
 from metaquest.core.models import Containment, SRAMetadata
@@ -28,7 +28,7 @@ class MastiffFormatPlugin(Plugin):
     REQUIRED_COLS = ["SRA accession", "containment"]
 
     @classmethod
-    def validate_header(cls, headers: List[str]) -> bool:
+    def validate_header(cls, headers: Sequence[str]) -> bool:
         """
         Validate that the headers contain required columns.
 
