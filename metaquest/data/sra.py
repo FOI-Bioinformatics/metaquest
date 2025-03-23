@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union, List
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import ensure_directory
@@ -157,7 +157,7 @@ def download_accession(
         logger.info(f"Downloading SRA for {accession}")
 
         # Handle temp folder for fasterq-dump
-        temp_cmd = []
+        temp_cmd: List[str] = []
         temp_cmd = _prepare_temp_folder(temp_folder, temp_cmd)
 
         # Build fasterq-dump command
@@ -310,7 +310,7 @@ def _retry_failed_downloads(
 
         logger.info(f"Retry attempt {retry + 1}/{max_retries}")
         retry_batch = failed_accessions.copy()
-        failed_accessions = []
+        failed_accessions: List[str] = []
 
         for accession in retry_batch:
             retry_count += 1
@@ -446,8 +446,8 @@ def download_sra(
         # Download accessions in parallel
         successful_count = 0
         failed_count = 0
-        failed_accessions = []
-        download_results = {}
+        failed_accessions: List[str] = []
+        download_results: Dict[str, str] = {}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit download jobs

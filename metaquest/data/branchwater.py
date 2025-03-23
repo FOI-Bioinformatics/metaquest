@@ -51,7 +51,7 @@ def process_branchwater_files(
     source_path = validate_folder(source_folder)
     target_path = ensure_directory(target_folder)
 
-    result_files = {}
+    result_files: Dict[str, Path] = {}
     processed_count = 0
     error_count = 0
 
@@ -180,7 +180,7 @@ def extract_metadata_from_branchwater(
     """
     try:
         source_path = Path(branchwater_folder)
-        metadata_records = []
+        metadata_records: List[Dict[str, Any]] = []
         processed_count = 0
         error_count = 0
 
@@ -416,7 +416,7 @@ def parse_containment_data(
     matches_path = validate_folder(matches_folder)
 
     # Dictionary to store containment data
-    containment_data = defaultdict(dict)
+    containment_data: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
 
     # Get all CSV files in the matches folder
     csv_files = list_files(matches_path, "*.csv")
