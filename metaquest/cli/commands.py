@@ -290,6 +290,7 @@ def download_sra_command(args: argparse.Namespace) -> int:
             force=args.force,
             max_retries=args.max_retries,
             temp_folder=args.temp_folder,
+            blacklist=args.blacklist,
         )
 
         if args.dry_run:
@@ -299,6 +300,10 @@ def download_sra_command(args: argparse.Namespace) -> int:
             logger.info(
                 f"  {download_stats['already_downloaded']} datasets would be skipped (already downloaded)"
             )
+            if 'blacklisted' in download_stats and download_stats['blacklisted'] > 0:
+                logger.info(
+                    f"  {download_stats['blacklisted']} datasets would be skipped (blacklisted)"
+                )
             if "to_download" in download_stats and download_stats["to_download"] > 0:
                 logger.info(f"  Output folder would be: {args.fastq_folder}")
                 if args.max_downloads:
@@ -312,6 +317,10 @@ def download_sra_command(args: argparse.Namespace) -> int:
             logger.info(
                 f"  Already downloaded: {download_stats['already_downloaded']} datasets"
             )
+            if 'blacklisted' in download_stats and download_stats['blacklisted'] > 0:
+                logger.info(
+                    f"  Blacklisted: {download_stats['blacklisted']} datasets"
+                )
             logger.info(f"  Total processed: {download_stats['total']} datasets")
 
         # Return error if there were failed downloads

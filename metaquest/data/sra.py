@@ -10,12 +10,43 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union, List
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import ensure_directory
 
 logger = logging.getLogger(__name__)
+
+
+def _read_blacklist_files(blacklist_files):
+    """
+    Read accessions from blacklist files.
+
+    Args:
+        blacklist_files: List of blacklist file paths
+
+    Returns:
+        Set of blacklisted accessions
+    """
+    blacklisted_accessions = set()
+
+    if not blacklist_files:
+        return blacklisted_accessions
+
+    for blacklist_file in blacklist_files:
+        try:
+            file_accessions = set()
+            with open(blacklist_file, 'r') as f:
+                for line in f:
+                    accession = line.strip()
+                    if accession:
+                        file_accessions.add(accession)
+                        blacklisted_accessions.add(accession)
+            logger.info(f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}")
+        except Exception as e:
+            logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
+
+    return blacklisted_accessions
 
 
 def _prepare_temp_folder(temp_folder, temp_cmd):
@@ -157,7 +188,7 @@ def download_accession(
         logger.info(f"Downloading SRA for {accession}")
 
         # Handle temp folder for fasterq-dump
-        temp_cmd: List[str] = []
+        temp_cmd = []
         temp_cmd = _prepare_temp_folder(temp_folder, temp_cmd)
 
         # Build fasterq-dump command
@@ -200,22 +231,36 @@ def download_accession(
         return False, f"Download failed: {str(e)}"
 
 
-def _check_existing_downloads(accessions, fastq_path, force):
+def _check_existing_downloads(
+    accessions: List[str],
+    fastq_path: Path,
+    force: bool,
+    blacklisted_accessions: Optional[Set[str]] = None
+) -> Tuple[List[str], List[str], List[str]]:
     """
-    Check which accessions need downloading and which are already downloaded.
+    Check which accessions need downloading and which are already downloaded or blacklisted.
 
     Args:
         accessions: List of accessions
         fastq_path: Path to FASTQ directory
         force: Whether to force redownload
+        blacklisted_accessions: Set of blacklisted accessions
 
     Returns:
-        Tuple of (already_downloaded, to_download)
+        Tuple of (already_downloaded, to_download, blacklisted)
     """
     already_downloaded = []
     to_download = []
+    blacklisted = []
+
+    if blacklisted_accessions is None:
+        blacklisted_accessions = set()
 
     for acc in accessions:
+        if acc in blacklisted_accessions:
+            blacklisted.append(acc)
+            continue
+
         acc_path = fastq_path / acc
         if not force and acc_path.exists():
             fastq_files = list(acc_path.glob("*.fastq*"))
@@ -227,7 +272,7 @@ def _check_existing_downloads(accessions, fastq_path, force):
         else:
             to_download.append(acc)
 
-    return already_downloaded, to_download
+    return already_downloaded, to_download, blacklisted
 
 
 def _process_download_results(
@@ -310,7 +355,7 @@ def _retry_failed_downloads(
 
         logger.info(f"Retry attempt {retry + 1}/{max_retries}")
         retry_batch = failed_accessions.copy()
-        failed_accessions: List[str] = []
+        failed_accessions = []
 
         for accession in retry_batch:
             retry_count += 1
@@ -378,6 +423,7 @@ def download_sra(
     force: bool = False,
     max_retries: int = 1,
     temp_folder: Optional[Union[str, Path]] = None,
+    blacklist: Optional[List[Union[str, Path]]] = None,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -392,6 +438,7 @@ def download_sra(
         force: If True, redownload even if files exist
         max_retries: Maximum number of retry attempts for failed downloads
         temp_folder: Directory to use for fasterq-dump temporary files
+        blacklist: One or more files containing accessions to skip
 
     Returns:
         Dictionary with download statistics
@@ -418,12 +465,18 @@ def download_sra(
 
         logger.info(f"Found {len(all_accessions)} accessions in file")
 
+        # Read blacklisted accessions
+        blacklisted_accessions = _read_blacklist_files(blacklist)
+        if blacklisted_accessions:
+            logger.info(f"Found total of {len(blacklisted_accessions)} blacklisted accessions")
+
         # Check which accessions need downloading
-        already_downloaded, accessions_to_download = _check_existing_downloads(
-            all_accessions, fastq_path, force
+        already_downloaded, accessions_to_download, blacklisted = _check_existing_downloads(
+            all_accessions, fastq_path, force, blacklisted_accessions
         )
 
         logger.info(f"{len(already_downloaded)} accessions already downloaded")
+        logger.info(f"{len(blacklisted)} accessions blacklisted")
         logger.info(f"{len(accessions_to_download)} accessions need downloading")
 
         if dry_run:
@@ -433,6 +486,7 @@ def download_sra(
             return {
                 "total": len(all_accessions),
                 "already_downloaded": len(already_downloaded),
+                "blacklisted": len(blacklisted),
                 "to_download": len(accessions_to_download),
                 "successful": 0,
                 "failed": 0,
@@ -446,8 +500,8 @@ def download_sra(
         # Download accessions in parallel
         successful_count = 0
         failed_count = 0
-        failed_accessions: List[str] = []
-        download_results: Dict[str, str] = {}
+        failed_accessions = []
+        download_results = {}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit download jobs
@@ -493,6 +547,7 @@ def download_sra(
         logger.info("Download summary:")
         logger.info(f"  Total accessions: {len(all_accessions)}")
         logger.info(f"  Already downloaded: {len(already_downloaded)}")
+        logger.info(f"  Blacklisted: {len(blacklisted)}")
         logger.info(f"  Newly downloaded: {successful_count}")
         logger.info(f"  Failed downloads: {failed_count}")
 
@@ -506,6 +561,7 @@ def download_sra(
         download_stats = {
             "total": len(all_accessions),
             "already_downloaded": len(already_downloaded),
+            "blacklisted": len(blacklisted),
             "successful": successful_count,
             "failed": failed_count,
             "failed_accessions": failed_accessions,

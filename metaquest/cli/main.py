@@ -356,6 +356,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--temp-folder",
         help="Directory to use for fasterq-dump temporary files (must be writable)",
     )
+    parser_download_sra.add_argument(
+        "--blacklist",
+        nargs="+",
+        help="One or more files containing blacklisted accessions, one per line",
+    )
     parser_download_sra.set_defaults(func=download_sra_command)
 
     # Assemble datasets command
