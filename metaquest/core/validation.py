@@ -165,7 +165,8 @@ def validate_accession(accession: str) -> bool:
         True if the accession is valid, False otherwise
     """
     # Basic validation - SRA accessions follow specific patterns
-    valid_prefixes = ("SRR", "ERR", "DRR")
+    from metaquest.core.constants import SRA_VALID_PREFIXES
+    valid_prefixes = SRA_VALID_PREFIXES
 
     if not accession:
         return False
