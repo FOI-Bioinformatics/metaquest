@@ -26,7 +26,7 @@ from metaquest.cli.commands import (
     SingleSampleCommand,
     DownloadSraCommand,
     AssembleDatasetsCommand,
-    DownloadTestGenomeCommand
+    DownloadTestGenomeCommand,
 )
 
 
@@ -44,9 +44,9 @@ def register_all_commands() -> None:
         PlotContainmentCommand(),
         PlotMetadataCountsCommand(),
         DownloadSraCommand(),
-        AssembleDatasetsCommand()
+        AssembleDatasetsCommand(),
     ]
-    
+
     for command in commands:
         command_registry.register(command)
 
@@ -73,7 +73,7 @@ def create_parser() -> argparse.ArgumentParser:
         default="INFO",
         help="Set the logging level",
     )
-    
+
     # Register all commands and setup subparsers
     register_all_commands()
     command_registry.setup_parsers(parser)

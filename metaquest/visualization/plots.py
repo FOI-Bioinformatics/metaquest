@@ -215,7 +215,7 @@ def plot_metadata_counts(
             fig, ax = plt.subplots(figsize=(10, 10))
 
             # Calculate percentage for "Other" category if data was limited
-            total_count = df["count"].sum()
+            _ = df["count"].sum()  # For potential future use
 
             # Create pie chart
             df["category"] = df["category"].astype(str)
