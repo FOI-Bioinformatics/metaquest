@@ -4,8 +4,7 @@ Basic unit tests for MetaQuest.
 
 import os
 import tempfile
-from pathlib import Path
-import pandas as pd
+
 import pytest
 
 import metaquest

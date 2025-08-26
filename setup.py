@@ -31,33 +31,33 @@ setup(
         "Intended Audience :: Science/Research",
     ],
     install_requires=[
-        'pandas>=1.3.0',
-        'matplotlib>=3.4.0',
-        'seaborn>=0.11.0',
-        'numpy>=1.20.0',
-        'scikit-learn>=1.0.0',
-        'biopython>=1.79',
-        'lxml>=4.6.0',
-        'upsetplot>=0.6.0',
-        'jinja2>=3.0.0',
-        'cartopy>=0.19.0',
+        "pandas>=1.3.0",
+        "matplotlib>=3.4.0",
+        "seaborn>=0.11.0",
+        "numpy>=1.20.0",
+        "scikit-learn>=1.0.0",
+        "biopython>=1.79",
+        "lxml>=4.6.0",
+        "upsetplot>=0.6.0",
+        "jinja2>=3.0.0",
+        "cartopy>=0.19.0",
     ],
     extras_require={
-        'dev': [
-            'pytest>=6.0.0',
-            'pytest-cov>=2.12.0',
-            'flake8>=3.9.0',
-            'black>=21.5b0',
-            'mypy>=0.812',
+        "dev": [
+            "pytest>=6.0.0",
+            "pytest-cov>=2.12.0",
+            "flake8>=3.9.0",
+            "black>=21.5b0",
+            "mypy>=0.812",
         ],
     },
-    python_requires='>=3.8',
+    python_requires=">=3.8",
     entry_points={
-        'console_scripts': [
-            'metaquest=metaquest.cli.main:main',
+        "console_scripts": [
+            "metaquest=metaquest.cli.main:main",
         ],
     },
     package_data={
-        'metaquest': ['py.typed'],
+        "metaquest": ["py.typed"],
     },
 )
