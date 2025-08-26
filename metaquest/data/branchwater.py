@@ -7,7 +7,7 @@ This module provides functions for processing Branchwater containment files.
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Union
+from typing import Any, DefaultDict, Dict, List, Union
 
 import pandas as pd
 

@@ -2,7 +2,6 @@
 Unit tests for MetaQuest data models.
 """
 
-import pytest
 from metaquest.core.models import (
     Containment,
     GenomeInfo,

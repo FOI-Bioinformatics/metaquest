@@ -12,8 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
+from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,15 @@ def _read_blacklist_files(blacklist_files):
     for blacklist_file in blacklist_files:
         try:
             file_accessions = set()
-            with open(blacklist_file, 'r') as f:
+            with open(blacklist_file, "r") as f:
                 for line in f:
                     accession = line.strip()
                     if accession:
                         file_accessions.add(accession)
                         blacklisted_accessions.add(accession)
-            logger.info(f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}")
+            logger.info(
+                f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}"
+            )
         except Exception as e:
             logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
 
@@ -191,9 +194,8 @@ def download_accession(
         temp_cmd = []
         temp_cmd = _prepare_temp_folder(temp_folder, temp_cmd)
 
-        # Build fasterq-dump command
-        cmd = [
-            "fasterq-dump",
+        # Build fasterq-dump arguments
+        args = [
             "--threads",
             str(num_threads),
             "--progress",
@@ -204,16 +206,10 @@ def download_accession(
 
         # Add temp folder if available
         if temp_cmd:
-            cmd.extend(temp_cmd)
+            args.extend(temp_cmd)
 
-        # Run fasterq-dump command
-        logger.debug(f"Running command: {' '.join(cmd)}")
-        subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        # Run fasterq-dump command securely
+        SecureSubprocess.run_secure("fasterq-dump", args)
 
         # Handle download output
         return _handle_download_output(temp_path, output_path)
@@ -223,6 +219,12 @@ def download_accession(
         # Clean up temp directory
         shutil.rmtree(temp_path)
         return False, f"Download failed: {e.stderr}"
+
+    except SecurityError as e:
+        logger.error(f"Security error downloading {accession}: {e}")
+        # Clean up temp directory
+        shutil.rmtree(temp_path)
+        return False, f"Security error: {e}"
 
     except Exception as e:
         logger.error(f"Error downloading {accession}: {e}")
@@ -235,7 +237,7 @@ def _check_existing_downloads(
     accessions: List[str],
     fastq_path: Path,
     force: bool,
-    blacklisted_accessions: Optional[Set[str]] = None
+    blacklisted_accessions: Optional[Set[str]] = None,
 ) -> Tuple[List[str], List[str], List[str]]:
     """
     Check which accessions need downloading and which are already downloaded or blacklisted.
@@ -468,11 +470,15 @@ def download_sra(
         # Read blacklisted accessions
         blacklisted_accessions = _read_blacklist_files(blacklist)
         if blacklisted_accessions:
-            logger.info(f"Found total of {len(blacklisted_accessions)} blacklisted accessions")
+            logger.info(
+                f"Found total of {len(blacklisted_accessions)} blacklisted accessions"
+            )
 
         # Check which accessions need downloading
-        already_downloaded, accessions_to_download, blacklisted = _check_existing_downloads(
-            all_accessions, fastq_path, force, blacklisted_accessions
+        already_downloaded, accessions_to_download, blacklisted = (
+            _check_existing_downloads(
+                all_accessions, fastq_path, force, blacklisted_accessions
+            )
         )
 
         logger.info(f"{len(already_downloaded)} accessions already downloaded")
@@ -592,24 +598,22 @@ def _process_illumina_dataset(fastq_file, r2_file):
 
     # Run megahit for Illumina paired-end data
     try:
-        subprocess.run(
-            [
-                "megahit",
-                "-1",
-                str(fastq_file),
-                "-2",
-                str(r2_file),
-                "-o",
-                output_dir,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        args = [
+            "-1",
+            str(fastq_file),
+            "-2",
+            str(r2_file),
+            "-o",
+            output_dir,
+        ]
+        SecureSubprocess.run_secure("megahit", args)
         logger.info(f"Successfully assembled {fastq_file.name}")
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error assembling {fastq_file.name}: {e.stderr}")
+
+    except SecurityError as e:
+        logger.error(f"Security error assembling {fastq_file.name}: {e}")
 
     except Exception as e:
         logger.error(f"Error assembling {fastq_file.name}: {e}")
@@ -632,23 +636,21 @@ def _process_nanopore_dataset(fastq_file):
 
     # Run flye for Nanopore data
     try:
-        subprocess.run(
-            [
-                "flye",
-                "--nano-raw",
-                str(fastq_file),
-                "--out-dir",
-                output_dir,
-                "--meta",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        args = [
+            "--nano-raw",
+            str(fastq_file),
+            "--out-dir",
+            output_dir,
+            "--meta",
+        ]
+        SecureSubprocess.run_secure("flye", args)
         logger.info(f"Successfully assembled {fastq_file.name}")
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error assembling {fastq_file.name}: {e.stderr}")
+
+    except SecurityError as e:
+        logger.error(f"Security error assembling {fastq_file.name}: {e}")
 
     except Exception as e:
         logger.error(f"Error assembling {fastq_file.name}: {e}")

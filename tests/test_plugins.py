@@ -5,10 +5,8 @@ Unit tests for MetaQuest plugin system.
 import pytest
 import tempfile
 import os
-from pathlib import Path
 
 from metaquest.core.exceptions import PluginError
-from metaquest.core.models import Containment
 from metaquest.plugins.base import Plugin, PluginRegistry
 from metaquest.plugins.formats.branchwater import BranchWaterFormatPlugin
 from metaquest.plugins.formats.mastiff import MastiffFormatPlugin

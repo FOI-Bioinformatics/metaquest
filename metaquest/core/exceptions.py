@@ -33,3 +33,7 @@ class PluginError(MetaQuestError):
 
 class ConfigurationError(MetaQuestError):
     """Exception raised for errors in configuration."""
+
+
+class SecurityError(MetaQuestError):
+    """Exception raised for security-related errors."""
