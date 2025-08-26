@@ -300,7 +300,7 @@ def download_sra_command(args: argparse.Namespace) -> int:
             logger.info(
                 f"  {download_stats['already_downloaded']} datasets would be skipped (already downloaded)"
             )
-            if 'blacklisted' in download_stats and download_stats['blacklisted'] > 0:
+            if "blacklisted" in download_stats and download_stats["blacklisted"] > 0:
                 logger.info(
                     f"  {download_stats['blacklisted']} datasets would be skipped (blacklisted)"
                 )
@@ -317,10 +317,8 @@ def download_sra_command(args: argparse.Namespace) -> int:
             logger.info(
                 f"  Already downloaded: {download_stats['already_downloaded']} datasets"
             )
-            if 'blacklisted' in download_stats and download_stats['blacklisted'] > 0:
-                logger.info(
-                    f"  Blacklisted: {download_stats['blacklisted']} datasets"
-                )
+            if "blacklisted" in download_stats and download_stats["blacklisted"] > 0:
+                logger.info(f"  Blacklisted: {download_stats['blacklisted']} datasets")
             logger.info(f"  Total processed: {download_stats['total']} datasets")
 
         # Return error if there were failed downloads

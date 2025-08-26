@@ -25,6 +25,56 @@ visualizer_registry.register(HeatmapPlugin)
 visualizer_registry.register(MapVisualizerPlugin)
 
 
+def _create_plot_by_type(
+    ax: plt.Axes, df: pd.DataFrame, column: str, plot_type: str, colors: str
+):
+    """Create plot based on plot type."""
+    if plot_type == "rank":
+        df_sorted = df.sort_values(by=column, ascending=False)
+        df_sorted["rank"] = np.arange(1, len(df_sorted) + 1)
+        ax.scatter(df_sorted["rank"], df_sorted[column], color=colors)
+        ax.set_xlabel("Rank")
+        ax.set_ylabel(f"{column} Value")
+    elif plot_type == "histogram":
+        ax.hist(df[column], bins=20, color=colors, alpha=0.7)
+        ax.set_xlabel(column)
+        ax.set_ylabel("Frequency")
+    elif plot_type == "box":
+        ax.boxplot(df[column])
+        ax.set_ylabel(column)
+        ax.set_xticklabels([column])
+    elif plot_type == "violin":
+        ax.violinplot(df[column])
+        ax.set_ylabel(column)
+        ax.set_xticklabels([column])
+    else:
+        raise VisualizationError(
+            f"Unknown plot type: {plot_type}. "
+            "Supported types: rank, histogram, box, violin"
+        )
+
+
+def _determine_title(
+    title: Optional[str], show_title: bool, plot_type: str, column: str
+) -> Optional[str]:
+    """Determine the title for the plot."""
+    if title is None and show_title:
+        return f"{plot_type.capitalize()} Plot of {column}"
+    elif not show_title:
+        return None
+    return title
+
+
+def _save_plot_if_requested(
+    file_path: Union[str, Path], plot_type: str, column: str, save_format: Optional[str]
+):
+    """Save plot if format is specified."""
+    if save_format:
+        output_file = f"{Path(file_path).stem}_{plot_type}_{column}.{save_format}"
+        plt.savefig(output_file, format=save_format, dpi=300, bbox_inches="tight")
+        logger.info(f"Plot saved to {output_file}")
+
+
 def plot_containment(
     file_path: Union[str, Path],
     column: str = "max_containment",
@@ -55,85 +105,31 @@ def plot_containment(
         VisualizationError: If the visualization fails
     """
     try:
-        # Load data
         df = pd.read_csv(file_path, sep="\t", index_col=0)
 
-        # Check if column exists
         if column not in df.columns:
             raise VisualizationError(
                 f"Column '{column}' not found in file. "
                 f"Available columns: {', '.join(df.columns)}"
             )
 
-        # Apply threshold if specified
         if threshold is not None:
             df = df[df[column] >= threshold]
             if df.empty:
                 logger.warning(f"No data above threshold {threshold}")
                 return None
 
-        # Set title if not specified
-        if title is None and show_title:
-            title = f"{plot_type.capitalize()} Plot of {column}"
-        elif not show_title:
-            title = None
+        title = _determine_title(title, show_title, plot_type, column)
+        colors = colors or "blue"
 
-        # Set default colors if not specified
-        if colors is None:
-            colors = "blue"
-
-        # Create figure
         fig, ax = plt.subplots(figsize=(10, 6))
+        _create_plot_by_type(ax, df, column, plot_type, colors)
 
-        # Create plot based on plot_type
-        if plot_type == "rank":
-            # Sort data
-            df_sorted = df.sort_values(by=column, ascending=False)
-
-            # Add rank column
-            df_sorted["rank"] = np.arange(1, len(df_sorted) + 1)
-
-            # Plot rank vs value
-            ax.scatter(df_sorted["rank"], df_sorted[column], color=colors)
-            ax.set_xlabel("Rank")
-            ax.set_ylabel(f"{column} Value")
-
-        elif plot_type == "histogram":
-            # Create histogram
-            ax.hist(df[column], bins=20, color=colors, alpha=0.7)
-            ax.set_xlabel(column)
-            ax.set_ylabel("Frequency")
-
-        elif plot_type == "box":
-            # Create box plot
-            ax.boxplot(df[column])
-            ax.set_ylabel(column)
-            ax.set_xticklabels([column])
-
-        elif plot_type == "violin":
-            # Create violin plot
-            ax.violinplot(df[column])
-            ax.set_ylabel(column)
-            ax.set_xticklabels([column])
-
-        else:
-            raise VisualizationError(
-                f"Unknown plot type: {plot_type}. "
-                "Supported types: rank, histogram, box, violin"
-            )
-
-        # Add title if specified
         if title:
             ax.set_title(title)
 
-        # Adjust layout
         plt.tight_layout()
-
-        # Save plot if format specified
-        if save_format:
-            output_file = f"{Path(file_path).stem}_{plot_type}_{column}.{save_format}"
-            plt.savefig(output_file, format=save_format, dpi=300, bbox_inches="tight")
-            logger.info(f"Plot saved to {output_file}")
+        _save_plot_if_requested(file_path, plot_type, column, save_format)
 
         return fig
 
@@ -178,7 +174,7 @@ def plot_metadata_counts(
         if df.shape[1] >= 2:
             # Set column names
             df.columns = ["category", "count"] + [
-                f"col{i+3}" for i in range(df.shape[1] - 2)
+                f"col{i + 3}" for i in range(df.shape[1] - 2)
             ]
 
             # Sort by count and limit number of items
@@ -213,9 +209,6 @@ def plot_metadata_counts(
         elif plot_type == "pie":
             # Create pie chart (limit to top items for readability)
             fig, ax = plt.subplots(figsize=(10, 10))
-
-            # Calculate percentage for "Other" category if data was limited
-            total_count = df["count"].sum()
 
             # Create pie chart
             df["category"] = df["category"].astype(str)

@@ -36,13 +36,15 @@ def _read_blacklist_files(blacklist_files):
     for blacklist_file in blacklist_files:
         try:
             file_accessions = set()
-            with open(blacklist_file, 'r') as f:
+            with open(blacklist_file, "r") as f:
                 for line in f:
                     accession = line.strip()
                     if accession:
                         file_accessions.add(accession)
                         blacklisted_accessions.add(accession)
-            logger.info(f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}")
+            logger.info(
+                f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}"
+            )
         except Exception as e:
             logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
 
@@ -235,7 +237,7 @@ def _check_existing_downloads(
     accessions: List[str],
     fastq_path: Path,
     force: bool,
-    blacklisted_accessions: Optional[Set[str]] = None
+    blacklisted_accessions: Optional[Set[str]] = None,
 ) -> Tuple[List[str], List[str], List[str]]:
     """
     Check which accessions need downloading and which are already downloaded or blacklisted.
@@ -468,11 +470,15 @@ def download_sra(
         # Read blacklisted accessions
         blacklisted_accessions = _read_blacklist_files(blacklist)
         if blacklisted_accessions:
-            logger.info(f"Found total of {len(blacklisted_accessions)} blacklisted accessions")
+            logger.info(
+                f"Found total of {len(blacklisted_accessions)} blacklisted accessions"
+            )
 
         # Check which accessions need downloading
-        already_downloaded, accessions_to_download, blacklisted = _check_existing_downloads(
-            all_accessions, fastq_path, force, blacklisted_accessions
+        already_downloaded, accessions_to_download, blacklisted = (
+            _check_existing_downloads(
+                all_accessions, fastq_path, force, blacklisted_accessions
+            )
         )
 
         logger.info(f"{len(already_downloaded)} accessions already downloaded")

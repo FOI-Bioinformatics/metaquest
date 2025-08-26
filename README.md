@@ -1,149 +1,290 @@
 # MetaQuest
 
-`metaquest` is a command-line tool designed to help users search through all SRA datasets to find containment of specified genomes. By analyzing the metadata information, it provides insights into where different species may be found.
+[![CI](https://github.com/FOI-Bioinformatics/metaquest/actions/workflows/ci.yml/badge.svg)](https://github.com/FOI-Bioinformatics/metaquest/actions/workflows/ci.yml)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-## Installation
+> A comprehensive toolkit for analyzing metagenomic datasets based on genome containment
 
-1. Clone the repository:
+MetaQuest is a command-line tool designed to help researchers search through SRA (Sequence Read Archive) datasets to find containment of specified genomes. By analyzing metadata information, it provides insights into where different species may be found across environmental and clinical samples.
+
+## 🚀 Key Features
+
+- **Branchwater Integration**: Direct processing of containment files from the Branchwater platform
+- **Metadata Analysis**: Comprehensive SRA metadata downloading and parsing from NCBI
+- **Visualization Tools**: Built-in plotting capabilities for containment and metadata analysis
+- **Scalable Processing**: Parallel download and processing capabilities
+- **Flexible Formats**: Support for multiple file formats (Branchwater, Mastiff)
+- **Security**: Input validation and secure subprocess handling
+
+## 📦 Installation
+
+### From PyPI (Recommended)
 ```bash
-git clone https://github.com/FOI-Bioinformatics/MetaQuest.git
-cd MetaQuest
+pip install metaquest
 ```
 
-2. Install the requirements:
+### From Source
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/FOI-Bioinformatics/metaquest.git
+cd metaquest
+pip install -e .
 ```
 
-3. Install MetaQuest:
+### Development Installation
 ```bash
-python setup.py install
+git clone https://github.com/FOI-Bioinformatics/metaquest.git
+cd metaquest
+pip install -e ".[dev]"
 ```
 
-## Usage with Branchwater
+## 🔧 Requirements
 
-### 1. Getting Containment Files from Branchwater
+- Python 3.8+
+- Dependencies: pandas, matplotlib, seaborn, biopython, cartopy
+- Optional tools: fasterq-dump (for SRA downloads), megahit/flye (for assembly)
 
-First, visit [https://branchwater.jgi.doe.gov/](https://branchwater.jgi.doe.gov/) to search and download containment files for your genomes of interest. Save these CSV files to a designated folder.
+## 📖 Quick Start
+
+### 1. Download Test Data
+```bash
+metaquest download_test_genome --output-folder genomes
+```
 
 ### 2. Process Branchwater Files
-
-Process the downloaded files to prepare them for the MetaQuest pipeline:
-
-```bash
-metaquest use_branchwater --branchwater-folder /path/to/branchwater/files --matches-folder matches
-```
-
-* `branchwater-folder`: The directory where Branchwater CSV files are located.
-* `matches-folder`: The directory where the processed files will be saved.
-
-### 3. Extract Basic Metadata from Branchwater Files (Optional)
-
-You can extract basic metadata directly from Branchwater CSV files without downloading from NCBI:
+Visit [https://branchwater.jgi.doe.gov/](https://branchwater.jgi.doe.gov/) to download containment files, then:
 
 ```bash
-metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater/files --metadata-folder metadata
+metaquest use_branchwater --branchwater-folder branchwater_files --matches-folder matches
 ```
 
-### 4. Summarizing Results
+### 3. Parse Containment Data
+```bash
+metaquest parse_containment --matches-folder matches --step-size 0.1
+```
 
-After processing the Branchwater files, you can summarize the results:
+### 4. Visualize Results
+```bash
+metaquest plot_containment --file-path parsed_containment.txt --plot-type rank
+```
+
+## 📚 Comprehensive Usage
+
+### Core Workflow Commands
+
+#### Branchwater Processing
+```bash
+# Process downloaded Branchwater files
+metaquest use_branchwater --branchwater-folder /path/to/files --matches-folder matches
+
+# Extract basic metadata from Branchwater files
+metaquest extract_branchwater_metadata --branchwater-folder /path/to/files --metadata-folder metadata
+```
+
+#### Containment Analysis
+```bash
+# Parse containment data with custom thresholds
+metaquest parse_containment --matches-folder matches \\
+    --parsed-containment-file results.txt \\
+    --summary-containment-file summary.txt \\
+    --step-size 0.05 \\
+    --file-format branchwater
+```
+
+#### Metadata Operations
+```bash
+# Download comprehensive metadata from NCBI
+metaquest download_metadata --email your.email@domain.com \\
+    --matches-folder matches \\
+    --metadata-folder metadata \\
+    --threshold 0.95
+
+# Parse downloaded metadata
+metaquest parse_metadata --metadata-folder metadata \\
+    --metadata-table-file parsed_metadata.txt
+
+# Count metadata by attributes
+metaquest count_metadata --summary-file parsed_containment.txt \\
+    --metadata-file parsed_metadata.txt \\
+    --metadata-column Sample_Scientific_Name \\
+    --threshold 0.95 \\
+    --output-file counts.txt
+```
+
+#### Single Sample Analysis
+```bash
+metaquest single_sample --summary-file parsed_containment.txt \\
+    --metadata-file parsed_metadata.txt \\
+    --summary-column GCF_000008985.1 \\
+    --metadata-column Sample_Scientific_Name \\
+    --threshold 0.95 \\
+    --top-n 100
+```
+
+#### SRA Data Download
+```bash
+# Download raw SRA data
+metaquest download_sra --accessions-file accessions.txt \\
+    --fastq-folder fastq \\
+    --num-threads 8 \\
+    --max-workers 4 \\
+    --max-retries 3
+
+# Assembly datasets (requires megahit/flye)
+metaquest assemble_datasets --data-files fastq/*.fastq \\
+    --output-file assembled_dataset.fasta
+```
+
+### Visualization Commands
+
+#### Containment Plots
+```bash
+# Rank plot of containment scores
+metaquest plot_containment --file-path parsed_containment.txt \\
+    --column max_containment \\
+    --plot-type rank \\
+    --save-format png \\
+    --threshold 0.05
+
+# Histogram of containment distribution
+metaquest plot_containment --file-path parsed_containment.txt \\
+    --plot-type histogram \\
+    --save-format pdf
+```
+
+**Available plot types**: `rank`, `histogram`, `box`, `violin`
+
+#### Metadata Plots
+```bash
+# Bar chart of metadata counts
+metaquest plot_metadata_counts --file-path counts.txt \\
+    --plot-type bar \\
+    --save-format png
+
+# Pie chart for categorical data
+metaquest plot_metadata_counts --file-path counts.txt \\
+    --plot-type pie \\
+    --title "Species Distribution"
+```
+
+**Available plot types**: `bar`, `pie`, `radar`
+
+## 🏗️ Architecture
+
+MetaQuest follows a layered, plugin-based architecture:
+
+```
+CLI Layer (commands, argument parsing)
+    ↓
+Core Logic Layer (models, validation, exceptions)
+    ↓
+Data Layer (file I/O, external APIs) ←→ Plugin System (formats, visualizers)
+    ↓
+External Systems (SRA, NCBI, Branchwater)
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
+
+## 🔧 Development
+
+### Setup Development Environment
+```bash
+# Clone and install in development mode
+git clone https://github.com/FOI-Bioinformatics/metaquest.git
+cd metaquest
+pip install -e ".[dev]"
+```
+
+### Code Quality Tools
+```bash
+# Format code
+make format
+
+# Lint code
+make lint
+
+# Run tests
+make test
+
+# Check all (format, lint, test)
+make check
+```
+
+### Available Make Commands
+- `make test` - Run tests with coverage
+- `make lint` - Lint code with flake8
+- `make format` - Format code with black
+- `make check` - Check formatting, linting, and types
+- `make build` - Build distribution packages
+- `make clean` - Clean build artifacts
+
+## 🧪 Testing
 
 ```bash
-metaquest parse_containment --matches_folder matches --parsed_containment_file parsed_containment.txt --summary_containment_file summary_containment.txt --step_size 0.05 --file_format branchwater
+# Run all tests
+pytest tests/
+
+# Run with coverage
+pytest tests/ --cov=metaquest --cov-report=html
+
+# Run specific test
+pytest tests/test_basic.py::test_version
 ```
 
-*Example output:* summary.txt and containment.txt
+## 📊 Examples
 
-### 5. Downloading Metadata from NCBI (Alternative to Step 3)
+Check out the `doc/` directory for detailed workflow examples:
+- [Branchwater Workflow](doc/branchwater_workflow.md)
 
-For more comprehensive metadata, you can download it from NCBI:
+## 🤝 Contributing
 
-```bash
-metaquest download_metadata --matches_folder matches --metadata_folder metadata --threshold 0.95 --email [EMAIL]
+We welcome contributions! Please see our contributing guidelines:
+
+### How to Contribute
+1. **Fork** the repository
+2. **Clone** your fork locally
+3. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
+4. **Make** your changes and add tests
+5. **Run** code quality checks (`make check`)
+6. **Commit** your changes (`git commit -m 'Add amazing feature'`)
+7. **Push** to your branch (`git push origin feature/amazing-feature`)
+8. **Open** a Pull Request
+
+### Code Standards
+- Follow PEP 8 style guidelines
+- Add type hints to new functions
+- Include docstrings for public methods
+- Write tests for new functionality
+- Ensure all CI checks pass
+
+## 📄 License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/FOI-Bioinformatics/metaquest/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/FOI-Bioinformatics/metaquest/discussions)
+- **Documentation**: [Architecture Guide](ARCHITECTURE.md)
+
+## 🏷️ Citation
+
+If you use MetaQuest in your research, please cite:
+
+```bibtex
+@software{metaquest,
+  title={MetaQuest: A toolkit for analyzing metagenomic datasets based on genome containment},
+  author={Andreas Sjödin and contributors},
+  url={https://github.com/FOI-Bioinformatics/metaquest},
+  version={0.3.1},
+  year={2024}
+}
 ```
 
-* `matches_folder`: Directory containing match files.
-* `metadata_folder`: Directory where the metadata files will be saved.
-* `threshold`: Only consider matches with containment above this threshold.
+## 🔄 Changelog
 
-### 6. Parsing Metadata
+See [CHANGELOG.md](CHANGELOG.md) for version history and changes.
 
-Once the metadata is downloaded, you can parse it to generate a more concise and readable format:
+---
 
-```bash
-metaquest parse_metadata --metadata_folder metadata --metadata_table_file parsed_metadata.txt
-```
-
-*Example output:* parsed_metadata.txt
-
-### 7. Check Metadata Attributes
-
-This step helps in understanding the distribution of metadata attributes:
-
-```bash
-metaquest check_metadata_attributes --file-path parsed_metadata.txt --output-file parsed_metadata_overview.txt
-```
-
-*Example output:* parsed_metadata_overview.txt
-
-### 8. Genome Count
-
-This step helps in understanding the distribution of genomes across different datasets:
-
-```bash
-metaquest count_metadata --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95 --output-file genome_counts.txt
-```
-
-*Example output:* genome_counts.txt
-
-### 9. Single Sample Analysis
-
-To analyze a single sample from the summary, you can use the `single_sample` command:
-
-```bash
-metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column Sample_Scientific_Name --threshold 0.95
-```
-
-### 10. Download SRA Data
-
-To download the raw SRA data for accessions that match your criteria:
-
-```bash
-metaquest download_sra --accessions_file accessions.txt --fastq_folder fastq --num_threads 8 --max_workers 4
-```
-
-The accessions file should contain one SRA accession per line.
-
-## Visualizing Results
-
-### Plotting Containment Data
-
-Plot the distribution of containment scores:
-
-```bash
-metaquest plot_containment --file_path parsed_containment.txt --column max_containment --plot_type rank --save_format png --threshold 0.05
-```
-
-Available plot types: rank, histogram, box, violin
-
-### Plotting Metadata Counts
-
-Visualize the distribution of metadata attributes:
-
-```bash
-metaquest plot_metadata_counts --file_path counts_Sample_Scientific_Name.txt --plot_type bar --save_format png
-```
-
-Available plot types: bar, pie, radar
-
-## Contributing
-
-We welcome contributions to `metaquest`! Whether you want to report a bug, suggest a feature, or contribute code, your input is valuable. Here's how to get started:
-
-1. **Fork the Repository**: Create your own fork of the `metaquest` repository.
-2. **Clone Your Fork**: Clone your fork to your local machine and set the upstream repository.
-3. **Create a New Branch**: Make a new branch for your feature or bugfix.
-4. **Make Your Changes**: Implement your feature or fix the bug and commit your changes.
-5. **Push to Your Fork**: Push your changes to your fork on GitHub.
-6. **Create a Pull Request**: From your fork, open a new pull request in the `metaquest` repository.
+**Made with ❤️ by the FOI Bioinformatics Team**
