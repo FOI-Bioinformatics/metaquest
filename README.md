@@ -137,6 +137,14 @@ metaquest plot_metadata_counts --file-path counts_Sample_Scientific_Name.txt --p
 
 Available plot types: bar, pie, radar
 
+## 📖 Documentation
+
+For comprehensive documentation including advanced features and technical details, see the [docs/](docs/) directory:
+
+- **[Enhanced SRA Features](docs/SRA_ENHANCED_FEATURES.md)** - Advanced SRA downloading with technology detection and statistics
+- **[Branchwater Workflow](docs/branchwater_workflow.md)** - Detailed workflow guide for branchwater functionality  
+- **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions
+
 ## Contributing
 
 We welcome contributions to `metaquest`! Whether you want to report a bug, suggest a feature, or contribute code, your input is valuable. Here's how to get started:
