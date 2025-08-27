@@ -446,10 +446,13 @@ class SRAValidateCommand(BaseCommand):
             if f.stat().st_size == 0:
                 issues.append(f"Empty file: {f.name}")
 
-        # Check paired-end consistency (simplified)
-        if check_pairs and len(fastq_files) == 2:
-            # Basic check - could be enhanced
-            pass
+        # Check paired-end consistency
+        if check_pairs:
+            r1_files = [f for f in fastq_files if "_R1" in f.name or "_1" in f.name]
+            r2_files = [f for f in fastq_files if "_R2" in f.name or "_2" in f.name]
+
+            if len(r1_files) != len(r2_files) and len(r2_files) > 0:
+                issues.append("Mismatched paired-end files")
 
         # Basic FASTQ format validation
         try:
@@ -493,102 +496,24 @@ class SRAValidateCommand(BaseCommand):
     def execute(self, args):
         try:
             fastq_folder = Path(args.fastq_folder)
-
             if not fastq_folder.exists():
                 print(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
 
             print("Validating downloaded SRA datasets...")
 
-            # Find accession directories
-            accession_dirs = [d for d in fastq_folder.iterdir() if d.is_dir()]
-
-            if args.accessions:
-                accession_dirs = [
-                    d for d in accession_dirs if d.name in args.accessions
-                ]
-
+            accession_dirs = self._find_accession_dirs(fastq_folder, args.accessions)
             if not accession_dirs:
                 print("No accession directories found")
                 return 1
 
             validation_results = []
-
             for acc_dir in accession_dirs:
-                print(f"Validating {acc_dir.name}...")
+                result = self._validate_directory(acc_dir, args.check_pairs)
+                validation_results.append(result)
 
-                # Find FASTQ files
-                fastq_files = list(acc_dir.glob("*.fastq*"))
-
-                if not fastq_files:
-                    validation_results.append(
-                        {
-                            "accession": acc_dir.name,
-                            "status": "FAILED",
-                            "issue": "No FASTQ files found",
-                        }
-                    )
-                    continue
-
-                # Basic validation
-                issues = []
-
-                # Check file sizes
-                for f in fastq_files:
-                    if f.stat().st_size == 0:
-                        issues.append(f"Empty file: {f.name}")
-
-                # Check paired-end consistency
-                if args.check_pairs:
-                    r1_files = [
-                        f for f in fastq_files if "_R1" in f.name or "_1" in f.name
-                    ]
-                    r2_files = [
-                        f for f in fastq_files if "_R2" in f.name or "_2" in f.name
-                    ]
-
-                    if len(r1_files) != len(r2_files) and len(r2_files) > 0:
-                        issues.append("Mismatched paired-end files")
-
-                # Basic FASTQ format validation
-                try:
-                    from Bio import SeqIO
-
-                    for f in fastq_files[:1]:  # Check first file only for speed
-                        with open(f, "rt") as handle:
-                            records = list(SeqIO.parse(handle, "fastq"))
-                            if len(records) == 0:
-                                issues.append(f"No valid FASTQ records in {f.name}")
-                            break
-                except Exception as e:
-                    issues.append(f"FASTQ format error: {e}")
-
-                validation_results.append(
-                    {
-                        "accession": acc_dir.name,
-                        "status": "PASSED" if not issues else "FAILED",
-                        "issues": "; ".join(issues) if issues else "None",
-                        "num_files": len(fastq_files),
-                    }
-                )
-
-            # Print results
-            print("\nValidation Results:")
-            print("=================")
-
-            passed = [r for r in validation_results if r["status"] == "PASSED"]
-            failed = [r for r in validation_results if r["status"] == "FAILED"]
-
-            print(f"Total validated: {len(validation_results)}")
-            print(f"Passed: {len(passed)}")
-            print(f"Failed: {len(failed)}")
-
-            if failed:
-                print("\nFailed validations:")
-                for result in failed:
-                    print(f"  {result['accession']}: {result['issues']}")
-
-            return 0 if len(failed) == 0 else 1
+            success = self._print_validation_results(validation_results)
+            return 0 if success else 1
 
         except Exception as e:
             logger.error(f"SRA validation failed: {e}")
