@@ -12,6 +12,7 @@ __email__ = "andreas.sjodin@gmail.com"
 # Conditional import to avoid issues during installation
 try:
     from metaquest.utils.logging import setup_logging
+
     # Initialize logging by default only if import succeeds
     setup_logging()
 except ImportError:
