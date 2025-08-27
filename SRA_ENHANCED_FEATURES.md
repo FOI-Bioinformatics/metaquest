@@ -42,6 +42,9 @@ metaquest sra_info --accessions-file accessions.txt --email your@email.com --api
 
 # Custom output report
 metaquest sra_info --accessions-file accessions.txt --email your@email.com --output-report my_report.csv
+
+# With bandwidth estimation for download time
+metaquest sra_info --accessions-file accessions.txt --email your@email.com --bandwidth-mbps 50.0
 ```
 
 **Output:**
@@ -62,10 +65,13 @@ metaquest sra_download --accessions-file accessions.txt --email your@email.com -
 metaquest sra_download --accessions-file accessions.txt --email your@email.com --fastq-folder data/ --verify-tools
 
 # Parallel downloads with retry
-metaquest sra_download --accessions-file accessions.txt --email your@email.com --max-workers 8 --num-threads 6
+metaquest sra_download --accessions-file accessions.txt --email your@email.com --fastq-folder data/ --max-workers 8 --num-threads 6
 
 # Dry run to preview
-metaquest sra_download --accessions-file accessions.txt --email your@email.com --dry-run
+metaquest sra_download --accessions-file accessions.txt --email your@email.com --fastq-folder data/ --dry-run
+
+# With blacklist to skip problematic accessions
+metaquest sra_download --accessions-file accessions.txt --email your@email.com --fastq-folder data/ --blacklist failed.txt
 ```
 
 **Features:**
@@ -124,15 +130,17 @@ The enhanced SRA downloader organizes files in a standardized way:
 ```
 fastq/
 ├── SRR123456/                 # Illumina paired-end
-│   ├── SRR123456_R1.fastq.gz
+│   ├── SRR123456_R1.fastq.gz  # (or .fastq depending on source)
 │   └── SRR123456_R2.fastq.gz
 ├── SRR789012/                 # Illumina single-end
 │   └── SRR789012_R1.fastq.gz
 ├── SRR345678/                 # Nanopore long reads
-│   └── SRR345678_long.fastq.gz
+│   └── SRR345678_long.fastq
 └── SRR901234/                 # PacBio long reads
-    └── SRR901234_long.fastq.gz
+    └── SRR901234_long.fastq
 ```
+
+**Note**: File extensions (.fastq or .fastq.gz) depend on the source data format.
 
 ## 🔧 Technology Detection
 
@@ -233,6 +241,7 @@ metaquest sra_download \
     --accessions-file large_study.txt \
     --email me@example.com \
     --api-key YOUR_KEY \
+    --fastq-folder fastq/ \
     --max-workers 8 \
     --num-threads 8 \
     --temp-folder /fast/tmp \
@@ -245,6 +254,7 @@ metaquest sra_download \
 metaquest sra_download \
     --accessions-file fastq/failed_accessions.txt \
     --email me@example.com \
+    --fastq-folder fastq/ \
     --force \
     --max-workers 4
 ```
@@ -275,6 +285,11 @@ metaquest sra_download \
    - Verify email and API key
    - Check NCBI service status
    - Reduce batch sizes for problematic accessions
+
+5. **Validation Failures**
+   - Use `--check-pairs` for paired-end validation
+   - Check FASTQ file integrity with `sra_validate`
+   - Re-download failed files with `--force`
 
 ### Performance Tips
 
