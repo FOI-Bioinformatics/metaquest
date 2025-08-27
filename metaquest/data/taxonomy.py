@@ -450,8 +450,9 @@ def suggest_species_corrections(
             return pd.DataFrame()
 
         suggestions = []
-        confidence_levels = {"low": 0, "medium": 1, "high": 2}
-        # min_confidence = confidence_levels.get(confidence_threshold, 1)  # For future use
+        # For future use: implement confidence-based filtering
+        # confidence_levels = {"low": 0, "medium": 1, "high": 2}
+        # min_confidence = confidence_levels.get(confidence_threshold, 1)
 
         for _, row in invalid_species.iterrows():
             # For now, suggest manual review

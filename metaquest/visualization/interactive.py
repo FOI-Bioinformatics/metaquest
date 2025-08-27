@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
 # from plotly.subplots import make_subplots
 # import plotly.offline as pyo
 from sklearn.decomposition import PCA
@@ -95,7 +96,8 @@ def create_interactive_pca(
                     # Additional safety check
                     if plot_data[size_by].isna().any():
                         logger.warning(
-                            f"NaN values detected in plot data for '{size_by}', removing size mapping"
+                            f"NaN values detected in plot data for '{size_by}', "
+                            "removing size mapping"
                         )
                         column_to_drop = size_by
                         size_by = None
@@ -142,7 +144,8 @@ def create_interactive_pca(
         # Add explained variance to title
         total_variance = sum(pca.explained_variance_ratio_[:n_components])
         fig.update_layout(
-            title=f"{title}<br><sub>Total variance explained: {total_variance:.1%}</sub>"
+            title=f"{title}<br><sub>Total variance explained: "
+            f"{total_variance:.1%}</sub>"
         )
 
         # Save plot if requested
@@ -318,7 +321,8 @@ def create_interactive_heatmap(
                 colorscale="RdBu_r",
                 showscale=True,
                 hoverongaps=False,
-                hovertemplate="Sample: %{y}<br>Feature: %{x}<br>Value: %{z}<extra></extra>",
+                hovertemplate="Sample: %{y}<br>Feature: %{x}<br>"
+                "Value: %{z}<extra></extra>",
             )
         )
 

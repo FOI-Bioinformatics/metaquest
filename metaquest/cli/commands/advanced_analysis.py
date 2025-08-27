@@ -175,7 +175,7 @@ class InteractivePlotCommand(BaseCommand):
 
             if args.plot_type == "pca":
                 logger.info("Creating interactive PCA plot...")
-                fig = create_interactive_pca(
+                create_interactive_pca(
                     data_df,
                     metadata=metadata_df,
                     color_by=args.color_by,
@@ -299,9 +299,12 @@ class TaxonomyValidationCommand(BaseCommand):
             print("\nTaxonomy Validation Summary:")
             print("============================")
             print(f"Total species: {total_count}")
-            print(f"Valid species: {valid_count} ({valid_count/total_count*100:.1f}%)")
             print(
-                f"Invalid species: {total_count-valid_count} ({(total_count-valid_count)/total_count*100:.1f}%)"  # noqa: E501
+                f"Valid species: {valid_count} "
+                f"({valid_count / total_count * 100:.1f}%)"
+            )
+            print(
+                f"Invalid species: {total_count - valid_count} ({(total_count - valid_count) / total_count * 100:.1f}%)"  # noqa: E501
             )
 
             # Show confidence distribution
