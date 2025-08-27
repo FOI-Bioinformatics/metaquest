@@ -22,7 +22,7 @@ echo "Testing extract_branchwater_metadata..."
 metaquest extract_branchwater_metadata --branchwater-folder test_data/branchwater --metadata-folder test_data/metadata
 
 echo "Testing parse_containment..."
-metaquest parse_containment --matches_folder test_data/processed --parsed_containment_file test_data/parsed_containment.txt --summary_containment_file test_data/summary_containment.txt
+metaquest parse_containment --matches-folder test_data/processed --parsed-containment-file test_data/parsed_containment.txt --summary-containment-file test_data/summary_containment.txt
 
 # Verify outputs
 echo "Verifying outputs..."
