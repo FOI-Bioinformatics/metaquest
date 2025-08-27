@@ -28,6 +28,12 @@ from metaquest.cli.commands import (
     AssembleDatasetsCommand,
     DownloadTestGenomeCommand,
 )
+from metaquest.cli.commands.advanced_analysis import (
+    DiversityAnalysisCommand,
+    InteractivePlotCommand,
+    TaxonomyValidationCommand,
+    TaxonomicSummaryCommand,
+)
 
 
 def register_all_commands() -> None:
@@ -45,6 +51,10 @@ def register_all_commands() -> None:
         PlotMetadataCountsCommand(),
         DownloadSraCommand(),
         AssembleDatasetsCommand(),
+        DiversityAnalysisCommand(),
+        InteractivePlotCommand(),
+        TaxonomyValidationCommand(),
+        TaxonomicSummaryCommand(),
     ]
 
     for command in commands:
