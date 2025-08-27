@@ -9,8 +9,12 @@ __version__ = "0.3.1"
 __author__ = "Andreas Sjödin"
 __email__ = "andreas.sjodin@gmail.com"
 
-# Import commonly used modules for easier access
-from metaquest.utils.logging import setup_logging
+# Conditional import to avoid issues during installation
+try:
+    from metaquest.utils.logging import setup_logging
 
-# Initialize logging by default
-setup_logging()
+    # Initialize logging by default only if import succeeds
+    setup_logging()
+except ImportError:
+    # During installation, subpackages might not be available yet
+    pass

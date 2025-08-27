@@ -65,8 +65,8 @@ This creates a simplified metadata file with the information available in the Br
 For more comprehensive metadata:
 
 ```bash
-metaquest download_metadata --matches_folder matches --metadata_folder metadata --threshold 0.95 --email your@email.com
-metaquest parse_metadata --metadata_folder metadata --metadata_table_file parsed_metadata.txt
+metaquest download_metadata --matches-folder matches --metadata-folder metadata --threshold 0.95 --email your@email.com
+metaquest parse_metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
 ```
 
 ### 4. Continue with Standard MetaQuest Analysis
@@ -75,7 +75,7 @@ Once you have the containment data and metadata, you can continue with the stand
 
 ```bash
 # Summarize containment results
-metaquest parse_containment --file_format branchwater --matches_folder matches --parsed_containment_file parsed_containment.txt --summary_containment_file summary_containment.txt
+metaquest parse_containment --file-format branchwater --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt
 
 # Analyze metadata attributes 
 metaquest check_metadata_attributes --file-path parsed_metadata.txt --output-file metadata_counts.txt
@@ -84,8 +84,8 @@ metaquest check_metadata_attributes --file-path parsed_metadata.txt --output-fil
 metaquest count_metadata --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95 --output-file genome_counts.txt
 
 # Visualize results
-metaquest plot_containment --file_path parsed_containment.txt --column max_containment --plot_type rank --save_format png
-metaquest plot_metadata_counts --file_path genome_counts.txt --plot_type bar --save_format png
+metaquest plot_containment --file-path parsed_containment.txt --column max_containment --plot-type rank --save-format png
+metaquest plot_metadata_counts --file-path genome_counts.txt --plot-type bar --save-format png
 ```
 
 ### 5. Download Raw Data (Optional)
@@ -97,7 +97,7 @@ If you want to download the raw sequence data for specific accessions:
 grep -v "^#" parsed_containment.txt | awk '$3 > 0.95 {print $1}' > high_containment_accessions.txt
 
 # Download the data
-metaquest download_sra --accessions_file high_containment_accessions.txt --fastq_folder fastq
+metaquest download_sra --accessions-file high_containment_accessions.txt --fastq-folder fastq
 ```
 
 ## Example Workflow
@@ -113,7 +113,7 @@ metaquest use_branchwater --branchwater-folder branchwater_downloads --matches-f
 metaquest extract_branchwater_metadata --branchwater-folder branchwater_downloads --metadata-folder metadata
 
 # 4. Parse containment data
-metaquest parse_containment --file_format branchwater --matches_folder matches --parsed_containment_file parsed_containment.txt --summary_containment_file summary_containment.txt
+metaquest parse_containment --file-format branchwater --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt
 
 # 5. Analyze and visualize
 metaquest count_metadata --summary-file parsed_containment.txt --metadata-file metadata/branchwater_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95 --output-file species_counts.txt

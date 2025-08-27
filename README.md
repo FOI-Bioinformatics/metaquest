@@ -50,7 +50,7 @@ metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater
 After processing the Branchwater files, you can summarize the results:
 
 ```bash
-metaquest parse_containment --matches_folder matches --parsed_containment_file parsed_containment.txt --summary_containment_file summary_containment.txt --step_size 0.05 --file_format branchwater
+metaquest parse_containment --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt --step-size 0.05 --file-format branchwater
 ```
 
 *Example output:* summary.txt and containment.txt
@@ -60,7 +60,7 @@ metaquest parse_containment --matches_folder matches --parsed_containment_file p
 For more comprehensive metadata, you can download it from NCBI:
 
 ```bash
-metaquest download_metadata --matches_folder matches --metadata_folder metadata --threshold 0.95 --email [EMAIL]
+metaquest download_metadata --matches-folder matches --metadata-folder metadata --threshold 0.95 --email [EMAIL]
 ```
 
 * `matches_folder`: Directory containing match files.
@@ -72,7 +72,7 @@ metaquest download_metadata --matches_folder matches --metadata_folder metadata 
 Once the metadata is downloaded, you can parse it to generate a more concise and readable format:
 
 ```bash
-metaquest parse_metadata --metadata_folder metadata --metadata_table_file parsed_metadata.txt
+metaquest parse_metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
 ```
 
 *Example output:* parsed_metadata.txt
@@ -110,7 +110,7 @@ metaquest single_sample --summary-file parsed_containment.txt --metadata-file pa
 To download the raw SRA data for accessions that match your criteria:
 
 ```bash
-metaquest download_sra --accessions_file accessions.txt --fastq_folder fastq --num_threads 8 --max_workers 4
+metaquest download_sra --accessions-file accessions.txt --fastq-folder fastq --num-threads 8 --max-workers 4
 ```
 
 The accessions file should contain one SRA accession per line.
@@ -122,7 +122,7 @@ The accessions file should contain one SRA accession per line.
 Plot the distribution of containment scores:
 
 ```bash
-metaquest plot_containment --file_path parsed_containment.txt --column max_containment --plot_type rank --save_format png --threshold 0.05
+metaquest plot_containment --file-path parsed_containment.txt --column max_containment --plot-type rank --save-format png --threshold 0.05
 ```
 
 Available plot types: rank, histogram, box, violin
@@ -132,7 +132,7 @@ Available plot types: rank, histogram, box, violin
 Visualize the distribution of metadata attributes:
 
 ```bash
-metaquest plot_metadata_counts --file_path counts_Sample_Scientific_Name.txt --plot_type bar --save_format png
+metaquest plot_metadata_counts --file-path counts_Sample_Scientific_Name.txt --plot-type bar --save-format png
 ```
 
 Available plot types: bar, pie, radar
