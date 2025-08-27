@@ -34,6 +34,12 @@ from metaquest.cli.commands.advanced_analysis import (
     TaxonomyValidationCommand,
     TaxonomicSummaryCommand,
 )
+from metaquest.cli.commands.sra_enhanced import (
+    SRAInfoCommand,
+    SRADownloadEnhancedCommand,
+    SRAStatsCommand,
+    SRAValidateCommand,
+)
 
 
 def register_all_commands() -> None:
@@ -51,6 +57,12 @@ def register_all_commands() -> None:
         PlotMetadataCountsCommand(),
         DownloadSraCommand(),
         AssembleDatasetsCommand(),
+        # Enhanced SRA commands
+        SRAInfoCommand(),
+        SRADownloadEnhancedCommand(),
+        SRAStatsCommand(),
+        SRAValidateCommand(),
+        # Advanced analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),
         TaxonomyValidationCommand(),
