@@ -28,6 +28,18 @@ from metaquest.cli.commands import (
     AssembleDatasetsCommand,
     DownloadTestGenomeCommand,
 )
+from metaquest.cli.commands.advanced_analysis import (
+    DiversityAnalysisCommand,
+    InteractivePlotCommand,
+    TaxonomyValidationCommand,
+    TaxonomicSummaryCommand,
+)
+from metaquest.cli.commands.sra_enhanced import (
+    SRAInfoCommand,
+    SRADownloadEnhancedCommand,
+    SRAStatsCommand,
+    SRAValidateCommand,
+)
 
 
 def register_all_commands() -> None:
@@ -45,6 +57,16 @@ def register_all_commands() -> None:
         PlotMetadataCountsCommand(),
         DownloadSraCommand(),
         AssembleDatasetsCommand(),
+        # Enhanced SRA commands
+        SRAInfoCommand(),
+        SRADownloadEnhancedCommand(),
+        SRAStatsCommand(),
+        SRAValidateCommand(),
+        # Advanced analysis commands
+        DiversityAnalysisCommand(),
+        InteractivePlotCommand(),
+        TaxonomyValidationCommand(),
+        TaxonomicSummaryCommand(),
     ]
 
     for command in commands:
