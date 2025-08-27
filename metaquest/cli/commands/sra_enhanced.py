@@ -9,7 +9,6 @@ import logging
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
-from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.sra_enhanced import (
     EnhancedSRADownloader,
     verify_sra_tools,
@@ -17,7 +16,6 @@ from metaquest.data.sra_enhanced import (
     create_download_report,
 )
 from metaquest.data.sra_metadata import (
-    SRAMetadataClient,
     save_metadata_report,
     generate_statistics_report,
 )
@@ -75,8 +73,7 @@ class SRAInfoCommand(BaseCommand):
 
             print(f"Analyzing {len(accessions)} SRA accessions...")
 
-            # Initialize metadata client
-            metadata_client = SRAMetadataClient(args.email, args.api_key)
+            # Initialize downloader
             downloader = EnhancedSRADownloader(args.email, args.api_key)
 
             # Get preview
@@ -89,15 +86,15 @@ class SRAInfoCommand(BaseCommand):
                 return 1
 
             # Print summary
-            print(f"\nSRA Dataset Analysis:")
-            print(f"====================")
+            print("\nSRA Dataset Analysis:")
+            print("===================")
             print(f"Total accessions: {len(accessions)}")
             print(f"Metadata fetched: {len(metadata)}")
             print(f"Total estimated size: {total_size_gb:.2f} GB")
 
             # Technology breakdown
             if tech_counts:
-                print(f"\nTechnology distribution:")
+                print("\nTechnology distribution:")
                 for tech, count in tech_counts.items():
                     print(f"  {tech}: {count} datasets")
 
@@ -109,19 +106,19 @@ class SRAInfoCommand(BaseCommand):
                 layouts[info.layout] = layouts.get(info.layout, 0) + 1
 
             if platforms:
-                print(f"\nPlatform distribution:")
+                print("\nPlatform distribution:")
                 for platform, count in platforms.items():
                     print(f"  {platform}: {count}")
 
             if layouts:
-                print(f"\nLayout distribution:")
+                print("\nLayout distribution:")
                 for layout, count in layouts.items():
                     print(f"  {layout}: {count}")
 
             # Size statistics
             sizes = [info.size_mb / 1024 for info in metadata.values()]  # Convert to GB
             if sizes:
-                print(f"\nSize statistics:")
+                print("\nSize statistics:")
                 print(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
                 print(f"  Largest dataset: {max(sizes):.2f} GB")
                 print(f"  Smallest dataset: {min(sizes):.2f} GB")
@@ -224,43 +221,82 @@ class SRADownloadEnhancedCommand(BaseCommand):
             help="Output file for download report",
         )
 
+    def _verify_tools(self, args):
+        """Verify SRA tools if requested."""
+        if args.verify_tools:
+            print("Verifying SRA tools...")
+            if not verify_sra_tools():
+                print("SRA tools verification failed. Please install SRA toolkit.")
+                return False
+            print("✓ SRA tools verified")
+        return True
+
+    def _read_accessions(self, filename):
+        """Read accessions from file."""
+        with open(filename, "r") as f:
+            accessions = [line.strip() for line in f if line.strip()]
+        if not accessions:
+            print("No accessions found in file")
+            return None
+        return accessions
+
+    def _read_blacklist(self, blacklist_files):
+        """Read blacklisted accessions from files."""
+        blacklisted = set()
+        if blacklist_files:
+            for blacklist_file in blacklist_files:
+                try:
+                    with open(blacklist_file, "r") as f:
+                        file_accessions = {line.strip() for line in f if line.strip()}
+                        blacklisted.update(file_accessions)
+                    logger.info(
+                        f"Read {len(file_accessions)} blacklisted accessions "
+                        f"from {blacklist_file}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Error reading blacklist file {blacklist_file}: {e}"
+                    )
+        return blacklisted
+
+    def _handle_dry_run(self, downloader, accessions):
+        """Handle dry run mode."""
+        print("Dry run mode: analyzing datasets...")
+        metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
+
+        print("\nWould download:")
+        print(f"  Accessions: {len(accessions)}")
+        print(f"  Total size: {total_size_gb:.2f} GB")
+
+        if tech_counts:
+            print("  Technologies:")
+            for tech, count in tech_counts.items():
+                print(f"    {tech}: {count}")
+
+    def _print_results(self, results):
+        """Print download results summary."""
+        print("\nDownload Summary:")
+        print("================")
+        print(f"Total: {results['total']}")
+        print(f"Successful: {results['successful']}")
+        print(f"Failed: {results['failed']}")
+
+        if results["technology_summary"]:
+            print("\nTechnology breakdown:")
+            for tech, count in results["technology_summary"].items():
+                print(f"  {tech}: {count}")
+
     def execute(self, args):
         try:
-            # Verify SRA tools if requested
-            if args.verify_tools:
-                print("Verifying SRA tools...")
-                if not verify_sra_tools():
-                    print("SRA tools verification failed. Please install SRA toolkit.")
-                    return 1
-                print("✓ SRA tools verified")
-
-            # Read accessions
-            with open(args.accessions_file, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-
-            if not accessions:
-                print("No accessions found in file")
+            if not self._verify_tools(args):
                 return 1
 
-            # Read blacklist
-            blacklisted = set()
-            if args.blacklist:
-                for blacklist_file in args.blacklist:
-                    try:
-                        with open(blacklist_file, "r") as f:
-                            file_accessions = {
-                                line.strip() for line in f if line.strip()
-                            }
-                            blacklisted.update(file_accessions)
-                        logger.info(
-                            f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Error reading blacklist file {blacklist_file}: {e}"
-                        )
+            accessions = self._read_accessions(args.accessions_file)
+            if accessions is None:
+                return 1
 
-            # Initialize downloader
+            blacklisted = self._read_blacklist(args.blacklist)
+
             downloader = EnhancedSRADownloader(
                 args.email,
                 args.api_key,
@@ -269,27 +305,11 @@ class SRADownloadEnhancedCommand(BaseCommand):
                 args.temp_folder,
             )
 
-            # Preview if dry run
             if args.dry_run:
-                print("Dry run mode: analyzing datasets...")
-                metadata, tech_counts, total_size_gb = downloader.preview_downloads(
-                    accessions
-                )
-
-                print(f"\nWould download:")
-                print(f"  Accessions: {len(accessions)}")
-                print(f"  Total size: {total_size_gb:.2f} GB")
-
-                if tech_counts:
-                    print(f"  Technologies:")
-                    for tech, count in tech_counts.items():
-                        print(f"    {tech}: {count}")
-
+                self._handle_dry_run(downloader, accessions)
                 return 0
 
-            # Actual download
             print(f"Starting enhanced download of {len(accessions)} datasets...")
-
             if blacklisted:
                 print(f"Blacklisted accessions: {len(blacklisted)}")
 
@@ -301,19 +321,8 @@ class SRADownloadEnhancedCommand(BaseCommand):
                 blacklisted,
             )
 
-            # Print summary
-            print(f"\nDownload Summary:")
-            print(f"================")
-            print(f"Total: {results['total']}")
-            print(f"Successful: {results['successful']}")
-            print(f"Failed: {results['failed']}")
+            self._print_results(results)
 
-            if results["technology_summary"]:
-                print(f"\nTechnology breakdown:")
-                for tech, count in results["technology_summary"].items():
-                    print(f"  {tech}: {count}")
-
-            # Save report
             create_download_report(results, args.report_file)
             print(f"\nDetailed report saved to: {args.report_file}")
 
@@ -408,6 +417,79 @@ class SRAValidateCommand(BaseCommand):
             help="Check that paired-end files have matching read counts",
         )
 
+    def _find_accession_dirs(self, fastq_folder, specific_accessions=None):
+        """Find accession directories to validate."""
+        accession_dirs = [d for d in fastq_folder.iterdir() if d.is_dir()]
+        if specific_accessions:
+            accession_dirs = [
+                d for d in accession_dirs if d.name in specific_accessions
+            ]
+        return accession_dirs
+
+    def _validate_directory(self, acc_dir, check_pairs=False):
+        """Validate a single accession directory."""
+        print(f"Validating {acc_dir.name}...")
+
+        fastq_files = list(acc_dir.glob("*.fastq*"))
+        if not fastq_files:
+            return {
+                "accession": acc_dir.name,
+                "status": "FAILED",
+                "issues": "No FASTQ files found",
+                "num_files": 0,
+            }
+
+        issues = []
+
+        # Check file sizes
+        for f in fastq_files:
+            if f.stat().st_size == 0:
+                issues.append(f"Empty file: {f.name}")
+
+        # Check paired-end consistency (simplified)
+        if check_pairs and len(fastq_files) == 2:
+            # Basic check - could be enhanced
+            pass
+
+        # Basic FASTQ format validation
+        try:
+            from Bio import SeqIO
+
+            for f in fastq_files[:1]:  # Check first file only for speed
+                with open(f, "rt") as handle:
+                    records = list(SeqIO.parse(handle, "fastq"))
+                    if len(records) == 0:
+                        issues.append(f"No valid FASTQ records in {f.name}")
+                    break
+        except Exception as e:
+            issues.append(f"FASTQ format error: {e}")
+
+        return {
+            "accession": acc_dir.name,
+            "status": "PASSED" if not issues else "FAILED",
+            "issues": "; ".join(issues) if issues else "None",
+            "num_files": len(fastq_files),
+        }
+
+    def _print_validation_results(self, validation_results):
+        """Print validation results summary."""
+        print("\nValidation Results:")
+        print("=================")
+
+        passed = [r for r in validation_results if r["status"] == "PASSED"]
+        failed = [r for r in validation_results if r["status"] == "FAILED"]
+
+        print(f"Total validated: {len(validation_results)}")
+        print(f"Passed: {len(passed)}")
+        print(f"Failed: {len(failed)}")
+
+        if failed:
+            print("\nFailed validations:")
+            for result in failed:
+                print(f"  {result['accession']}: {result['issues']}")
+
+        return len(failed) == 0
+
     def execute(self, args):
         try:
             fastq_folder = Path(args.fastq_folder)
@@ -491,8 +573,8 @@ class SRAValidateCommand(BaseCommand):
                 )
 
             # Print results
-            print(f"\nValidation Results:")
-            print(f"==================")
+            print("\nValidation Results:")
+            print("=================")
 
             passed = [r for r in validation_results if r["status"] == "PASSED"]
             failed = [r for r in validation_results if r["status"] == "FAILED"]
@@ -502,7 +584,7 @@ class SRAValidateCommand(BaseCommand):
             print(f"Failed: {len(failed)}")
 
             if failed:
-                print(f"\nFailed validations:")
+                print("\nFailed validations:")
                 for result in failed:
                     print(f"  {result['accession']}: {result['issues']}")
 

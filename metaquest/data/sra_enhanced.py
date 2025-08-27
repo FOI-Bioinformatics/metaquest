@@ -13,8 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.exceptions import DataAccessError, SecurityError
-from metaquest.data.file_io import ensure_directory
+from metaquest.core.exceptions import SecurityError
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
     detect_sequencing_technology,
@@ -506,8 +505,8 @@ def create_download_report(
 
         # Print summary
         successful = df[df["status"] == "Success"]
-        print(f"\nDownload Report Summary:")
-        print(f"=======================")
+        print("\nDownload Report Summary:")
+        print("=======================")
         print(f"Total datasets: {len(df)}")
         print(f"Successful: {len(successful)}")
         print(f"Failed: {len(df) - len(successful)}")
@@ -519,6 +518,6 @@ def create_download_report(
 
             # Technology breakdown
             tech_counts = successful["technology"].value_counts()
-            print(f"\nTechnology distribution:")
+            print("\nTechnology distribution:")
             for tech, count in tech_counts.items():
                 print(f"  {tech}: {count}")

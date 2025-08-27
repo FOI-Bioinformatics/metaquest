@@ -7,18 +7,16 @@ detecting sequencing technologies, and calculating dataset statistics.
 
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
-from urllib.parse import quote
+from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import requests
 from Bio import SeqIO
 
-from metaquest.core.exceptions import DataAccessError, ProcessingError
+from metaquest.core.exceptions import DataAccessError
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +115,9 @@ class SRAMetadataClient:
 
         for i in range(0, len(accessions), batch_size):
             batch = accessions[i : i + batch_size]
-            logger.info(
-                f"Processing batch {i//batch_size + 1}/{(len(accessions) + batch_size - 1)//batch_size}"
-            )
+            batch_num = i // batch_size + 1
+            total_batches = (len(accessions) + batch_size - 1) // batch_size
+            logger.info(f"Processing batch {batch_num}/{total_batches}")
 
             try:
                 batch_results = self._fetch_batch_metadata(batch)
@@ -360,7 +358,8 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
         return "pacbio"
 
     logger.warning(
-        f"Unknown sequencing technology for {dataset_info.accession}: {platform}/{instrument}"
+        f"Unknown sequencing technology for {dataset_info.accession}: "
+        f"{platform}/{instrument}"
     )
     return "unknown"
 
@@ -435,7 +434,8 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
         }
 
     logger.info(
-        f"Statistics calculated: {total_reads} reads, {total_bases} bases, {avg_read_length:.1f} avg length"
+        f"Statistics calculated: {total_reads} reads, {total_bases} bases, "
+        f"{avg_read_length:.1f} avg length"
     )
 
     return ReadStatistics(
@@ -632,8 +632,8 @@ def generate_statistics_report(
         )
 
         # Print summary
-        print(f"\nDataset Statistics Summary:")
-        print(f"==========================")
+        print("\nDataset Statistics Summary:")
+        print("==========================")
         print(f"Total datasets: {len(report_data)}")
         print(f"Total reads: {df['total_reads'].sum():,}")
         print(f"Total bases: {df['total_bases'].sum():,}")
@@ -642,7 +642,7 @@ def generate_statistics_report(
 
         # Technology breakdown
         layout_counts = df["layout"].value_counts()
-        print(f"\nLayout distribution:")
+        print("\nLayout distribution:")
         for layout, count in layout_counts.items():
             print(f"  {layout}: {count}")
     else:
