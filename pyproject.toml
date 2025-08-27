@@ -53,8 +53,8 @@ Issues = "https://github.com/FOI-Bioinformatics/metaquest/issues"
 [project.scripts]
 metaquest = "metaquest.cli.main:main"
 
-[tool.setuptools]
-packages = ["metaquest"]
+[tool.setuptools.packages.find]
+include = ["metaquest*"]
 
 [tool.setuptools.package-data]
 metaquest = ["py.typed"]
