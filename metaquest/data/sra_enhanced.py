@@ -92,11 +92,11 @@ class EnhancedSRADownloader:
             # Get metadata for this accession
             logger.info(f"Fetching metadata for {accession}")
             sra_metadata = self.metadata_client.get_sra_metadata([accession])
-            
+
             if accession in sra_metadata:
                 dataset_info = sra_metadata[accession]
                 technology = detect_sequencing_technology(dataset_info)
-                
+
                 metadata = {
                     "technology": technology,
                     "platform": dataset_info.platform,
@@ -107,7 +107,7 @@ class EnhancedSRADownloader:
                     "avg_length": dataset_info.avg_length,
                     "size_mb": dataset_info.size_mb,
                 }
-                
+
                 logger.info(f"Detected {technology} technology for {accession}")
             else:
                 logger.warning(f"Could not fetch metadata for {accession}")
@@ -119,7 +119,9 @@ class EnhancedSRADownloader:
 
             # Download with technology-specific optimizations
             success, message = self._download_with_optimizations(
-                accession, output_path, technology_hint or metadata.get("technology", "unknown")
+                accession,
+                output_path,
+                technology_hint or metadata.get("technology", "unknown"),
             )
 
             # Calculate post-download statistics if successful
@@ -128,12 +130,14 @@ class EnhancedSRADownloader:
                     fastq_files = list(output_path.glob("*.fastq*"))
                     if fastq_files:
                         stats = calculate_read_statistics(fastq_files)
-                        metadata.update({
-                            "downloaded_reads": stats.total_reads,
-                            "downloaded_bases": stats.total_bases,
-                            "actual_avg_length": stats.avg_read_length,
-                            "gc_content": stats.gc_content,
-                        })
+                        metadata.update(
+                            {
+                                "downloaded_reads": stats.total_reads,
+                                "downloaded_bases": stats.total_bases,
+                                "actual_avg_length": stats.avg_read_length,
+                                "gc_content": stats.gc_content,
+                            }
+                        )
                 except Exception as e:
                     logger.warning(f"Could not calculate post-download statistics: {e}")
 
@@ -148,7 +152,7 @@ class EnhancedSRADownloader:
     ) -> Tuple[bool, str]:
         """Download with technology-specific optimizations."""
         temp_path = output_path.parent / f"{accession}_temp"
-        
+
         try:
             # Clean up any existing temp directory
             if temp_path.exists():
@@ -186,10 +190,12 @@ class EnhancedSRADownloader:
     ) -> List[str]:
         """Build fasterq-dump command with technology-specific optimizations."""
         args = [
-            "--threads", str(self.num_threads),
+            "--threads",
+            str(self.num_threads),
             "--progress",
             accession,
-            "-O", str(temp_path),
+            "-O",
+            str(temp_path),
         ]
 
         # Add technology-specific optimizations
@@ -214,7 +220,7 @@ class EnhancedSRADownloader:
         """Handle download output with technology-specific processing."""
         # Find downloaded files
         fastq_files = list(temp_path.glob("*.fastq*"))
-        
+
         if not fastq_files:
             logger.error(f"No FASTQ files created for {output_path.name}")
             self._cleanup_temp(temp_path)
@@ -224,7 +230,9 @@ class EnhancedSRADownloader:
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Rename files based on technology and layout
-        renamed_files = self._rename_files_by_technology(fastq_files, technology, output_path)
+        renamed_files = self._rename_files_by_technology(
+            fastq_files, technology, output_path
+        )
 
         # Move files to final location
         for old_file, new_file in renamed_files.items():
@@ -246,7 +254,7 @@ class EnhancedSRADownloader:
         if technology == "illumina":
             # Sort files to ensure consistent R1/R2 assignment
             fastq_files.sort()
-            
+
             if len(fastq_files) == 2:
                 # Paired-end
                 renamed_files[fastq_files[0]] = output_path / f"{accession}_R1.fastq.gz"
@@ -283,7 +291,7 @@ class EnhancedSRADownloader:
         """Check if files are already downloaded."""
         if not output_path.exists():
             return False
-            
+
         fastq_files = list(output_path.glob("*.fastq*"))
         return len(fastq_files) > 0
 
@@ -355,19 +363,19 @@ class EnhancedSRADownloader:
                 accession = futures[future]
                 try:
                     success, message, metadata = future.result()
-                    
+
                     results["download_results"][accession] = message
                     results["metadata"][accession] = metadata
-                    
+
                     if success:
                         results["successful"] += 1
-                        
+
                         # Track technology
                         tech = metadata.get("technology", "unknown")
                         results["technology_summary"][tech] = (
                             results["technology_summary"].get(tech, 0) + 1
                         )
-                        
+
                         logger.info(f"✓ {accession}: {message}")
                     else:
                         results["failed"] += 1
@@ -385,7 +393,7 @@ class EnhancedSRADownloader:
         logger.info(f"  Total: {results['total']}")
         logger.info(f"  Successful: {results['successful']}")
         logger.info(f"  Failed: {results['failed']}")
-        
+
         if results["technology_summary"]:
             logger.info("  Technology breakdown:")
             for tech, count in results["technology_summary"].items():
@@ -402,24 +410,27 @@ def verify_sra_tools() -> bool:
         True if tools are available, False otherwise
     """
     required_tools = ["fasterq-dump", "prefetch", "vdb-validate"]
-    
+
     for tool in required_tools:
         try:
-            subprocess.run([tool, "--version"], 
-                         capture_output=True, check=True, timeout=10)
+            subprocess.run(
+                [tool, "--version"], capture_output=True, check=True, timeout=10
+            )
             logger.debug(f"✓ {tool} is available")
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             logger.error(f"✗ {tool} is not available or not working properly")
             return False
-    
+
     logger.info("All SRA tools are available")
     return True
 
 
 def estimate_download_time(
-    total_size_gb: float, 
-    bandwidth_mbps: float = 100,
-    num_parallel: int = 4
+    total_size_gb: float, bandwidth_mbps: float = 100, num_parallel: int = 4
 ) -> float:
     """
     Estimate download time based on size and bandwidth.
@@ -434,20 +445,19 @@ def estimate_download_time(
     """
     # Convert GB to Mb
     total_size_mb = total_size_gb * 1024 * 8
-    
+
     # Account for parallel downloads (with some efficiency loss)
     effective_bandwidth = bandwidth_mbps * num_parallel * 0.8
-    
+
     # Calculate time in seconds, convert to hours
     time_seconds = total_size_mb / effective_bandwidth
     time_hours = time_seconds / 3600
-    
+
     return time_hours
 
 
 def create_download_report(
-    results: Dict[str, Any], 
-    output_file: Union[str, Path]
+    results: Dict[str, Any], output_file: Union[str, Path]
 ) -> None:
     """
     Create a comprehensive download report.
@@ -457,39 +467,43 @@ def create_download_report(
         output_file: Output report file
     """
     import pandas as pd
-    
+
     if not results["metadata"]:
         logger.warning("No metadata available for report")
         return
-    
+
     # Create detailed report
     report_data = []
-    
+
     for accession, metadata in results["metadata"].items():
-        status = "Success" if accession not in results["failed_accessions"] else "Failed"
+        status = (
+            "Success" if accession not in results["failed_accessions"] else "Failed"
+        )
         message = results["download_results"].get(accession, "")
-        
-        report_data.append({
-            "accession": accession,
-            "status": status,
-            "message": message,
-            "technology": metadata.get("technology", ""),
-            "platform": metadata.get("platform", ""),
-            "layout": metadata.get("layout", ""),
-            "spots": metadata.get("spots", 0),
-            "bases": metadata.get("bases", 0),
-            "avg_length": metadata.get("avg_length", 0.0),
-            "size_mb": metadata.get("size_mb", 0.0),
-            "downloaded_reads": metadata.get("downloaded_reads", 0),
-            "downloaded_bases": metadata.get("downloaded_bases", 0),
-            "gc_content": metadata.get("gc_content", 0.0),
-        })
-    
+
+        report_data.append(
+            {
+                "accession": accession,
+                "status": status,
+                "message": message,
+                "technology": metadata.get("technology", ""),
+                "platform": metadata.get("platform", ""),
+                "layout": metadata.get("layout", ""),
+                "spots": metadata.get("spots", 0),
+                "bases": metadata.get("bases", 0),
+                "avg_length": metadata.get("avg_length", 0.0),
+                "size_mb": metadata.get("size_mb", 0.0),
+                "downloaded_reads": metadata.get("downloaded_reads", 0),
+                "downloaded_bases": metadata.get("downloaded_bases", 0),
+                "gc_content": metadata.get("gc_content", 0.0),
+            }
+        )
+
     if report_data:
         df = pd.DataFrame(report_data)
         df.to_csv(output_file, index=False)
         logger.info(f"Download report saved to {output_file}")
-        
+
         # Print summary
         successful = df[df["status"] == "Success"]
         print(f"\nDownload Report Summary:")
@@ -497,14 +511,14 @@ def create_download_report(
         print(f"Total datasets: {len(df)}")
         print(f"Successful: {len(successful)}")
         print(f"Failed: {len(df) - len(successful)}")
-        
+
         if len(successful) > 0:
             print(f"Total downloaded reads: {successful['downloaded_reads'].sum():,}")
             print(f"Total downloaded bases: {successful['downloaded_bases'].sum():,}")
             print(f"Average GC content: {successful['gc_content'].mean():.1f}%")
-            
+
             # Technology breakdown
-            tech_counts = successful['technology'].value_counts()
+            tech_counts = successful["technology"].value_counts()
             print(f"\nTechnology distribution:")
             for tech, count in tech_counts.items():
                 print(f"  {tech}: {count}")

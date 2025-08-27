@@ -80,7 +80,9 @@ class SRAInfoCommand(BaseCommand):
             downloader = EnhancedSRADownloader(args.email, args.api_key)
 
             # Get preview
-            metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
+            metadata, tech_counts, total_size_gb = downloader.preview_downloads(
+                accessions
+            )
 
             if not metadata:
                 print("Could not fetch metadata for any accessions")
@@ -199,7 +201,7 @@ class SRADownloadEnhancedCommand(BaseCommand):
         )
         parser.add_argument(
             "--force",
-            action="store_true", 
+            action="store_true",
             help="Force redownload even if files exist",
         )
         parser.add_argument(
@@ -246,11 +248,17 @@ class SRADownloadEnhancedCommand(BaseCommand):
                 for blacklist_file in args.blacklist:
                     try:
                         with open(blacklist_file, "r") as f:
-                            file_accessions = {line.strip() for line in f if line.strip()}
+                            file_accessions = {
+                                line.strip() for line in f if line.strip()
+                            }
                             blacklisted.update(file_accessions)
-                        logger.info(f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}")
+                        logger.info(
+                            f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}"
+                        )
                     except Exception as e:
-                        logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
+                        logger.warning(
+                            f"Error reading blacklist file {blacklist_file}: {e}"
+                        )
 
             # Initialize downloader
             downloader = EnhancedSRADownloader(
@@ -264,22 +272,24 @@ class SRADownloadEnhancedCommand(BaseCommand):
             # Preview if dry run
             if args.dry_run:
                 print("Dry run mode: analyzing datasets...")
-                metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
-                
+                metadata, tech_counts, total_size_gb = downloader.preview_downloads(
+                    accessions
+                )
+
                 print(f"\nWould download:")
                 print(f"  Accessions: {len(accessions)}")
                 print(f"  Total size: {total_size_gb:.2f} GB")
-                
+
                 if tech_counts:
                     print(f"  Technologies:")
                     for tech, count in tech_counts.items():
                         print(f"    {tech}: {count}")
-                
+
                 return 0
 
             # Actual download
             print(f"Starting enhanced download of {len(accessions)} datasets...")
-            
+
             if blacklisted:
                 print(f"Blacklisted accessions: {len(blacklisted)}")
 
@@ -352,7 +362,7 @@ class SRAStatsCommand(BaseCommand):
     def execute(self, args):
         try:
             fastq_folder = Path(args.fastq_folder)
-            
+
             if not fastq_folder.exists():
                 print(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
@@ -401,7 +411,7 @@ class SRAValidateCommand(BaseCommand):
     def execute(self, args):
         try:
             fastq_folder = Path(args.fastq_folder)
-            
+
             if not fastq_folder.exists():
                 print(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
@@ -410,33 +420,37 @@ class SRAValidateCommand(BaseCommand):
 
             # Find accession directories
             accession_dirs = [d for d in fastq_folder.iterdir() if d.is_dir()]
-            
+
             if args.accessions:
-                accession_dirs = [d for d in accession_dirs if d.name in args.accessions]
+                accession_dirs = [
+                    d for d in accession_dirs if d.name in args.accessions
+                ]
 
             if not accession_dirs:
                 print("No accession directories found")
                 return 1
 
             validation_results = []
-            
+
             for acc_dir in accession_dirs:
                 print(f"Validating {acc_dir.name}...")
-                
+
                 # Find FASTQ files
                 fastq_files = list(acc_dir.glob("*.fastq*"))
-                
+
                 if not fastq_files:
-                    validation_results.append({
-                        "accession": acc_dir.name,
-                        "status": "FAILED",
-                        "issue": "No FASTQ files found"
-                    })
+                    validation_results.append(
+                        {
+                            "accession": acc_dir.name,
+                            "status": "FAILED",
+                            "issue": "No FASTQ files found",
+                        }
+                    )
                     continue
 
                 # Basic validation
                 issues = []
-                
+
                 # Check file sizes
                 for f in fastq_files:
                     if f.stat().st_size == 0:
@@ -444,15 +458,20 @@ class SRAValidateCommand(BaseCommand):
 
                 # Check paired-end consistency
                 if args.check_pairs:
-                    r1_files = [f for f in fastq_files if "_R1" in f.name or "_1" in f.name]
-                    r2_files = [f for f in fastq_files if "_R2" in f.name or "_2" in f.name]
-                    
+                    r1_files = [
+                        f for f in fastq_files if "_R1" in f.name or "_1" in f.name
+                    ]
+                    r2_files = [
+                        f for f in fastq_files if "_R2" in f.name or "_2" in f.name
+                    ]
+
                     if len(r1_files) != len(r2_files) and len(r2_files) > 0:
                         issues.append("Mismatched paired-end files")
 
                 # Basic FASTQ format validation
                 try:
                     from Bio import SeqIO
+
                     for f in fastq_files[:1]:  # Check first file only for speed
                         with open(f, "rt") as handle:
                             records = list(SeqIO.parse(handle, "fastq"))
@@ -462,20 +481,22 @@ class SRAValidateCommand(BaseCommand):
                 except Exception as e:
                     issues.append(f"FASTQ format error: {e}")
 
-                validation_results.append({
-                    "accession": acc_dir.name,
-                    "status": "PASSED" if not issues else "FAILED",
-                    "issues": "; ".join(issues) if issues else "None",
-                    "num_files": len(fastq_files)
-                })
+                validation_results.append(
+                    {
+                        "accession": acc_dir.name,
+                        "status": "PASSED" if not issues else "FAILED",
+                        "issues": "; ".join(issues) if issues else "None",
+                        "num_files": len(fastq_files),
+                    }
+                )
 
             # Print results
             print(f"\nValidation Results:")
             print(f"==================")
-            
+
             passed = [r for r in validation_results if r["status"] == "PASSED"]
             failed = [r for r in validation_results if r["status"] == "FAILED"]
-            
+
             print(f"Total validated: {len(validation_results)}")
             print(f"Passed: {len(passed)}")
             print(f"Failed: {len(failed)}")

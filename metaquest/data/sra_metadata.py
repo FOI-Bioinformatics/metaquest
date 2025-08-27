@@ -117,7 +117,9 @@ class SRAMetadataClient:
 
         for i in range(0, len(accessions), batch_size):
             batch = accessions[i : i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}/{(len(accessions) + batch_size - 1)//batch_size}")
+            logger.info(
+                f"Processing batch {i//batch_size + 1}/{(len(accessions) + batch_size - 1)//batch_size}"
+            )
 
             try:
                 batch_results = self._fetch_batch_metadata(batch)
@@ -145,7 +147,10 @@ class SRAMetadataClient:
         search_response = self._make_request(search_url, params)
         search_data = json.loads(search_response)
 
-        if "esearchresult" not in search_data or not search_data["esearchresult"]["idlist"]:
+        if (
+            "esearchresult" not in search_data
+            or not search_data["esearchresult"]["idlist"]
+        ):
             logger.warning(f"No results found for batch: {accessions[:3]}...")
             return {}
 
@@ -211,8 +216,16 @@ class SRAMetadataClient:
             strategy = self._get_text(library_descriptor, ".//LIBRARY_STRATEGY", "")
             selection = self._get_text(library_descriptor, ".//LIBRARY_SELECTION", "")
             source = self._get_text(library_descriptor, ".//LIBRARY_SOURCE", "")
-            layout_elem = library_descriptor.find(".//LIBRARY_LAYOUT") if library_descriptor else None
-            layout = "PAIRED" if layout_elem and layout_elem.find(".//PAIRED") is not None else "SINGLE"
+            layout_elem = (
+                library_descriptor.find(".//LIBRARY_LAYOUT")
+                if library_descriptor
+                else None
+            )
+            layout = (
+                "PAIRED"
+                if layout_elem and layout_elem.find(".//PAIRED") is not None
+                else "SINGLE"
+            )
 
             # Get run info
             run_set = package.find(".//RUN_SET")
@@ -223,21 +236,31 @@ class SRAMetadataClient:
                 for run in run_set.findall(".//RUN"):
                     spots += int(self._get_text(run, ".//Statistics/@nspots", "0"))
                     bases += int(self._get_text(run, ".//Statistics/@nbases", "0"))
-                    size_mb += float(self._get_text(run, ".//Statistics/@size", "0")) / (1024 * 1024)
+                    size_mb += float(
+                        self._get_text(run, ".//Statistics/@size", "0")
+                    ) / (1024 * 1024)
 
             avg_length = bases / spots if spots > 0 else 0.0
 
             # Get sample info
             sample = package.find(".//SAMPLE")
-            organism = self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample else ""
+            organism = (
+                self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample else ""
+            )
 
             # Get study info
             study = package.find(".//STUDY")
-            bioproject = self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "") if study else ""
+            bioproject = (
+                self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "")
+                if study
+                else ""
+            )
 
             # Get submission info
             submission = package.find(".//SUBMISSION")
-            release_date = self._get_text(submission, "./@received", "") if submission else ""
+            release_date = (
+                self._get_text(submission, "./@received", "") if submission else ""
+            )
 
             # Get biosample
             sample_attrs = package.findall(".//SAMPLE_ATTRIBUTE")
@@ -275,7 +298,7 @@ class SRAMetadataClient:
         """Safely extract text from XML element."""
         if element is None:
             return default
-        
+
         try:
             if xpath.startswith("./@"):
                 # Attribute
@@ -312,11 +335,21 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
         return "illumina"
 
     # Nanopore detection
-    if platform == "oxford_nanopore" or "nanopore" in instrument or "minion" in instrument or "gridion" in instrument:
+    if (
+        platform == "oxford_nanopore"
+        or "nanopore" in instrument
+        or "minion" in instrument
+        or "gridion" in instrument
+    ):
         return "nanopore"
 
     # PacBio detection
-    if platform == "pacbio_smrt" or "pacbio" in instrument or "sequel" in instrument or "rs" in instrument:
+    if (
+        platform == "pacbio_smrt"
+        or "pacbio" in instrument
+        or "sequel" in instrument
+        or "rs" in instrument
+    ):
         return "pacbio"
 
     # Check strategy for additional hints
@@ -326,7 +359,9 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
     if "pacbio" in strategy:
         return "pacbio"
 
-    logger.warning(f"Unknown sequencing technology for {dataset_info.accession}: {platform}/{instrument}")
+    logger.warning(
+        f"Unknown sequencing technology for {dataset_info.accession}: {platform}/{instrument}"
+    )
     return "unknown"
 
 
@@ -350,11 +385,11 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
 
     for fastq_file in fastq_files:
         logger.debug(f"Processing {fastq_file.name}")
-        
+
         try:
             # Determine if file is gzipped
             open_func = _get_file_opener(fastq_file)
-            
+
             with open_func(fastq_file, "rt") as handle:
                 for record in SeqIO.parse(handle, "fastq"):
                     total_reads += 1
@@ -366,10 +401,13 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
                     gc_count += record.seq.count("G") + record.seq.count("C")
 
                     # Calculate average quality score
-                    if hasattr(record, "letter_annotations") and "phred_quality" in record.letter_annotations:
-                        avg_qual = sum(record.letter_annotations["phred_quality"]) / len(
+                    if (
+                        hasattr(record, "letter_annotations")
+                        and "phred_quality" in record.letter_annotations
+                    ):
+                        avg_qual = sum(
                             record.letter_annotations["phred_quality"]
-                        )
+                        ) / len(record.letter_annotations["phred_quality"])
                         quality_scores.append(avg_qual)
 
         except Exception as e:
@@ -396,7 +434,9 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
             "max": max(quality_scores),
         }
 
-    logger.info(f"Statistics calculated: {total_reads} reads, {total_bases} bases, {avg_read_length:.1f} avg length")
+    logger.info(
+        f"Statistics calculated: {total_reads} reads, {total_bases} bases, {avg_read_length:.1f} avg length"
+    )
 
     return ReadStatistics(
         total_reads=total_reads,
@@ -413,7 +453,7 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
 def _get_file_opener(file_path: Path):
     """Get appropriate file opener based on file extension."""
     import gzip
-    
+
     if file_path.suffix.lower() in [".gz", ".gzip"]:
         return gzip.open
     else:
@@ -533,44 +573,52 @@ def generate_statistics_report(
 
     # Find all accession directories
     accession_dirs = [d for d in fastq_path.iterdir() if d.is_dir()]
-    
+
     if not accession_dirs:
         logger.warning("No accession directories found")
         return
 
     # Calculate statistics for each dataset
     report_data = []
-    
+
     for acc_dir in accession_dirs:
         logger.info(f"Processing {acc_dir.name}")
-        
+
         # Find FASTQ files
         fastq_files = list(acc_dir.glob("*.fastq*"))
-        
+
         if not fastq_files:
             logger.warning(f"No FASTQ files found in {acc_dir}")
             continue
-            
+
         try:
             stats = calculate_read_statistics(fastq_files)
-            
+
             # Detect layout and technology from file patterns
-            layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in fastq_files) else "SINGLE"
-            
-            report_data.append({
-                "accession": acc_dir.name,
-                "num_files": len(fastq_files),
-                "layout": layout,
-                "total_reads": stats.total_reads,
-                "total_bases": stats.total_bases,
-                "avg_read_length": stats.avg_read_length,
-                "min_read_length": stats.min_read_length,
-                "max_read_length": stats.max_read_length,
-                "n50": stats.n50,
-                "gc_content": stats.gc_content,
-                "avg_quality": stats.quality_scores["mean"] if stats.quality_scores else None,
-            })
-            
+            layout = (
+                "PAIRED"
+                if any("_2" in f.name or "_R2" in f.name for f in fastq_files)
+                else "SINGLE"
+            )
+
+            report_data.append(
+                {
+                    "accession": acc_dir.name,
+                    "num_files": len(fastq_files),
+                    "layout": layout,
+                    "total_reads": stats.total_reads,
+                    "total_bases": stats.total_bases,
+                    "avg_read_length": stats.avg_read_length,
+                    "min_read_length": stats.min_read_length,
+                    "max_read_length": stats.max_read_length,
+                    "n50": stats.n50,
+                    "gc_content": stats.gc_content,
+                    "avg_quality": (
+                        stats.quality_scores["mean"] if stats.quality_scores else None
+                    ),
+                }
+            )
+
         except Exception as e:
             logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
             continue
@@ -579,8 +627,10 @@ def generate_statistics_report(
         # Save report
         df = pd.DataFrame(report_data)
         df.to_csv(output_file, index=False)
-        logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
-        
+        logger.info(
+            f"Statistics report saved to {output_file} ({len(report_data)} datasets)"
+        )
+
         # Print summary
         print(f"\nDataset Statistics Summary:")
         print(f"==========================")
@@ -589,9 +639,9 @@ def generate_statistics_report(
         print(f"Total bases: {df['total_bases'].sum():,}")
         print(f"Average read length: {df['avg_read_length'].mean():.1f}")
         print(f"Average GC content: {df['gc_content'].mean():.1f}%")
-        
+
         # Technology breakdown
-        layout_counts = df['layout'].value_counts()
+        layout_counts = df["layout"].value_counts()
         print(f"\nLayout distribution:")
         for layout, count in layout_counts.items():
             print(f"  {layout}: {count}")
