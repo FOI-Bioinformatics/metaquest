@@ -160,13 +160,3 @@ SUCCESS_MESSAGES = {
 # Plugin System Constants
 PLUGIN_REGISTRY_NAME = "metaquest_plugins"
 DEFAULT_PLUGIN_TIMEOUT = 300  # 5 minutes
-
-# Configuration File Names
-CONFIG_FILE_NAMES = [
-    "metaquest.json",
-    "metaquest.yaml",
-    "metaquest.yml",
-    ".metaquest.json",
-    ".metaquest.yaml",
-    ".metaquest.yml",
-]

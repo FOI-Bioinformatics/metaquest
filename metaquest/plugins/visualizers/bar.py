@@ -36,9 +36,7 @@ def _prepare_plot_data(data, x_column, y_column, limit):
     # Use index if x_column not specified
     if x_column is None:
         if isinstance(df.index, pd.MultiIndex):
-            raise VisualizationError(
-                "Cannot use MultiIndex for x-axis. Please specify x_column."
-            )
+            raise VisualizationError("Cannot use MultiIndex for x-axis. Please specify x_column.")
         plot_df = df.copy()
     else:
         plot_df = df.set_index(x_column)
@@ -174,9 +172,7 @@ class BarChartPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved bar chart to {output_file}")
 
             return fig
@@ -225,9 +221,7 @@ class BarChartPlugin(Plugin):
         """
         try:
             # Pivot data for grouped bar chart
-            pivot_df = data.pivot_table(
-                index=x_column, columns=group_column, values=value_column, aggfunc="sum"
-            )
+            pivot_df = data.pivot_table(index=x_column, columns=group_column, values=value_column, aggfunc="sum")
 
             # Apply limit if specified
             if limit is not None and limit > 0:
@@ -269,9 +263,7 @@ class BarChartPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved grouped bar chart to {output_file}")
 
             return fig

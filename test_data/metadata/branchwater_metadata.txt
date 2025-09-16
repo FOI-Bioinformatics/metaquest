@@ -1,0 +1,3 @@
+Run_ID	Sample_ID	Project_ID	Sample_Scientific_Name	geo_loc_name_country_calc	collection_date_sam	assay_type	lat_lon	cANI
+SRR12345678	SAMN12345678	PRJNA123456	Francisella adeliensis	USA	2019-05-01	AMPLICON	35.7N 100.2W	0.98
+SRR87654321	SAMN87654321	PRJNA123456	Francisella adeliensis	USA	2019-06-15	AMPLICON	36.1N 99.8W	0.96

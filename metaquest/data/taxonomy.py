@@ -107,11 +107,7 @@ class NCBITaxonomyClient:
 
         for taxon in root.findall("./Taxon"):
             tax_id = taxon.find("TaxId").text if taxon.find("TaxId") is not None else ""
-            sci_name = (
-                taxon.find("ScientificName").text
-                if taxon.find("ScientificName") is not None
-                else ""
-            )
+            sci_name = taxon.find("ScientificName").text if taxon.find("ScientificName") is not None else ""
             rank = taxon.find("Rank").text if taxon.find("Rank") is not None else ""
 
             # Get lineage
@@ -167,9 +163,7 @@ class NCBITaxonomyClient:
                     "lineage": best_match["lineage"],
                     "is_valid": True,
                     "confidence": (
-                        "high"
-                        if cleaned_name.lower() == best_match["scientific_name"].lower()
-                        else "medium"
+                        "high" if cleaned_name.lower() == best_match["scientific_name"].lower() else "medium"
                     ),
                 }
             else:
@@ -200,12 +194,8 @@ class NCBITaxonomyClient:
     def _clean_species_name(self, name: str) -> str:
         """Clean and standardize species name for taxonomy lookup."""
         # Remove common prefixes/suffixes
-        cleaned = re.sub(
-            r"^(candidate|unclassified|uncultured)\s+", "", name, flags=re.IGNORECASE
-        )
-        cleaned = re.sub(
-            r"\s+(sp\.|strain|isolate|clone)\s+.*$", "", cleaned, flags=re.IGNORECASE
-        )
+        cleaned = re.sub(r"^(candidate|unclassified|uncultured)\s+", "", name, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+(sp\.|strain|isolate|clone)\s+.*$", "", cleaned, flags=re.IGNORECASE)
 
         # Remove brackets and their contents
         cleaned = re.sub(r"\[.*?\]", "", cleaned)
@@ -243,9 +233,7 @@ def validate_taxonomic_assignments(
         if cache_file and Path(cache_file).exists():
             try:
                 cache_df = pd.read_csv(cache_file)
-                cached_results = dict(
-                    zip(cache_df["original_name"], cache_df.to_dict("records"))
-                )
+                cached_results = dict(zip(cache_df["original_name"], cache_df.to_dict("records")))
                 logger.info(f"Loaded {len(cached_results)} cached taxonomy validations")
             except Exception as e:
                 logger.warning(f"Failed to load cache file: {e}")
@@ -270,9 +258,7 @@ def validate_taxonomic_assignments(
 
                 # Rate limiting for API calls
                 if i % 10 == 0:
-                    logger.info(
-                        f"Progress: {i}/{len(unique_species)} species validated"
-                    )
+                    logger.info(f"Progress: {i}/{len(unique_species)} species validated")
 
         # Create results DataFrame
         if results:
@@ -307,9 +293,7 @@ def validate_taxonomic_assignments(
 
         # Log summary
         valid_count = results_df["is_valid"].sum() if not results_df.empty else 0
-        logger.info(
-            f"Taxonomy validation complete: {valid_count}/{len(results_df)} species validated"  # noqa: E501
-        )
+        logger.info(f"Taxonomy validation complete: {valid_count}/{len(results_df)} species validated")  # noqa: E501
 
         return results_df
 
@@ -428,9 +412,7 @@ def analyze_taxonomic_composition(
         raise ProcessingError(f"Failed to analyze taxonomic composition: {e}")
 
 
-def suggest_species_corrections(
-    validation_results: pd.DataFrame, confidence_threshold: str = "medium"
-) -> pd.DataFrame:
+def suggest_species_corrections(validation_results: pd.DataFrame, confidence_threshold: str = "medium") -> pd.DataFrame:
     """
     Suggest corrections for invalid species names.
 
@@ -467,9 +449,7 @@ def suggest_species_corrections(
             )
 
         suggestions_df = pd.DataFrame(suggestions)
-        logger.info(
-            f"Generated {len(suggestions_df)} species name correction suggestions"
-        )
+        logger.info(f"Generated {len(suggestions_df)} species name correction suggestions")
 
         return suggestions_df
 

@@ -117,12 +117,8 @@ def calculate_beta_diversity(
             distances = pairwise_distances(data, metric=metric)
 
         if return_dataframe:
-            distance_df = pd.DataFrame(
-                distances, index=sample_names, columns=sample_names
-            )
-            logger.info(
-                f"Calculated {metric} beta diversity for {len(sample_names)} samples"
-            )
+            distance_df = pd.DataFrame(distances, index=sample_names, columns=sample_names)
+            logger.info(f"Calculated {metric} beta diversity for {len(sample_names)} samples")
             return distance_df
         else:
             return distances
@@ -228,15 +224,9 @@ def calculate_dispersion(
 
             # Calculate dispersion metrics
             results[str(group)] = {
-                "mean_distance": np.mean(
-                    group_distances[np.triu_indices_from(group_distances, k=1)]
-                ),
-                "median_distance": np.median(
-                    group_distances[np.triu_indices_from(group_distances, k=1)]
-                ),
-                "std_distance": np.std(
-                    group_distances[np.triu_indices_from(group_distances, k=1)]
-                ),
+                "mean_distance": np.mean(group_distances[np.triu_indices_from(group_distances, k=1)]),
+                "median_distance": np.median(group_distances[np.triu_indices_from(group_distances, k=1)]),
+                "std_distance": np.std(group_distances[np.triu_indices_from(group_distances, k=1)]),
                 "n_samples": len(group_indices),
             }
 
@@ -259,9 +249,7 @@ def _calculate_shannon_diversity(data: np.ndarray) -> np.ndarray:
     zero_rows = (row_sums == 0).flatten()
 
     # Normalize to relative abundances
-    rel_abundance = np.divide(
-        data_float, row_sums, out=np.zeros_like(data_float), where=row_sums != 0
-    )
+    rel_abundance = np.divide(data_float, row_sums, out=np.zeros_like(data_float), where=row_sums != 0)
     rel_abundance = rel_abundance + 1e-12  # Add small constant to avoid log(0)
 
     # Shannon index: H = -sum(pi * ln(pi))
@@ -283,9 +271,7 @@ def _calculate_simpson_diversity(data: np.ndarray) -> np.ndarray:
     zero_rows = (row_sums == 0).flatten()
 
     # Normalize to relative abundances
-    rel_abundance = np.divide(
-        data_float, row_sums, out=np.zeros_like(data_float), where=row_sums != 0
-    )
+    rel_abundance = np.divide(data_float, row_sums, out=np.zeros_like(data_float), where=row_sums != 0)
 
     # Simpson index: D = 1 - sum(pi^2)
     simpson = 1 - np.sum(rel_abundance**2, axis=1)
@@ -374,14 +360,16 @@ def _calculate_jaccard_distance(data: np.ndarray) -> np.ndarray:
     return distances
 
 
-def _permanova_test(
-    distance_matrix: np.ndarray, groups: pd.Series, n_permutations: int
-) -> Tuple[float, float]:
+def _permanova_test(distance_matrix: np.ndarray, groups: pd.Series, n_permutations: int) -> Tuple[float, float]:
     """Perform PERMANOVA test."""
     n_samples = distance_matrix.shape[0]
 
     # Calculate total sum of squares
-    grand_mean = np.mean(distance_matrix[np.triu_indices(n_samples, k=1)] ** 2)
+    upper_triangle_distances = distance_matrix[np.triu_indices(n_samples, k=1)] ** 2
+    if len(upper_triangle_distances) > 0:
+        grand_mean = np.mean(upper_triangle_distances)
+    else:
+        grand_mean = 0
     total_ss = np.sum(distance_matrix**2) / (2 * n_samples) - grand_mean
 
     # Calculate within-group sum of squares
@@ -392,12 +380,12 @@ def _permanova_test(
         group_indices = np.where(groups == group)[0]
         if len(group_indices) > 1:
             group_distances = distance_matrix[np.ix_(group_indices, group_indices)]
-            group_mean = np.mean(
-                group_distances[np.triu_indices(len(group_indices), k=1)] ** 2
-            )
-            within_ss += (
-                np.sum(group_distances**2) / (2 * len(group_indices)) - group_mean
-            )
+            group_upper_triangle = group_distances[np.triu_indices(len(group_indices), k=1)] ** 2
+            if len(group_upper_triangle) > 0:
+                group_mean = np.mean(group_upper_triangle)
+            else:
+                group_mean = 0
+            within_ss += np.sum(group_distances**2) / (2 * len(group_indices)) - group_mean
 
     # Calculate between-group sum of squares
     between_ss = total_ss - within_ss
@@ -418,6 +406,9 @@ def _permanova_test(
         perm_f, _ = _permanova_test(distance_matrix, pd.Series(permuted_groups), 0)
         permuted_f_stats.append(perm_f)
 
-    p_value = np.mean(np.array(permuted_f_stats) >= f_stat)
+    if len(permuted_f_stats) > 0:
+        p_value = np.mean(np.array(permuted_f_stats) >= f_stat)
+    else:
+        p_value = np.nan  # Return NaN when no permutations were performed
 
     return f_stat, p_value

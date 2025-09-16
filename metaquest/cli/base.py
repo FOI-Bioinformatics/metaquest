@@ -5,12 +5,17 @@ This module provides the foundation for a modular command architecture.
 """
 
 import argparse
+import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Optional
 
 
 class BaseCommand(ABC):
     """Base class for all CLI commands."""
+
+    def __init__(self):
+        """Initialize the command with a logger."""
+        self.logger = logging.getLogger(self.__class__.__module__)
 
     @property
     @abstractmethod

@@ -52,9 +52,7 @@ class BranchWaterFormatPlugin(Plugin):
         return all(col in headers for col in cls.REQUIRED_COLS)
 
     @classmethod
-    def parse_file(
-        cls, file_path: Union[str, Path], genome_id: str
-    ) -> List[Containment]:
+    def parse_file(cls, file_path: Union[str, Path], genome_id: str) -> List[Containment]:
         """
         Parse a Branchwater format file and return containment data.
 
@@ -77,32 +75,20 @@ class BranchWaterFormatPlugin(Plugin):
 
                 # Validate headers
                 if not cls.validate_header(reader.fieldnames or []):
-                    missing = [
-                        col
-                        for col in cls.REQUIRED_COLS
-                        if col not in (reader.fieldnames or [])
-                    ]
-                    raise ValidationError(
-                        f"Missing required columns in {file_path}: {', '.join(missing)}"
-                    )
+                    missing = [col for col in cls.REQUIRED_COLS if col not in (reader.fieldnames or [])]
+                    raise ValidationError(f"Missing required columns in {file_path}: {', '.join(missing)}")
 
                 for row in reader:
                     # Extract and validate accession
                     accession = row.get("acc", "")
                     if not validate_accession(accession):
-                        logger.warning(
-                            f"Skipping row with invalid accession '{accession}' in {file_path}"
-                        )
+                        logger.warning(f"Skipping row with invalid accession '{accession}' in {file_path}")
                         continue
 
                     # Extract and validate containment value
-                    containment_value = validate_containment_value(
-                        row.get("containment", "")
-                    )
+                    containment_value = validate_containment_value(row.get("containment", ""))
                     if containment_value is None:
-                        logger.warning(
-                            f"Skipping row with invalid containment value for {accession} in {file_path}"
-                        )
+                        logger.warning(f"Skipping row with invalid containment value for {accession} in {file_path}")
                         continue
 
                     # Create containment object with additional metadata
@@ -125,9 +111,7 @@ class BranchWaterFormatPlugin(Plugin):
         except Exception as e:
             if isinstance(e, ValidationError):
                 raise
-            raise ValidationError(
-                f"Error parsing Branchwater file {file_path}: {str(e)}"
-            )
+            raise ValidationError(f"Error parsing Branchwater file {file_path}: {str(e)}")
 
     @classmethod
     def extract_metadata(cls, containment: Containment) -> Optional[SRAMetadata]:
@@ -148,9 +132,7 @@ class BranchWaterFormatPlugin(Plugin):
         # Map known fields to metadata attributes
         for source_field, target_field in cls.METADATA_MAPPING.items():
             if source_field in containment.additional_data:
-                setattr(
-                    metadata, target_field, containment.additional_data[source_field]
-                )
+                setattr(metadata, target_field, containment.additional_data[source_field])
 
         # Add all other fields to the attributes dictionary
         for key, value in containment.additional_data.items():

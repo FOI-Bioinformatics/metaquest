@@ -9,8 +9,9 @@ MetaQuest is designed around the following principles:
 1. **Separation of Concerns**: Clear separation between data access, business logic, and user interfaces
 2. **Extensibility**: Plugin-based design allowing for easy addition of new features
 3. **Maintainability**: Well-defined interfaces and abstractions to simplify maintenance
-4. **Robustness**: Comprehensive error handling and validation
+4. **Robustness**: Comprehensive error handling, validation, and numerical stability
 5. **Usability**: Intuitive CLI with consistent command patterns
+6. **Reliability**: Extensive test coverage with systematic edge case handling
 
 ## Architecture Overview
 
@@ -131,12 +132,15 @@ Each plugin provides standard methods like:
 
 ## Error Handling
 
-The application uses a consistent error handling approach:
+The application uses a comprehensive error handling approach:
 
-1. Custom exception hierarchy starting with `MetaQuestError`
-2. Specific exception types for different error categories
-3. Each layer handles errors appropriate to its level
-4. CLI layer catches and formats errors for user display
+1. **Exception Hierarchy**: Custom exception hierarchy starting with `MetaQuestError`
+2. **Specific Error Types**: Different exception types for various error categories
+3. **Layered Handling**: Each layer handles errors appropriate to its level
+4. **Numerical Stability**: Proper handling of edge cases in statistical computations
+5. **Input Validation**: Comprehensive validation of user inputs and external data
+6. **Graceful Degradation**: Robust handling of degenerate cases and boundary conditions
+7. **User-Friendly Display**: CLI layer catches and formats errors for user display
 
 ## Configuration Management
 

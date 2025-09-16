@@ -25,18 +25,13 @@ visualizer_registry.register(HeatmapPlugin)
 visualizer_registry.register(MapVisualizerPlugin)
 
 
-def _load_and_validate_data(
-    file_path: Union[str, Path], column: str, threshold: Optional[float]
-) -> pd.DataFrame:
+def _load_and_validate_data(file_path: Union[str, Path], column: str, threshold: Optional[float]) -> pd.DataFrame:
     """Load and validate containment data."""
     df = pd.read_csv(file_path, sep="\t", index_col=0)
 
     # Check if column exists
     if column not in df.columns:
-        raise VisualizationError(
-            f"Column '{column}' not found in file. "
-            f"Available columns: {', '.join(df.columns)}"
-        )
+        raise VisualizationError(f"Column '{column}' not found in file. " f"Available columns: {', '.join(df.columns)}")
 
     # Apply threshold if specified
     if threshold is not None:
@@ -50,6 +45,13 @@ def _load_and_validate_data(
 
 def _create_rank_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) -> None:
     """Create rank plot."""
+    # Handle empty DataFrame or missing column
+    if df.empty or column not in df.columns:
+        ax.scatter([], [], color=colors)
+        ax.set_xlabel("Rank")
+        ax.set_ylabel(f"{column} Value")
+        return
+    
     df_sorted = df.sort_values(by=column, ascending=False)
     df_sorted["rank"] = np.arange(1, len(df_sorted) + 1)
     ax.scatter(df_sorted["rank"], df_sorted[column], color=colors)
@@ -57,17 +59,38 @@ def _create_rank_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) 
     ax.set_ylabel(f"{column} Value")
 
 
-def _create_histogram_plot(
-    ax: plt.Axes, df: pd.DataFrame, column: str, colors: str
-) -> None:
+def _create_histogram_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) -> None:
     """Create histogram plot."""
-    ax.hist(df[column], bins=20, color=colors, alpha=0.7)
+    # Handle empty DataFrame or missing column
+    if df.empty or column not in df.columns:
+        ax.hist([], bins=20, color=colors, alpha=0.7)
+        ax.set_xlabel(column)
+        ax.set_ylabel("Frequency")
+        return
+    
+    # Adjust bin count for small datasets  
+    data_size = len(df)
+    if data_size <= 2:
+        bin_count = 5  # Minimum bins for very small datasets
+    elif data_size <= 10:
+        bin_count = min(20, max(5, data_size // 2 + 1))
+    else:
+        bin_count = 20  # Default for normal datasets
+    
+    ax.hist(df[column], bins=bin_count, color=colors, alpha=0.7)
     ax.set_xlabel(column)
     ax.set_ylabel("Frequency")
 
 
 def _create_box_plot(ax: plt.Axes, df: pd.DataFrame, column: str) -> None:
     """Create box plot."""
+    # Handle empty DataFrame or missing column
+    if df.empty or column not in df.columns:
+        ax.boxplot([[]])  # Empty boxplot
+        ax.set_ylabel(column)
+        ax.set_xticklabels([column])
+        return
+    
     ax.boxplot(df[column])
     ax.set_ylabel(column)
     ax.set_xticklabels([column])
@@ -75,14 +98,19 @@ def _create_box_plot(ax: plt.Axes, df: pd.DataFrame, column: str) -> None:
 
 def _create_violin_plot(ax: plt.Axes, df: pd.DataFrame, column: str) -> None:
     """Create violin plot."""
+    # Handle empty DataFrame or missing column
+    if df.empty or column not in df.columns:
+        ax.violinplot([[]])  # Empty violin plot
+        ax.set_ylabel(column)
+        ax.set_xticklabels([column])
+        return
+    
     ax.violinplot(df[column])
     ax.set_ylabel(column)
     ax.set_xticklabels([column])
 
 
-def _create_plot_by_type(
-    ax: plt.Axes, df: pd.DataFrame, column: str, colors: str, plot_type: str
-) -> None:
+def _create_plot_by_type(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str, plot_type: str) -> None:
     """Create plot based on plot type."""
     if plot_type == "rank":
         _create_rank_plot(ax, df, column, colors)
@@ -93,19 +121,15 @@ def _create_plot_by_type(
     elif plot_type == "violin":
         _create_violin_plot(ax, df, column)
     else:
-        raise VisualizationError(
-            f"Unknown plot type: {plot_type}. "
-            "Supported types: rank, histogram, box, violin"
-        )
+        raise VisualizationError(f"Unknown plot type: {plot_type}. " "Supported types: rank, histogram, box, violin")
 
 
-def _save_plot_if_needed(
-    file_path: Union[str, Path], plot_type: str, column: str, save_format: Optional[str]
-) -> None:
+def _save_plot_if_needed(file_path: Union[str, Path], plot_type: str, column: str, save_format: Optional[str]) -> None:
     """Save plot if format is specified."""
     if save_format:
-        output_file = f"{Path(file_path).stem}_{plot_type}_{column}.{save_format}"
-        plt.savefig(output_file, format=save_format, dpi=300, bbox_inches="tight")
+        base_path = Path(file_path)
+        output_file = f"{base_path}_{plot_type}_{column}.{save_format}"
+        plt.savefig(output_file, dpi=300, bbox_inches="tight")
         logger.info(f"Plot saved to {output_file}")
 
 
@@ -212,18 +236,14 @@ def plot_metadata_counts(
         # If file has two columns, assume it's [category, count]
         if df.shape[1] >= 2:
             # Set column names
-            df.columns = ["category", "count"] + [
-                f"col{i + 3}" for i in range(df.shape[1] - 2)
-            ]
+            df.columns = ["category", "count"] + [f"col{i + 3}" for i in range(df.shape[1] - 2)]
 
             # Sort by count and limit number of items
             df = df.sort_values(by="count", ascending=False).head(limit)
 
         else:
             # Single column format, can't create plot
-            raise VisualizationError(
-                "File must have at least two columns (category and count)"
-            )
+            raise VisualizationError("File must have at least two columns (category and count)")
 
         # Set default title if not specified
         if title is None and show_title:
@@ -269,12 +289,8 @@ def plot_metadata_counts(
         elif plot_type == "radar":
             # Create radar chart (requires at least 3 categories)
             if len(df) < 3:
-                logger.warning(
-                    "Radar chart requires at least 3 categories, falling back to bar chart"
-                )
-                return plot_metadata_counts(
-                    file_path, title, "bar", colors, show_title, save_format
-                )
+                logger.warning("Radar chart requires at least 3 categories, falling back to bar chart")
+                return plot_metadata_counts(file_path, title, "bar", colors, show_title, save_format)
 
             # Set up radar chart
             fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
@@ -316,9 +332,7 @@ def plot_metadata_counts(
                 ax.set_title(title)
 
         else:
-            raise VisualizationError(
-                f"Unknown plot type: {plot_type}. " "Supported types: bar, pie, radar"
-            )
+            raise VisualizationError(f"Unknown plot type: {plot_type}. " "Supported types: bar, pie, radar")
 
         # Save plot if format specified
         if save_format and plot_type != "bar":  # bar plugin handles saving
@@ -367,7 +381,7 @@ def plot_heatmap(
             df = data.copy()
 
         # Apply threshold
-        df = df.applymap(lambda x: x if x > threshold else 0)
+        df = df.map(lambda x: x if x > threshold else 0)
 
         # Remove metadata columns if present
         metadata_cols = ["max_containment", "max_containment_annotation"]

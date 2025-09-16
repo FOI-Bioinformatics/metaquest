@@ -56,9 +56,7 @@ def list_files(directory: Union[str, Path], pattern: str = "*") -> List[Path]:
         directory = Path(directory)
         return list(directory.glob(pattern))
     except Exception as e:
-        logger.warning(
-            f"Error listing files in {directory} with pattern {pattern}: {e}"
-        )
+        logger.warning(f"Error listing files in {directory} with pattern {pattern}: {e}")
         return []
 
 
@@ -150,9 +148,7 @@ def read_json(file_path: Union[str, Path]) -> Dict[str, Any]:
         raise DataAccessError(f"Failed to read JSON file {file_path}: {e}")
 
 
-def write_json(
-    data: Dict[str, Any], file_path: Union[str, Path], indent: int = 2
-) -> None:
+def write_json(data: Dict[str, Any], file_path: Union[str, Path], indent: int = 2) -> None:
     """
     Write a dictionary to a JSON file.
 

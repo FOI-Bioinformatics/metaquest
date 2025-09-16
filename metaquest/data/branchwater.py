@@ -32,9 +32,7 @@ format_registry.register(BranchWaterFormatPlugin)
 format_registry.register(MastiffFormatPlugin)
 
 
-def process_branchwater_files(
-    source_folder: Union[str, Path], target_folder: Union[str, Path]
-) -> Dict[str, Path]:
+def process_branchwater_files(source_folder: Union[str, Path], target_folder: Union[str, Path]) -> Dict[str, Path]:
     """
     Process Branchwater files from source folder and copy to target folder.
 
@@ -76,16 +74,12 @@ def process_branchwater_files(
             # Determine file format
             try:
                 # Try to load as Branchwater format
-                BranchWaterFormatPlugin.validate_header(
-                    read_csv(csv_file, nrows=0).columns.tolist()
-                )
+                BranchWaterFormatPlugin.validate_header(read_csv(csv_file, nrows=0).columns.tolist())
                 format_name = "branchwater"
             except (ValidationError, DataAccessError):
                 try:
                     # Try to load as Mastiff format
-                    MastiffFormatPlugin.validate_header(
-                        read_csv(csv_file, nrows=0).columns.tolist()
-                    )
+                    MastiffFormatPlugin.validate_header(read_csv(csv_file, nrows=0).columns.tolist())
                     format_name = "mastiff"
                 except (ValidationError, DataAccessError):
                     raise ValidationError(f"Unknown file format for {csv_file}")
@@ -155,9 +149,7 @@ def _validate_branchwater_file(csv_file):
 
     # Check if this is a valid Branchwater format file
     if "acc" not in columns or "containment" not in columns:
-        logger.warning(
-            f"File {csv_file} does not appear to be in Branchwater format. Skipping."
-        )
+        logger.warning(f"File {csv_file} does not appear to be in Branchwater format. Skipping.")
         return False
     return True
 
@@ -215,17 +207,13 @@ def extract_metadata_from_branchwater(
                 error_count += 1
                 logger.error(f"Error extracting metadata from {csv_file}: {e}")
 
-        return _finalize_metadata_extraction(
-            metadata_records, output_file, processed_count, error_count
-        )
+        return _finalize_metadata_extraction(metadata_records, output_file, processed_count, error_count)
 
     except Exception as e:
         raise DataAccessError(f"Error extracting metadata from Branchwater files: {e}")
 
 
-def _finalize_metadata_extraction(
-    metadata_records, output_file, processed_count, error_count
-):
+def _finalize_metadata_extraction(metadata_records, output_file, processed_count, error_count):
     """
     Create and save the final metadata DataFrame.
 
@@ -259,9 +247,7 @@ def _finalize_metadata_extraction(
     if not metadata_records:
         logger.info(f"Saved empty metadata file to {output_file}")
     else:
-        logger.info(
-            f"Extracted metadata saved to {output_file} with {len(metadata_df)} records"
-        )
+        logger.info(f"Extracted metadata saved to {output_file} with {len(metadata_df)} records")
 
     return metadata_df
 
@@ -283,12 +269,15 @@ def _process_genome_containments(csv_file, genome_id, containment_data):
         df_headers = read_csv(csv_file, nrows=0)
         headers = df_headers.columns.tolist()
 
-        if BranchWaterFormatPlugin.validate_header(headers):
+        try:
+            BranchWaterFormatPlugin.validate_header(headers)
             format_plugin = BranchWaterFormatPlugin
-        elif MastiffFormatPlugin.validate_header(headers):
-            format_plugin = MastiffFormatPlugin
-        else:
-            raise ValidationError(f"Unknown file format for {csv_file}")
+        except (ValidationError, DataAccessError):
+            try:
+                MastiffFormatPlugin.validate_header(headers)
+                format_plugin = MastiffFormatPlugin
+            except (ValidationError, DataAccessError):
+                raise ValidationError(f"Unknown file format for {csv_file}")
 
         # Parse file to get containments
         containments = format_plugin.parse_file(csv_file, genome_id)
@@ -308,9 +297,7 @@ def _process_genome_containments(csv_file, genome_id, containment_data):
         raise DataAccessError(f"Error processing {csv_file}: {e}")
 
 
-def _generate_containment_summary(
-    containment_data, output_file, summary_file, step_size
-):
+def _generate_containment_summary(containment_data, output_file, summary_file, step_size):
     """
     Generate summary data from containment data.
 
@@ -381,8 +368,7 @@ def _generate_containment_summary(
             genomes = [
                 genome
                 for genome in df.columns
-                if genome not in ("max_containment", "max_containment_annotation")
-                and row[genome] > 0
+                if genome not in ("max_containment", "max_containment_annotation") and row[genome] > 0
             ]
             summary.sample_to_genomes[accession] = genomes
 
@@ -443,6 +429,4 @@ def parse_containment_data(
         logger.warning("No valid containment data found")
         return ContainmentSummary()
 
-    return _generate_containment_summary(
-        containment_data, output_file, summary_file, step_size
-    )
+    return _generate_containment_summary(containment_data, output_file, summary_file, step_size)

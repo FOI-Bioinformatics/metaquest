@@ -8,6 +8,24 @@ import pandas as pd
 import numpy as np
 import tempfile
 from pathlib import Path
+import sys
+import importlib
+
+# Force fresh import of modules to avoid contamination from other tests
+def _force_fresh_import():
+    """Force fresh import of SRA modules to get real implementations."""
+    modules_to_clear = [
+        'metaquest.data.sra_metadata',
+        'metaquest.data.sra_enhanced',
+    ]
+    for module_name in modules_to_clear:
+        if module_name in sys.modules:
+            # Only remove if it's a Mock object (contaminated)
+            if hasattr(sys.modules[module_name], '_mock_name'):
+                del sys.modules[module_name]
+
+# Apply fresh import at start of test session
+_force_fresh_import()
 
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,

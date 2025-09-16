@@ -77,9 +77,7 @@ class SRAInfoCommand(BaseCommand):
             downloader = EnhancedSRADownloader(args.email, args.api_key)
 
             # Get preview
-            metadata, tech_counts, total_size_gb = downloader.preview_downloads(
-                accessions
-            )
+            metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
 
             if not metadata:
                 print("Could not fetch metadata for any accessions")
@@ -124,9 +122,7 @@ class SRAInfoCommand(BaseCommand):
                 print(f"  Smallest dataset: {min(sizes):.2f} GB")
 
             # Download time estimation
-            estimated_hours = estimate_download_time(
-                total_size_gb, args.bandwidth_mbps, 4
-            )
+            estimated_hours = estimate_download_time(total_size_gb, args.bandwidth_mbps, 4)
             if estimated_hours < 1:
                 print(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
             else:
@@ -249,14 +245,9 @@ class SRADownloadEnhancedCommand(BaseCommand):
                     with open(blacklist_file, "r") as f:
                         file_accessions = {line.strip() for line in f if line.strip()}
                         blacklisted.update(file_accessions)
-                    logger.info(
-                        f"Read {len(file_accessions)} blacklisted accessions "
-                        f"from {blacklist_file}"
-                    )
+                    logger.info(f"Read {len(file_accessions)} blacklisted accessions " f"from {blacklist_file}")
                 except Exception as e:
-                    logger.warning(
-                        f"Error reading blacklist file {blacklist_file}: {e}"
-                    )
+                    logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
         return blacklisted
 
     def _handle_dry_run(self, downloader, accessions):
@@ -421,9 +412,7 @@ class SRAValidateCommand(BaseCommand):
         """Find accession directories to validate."""
         accession_dirs = [d for d in fastq_folder.iterdir() if d.is_dir()]
         if specific_accessions:
-            accession_dirs = [
-                d for d in accession_dirs if d.name in specific_accessions
-            ]
+            accession_dirs = [d for d in accession_dirs if d.name in specific_accessions]
         return accession_dirs
 
     def _validate_directory(self, acc_dir, check_pairs=False):

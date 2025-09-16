@@ -62,14 +62,18 @@ def create_interactive_pca(
             X = data
             sample_names = [f"Sample_{i}" for i in range(X.shape[0])]
 
+        # Validate input for PCA
+        if X.shape[0] < 2:
+            raise VisualizationError("PCA requires at least 2 samples")
+        if X.shape[1] < 1:
+            raise VisualizationError("PCA requires at least 1 feature")
+
         # Perform PCA
         pca = PCA(n_components=min(n_components, X.shape[1], X.shape[0]))
         X_pca = pca.fit_transform(X)
 
         # Create DataFrame for plotting
-        plot_data = pd.DataFrame(
-            {"PC1": X_pca[:, 0], "PC2": X_pca[:, 1], "Sample": sample_names}
-        )
+        plot_data = pd.DataFrame({"PC1": X_pca[:, 0], "PC2": X_pca[:, 1], "Sample": sample_names})
 
         if n_components >= 3 and X_pca.shape[1] >= 3:
             plot_data["PC3"] = X_pca[:, 2]
@@ -87,18 +91,13 @@ def create_interactive_pca(
                 size_values = metadata.loc[sample_names, size_by]
                 # Check for NaN values and handle them
                 if size_values.isna().any():
-                    logger.warning(
-                        f"Column '{size_by}' contains NaN values, removing size mapping"
-                    )
+                    logger.warning(f"Column '{size_by}' contains NaN values, removing size mapping")
                     size_by = None
                 else:
                     plot_data[size_by] = size_values
                     # Additional safety check
                     if plot_data[size_by].isna().any():
-                        logger.warning(
-                            f"NaN values detected in plot data for '{size_by}', "
-                            "removing size mapping"
-                        )
+                        logger.warning(f"NaN values detected in plot data for '{size_by}', " "removing size mapping")
                         column_to_drop = size_by
                         size_by = None
                         plot_data = plot_data.drop(columns=[column_to_drop])
@@ -143,10 +142,7 @@ def create_interactive_pca(
 
         # Add explained variance to title
         total_variance = sum(pca.explained_variance_ratio_[:n_components])
-        fig.update_layout(
-            title=f"{title}<br><sub>Total variance explained: "
-            f"{total_variance:.1%}</sub>"
-        )
+        fig.update_layout(title=f"{title}<br><sub>Total variance explained: " f"{total_variance:.1%}</sub>")
 
         # Save plot if requested
         if output_file:
@@ -201,15 +197,11 @@ def create_interactive_tsne(
             sample_names = [f"Sample_{i}" for i in range(X.shape[0])]
 
         # Perform t-SNE
-        tsne = TSNE(
-            n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=42
-        )
+        tsne = TSNE(n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=42)
         X_tsne = tsne.fit_transform(X)
 
         # Create DataFrame for plotting
-        plot_data = pd.DataFrame(
-            {"tSNE1": X_tsne[:, 0], "tSNE2": X_tsne[:, 1], "Sample": sample_names}
-        )
+        plot_data = pd.DataFrame({"tSNE1": X_tsne[:, 0], "tSNE2": X_tsne[:, 1], "Sample": sample_names})
 
         # Add metadata if provided
         if metadata is not None and color_by is not None:
@@ -294,16 +286,12 @@ def create_interactive_heatmap(
         feature_order = list(range(len(feature_names)))
 
         if cluster_samples:
-            sample_linkage = linkage(
-                data_matrix, method=linkage_method, metric=distance_metric
-            )
+            sample_linkage = linkage(data_matrix, method=linkage_method, metric=distance_metric)
             sample_dendro = dendrogram(sample_linkage, no_plot=True)
             sample_order = sample_dendro["leaves"]
 
         if cluster_features:
-            feature_linkage = linkage(
-                data_matrix.T, method=linkage_method, metric=distance_metric
-            )
+            feature_linkage = linkage(data_matrix.T, method=linkage_method, metric=distance_metric)
             feature_dendro = dendrogram(feature_linkage, no_plot=True)
             feature_order = feature_dendro["leaves"]
 
@@ -321,8 +309,7 @@ def create_interactive_heatmap(
                 colorscale="RdBu_r",
                 showscale=True,
                 hoverongaps=False,
-                hovertemplate="Sample: %{y}<br>Feature: %{x}<br>"
-                "Value: %{z}<extra></extra>",
+                hovertemplate="Sample: %{y}<br>Feature: %{x}<br>" "Value: %{z}<extra></extra>",
             )
         )
 
@@ -388,9 +375,7 @@ def create_diversity_comparison_plot(
 
         # Create plot based on type
         if plot_type == "box":
-            fig = px.box(
-                plot_data, x=group_by, y=diversity_metric, title=title, points="all"
-            )
+            fig = px.box(plot_data, x=group_by, y=diversity_metric, title=title, points="all")
         elif plot_type == "violin":
             fig = px.violin(
                 plot_data,

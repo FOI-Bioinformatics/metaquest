@@ -50,8 +50,7 @@ def generate_report(
 
         if format == "html" and not JINJA2_AVAILABLE:
             raise VisualizationError(
-                "HTML report generation requires jinja2. "
-                "Please install with 'pip install jinja2'"
+                "HTML report generation requires jinja2. " "Please install with 'pip install jinja2'"
             )
 
         # Load data files
@@ -180,8 +179,7 @@ def _create_containment_summary_page(summary_data, threshold):
     genome_columns = [
         col
         for col in summary_data.columns
-        if col not in ("max_containment", "max_containment_annotation")
-        and ("GCF" in col or "GCA" in col)
+        if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
     ]
 
     # Add genome counts
@@ -268,8 +266,7 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
         genome_columns = [
             col
             for col in summary_data.columns
-            if col not in ("max_containment", "max_containment_annotation")
-            and ("GCF" in col or "GCA" in col)
+            if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
         ]
 
         if len(genome_columns) > 1:
@@ -286,9 +283,7 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
                 # Create heatmap of top genome correlations
                 correlation_matrix = summary_data[top_genome_cols].corr()
 
-                fig = plot_correlation_matrix(
-                    correlation_matrix, title="Genome Correlation Matrix"
-                )
+                fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
                 pdf.savefig(fig)
                 plt.close(fig)
     except Exception as e:
@@ -331,9 +326,7 @@ def _generate_pdf_report(
 
         # Containment summary page
         if include_tables:
-            fig, filtered_samples = _create_containment_summary_page(
-                summary_data, threshold
-            )
+            fig, filtered_samples = _create_containment_summary_page(summary_data, threshold)
             pdf.savefig(fig)
             plt.close(fig)
 
@@ -368,9 +361,7 @@ def _generate_pdf_report(
         # Metadata count plots
         if counts_data is not None and include_plots:
             try:
-                fig = plot_metadata_counts(
-                    counts_data, title="Top Categories", plot_type="bar"
-                )
+                fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
                 pdf.savefig(fig)
                 plt.close(fig)
 
@@ -431,9 +422,7 @@ def _prepare_template_data(
     # Summary statistics
     summary_stats = {
         "total_samples": len(summary_data),
-        "samples_above_threshold": len(
-            summary_data[summary_data["max_containment"] > threshold]
-        ),
+        "samples_above_threshold": len(summary_data[summary_data["max_containment"] > threshold]),
         "threshold": threshold,
     }
 
@@ -441,8 +430,7 @@ def _prepare_template_data(
     genome_columns = [
         col
         for col in summary_data.columns
-        if col not in ("max_containment", "max_containment_annotation")
-        and ("GCF" in col or "GCA" in col)
+        if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
     ]
 
     summary_stats["genome_count"] = len(genome_columns)
@@ -535,9 +523,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
         # Metadata counts plot if available
         if counts_data is not None:
             try:
-                fig = plot_metadata_counts(
-                    counts_data, title="Top Categories", plot_type="bar"
-                )
+                fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
                 counts_plot_file = images_dir / "metadata_counts.png"
                 fig.savefig(counts_plot_file, dpi=300, bbox_inches="tight")
                 plt.close(fig)
@@ -562,8 +548,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
             genome_columns = [
                 col
                 for col in summary_data.columns
-                if col not in ("max_containment", "max_containment_annotation")
-                and ("GCF" in col or "GCA" in col)
+                if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
             ]
 
             if len(genome_columns) > 1:
@@ -574,17 +559,13 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
                         top_genomes.append((col, len(top_samples)))
 
                 top_genomes.sort(key=lambda x: x[1], reverse=True)
-                top_genome_cols = [
-                    g[0] for g in top_genomes[: min(20, len(top_genomes))]
-                ]
+                top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
 
                 if len(top_genome_cols) > 1:
                     # Create heatmap of top genome correlations
                     correlation_matrix = summary_data[top_genome_cols].corr()
 
-                    fig = plot_correlation_matrix(
-                        correlation_matrix, title="Genome Correlation Matrix"
-                    )
+                    fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
                     heatmap_file = images_dir / "genome_correlation.png"
                     fig.savefig(heatmap_file, dpi=300, bbox_inches="tight")
                     plt.close(fig)
@@ -805,10 +786,7 @@ def _generate_html_report(
         Path to the generated HTML report
     """
     if not JINJA2_AVAILABLE:
-        raise VisualizationError(
-            "HTML report generation requires jinja2. "
-            "Please install with 'pip install jinja2'"
-        )
+        raise VisualizationError("HTML report generation requires jinja2. " "Please install with 'pip install jinja2'")
 
     # Create output directory
     output_path = Path(output_file)
@@ -823,9 +801,7 @@ def _generate_html_report(
     plot_files = {}
 
     if include_plots:
-        plot_files = _generate_plots_for_html(
-            summary_data, counts_data, threshold, images_dir
-        )
+        plot_files = _generate_plots_for_html(summary_data, counts_data, threshold, images_dir)
 
     # Prepare data for template
     template_data = _prepare_template_data(

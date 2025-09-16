@@ -67,9 +67,7 @@ class HeatmapPlugin(Plugin):
 
             # Create plot
             if cluster:
-                clustergrid = sns.clustermap(
-                    df, cmap=cmap, linewidths=linewidths, annot=annot, **kwargs
-                )
+                clustergrid = sns.clustermap(df, cmap=cmap, linewidths=linewidths, annot=annot, **kwargs)
 
                 # Add title if specified
                 if title:
@@ -80,9 +78,7 @@ class HeatmapPlugin(Plugin):
 
             else:
                 # Create regular heatmap
-                sns.heatmap(
-                    df, cmap=cmap, linewidths=linewidths, annot=annot, ax=ax, **kwargs
-                )
+                sns.heatmap(df, cmap=cmap, linewidths=linewidths, annot=annot, ax=ax, **kwargs)
 
                 # Add title if specified
                 if title:
@@ -93,9 +89,7 @@ class HeatmapPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved heatmap to {output_file}")
 
             return fig
@@ -184,9 +178,7 @@ class HeatmapPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved presence heatmap to {output_file}")
 
             return fig
@@ -267,9 +259,7 @@ class HeatmapPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved correlation heatmap to {output_file}")
 
             return fig

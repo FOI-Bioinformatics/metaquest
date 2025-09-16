@@ -40,6 +40,12 @@ from metaquest.cli.commands.sra_enhanced import (
     SRAStatsCommand,
     SRAValidateCommand,
 )
+from metaquest.cli.commands.sra_intelligent import (
+    SRAIntelligentDownloadCommand,
+    SRAQualityProfileCommand,
+    SRAInteractiveDashboardCommand,
+    SRAComparativeAnalysisCommand,
+)
 
 
 def register_all_commands() -> None:
@@ -62,6 +68,11 @@ def register_all_commands() -> None:
         SRADownloadEnhancedCommand(),
         SRAStatsCommand(),
         SRAValidateCommand(),
+        # Intelligent SRA commands
+        SRAIntelligentDownloadCommand(),
+        SRAQualityProfileCommand(),
+        SRAInteractiveDashboardCommand(),
+        SRAComparativeAnalysisCommand(),
         # Advanced analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),
@@ -85,9 +96,7 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    parser.add_argument(
-        "--version", action="version", version=f"MetaQuest v{__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"MetaQuest v{__version__}")
 
     parser.add_argument(
         "--log-level",

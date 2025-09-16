@@ -1,0 +1,672 @@
+"""
+Test visualization.reporting module functionality - comprehensive working tests.
+
+Tests for PDF and HTML report generation with proper mocking of all dependencies.
+"""
+
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch, mock_open, MagicMock
+import sys
+
+import pytest
+import pandas as pd
+
+# Import the modules normally - we'll mock specific functions as needed
+from metaquest.visualization.reporting import (
+    generate_report,
+    _create_title_page,
+    _create_containment_summary_page,
+    _add_metadata_summary_page,
+    _add_correlation_heatmap,
+    _generate_pdf_report,
+    _prepare_template_data,
+    _generate_plots_for_html,
+    _create_default_template,
+    _generate_html_report,
+)
+from metaquest.core.exceptions import VisualizationError
+
+
+class TestGenerateReport:
+    """Test main generate_report function."""
+
+    def setup_method(self):
+        """Reset any persistent state before each test."""
+        pass
+
+    def test_generate_report_pdf_basic(self, tmp_path):
+        """Test basic PDF report generation."""
+        summary_file = tmp_path / "summary.tsv"
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87, 0.12],
+            'max_containment_annotation': ['Genome1', 'Genome2', 'Genome3'],
+            'GCF_001': [0.95, 0.12, 0.05],
+            'GCF_002': [0.23, 0.87, 0.12]
+        }, index=['Sample1', 'Sample2', 'Sample3'])
+
+        output_file = tmp_path / "test_report.pdf"
+
+        with patch('pandas.read_csv', return_value=summary_data):
+            with patch('metaquest.visualization.reporting._generate_pdf_report') as mock_pdf_gen:
+                mock_pdf_gen.return_value = output_file
+                
+                result = generate_report(
+                    title="Test Report",
+                    summary_file=str(summary_file),
+                    output_file=str(output_file),
+                    format="pdf"
+                )
+        
+        assert result == output_file
+        mock_pdf_gen.assert_called_once()
+        # Verify the call includes all required parameters
+        call_kwargs = mock_pdf_gen.call_args[1]
+        assert 'threshold' in call_kwargs
+        assert 'include_plots' in call_kwargs
+        assert 'include_tables' in call_kwargs
+
+    def test_generate_report_html_with_jinja2(self, tmp_path):
+        """Test HTML report generation with jinja2 available."""
+        summary_file = tmp_path / "summary.tsv"
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'max_containment_annotation': ['Genome1', 'Genome2']
+        }, index=['Sample1', 'Sample2'])
+
+        output_file = tmp_path / "test_report.html"
+
+        with patch('pandas.read_csv', return_value=summary_data):
+            with patch('metaquest.visualization.reporting._generate_html_report') as mock_html_gen:
+                with patch('metaquest.visualization.reporting.JINJA2_AVAILABLE', True):
+                    mock_html_gen.return_value = output_file
+                    
+                    result = generate_report(
+                        title="Test Report",
+                        summary_file=str(summary_file),
+                        output_file=str(output_file),
+                        format="html"
+                    )
+        
+        assert result == output_file
+        mock_html_gen.assert_called_once()
+
+    def test_generate_report_html_without_jinja2(self, tmp_path):
+        """Test HTML report error when jinja2 not available."""
+        summary_file = tmp_path / "summary.tsv"
+        summary_data = pd.DataFrame({'max_containment': [0.95]})
+
+        with patch('pandas.read_csv', return_value=summary_data):
+            with patch('metaquest.visualization.reporting.JINJA2_AVAILABLE', False):
+                with pytest.raises(VisualizationError, match="HTML report generation requires jinja2"):
+                    generate_report(
+                        title="Test",
+                        summary_file=str(summary_file),
+                        format="html"
+                    )
+
+    def test_generate_report_unsupported_format(self, tmp_path):
+        """Test error for unsupported format."""
+        summary_file = tmp_path / "summary.tsv"
+        summary_data = pd.DataFrame({'max_containment': [0.95]})
+
+        with patch('pandas.read_csv', return_value=summary_data):
+            with pytest.raises(VisualizationError, match="Unsupported report format"):
+                generate_report(
+                    title="Test",
+                    summary_file=str(summary_file),
+                    format="xml"
+                )
+
+    def test_generate_report_with_all_files(self, tmp_path):
+        """Test report generation with all optional files."""
+        summary_file = tmp_path / "summary.tsv"
+        metadata_file = tmp_path / "metadata.tsv"
+        counts_file = tmp_path / "counts.tsv"
+        
+        summary_data = pd.DataFrame({'max_containment': [0.95]})
+        metadata_data = pd.DataFrame({'organism': ['E. coli']})
+        counts_data = pd.DataFrame({'category': ['bacteria'], 'count': [100]})
+
+        # Mock file existence and reading
+        with patch('pandas.read_csv', side_effect=[summary_data, metadata_data, counts_data]):
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch('metaquest.visualization.reporting._generate_pdf_report') as mock_pdf_gen:
+                    mock_pdf_gen.return_value = "output.pdf"
+                    
+                    result = generate_report(
+                        title="Complete Report",
+                        summary_file=str(summary_file),
+                        metadata_file=str(metadata_file),
+                        metadata_counts_file=str(counts_file),
+                        threshold=0.05,
+                        include_plots=True,
+                        include_tables=True
+                    )
+        
+        # Verify all data was passed to PDF generator
+        call_kwargs = mock_pdf_gen.call_args[1]
+        assert call_kwargs['metadata_data'] is not None
+        assert call_kwargs['counts_data'] is not None
+
+    def test_generate_report_file_read_error(self, tmp_path):
+        """Test error handling when file reading fails."""
+        summary_file = tmp_path / "summary.tsv"
+        
+        with patch('pandas.read_csv', side_effect=Exception("File read error")):
+            with pytest.raises(VisualizationError, match="Error generating report"):
+                generate_report(
+                    title="Test",
+                    summary_file=str(summary_file)
+                )
+
+
+class TestCreateTitlePage:
+    """Test _create_title_page function."""
+
+    def test_create_title_page_with_metadata(self):
+        """Test title page creation with metadata."""
+        mock_fig = Mock()
+        mock_ax = Mock()
+        
+        summary_data = "test_summary.tsv"  # Function expects path string
+        metadata_data = pd.DataFrame({'col1': [1, 2, 3]})
+        
+        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
+            with patch('metaquest.visualization.reporting.datetime') as mock_dt:
+                mock_dt.now.return_value.strftime.return_value = "2023-01-01 12:00"
+                
+                result = _create_title_page("Test Title", summary_data, metadata_data)
+        
+        assert result == mock_fig
+        mock_ax.text.assert_called()
+        assert mock_ax.text.call_count >= 4  # Title, subtitle, date, metadata info
+
+    def test_create_title_page_without_metadata(self):
+        """Test title page creation without metadata."""
+        mock_fig = Mock()
+        mock_ax = Mock()
+        
+        summary_data = "test_summary.tsv"
+        
+        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
+            with patch('metaquest.visualization.reporting.datetime') as mock_dt:
+                mock_dt.now.return_value.strftime.return_value = "2023-01-01 12:00"
+                
+                result = _create_title_page("Test Title", summary_data, None)
+        
+        assert result == mock_fig
+        mock_ax.text.assert_called()
+
+
+class TestCreateContainmentSummaryPage:
+    """Test _create_containment_summary_page function."""
+
+    def test_containment_summary_page_basic(self):
+        """Test basic containment summary page creation."""
+        mock_fig = Mock()
+        mock_ax = Mock()
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87, 0.12, 0.05],
+            'max_containment_annotation': ['Genome1', 'Genome2', 'Genome3', 'Genome4'],
+            'GCF_001': [0.95, 0.12, 0.05, 0.01],
+            'GCF_002': [0.23, 0.87, 0.12, 0.05]
+        }, index=['Sample1', 'Sample2', 'Sample3', 'Sample4'])
+        
+        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
+            fig, filtered_samples = _create_containment_summary_page(summary_data, threshold=0.1)
+        
+        assert fig == mock_fig
+        assert len(filtered_samples) == 3  # Samples above 0.1 threshold
+        mock_ax.text.assert_called()
+        mock_ax.table.assert_called_once()
+
+    def test_containment_summary_page_no_samples_above_threshold(self):
+        """Test when no samples above threshold."""
+        mock_fig = Mock()
+        mock_ax = Mock()
+        # Mock matplotlib at method level
+        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
+            summary_data = pd.DataFrame({
+                'max_containment': [0.05, 0.03],
+                'max_containment_annotation': ['Genome1', 'Genome2'],
+                'GCF_001': [0.05, 0.03]
+            }, index=['Sample1', 'Sample2'])
+            
+            fig, filtered_samples = _create_containment_summary_page(summary_data, threshold=0.1)
+            
+            assert len(filtered_samples) == 0
+
+
+class TestAddMetadataSummaryPage:
+    """Test _add_metadata_summary_page function."""
+
+    def test_add_metadata_summary_page_success(self):
+        """Test metadata summary page addition."""
+        mock_pdf = Mock()
+        mock_fig = Mock()
+        mock_ax = Mock()
+        
+        metadata_data = pd.DataFrame({
+            'organism': ['E. coli', 'S. enterica', None],
+            'country': ['USA', 'Denmark', 'UK'],
+            'assay_type': ['WGS', None, 'WGS']
+        })
+        
+        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)) as mock_subplots:
+            with patch('matplotlib.pyplot.close'):
+                _add_metadata_summary_page(mock_pdf, metadata_data)
+        
+        mock_subplots.assert_called_with(figsize=(8.5, 11))
+        mock_pdf.savefig.assert_called_once_with(mock_fig)
+        mock_ax.table.assert_called_once()
+
+    def test_add_metadata_summary_page_empty_data(self):
+        """Test with empty metadata."""
+        mock_pdf = Mock()
+        mock_fig = Mock()
+        mock_ax = Mock()
+        # Mock matplotlib at method level
+        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
+        
+        metadata_data = pd.DataFrame()
+        
+        _add_metadata_summary_page(mock_pdf, metadata_data)
+        
+        mock_pdf.savefig.assert_called_once_with(mock_fig)
+
+
+class TestAddCorrelationHeatmap:
+    """Test _add_correlation_heatmap function."""
+
+    def test_add_correlation_heatmap_success(self):
+        """Test correlation heatmap addition."""
+        mock_pdf = Mock()
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87, 0.12],
+            'GCF_001': [0.95, 0.12, 0.05],
+            'GCF_002': [0.23, 0.87, 0.12],
+            'GCF_003': [0.15, 0.45, 0.11]
+        })
+        
+        with patch('metaquest.visualization.reporting.plot_correlation_matrix') as mock_plot:
+            mock_plot.return_value = Mock()
+            
+            _add_correlation_heatmap(mock_pdf, summary_data, threshold=0.1)
+        
+        mock_plot.assert_called_once()
+        mock_pdf.savefig.assert_called_once()
+
+    def test_add_correlation_heatmap_few_genomes(self):
+        """Test with insufficient genomes for correlation."""
+        mock_pdf = Mock()
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'GCF_001': [0.95, 0.12]  # Only 1 genome
+        })
+        
+        with patch('metaquest.visualization.reporting.plot_correlation_matrix') as mock_plot:
+            _add_correlation_heatmap(mock_pdf, summary_data, threshold=0.1)
+        
+        # Should not plot with < 2 genomes
+        mock_plot.assert_not_called()
+
+
+class TestGeneratePdfReport:
+    """Test _generate_pdf_report function."""
+
+    def test_generate_pdf_report_minimal(self, tmp_path):
+        """Test minimal PDF report generation."""
+        output_file = tmp_path / "test.pdf"
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'max_containment_annotation': ['Genome1', 'Genome2'],
+            'GCF_001': [0.95, 0.12],
+            'GCF_002': [0.23, 0.87]
+        })
+        
+        mock_pdf_context = Mock()
+        mock_matplotlib.backends.backend_pdf.PdfPages.return_value.__enter__.return_value = mock_pdf_context
+        
+        with patch('metaquest.visualization.reporting._create_title_page') as mock_title:
+            with patch('metaquest.visualization.reporting._create_containment_summary_page') as mock_summary:
+                mock_title.return_value = Mock()
+                mock_summary.return_value = (Mock(), pd.DataFrame())
+                
+                result = _generate_pdf_report(
+                    title="Test Report",
+                    summary_data=summary_data,
+                    metadata_data=None,
+                    counts_data=None,
+                    output_file=str(output_file),
+                    threshold=0.1,
+                    include_plots=False,
+                    include_tables=False
+                )
+        
+        assert result == Path(output_file)
+        mock_title.assert_called_once()
+        mock_summary.assert_called_once()
+
+    def test_generate_pdf_report_full_features(self, tmp_path):
+        """Test PDF report with all features."""
+        output_file = tmp_path / "test.pdf"
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'GCF_001': [0.95, 0.12],
+            'GCF_002': [0.23, 0.87]
+        })
+        metadata_data = pd.DataFrame({'organism': ['E. coli', 'S. enterica']})
+        counts_data = pd.DataFrame({'category': ['bacteria'], 'count': [100]})
+        
+        mock_pdf_context = Mock()
+        mock_matplotlib.backends.backend_pdf.PdfPages.return_value.__enter__.return_value = mock_pdf_context
+        
+        with patch('metaquest.visualization.reporting._create_title_page') as mock_title:
+            with patch('metaquest.visualization.reporting._create_containment_summary_page') as mock_summary:
+                with patch('metaquest.visualization.reporting._add_metadata_summary_page') as mock_metadata:
+                    with patch('metaquest.visualization.reporting._add_correlation_heatmap') as mock_corr:
+                        mock_title.return_value = Mock()
+                        mock_summary.return_value = (Mock(), summary_data)
+                        
+                        # Configure plot mocks
+                        with patch('metaquest.visualization.reporting.plot_containment') as mock_plot_contain:
+                            with patch('metaquest.visualization.reporting.plot_metadata_counts') as mock_plot_counts:
+                                mock_plot_contain.return_value = Mock()
+                                mock_plot_counts.return_value = Mock()
+                                
+                                result = _generate_pdf_report(
+                                    title="Full Report",
+                                    summary_data=summary_data,
+                                    metadata_data=metadata_data,
+                                    counts_data=counts_data,
+                                    output_file=str(output_file),
+                                    threshold=0.1,
+                                    include_plots=True,
+                                    include_tables=True
+                                )
+        
+        # Verify all components were called
+        mock_title.assert_called_once()
+        mock_summary.assert_called_once()
+        mock_metadata.assert_called_once()
+        mock_corr.assert_called_once()
+
+
+class TestPrepareTemplateData:
+    """Test _prepare_template_data function."""
+
+    def test_prepare_template_data_complete(self):
+        """Test template data preparation with all data."""
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87, 0.12],
+            'max_containment_annotation': ['Genome1', 'Genome2', 'Genome3'],
+            'GCF_001': [0.95, 0.12, 0.05],
+            'GCF_002': [0.23, 0.87, 0.12]
+        }, index=['Sample1', 'Sample2', 'Sample3'])
+        
+        metadata_data = pd.DataFrame({
+            'organism': ['E. coli', 'S. enterica', 'B. subtilis']
+        })
+        
+        counts_data = pd.DataFrame({
+            'category': ['bacteria', 'archaea'],
+            'count': [100, 5]
+        })
+        
+        with patch('metaquest.visualization.reporting.datetime') as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2023-01-01 12:00"
+            
+            result = _prepare_template_data(
+                title="Test Report",
+                summary_data=summary_data,
+                metadata_data=metadata_data,
+                counts_data=counts_data,
+                threshold=0.1
+            )
+        
+        assert result['title'] == "Test Report"
+        assert result['date'] == "2023-01-01 12:00"
+        assert result['total_samples'] == 3
+        assert result['samples_above_threshold'] == 2
+        assert result['num_genomes'] == 2
+        assert 'summary_table' in result
+        assert result['has_metadata'] is True
+        assert result['has_counts_data'] is True
+
+    def test_prepare_template_data_minimal(self):
+        """Test template data preparation with minimal data."""
+        summary_data = pd.DataFrame({
+            'max_containment': [0.05],
+            'max_containment_annotation': ['Genome1'],
+            'GCF_001': [0.05]
+        }, index=['Sample1'])
+        
+        with patch('metaquest.visualization.reporting.datetime') as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2023-01-01 12:00"
+            
+            result = _prepare_template_data(
+                title="Minimal Report",
+                summary_data=summary_data,
+                metadata_data=None,
+                counts_data=None,
+                threshold=0.1
+            )
+        
+        assert result['total_samples'] == 1
+        assert result['samples_above_threshold'] == 0
+        assert result['has_metadata'] is False
+        assert result['has_counts_data'] is False
+
+
+class TestGeneratePlotsForHtml:
+    """Test _generate_plots_for_html function."""
+
+    def test_generate_plots_for_html_success(self, tmp_path):
+        """Test HTML plot generation."""
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'GCF_001': [0.95, 0.12],
+            'GCF_002': [0.23, 0.87]
+        })
+        
+        counts_data = pd.DataFrame({
+            'category': ['bacteria', 'archaea'],
+            'count': [100, 5]
+        })
+        
+        with patch('metaquest.visualization.reporting.plot_containment') as mock_plot_contain:
+            with patch('metaquest.visualization.reporting.plot_metadata_counts') as mock_plot_counts:
+                with patch('metaquest.visualization.reporting.plot_correlation_matrix') as mock_plot_corr:
+                    mock_plot_contain.return_value = Mock()
+                    mock_plot_counts.return_value = Mock()
+                    mock_plot_corr.return_value = Mock()
+                    
+                    result = _generate_plots_for_html(summary_data, counts_data, threshold=0.1, images_dir=images_dir)
+        
+        assert isinstance(result, dict)
+        assert 'containment_plot' in result
+        assert 'metadata_counts_plot' in result
+        assert 'correlation_heatmap' in result
+
+    def test_generate_plots_for_html_no_counts_data(self, tmp_path):
+        """Test HTML plot generation without counts data."""
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'GCF_001': [0.95, 0.12]
+        })
+        
+        with patch('metaquest.visualization.reporting.plot_containment') as mock_plot:
+            mock_plot.return_value = Mock()
+            
+            result = _generate_plots_for_html(summary_data, None, threshold=0.1, images_dir=images_dir)
+        
+        assert 'containment_plot' in result
+        assert 'metadata_counts_plot' not in result
+
+
+class TestCreateDefaultTemplate:
+    """Test _create_default_template function."""
+
+    def test_create_default_template_structure(self):
+        """Test default HTML template creation."""
+        template_content = _create_default_template()
+        
+        assert isinstance(template_content, str)
+        assert '<html' in template_content.lower()
+        assert '<title>' in template_content.lower()
+        assert '{{ title }}' in template_content
+        assert '{{ date }}' in template_content
+        assert 'Containment Summary' in template_content
+        assert 'Metadata Summary' in template_content
+
+
+class TestGenerateHtmlReport:
+    """Test _generate_html_report function."""
+
+    def test_generate_html_report_basic(self, tmp_path):
+        """Test basic HTML report generation."""
+        output_file = tmp_path / "test.html"
+        
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87],
+            'GCF_001': [0.95, 0.12]
+        })
+        
+        mock_template = Mock()
+        mock_template.render.return_value = "<html>Test Report</html>"
+        mock_jinja2.Template.return_value = mock_template
+        
+        with patch('metaquest.visualization.reporting._prepare_template_data') as mock_prepare:
+            with patch('metaquest.visualization.reporting._generate_plots_for_html') as mock_plots_html:
+                with patch('metaquest.visualization.reporting._create_default_template') as mock_template_content:
+                    with patch('metaquest.visualization.reporting.JINJA2_AVAILABLE', True):
+                        mock_prepare.return_value = {'title': 'Test'}
+                        mock_plots_html.return_value = {'containment_plot': 'plot.png'}
+                        mock_template_content.return_value = "<html>{{ title }}</html>"
+                        
+                        result = _generate_html_report(
+                            title="Test Report",
+                            summary_data=summary_data,
+                            metadata_data=None,
+                            counts_data=None,
+                            output_file=str(output_file),
+                            threshold=0.1,
+                            include_plots=True,
+                            include_tables=True
+                        )
+        
+        assert result == Path(output_file)
+        assert output_file.exists()
+        mock_prepare.assert_called_once()
+        mock_template.render.assert_called_once()
+
+    def test_generate_html_report_without_plots(self, tmp_path):
+        """Test HTML report generation without plots."""
+        output_file = tmp_path / "test.html"
+        
+        summary_data = pd.DataFrame({'max_containment': [0.95]})
+        
+        mock_template = Mock()
+        mock_template.render.return_value = "<html>Test</html>"
+        mock_jinja2.Template.return_value = mock_template
+        
+        with patch('metaquest.visualization.reporting._prepare_template_data') as mock_prepare:
+            with patch('metaquest.visualization.reporting._generate_plots_for_html') as mock_plots_html:
+                with patch('metaquest.visualization.reporting._create_default_template') as mock_template_content:
+                    with patch('metaquest.visualization.reporting.JINJA2_AVAILABLE', True):
+                        mock_prepare.return_value = {'title': 'Test'}
+                        mock_template_content.return_value = "<html>{{ title }}</html>"
+                        
+                        result = _generate_html_report(
+                            title="Test Report",
+                            summary_data=summary_data,
+                            metadata_data=None,
+                            counts_data=None,
+                            output_file=str(output_file),
+                            threshold=0.1,
+                            include_plots=False,
+                            include_tables=True
+                        )
+        
+        # Should not generate plots when include_plots=False
+        mock_plots_html.assert_not_called()
+
+
+class TestReportingIntegration:
+    """Integration tests for complete reporting workflows."""
+
+    def test_end_to_end_pdf_workflow(self, tmp_path):
+        """Test complete PDF report workflow with realistic data."""
+        summary_file = tmp_path / "summary.tsv"
+        metadata_file = tmp_path / "metadata.tsv"
+        output_file = tmp_path / "report.pdf"
+        
+        # Create realistic genomic data
+        summary_data = pd.DataFrame({
+            'max_containment': [0.95, 0.87, 0.65, 0.45, 0.12, 0.05],
+            'max_containment_annotation': [
+                'Escherichia coli', 'Salmonella enterica', 'Klebsiella pneumoniae',
+                'Pseudomonas aeruginosa', 'Bacillus subtilis', 'Streptococcus pneumoniae'
+            ],
+            'GCF_000005825.2': [0.95, 0.12, 0.05, 0.02, 0.01, 0.0],  # E. coli
+            'GCF_000006945.2': [0.23, 0.87, 0.15, 0.08, 0.03, 0.0],  # Salmonella
+            'GCF_000009605.1': [0.15, 0.25, 0.65, 0.12, 0.05, 0.01]  # Klebsiella
+        }, index=['ERR123456', 'SRR789012', 'ERR345678', 'SRR901234', 'ERR567890', 'SRR234567'])
+        
+        metadata_data = pd.DataFrame({
+            'Run_ID': ['ERR123456', 'SRR789012', 'ERR345678', 'SRR901234', 'ERR567890', 'SRR234567'],
+            'Sample_Scientific_Name': ['gut metagenome', 'food metagenome', 'clinical isolate', 
+                                     'environmental sample', 'soil metagenome', 'water sample'],
+            'geo_loc_name_country_calc': ['USA', 'Denmark', 'UK', 'Germany', 'France', 'Japan'],
+            'assay_type': ['WGS', 'WGS', 'WGA', 'WGS', 'OTHER', 'WGS']
+        })
+        
+        # Mock all operations
+        mock_pdf_context = Mock()
+        mock_matplotlib.backends.backend_pdf.PdfPages.return_value.__enter__.return_value = mock_pdf_context
+        
+        with patch('pandas.read_csv', side_effect=[summary_data, metadata_data]):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = generate_report(
+                    title="MetaQuest Analysis Report - Bacterial Pathogen Detection",
+                    summary_file=str(summary_file),
+                    metadata_file=str(metadata_file),
+                    output_file=str(output_file),
+                    format="pdf",
+                    threshold=0.1,
+                    include_plots=True,
+                    include_tables=True
+                )
+        
+        assert result == Path(output_file)
+
+    def test_error_recovery_comprehensive(self, tmp_path):
+        """Test comprehensive error recovery."""
+        summary_file = tmp_path / "summary.tsv"
+        
+        # Test file read error
+        with patch('pandas.read_csv', side_effect=pd.errors.ParserError("Malformed CSV")):
+            with pytest.raises(VisualizationError) as exc_info:
+                generate_report(
+                    title="Error Test",
+                    summary_file=str(summary_file)
+                )
+        
+        assert "Error generating report" in str(exc_info.value)
+        assert "Malformed CSV" in str(exc_info.value)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

@@ -35,8 +35,7 @@ def _validate_cartopy_availability():
     """
     if not CARTOPY_AVAILABLE:
         raise VisualizationError(
-            "Cartopy library is required for map visualization. "
-            "Please install with 'pip install cartopy'"
+            "Cartopy library is required for map visualization. " "Please install with 'pip install cartopy'"
         )
 
 
@@ -273,9 +272,7 @@ class MapVisualizerPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved map to {output_file}")
 
             return fig
@@ -320,8 +317,7 @@ class MapVisualizerPlugin(Plugin):
         """
         if not CARTOPY_AVAILABLE:
             raise VisualizationError(
-                "Cartopy library is required for choropleth visualization. "
-                "Please install with 'pip install cartopy'"
+                "Cartopy library is required for choropleth visualization. " "Please install with 'pip install cartopy'"
             )
 
         try:
@@ -376,9 +372,7 @@ class MapVisualizerPlugin(Plugin):
 
             # Save plot if output_file specified
             if output_file:
-                fig.savefig(
-                    output_file, format=output_format, dpi=300, bbox_inches="tight"
-                )
+                fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved choropleth map to {output_file}")
 
             return fig

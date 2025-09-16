@@ -1,0 +1,3 @@
+acc,containment,cANI,biosample,bioproject,assay_type,collection_date_sam,geo_loc_name_country_calc,organism,lat_lon
+SRR12345678,0.95,0.98,SAMN12345678,PRJNA123456,AMPLICON,2019-05-01,USA,Francisella adeliensis,35.7N 100.2W
+SRR87654321,0.92,0.96,SAMN87654321,PRJNA123456,AMPLICON,2019-06-15,USA,Francisella adeliensis,36.1N 99.8W

@@ -38,7 +38,7 @@ Thank you for your interest in contributing to MetaQuest! This document provides
 
 3. **Run tests**:
    ```bash
-   make test        # Run tests with coverage
+   make test        # Run comprehensive test suite (635 tests)
    make pipeline    # Run full integration test
    ```
 
@@ -84,11 +84,21 @@ Thank you for your interest in contributing to MetaQuest! This document provides
 - Use type hints where appropriate
 - Write clear docstrings for functions and classes
 
+## Testing Guidelines
+
+- **Comprehensive Coverage**: Include unit tests for all new functionality
+- **Edge Case Handling**: Test boundary conditions and degenerate cases
+- **Numerical Stability**: Verify proper handling of empty arrays, near-zero variances, and precision loss
+- **Mock External Dependencies**: Use proper test doubles for NCBI APIs, file operations, and system calls
+- **Test Isolation**: Ensure tests do not contaminate each other's state
+- **Error Path Testing**: Include tests for validation failures and error conditions
+
 ## Pull Request Guidelines
 
 - Provide a clear description of the changes
-- Include tests for new functionality
-- Ensure all tests pass
+- Include tests for new functionality with proper edge case handling
+- Ensure all tests pass without warnings
+- Maintain numerical stability in statistical computations
 - Update documentation if necessary
 - Reference any related issues
 

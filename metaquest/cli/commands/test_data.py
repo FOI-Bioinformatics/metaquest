@@ -5,7 +5,8 @@ Test data CLI commands.
 import argparse
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands_legacy import download_test_genome_command
+from metaquest.core.exceptions import MetaQuestError
+from metaquest.processing.containment import download_test_genome
 
 
 class DownloadTestGenomeCommand(BaseCommand):
@@ -27,4 +28,9 @@ class DownloadTestGenomeCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return download_test_genome_command(args)
+        try:
+            download_test_genome(args.output_folder)
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error downloading test genome: {e}")
+            return 1

@@ -5,9 +5,12 @@ Branchwater-related CLI commands.
 import argparse
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands_legacy import (
-    process_branchwater_command,
-    extract_branchwater_metadata_command,
+from pathlib import Path
+
+from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.branchwater import (
+    process_branchwater_files,
+    extract_metadata_from_branchwater,
 )
 
 
@@ -35,7 +38,12 @@ class UseBranchwaterCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return process_branchwater_command(args)
+        try:
+            process_branchwater_files(args.branchwater_folder, args.matches_folder)
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error processing Branchwater files: {e}")
+            return 1
 
 
 class ExtractBranchwaterMetadataCommand(BaseCommand):
@@ -62,4 +70,13 @@ class ExtractBranchwaterMetadataCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return extract_branchwater_metadata_command(args)
+        try:
+            metadata_folder = Path(args.metadata_folder)
+            metadata_folder.mkdir(exist_ok=True)
+            output_file = metadata_folder / "branchwater_metadata.txt"
+
+            extract_metadata_from_branchwater(args.branchwater_folder, output_file)
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error extracting metadata: {e}")
+            return 1

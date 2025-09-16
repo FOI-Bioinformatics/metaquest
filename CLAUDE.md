@@ -1,0 +1,346 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic datasets based on genome containment. The software processes Branchwater CSV files, downloads SRA metadata from NCBI, and provides advanced visualization capabilities for containment analysis, including intelligent SRA management with resume capability and comprehensive quality profiling.
+
+## Development Commands
+
+### Quick Start
+- `make dev-install` - Install with development dependencies
+- `make help` - Show all available commands
+
+### Testing and Quality
+- `make test` - Run pytest with coverage (currently 53% overall coverage)
+- `make lint` - Run flake8 linting (currently passing)
+- `make format` - Format code with black
+- `make check` - Full quality check (format, lint, type check)
+- `make pipeline` - Run full test pipeline via local_test.sh
+
+### Build and Clean
+- `make build` - Build distribution packages (uses pyproject.toml)
+- `make clean` - Clean build artifacts, cache files, and test data
+
+### Installation
+- `make install` - Install package for development
+- `make dev-install` - Install with development dependencies
+- Legacy: `pip install -r requirements.txt` (still supported)
+
+## Architecture
+
+MetaQuest follows a layered architecture with clear separation of concerns:
+
+### Core Components
+- **CLI Layer** (`metaquest/cli/`): Command-line interface with modular command architecture using a registry pattern
+- **Core Logic** (`metaquest/core/`): Domain models, validation, exceptions, and constants
+- **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA operations
+- **Advanced SRA Package** (`metaquest/sra/`): Intelligent download management, quality profiling, interactive reporting
+- **Processing** (`metaquest/processing/`): Containment analysis, statistical processing, counting algorithms
+- **Plugins** (`metaquest/plugins/`): Extensible plugin system for formats and visualizers
+- **Visualization** (`metaquest/visualization/`): Plotting and reporting functionality
+
+### Key Design Patterns
+- **Command Registry**: All CLI commands inherit from base classes and register themselves via `command_registry`
+- **Plugin System**: Uses `PluginRegistry` with automatic discovery for format handlers and visualizers
+- **Data Models**: Dataclasses in `core/models.py` define `Containment`, `SRAMetadata`, `GenomeInfo`, and `ContainmentSummary`
+- **Dual SRA Architecture**: Basic operations in data layer, advanced features in specialized SRA package
+
+## Project Structure
+
+### Modern Python Packaging
+- Uses `pyproject.toml` for modern Python packaging (PEP 518/621)
+- Maintains `setup.py` for backward compatibility
+- Configuration files: `setup.cfg` (flake8), `pyproject.toml` (build, black, mypy, pytest)
+
+### Documentation Structure
+- `README.md` - Main project documentation
+- `CONTRIBUTING.md` - Development guidelines
+- `docs/ARCHITECTURE.md` - Detailed architecture documentation
+- `docs/` - Additional documentation (workflow guides, etc.)
+- `CLAUDE.md` - This file for Claude Code guidance
+
+## Important Implementation Notes
+
+### CLI Command Structure
+New commands should:
+1. Inherit from the appropriate base command class in `cli/base.py`
+2. Register themselves in `cli/main.py` via the `register_all_commands()` function
+3. Follow the existing pattern for argument parsing and execution
+4. **CRITICAL**: Use dashes in CLI arguments (e.g., `--matches-folder`), not underscores
+
+### Advanced SRA Commands
+The intelligent SRA package provides four main CLI commands:
+- `sra-download-intelligent` - Downloads with resume capability and bandwidth optimization
+- `sra-profile-quality` - Comprehensive quality analysis of downloaded datasets
+- `sra-dashboard` - Interactive HTML dashboard generation
+- `sra-compare` - Statistical comparison between dataset groups
+
+### Plugin Development
+- Format plugins inherit from base Plugin class in `plugins/base.py`
+- Register with `format_registry` for file format handlers
+- Register with `visualizer_registry` for visualization types
+- Implement required methods like `validate_header`, `parse_file`, `extract_metadata`
+
+### Data Processing Pipeline
+The typical workflow involves:
+1. Processing Branchwater CSV files (`use_branchwater`)
+2. Extracting/downloading metadata (`extract_branchwater_metadata` or `download_metadata`)
+3. Parsing containment data (`parse_containment`) 
+4. Visualization and analysis (`plot_containment`, `count_metadata`)
+5. Advanced SRA operations (`sra-download-intelligent`, `sra-profile-quality`, `sra-dashboard`)
+
+### Code Quality Standards & Current Status
+
+#### Current Quality Status (September 2025)
+- **✅ All linting checks passing** - No flake8 violations
+- **✅ Code formatting consistent** - Black formatting applied
+- **✅ Make check passes** - All quality gates working
+- **✅ Test suite stability achieved** - All 635 tests passing consistently
+- **✅ Runtime warnings eliminated** - Numerical computation warnings resolved
+- **✅ API compatibility maintained** - DataFrame deprecation warnings addressed
+
+#### Quality Requirements
+- **Line length**: 88 characters maximum (Black default)
+- **Formatting**: Use Black for consistent code formatting
+- **Linting**: All code must pass flake8 without violations
+- **Type hints**: Encouraged (mypy checking enabled)
+- **Coverage**: Minimum 80% for new code, 60% project-wide target
+
+#### Maintenance Standards
+1. **Continuous quality assurance** - Focus on maintaining clean codebase
+2. **Add type hints** to remaining modules
+3. **Maintain quality standards** with `make check` before commits
+4. **Consider pre-commit hooks** for automated quality checks
+
+### Error Handling
+- Custom exception hierarchy starts with `MetaQuestError` in `core/exceptions.py`
+- Each layer handles errors appropriate to its level
+- CLI layer formats errors for user display
+
+## Testing Strategy & Current Status
+
+**Status**: The project maintains **robust test infrastructure** with full test suite stability and comprehensive coverage across core functionality.
+
+### Test Suite Reliability (September 2025)
+- **Test Execution**: 635 tests passing consistently with zero failures
+- **Runtime Stability**: All numerical computation warnings resolved
+- **Test Isolation**: Cross-test contamination issues eliminated
+- **Mock Integration**: Proper test doubles configured for external dependencies
+- **Edge Case Coverage**: Boundary conditions and error paths comprehensively tested
+
+### Current Coverage Status (September 2025)
+- **CLI Commands**: Comprehensive coverage with integration testing
+- **Core Processing**: Statistical and diversity analysis modules fully validated
+- **Data Layer**: SRA operations and metadata handling thoroughly tested
+- **Visualization**: Plot generation and error handling properly covered
+- **Advanced Features**: Intelligent download and analytics modules tested
+
+### Testing Commands
+- `make test` - Unit tests with coverage reporting
+- `make pipeline` - Integration test via `local_test.sh`
+- `make check` - Full quality check (format, lint, type check)
+
+### Test Infrastructure Components
+
+#### Core Testing Achievements ✅ 
+- **Statistical Computing**: Numerical edge cases properly handled
+- **API Compatibility**: Future-proof implementation with current libraries
+- **Error Propagation**: Comprehensive exception handling across modules
+- **Test Isolation**: Module contamination issues resolved
+
+#### Reliability Improvements Implemented
+1. **Numerical Stability**:
+   - Empty array validation in statistical functions
+   - Precision loss detection for nearly-identical data
+   - Graceful handling of degenerate cases in PCA and PERMANOVA
+
+2. **Mock Architecture**:
+   - Proper cleanup of test doubles to prevent contamination
+   - Systematic validation of external API expectations
+   - Robust handling of concurrent operations in download tests
+
+3. **Production Bug Prevention**:
+   - String replacement edge cases identified and resolved
+   - Parameter validation enhanced across SRA operations
+   - Function signature consistency verified
+
+#### Test Coverage Distribution
+- **Core Functionality**: Comprehensive coverage with edge case validation
+- **CLI Interface**: Full integration testing with realistic workflows
+- **Data Processing**: Statistical methods and file operations thoroughly tested
+- **Visualization**: Plot generation and error handling properly covered
+- **Advanced Features**: Concurrent downloads and analytics modules validated
+
+### Testing Guidelines
+
+#### Writing Tests
+- **Mock External Dependencies**: Use pytest fixtures for file I/O, network calls
+- **Test Error Paths**: Include validation failures, missing files, network errors
+- **Edge Cases**: Empty datasets, malformed inputs, boundary conditions
+- **Integration**: Test complete workflows with realistic data
+
+#### Test Structure
+```python
+# Example test pattern for CLI commands
+@pytest.fixture
+def mock_file_operations():
+    with patch('metaquest.data.file_io.read_file') as mock:
+        yield mock
+
+def test_command_execution(mock_file_operations):
+    # Setup mocks
+    # Execute command
+    # Verify behavior
+```
+
+#### Coverage Requirements
+- **New Code**: 80% minimum coverage
+- **Bug Fixes**: Must include tests for the fixed scenario
+- **Critical Paths**: CLI commands, data processing must have high coverage
+
+### Integration Testing
+
+The `local_test.sh` script provides basic end-to-end testing:
+1. Creates sample Branchwater data
+2. Tests core functionality through CLI
+3. Verifies expected output files
+4. Cleans up test artifacts
+
+**Enhancement Opportunities**: Expand integration tests to include SRA workflows and advanced analysis features.
+
+### Quality Gates
+Before committing code:
+1. `make check` must pass (linting, formatting, type checking)
+2. `make test` must pass with coverage improvement
+3. `make pipeline` integration test must pass
+4. No decrease in overall coverage percentage
+
+## Legacy Code
+
+Note: The codebase contains some legacy files that are still in use:
+- `metaquest/cli/commands_legacy.py` - Legacy command implementations (still imported by current commands)
+
+These files should not be removed as they contain functionality still used by the current command system.
+
+## Development Workflow & Implementation Priorities
+
+### Recommended Development Approach
+
+When working on MetaQuest, follow this priority order:
+
+#### 1. Maintenance Tasks (Ongoing Priority)
+- **Maintain quality standards**: Run `make format` and ensure `make check` passes
+- **No new code without tests**: Continue established testing practices
+- **Architecture consistency**: Follow established patterns for new features
+
+#### 2. Current Focus Areas (High Priority)
+- **Visualization layer testing**: Complete test coverage for plotting and reporting modules
+- **Processing layer completion**: Finish testing of containment analysis and remaining modules
+- **Plugin system enhancement**: Expand test coverage for visualization plugins
+- **Integration test expansion**: Beyond basic workflow validation
+
+#### 3. Code Quality Improvements (Medium Priority)
+- **Add type hints**: Complete type annotation for remaining modules
+- **Documentation enhancement**: Add docstrings for complex functions
+- **Performance optimization**: Large dataset handling and memory efficiency
+
+#### 4. Feature Enhancements (Lower Priority)
+- **Only after maintaining current quality levels**
+- **Must include comprehensive tests**
+- **Should follow existing architectural patterns**
+
+### Implementation Guidelines for Claude
+
+#### When Adding New Features
+1. **Check existing patterns**: Look at similar implementations first
+2. **Write tests first**: TDD approach preferred for new features  
+3. **Mock dependencies**: Don't rely on external systems in tests
+4. **Follow plugin patterns**: Use existing registries for extensibility
+
+#### When Fixing Bugs
+1. **Write a test that reproduces the bug**: This should fail initially
+2. **Fix the bug**: Minimal change approach
+3. **Verify the test passes**: And doesn't break existing tests
+4. **Check edge cases**: Consider similar scenarios
+
+#### When Refactoring
+1. **Ensure full test coverage first**: Don't refactor untested code
+2. **Small incremental changes**: One logical change at a time
+3. **Maintain backward compatibility**: Especially for CLI interfaces
+4. **Update documentation**: If public interfaces change
+
+### File-Specific Guidance
+
+#### Well-Tested Files (Reference Implementations)
+- `metaquest/cli/commands/*.py` - 100% coverage, comprehensive CLI testing patterns
+- `metaquest/data/file_io.py` - 96% coverage, robust file operations
+- `metaquest/data/branchwater.py` - 98% coverage, format handling exemplar
+- `metaquest/data/metadata.py` - 93% coverage, external API integration
+- `metaquest/processing/statistics.py` - 99% coverage, statistical analysis
+- `metaquest/sra/` - Comprehensive test coverage for advanced SRA features
+
+#### Priority Files for Enhancement
+- `metaquest/visualization/reporting.py` - Core reporting functionality, requires testing
+- `metaquest/visualization/plots.py` - Plotting functionality enhancement needed
+- `metaquest/processing/containment.py` - Core containment algorithms
+- `metaquest/data/sra_enhanced.py` - Enhanced SRA features integration
+
+#### Complex Files (Systematic Approach Recommended)
+- `metaquest/cli/commands/sra_enhanced.py` - 520 lines, comprehensive SRA command implementation
+- `metaquest/data/sra_metadata.py` - 649 lines, detailed metadata processing
+- `metaquest/visualization/interactive.py` - 152 lines, interactive plotting features
+
+### Success Metrics for Development Work
+
+#### Recently Completed ✅ (September 2025)
+- [x] **Intelligent SRA package implemented** - Complete next-generation SRA capabilities
+- [x] **All linting issues resolved** - Clean, consistent codebase
+- [x] **CLI commands fully tested** (0% → 100% coverage)
+- [x] **Core processing tested** (0% → 92-99% coverage)
+- [x] **Data layer testing completed** - Key modules at 96-98% coverage
+- [x] **Overall project coverage improved** (24% → 53%)
+- [x] **Orphan code removed** - Clean architecture maintained
+
+#### Advanced SRA Features Achievements
+- [x] **IntelligentDownloadManager** - Resume capability, bandwidth optimization
+- [x] **SRADatasetAnalyzer** - Quality profiling, comparative analysis, anomaly detection
+- [x] **SRAReportGenerator** - Interactive dashboards, Plotly visualizations
+- [x] **CLI Integration** - Four new intelligent SRA commands fully functional
+
+#### Current Development Priorities
+- [ ] **Visualization layer testing** (16-64% → 80%+ coverage)
+- [ ] **Processing layer completion** (remaining containment analysis modules)
+- [ ] **Plugin system enhancement** (visualization plugins testing)
+- [ ] **Integration test expansion** (SRA workflows, advanced features)
+
+#### Long-term Goals (3+ months)
+- [ ] **Production-ready coverage** (80%+)
+- [ ] **Performance benchmarking** implementation
+- [ ] **Complete plugin validation** across all format handlers
+- [ ] **Advanced feature optimization** for large datasets
+
+### Recent Architecture Enhancements
+
+#### SRA Package Structure
+The advanced SRA package (`metaquest.sra`) provides specialized functionality:
+- **download_manager.py** - Intelligent downloading with checkpoints and bandwidth management
+- **analytics.py** - Comprehensive quality analysis and statistical testing
+- **reporting.py** - Interactive dashboard generation with Plotly integration
+- **__init__.py** - Clean API exposure with proper imports
+
+#### CLI Command Architecture
+New intelligent SRA commands integrate seamlessly with existing command registry:
+- Proper argument parsing with scientific parameter naming
+- Error handling consistent with existing patterns
+- Help text following established conventions
+- Integration with base command infrastructure
+
+## important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+
+IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.

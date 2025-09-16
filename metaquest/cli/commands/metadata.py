@@ -5,12 +5,13 @@ Metadata-related CLI commands.
 import argparse
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands_legacy import (
-    download_metadata_command,
-    parse_metadata_command,
-    count_metadata_command,
-    plot_metadata_counts_command,
+from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.metadata import (
+    download_metadata,
+    parse_metadata,
 )
+from metaquest.processing.counts import count_metadata
+from metaquest.visualization.plots import plot_metadata_counts
 
 
 class DownloadMetadataCommand(BaseCommand):
@@ -25,12 +26,8 @@ class DownloadMetadataCommand(BaseCommand):
         return "Download metadata for SRA accessions"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--email", required=True, help="Your email address for NCBI API access"
-        )
-        parser.add_argument(
-            "--matches-folder", default="matches", help="Folder containing match files"
-        )
+        parser.add_argument("--email", required=True, help="Your email address for NCBI API access")
+        parser.add_argument("--matches-folder", default="matches", help="Folder containing match files")
         parser.add_argument(
             "--metadata-folder",
             default="metadata",
@@ -49,7 +46,18 @@ class DownloadMetadataCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return download_metadata_command(args)
+        try:
+            download_metadata(
+                email=args.email,
+                matches_folder=args.matches_folder,
+                metadata_folder=args.metadata_folder,
+                threshold=args.threshold,
+                dry_run=args.dry_run,
+            )
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error downloading metadata: {e}")
+            return 1
 
 
 class ParseMetadataCommand(BaseCommand):
@@ -76,7 +84,12 @@ class ParseMetadataCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return parse_metadata_command(args)
+        try:
+            parse_metadata(args.metadata_folder, args.metadata_table_file)
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error parsing metadata: {e}")
+            return 1
 
 
 class CountMetadataCommand(BaseCommand):
@@ -117,12 +130,22 @@ class CountMetadataCommand(BaseCommand):
             default="metadata_counts.txt",
             help="Path to the output file",
         )
-        parser.add_argument(
-            "--stat-file", default=None, help="Path to the statistics file"
-        )
+        parser.add_argument("--stat-file", default=None, help="Path to the statistics file")
 
     def execute(self, args: argparse.Namespace) -> int:
-        return count_metadata_command(args)
+        try:
+            count_metadata(
+                summary_file=args.summary_file,
+                metadata_file=args.metadata_file,
+                metadata_column=args.metadata_column,
+                threshold=args.threshold,
+                output_file=args.output_file,
+                stat_file=args.stat_file,
+            )
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error counting metadata: {e}")
+            return 1
 
 
 class PlotMetadataCountsCommand(BaseCommand):
@@ -137,9 +160,7 @@ class PlotMetadataCountsCommand(BaseCommand):
         return "Plot metadata counts"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--file-path", required=True, help="Path to the metadata counts file"
-        )
+        parser.add_argument("--file-path", required=True, help="Path to the metadata counts file")
         parser.add_argument("--title", default=None, help="Title for the plot")
         parser.add_argument(
             "--plot-type",
@@ -148,9 +169,7 @@ class PlotMetadataCountsCommand(BaseCommand):
             help="Type of plot to generate",
         )
         parser.add_argument("--colors", default=None, help="Colors or colormap name")
-        parser.add_argument(
-            "--show-title", action="store_true", help="Whether to display the title"
-        )
+        parser.add_argument("--show-title", action="store_true", help="Whether to display the title")
         parser.add_argument(
             "--save-format",
             default=None,
@@ -159,4 +178,16 @@ class PlotMetadataCountsCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return plot_metadata_counts_command(args)
+        try:
+            plot_metadata_counts(
+                file_path=args.file_path,
+                title=args.title,
+                plot_type=args.plot_type,
+                colors=args.colors,
+                show_title=args.show_title,
+                save_format=args.save_format,
+            )
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error plotting metadata counts: {e}")
+            return 1

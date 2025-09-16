@@ -51,9 +51,7 @@ class EnhancedSRADownloader:
         self.max_workers = max_workers
         self.temp_folder = temp_folder
 
-    def preview_downloads(
-        self, accessions: List[str]
-    ) -> Tuple[Dict[str, Any], Dict[str, int], float]:
+    def preview_downloads(self, accessions: List[str]) -> Tuple[Dict[str, Any], Dict[str, int], float]:
         """
         Preview what will be downloaded without actually downloading.
 
@@ -146,9 +144,7 @@ class EnhancedSRADownloader:
             logger.error(f"Error in enhanced download for {accession}: {e}")
             return False, f"Enhanced download failed: {str(e)}", metadata
 
-    def _download_with_optimizations(
-        self, accession: str, output_path: Path, technology: str
-    ) -> Tuple[bool, str]:
+    def _download_with_optimizations(self, accession: str, output_path: Path, technology: str) -> Tuple[bool, str]:
         """Download with technology-specific optimizations."""
         temp_path = output_path.parent / f"{accession}_temp"
 
@@ -184,9 +180,7 @@ class EnhancedSRADownloader:
             self._cleanup_temp(temp_path)
             return False, f"Download failed: {str(e)}"
 
-    def _build_download_command(
-        self, accession: str, temp_path: Path, technology: str
-    ) -> List[str]:
+    def _build_download_command(self, accession: str, temp_path: Path, technology: str) -> List[str]:
         """Build fasterq-dump command with technology-specific optimizations."""
         args = [
             "--threads",
@@ -213,9 +207,7 @@ class EnhancedSRADownloader:
 
         return args
 
-    def _handle_download_output(
-        self, temp_path: Path, output_path: Path, technology: str
-    ) -> Tuple[bool, str]:
+    def _handle_download_output(self, temp_path: Path, output_path: Path, technology: str) -> Tuple[bool, str]:
         """Handle download output with technology-specific processing."""
         # Find downloaded files
         fastq_files = list(temp_path.glob("*.fastq*"))
@@ -229,9 +221,7 @@ class EnhancedSRADownloader:
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Rename files based on technology and layout
-        renamed_files = self._rename_files_by_technology(
-            fastq_files, technology, output_path
-        )
+        renamed_files = self._rename_files_by_technology(fastq_files, technology, output_path)
 
         # Move files to final location
         for old_file, new_file in renamed_files.items():
@@ -351,10 +341,7 @@ class EnhancedSRADownloader:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit jobs
             futures = {
-                executor.submit(
-                    self.download_accession_enhanced, acc, fastq_path, force
-                ): acc
-                for acc in accessions
+                executor.submit(self.download_accession_enhanced, acc, fastq_path, force): acc for acc in accessions
             }
 
             # Process results
@@ -371,9 +358,7 @@ class EnhancedSRADownloader:
 
                         # Track technology
                         tech = metadata.get("technology", "unknown")
-                        results["technology_summary"][tech] = (
-                            results["technology_summary"].get(tech, 0) + 1
-                        )
+                        results["technology_summary"][tech] = results["technology_summary"].get(tech, 0) + 1
 
                         logger.info(f"✓ {accession}: {message}")
                     else:
@@ -412,9 +397,7 @@ def verify_sra_tools() -> bool:
 
     for tool in required_tools:
         try:
-            subprocess.run(
-                [tool, "--version"], capture_output=True, check=True, timeout=10
-            )
+            subprocess.run([tool, "--version"], capture_output=True, check=True, timeout=10)
             logger.debug(f"✓ {tool} is available")
         except (
             subprocess.CalledProcessError,
@@ -428,9 +411,7 @@ def verify_sra_tools() -> bool:
     return True
 
 
-def estimate_download_time(
-    total_size_gb: float, bandwidth_mbps: float = 100, num_parallel: int = 4
-) -> float:
+def estimate_download_time(total_size_gb: float, bandwidth_mbps: float = 100, num_parallel: int = 4) -> float:
     """
     Estimate download time based on size and bandwidth.
 
@@ -455,9 +436,7 @@ def estimate_download_time(
     return time_hours
 
 
-def create_download_report(
-    results: Dict[str, Any], output_file: Union[str, Path]
-) -> None:
+def create_download_report(results: Dict[str, Any], output_file: Union[str, Path]) -> None:
     """
     Create a comprehensive download report.
 
@@ -475,9 +454,7 @@ def create_download_report(
     report_data = []
 
     for accession, metadata in results["metadata"].items():
-        status = (
-            "Success" if accession not in results["failed_accessions"] else "Failed"
-        )
+        status = "Success" if accession not in results["failed_accessions"] else "Failed"
         message = results["download_results"].get(accession, "")
 
         report_data.append(

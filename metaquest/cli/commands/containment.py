@@ -5,10 +5,9 @@ Containment-related CLI commands.
 import argparse
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands_legacy import (
-    parse_containment_command,
-    plot_containment_command,
-)
+from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.branchwater import parse_containment_data
+from metaquest.visualization.plots import plot_containment as viz_plot_containment
 
 
 class ParseContainmentCommand(BaseCommand):
@@ -52,7 +51,17 @@ class ParseContainmentCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return parse_containment_command(args)
+        try:
+            parse_containment_data(
+                args.matches_folder,
+                args.parsed_containment_file,
+                args.summary_containment_file,
+                args.step_size,
+            )
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error parsing containment: {e}")
+            return 1
 
 
 class PlotContainmentCommand(BaseCommand):
@@ -67,17 +76,11 @@ class PlotContainmentCommand(BaseCommand):
         return "Plot containment data"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--file-path", required=True, help="Path to the containment file"
-        )
-        parser.add_argument(
-            "--column", default="max_containment", help="Column to plot"
-        )
+        parser.add_argument("--file-path", required=True, help="Path to the containment file")
+        parser.add_argument("--column", default="max_containment", help="Column to plot")
         parser.add_argument("--title", default=None, help="Title of the plot")
         parser.add_argument("--colors", default=None, help="Colors to use in the plot")
-        parser.add_argument(
-            "--show-title", action="store_true", help="Whether to display the title"
-        )
+        parser.add_argument("--show-title", action="store_true", help="Whether to display the title")
         parser.add_argument(
             "--save-format",
             default=None,
@@ -98,4 +101,18 @@ class PlotContainmentCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
-        return plot_containment_command(args)
+        try:
+            viz_plot_containment(
+                file_path=args.file_path,
+                column=args.column,
+                title=args.title,
+                colors=args.colors,
+                show_title=args.show_title,
+                save_format=args.save_format,
+                threshold=args.threshold,
+                plot_type=args.plot_type,
+            )
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error plotting containment: {e}")
+            return 1

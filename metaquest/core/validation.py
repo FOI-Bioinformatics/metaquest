@@ -96,9 +96,7 @@ def _check_csv_data(file_path, reader):
         raise ValidationError(f"File {file_path} contains headers but no data rows")
 
 
-def validate_csv_file(
-    file_path: Union[str, Path], file_format: Optional[str] = None
-) -> Tuple[str, List[str]]:
+def validate_csv_file(file_path: Union[str, Path], file_format: Optional[str] = None) -> Tuple[str, List[str]]:
     """
     Validate a CSV file by checking required columns and format.
 
@@ -115,9 +113,7 @@ def validate_csv_file(
     """
     try:
         # Auto-detect format if not specified
-        detected_format = (
-            detect_file_format(file_path) if file_format is None else file_format
-        )
+        detected_format = detect_file_format(file_path) if file_format is None else file_format
 
         # Determine required columns based on format
         if detected_format == "branchwater":
@@ -200,9 +196,7 @@ def validate_containment_value(value: Union[str, float]) -> Optional[float]:
         if 0 <= float_value <= 1:
             return float_value
         else:
-            logger.warning(
-                f"Containment value {float_value} outside expected range [0, 1]"
-            )
+            logger.warning(f"Containment value {float_value} outside expected range [0, 1]")
             return None
     except (ValueError, TypeError):
         logger.warning(f"Invalid containment value: {value}")

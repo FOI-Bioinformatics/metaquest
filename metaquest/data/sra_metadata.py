@@ -145,10 +145,7 @@ class SRAMetadataClient:
         search_response = self._make_request(search_url, params)
         search_data = json.loads(search_response)
 
-        if (
-            "esearchresult" not in search_data
-            or not search_data["esearchresult"]["idlist"]
-        ):
+        if "esearchresult" not in search_data or not search_data["esearchresult"]["idlist"]:
             logger.warning(f"No results found for batch: {accessions[:3]}...")
             return {}
 
@@ -214,16 +211,8 @@ class SRAMetadataClient:
             strategy = self._get_text(library_descriptor, ".//LIBRARY_STRATEGY", "")
             selection = self._get_text(library_descriptor, ".//LIBRARY_SELECTION", "")
             source = self._get_text(library_descriptor, ".//LIBRARY_SOURCE", "")
-            layout_elem = (
-                library_descriptor.find(".//LIBRARY_LAYOUT")
-                if library_descriptor
-                else None
-            )
-            layout = (
-                "PAIRED"
-                if layout_elem and layout_elem.find(".//PAIRED") is not None
-                else "SINGLE"
-            )
+            layout_elem = library_descriptor.find(".//LIBRARY_LAYOUT") if library_descriptor else None
+            layout = "PAIRED" if layout_elem and layout_elem.find(".//PAIRED") is not None else "SINGLE"
 
             # Get run info
             run_set = package.find(".//RUN_SET")
@@ -234,31 +223,21 @@ class SRAMetadataClient:
                 for run in run_set.findall(".//RUN"):
                     spots += int(self._get_text(run, ".//Statistics/@nspots", "0"))
                     bases += int(self._get_text(run, ".//Statistics/@nbases", "0"))
-                    size_mb += float(
-                        self._get_text(run, ".//Statistics/@size", "0")
-                    ) / (1024 * 1024)
+                    size_mb += float(self._get_text(run, ".//Statistics/@size", "0")) / (1024 * 1024)
 
             avg_length = bases / spots if spots > 0 else 0.0
 
             # Get sample info
             sample = package.find(".//SAMPLE")
-            organism = (
-                self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample else ""
-            )
+            organism = self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample else ""
 
             # Get study info
             study = package.find(".//STUDY")
-            bioproject = (
-                self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "")
-                if study
-                else ""
-            )
+            bioproject = self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "") if study else ""
 
             # Get submission info
             submission = package.find(".//SUBMISSION")
-            release_date = (
-                self._get_text(submission, "./@received", "") if submission else ""
-            )
+            release_date = self._get_text(submission, "./@received", "") if submission else ""
 
             # Get biosample
             sample_attrs = package.findall(".//SAMPLE_ATTRIBUTE")
@@ -333,21 +312,11 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
         return "illumina"
 
     # Nanopore detection
-    if (
-        platform == "oxford_nanopore"
-        or "nanopore" in instrument
-        or "minion" in instrument
-        or "gridion" in instrument
-    ):
+    if platform == "oxford_nanopore" or "nanopore" in instrument or "minion" in instrument or "gridion" in instrument:
         return "nanopore"
 
     # PacBio detection
-    if (
-        platform == "pacbio_smrt"
-        or "pacbio" in instrument
-        or "sequel" in instrument
-        or "rs" in instrument
-    ):
+    if platform == "pacbio_smrt" or "pacbio" in instrument or "sequel" in instrument or "rs" in instrument:
         return "pacbio"
 
     # Check strategy for additional hints
@@ -357,10 +326,7 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
     if "pacbio" in strategy:
         return "pacbio"
 
-    logger.warning(
-        f"Unknown sequencing technology for {dataset_info.accession}: "
-        f"{platform}/{instrument}"
-    )
+    logger.warning(f"Unknown sequencing technology for {dataset_info.accession}: " f"{platform}/{instrument}")
     return "unknown"
 
 
@@ -400,13 +366,10 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
                     gc_count += record.seq.count("G") + record.seq.count("C")
 
                     # Calculate average quality score
-                    if (
-                        hasattr(record, "letter_annotations")
-                        and "phred_quality" in record.letter_annotations
-                    ):
-                        avg_qual = sum(
+                    if hasattr(record, "letter_annotations") and "phred_quality" in record.letter_annotations:
+                        avg_qual = sum(record.letter_annotations["phred_quality"]) / len(
                             record.letter_annotations["phred_quality"]
-                        ) / len(record.letter_annotations["phred_quality"])
+                        )
                         quality_scores.append(avg_qual)
 
         except Exception as e:
@@ -434,8 +397,7 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
         }
 
     logger.info(
-        f"Statistics calculated: {total_reads} reads, {total_bases} bases, "
-        f"{avg_read_length:.1f} avg length"
+        f"Statistics calculated: {total_reads} reads, {total_bases} bases, " f"{avg_read_length:.1f} avg length"
     )
 
     return ReadStatistics(
@@ -511,9 +473,7 @@ def create_download_preview(
     return metadata, tech_counts, total_size_gb
 
 
-def save_metadata_report(
-    metadata: Dict[str, SRADatasetInfo], output_file: Union[str, Path]
-) -> None:
+def save_metadata_report(metadata: Dict[str, SRADatasetInfo], output_file: Union[str, Path]) -> None:
     """
     Save metadata report to CSV file.
 
@@ -555,9 +515,7 @@ def save_metadata_report(
     logger.info(f"Metadata report saved to {output_file}")
 
 
-def generate_statistics_report(
-    fastq_folder: Union[str, Path], output_file: Union[str, Path]
-) -> None:
+def generate_statistics_report(fastq_folder: Union[str, Path], output_file: Union[str, Path]) -> None:
     """
     Generate comprehensive statistics report for downloaded datasets.
 
@@ -595,11 +553,7 @@ def generate_statistics_report(
             stats = calculate_read_statistics(fastq_files)
 
             # Detect layout and technology from file patterns
-            layout = (
-                "PAIRED"
-                if any("_2" in f.name or "_R2" in f.name for f in fastq_files)
-                else "SINGLE"
-            )
+            layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in fastq_files) else "SINGLE"
 
             report_data.append(
                 {
@@ -613,9 +567,7 @@ def generate_statistics_report(
                     "max_read_length": stats.max_read_length,
                     "n50": stats.n50,
                     "gc_content": stats.gc_content,
-                    "avg_quality": (
-                        stats.quality_scores["mean"] if stats.quality_scores else None
-                    ),
+                    "avg_quality": (stats.quality_scores["mean"] if stats.quality_scores else None),
                 }
             )
 
@@ -627,9 +579,7 @@ def generate_statistics_report(
         # Save report
         df = pd.DataFrame(report_data)
         df.to_csv(output_file, index=False)
-        logger.info(
-            f"Statistics report saved to {output_file} ({len(report_data)} datasets)"
-        )
+        logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
 
         # Print summary
         print("\nDataset Statistics Summary:")

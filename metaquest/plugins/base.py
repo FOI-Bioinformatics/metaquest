@@ -70,9 +70,7 @@ class PluginRegistry(Generic[T]):
             raise PluginError(f"Plugin '{name}' is already registered")
 
         self._plugins[name] = plugin_class
-        logger.debug(
-            f"Registered plugin: {name} ({plugin_class.__module__}.{plugin_class.__name__})"
-        )
+        logger.debug(f"Registered plugin: {name} ({plugin_class.__module__}.{plugin_class.__name__})")
 
     def unregister(self, name: str) -> None:
         """
@@ -150,15 +148,9 @@ def discover_plugins(package: str, base_class: Type[T]) -> Set[Type[T]]:
                 module = importlib.import_module(name)
 
                 for item_name, item in inspect.getmembers(module, inspect.isclass):
-                    if (
-                        issubclass(item, base_class)
-                        and item is not base_class
-                        and item.__module__ == module.__name__
-                    ):
+                    if issubclass(item, base_class) and item is not base_class and item.__module__ == module.__name__:
                         discovered_plugins.add(item)
-                        logger.debug(
-                            f"Discovered plugin: {item.get_name()} in {module.__name__}"
-                        )
+                        logger.debug(f"Discovered plugin: {item.get_name()} in {module.__name__}")
 
                 # If it's a package, recursively discover plugins
                 if is_pkg:
@@ -174,9 +166,7 @@ def discover_plugins(package: str, base_class: Type[T]) -> Set[Type[T]]:
     return discovered_plugins
 
 
-def register_discovered_plugins(
-    registry: PluginRegistry[T], package: str, base_class: Type[T]
-) -> None:
+def register_discovered_plugins(registry: PluginRegistry[T], package: str, base_class: Type[T]) -> None:
     """
     Discover and register all plugins in a package.
 

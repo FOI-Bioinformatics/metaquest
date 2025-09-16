@@ -110,16 +110,12 @@ def _download_single_metadata(accession, metadata_path, entrez_email):
 
         except HTTPError as e:
             retries += 1
-            logger.warning(
-                f"Error downloading {accession}, retrying ({retries}/{max_retries}): {e}"
-            )
+            logger.warning(f"Error downloading {accession}, retrying ({retries}/{max_retries}): {e}")
             time.sleep(2**retries)  # Exponential backoff
 
         except Exception as e:
             retries += 1
-            logger.warning(
-                f"Error downloading {accession}, retrying ({retries}/{max_retries}): {e}"
-            )
+            logger.warning(f"Error downloading {accession}, retrying ({retries}/{max_retries}): {e}")
             time.sleep(2**retries)
 
     return False, f"Failed after {max_retries} retries"
@@ -173,17 +169,13 @@ def download_metadata(
             return {}
 
         # Download metadata for each accession
-        return _download_accessions_metadata(
-            accessions_to_download, metadata_path, email, to_download_count
-        )
+        return _download_accessions_metadata(accessions_to_download, metadata_path, email, to_download_count)
 
     except Exception as e:
         raise DataAccessError(f"Error downloading metadata: {e}")
 
 
-def _download_accessions_metadata(
-    accessions_to_download, metadata_path, email, total_count
-):
+def _download_accessions_metadata(accessions_to_download, metadata_path, email, total_count):
     """
     Download metadata for multiple accessions.
 
@@ -214,9 +206,7 @@ def _download_accessions_metadata(
             failed_count += 1
             logger.error(f"Failed to download {accession}: {result}")
 
-    logger.info(
-        f"Downloaded {downloaded_count} metadata files with {failed_count} failures"
-    )
+    logger.info(f"Downloaded {downloaded_count} metadata files with {failed_count} failures")
     return result_files
 
 
@@ -262,18 +252,10 @@ def _extract_metadata_fields(tree, xml_file):
         experiment_id = tree.findtext(".//EXPERIMENT/IDENTIFIERS/PRIMARY_ID")
         experiment_title = tree.findtext(".//EXPERIMENT/TITLE")
         experiment_design = tree.findtext(".//EXPERIMENT/DESIGN/DESIGN_DESCRIPTION")
-        experiment_library_name = tree.findtext(
-            ".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_NAME"
-        )
-        experiment_library_strategy = tree.findtext(
-            ".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY"
-        )
-        experiment_library_source = tree.findtext(
-            ".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE"
-        )
-        experiment_library_selection = tree.findtext(
-            ".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION"
-        )
+        experiment_library_name = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_NAME")
+        experiment_library_strategy = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY")
+        experiment_library_source = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE")
+        experiment_library_selection = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION")
 
         # Extract SRA URL
         srafile_elements = tree.findall(".//RUN/SRAFiles/SRAFile")
@@ -341,9 +323,7 @@ def _extract_sample_attributes(tree, unique_attributes):
     return sample_attributes
 
 
-def parse_metadata(
-    metadata_folder: Union[str, Path], output_file: Union[str, Path]
-) -> pd.DataFrame:
+def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Path]) -> pd.DataFrame:
     """
     Parse metadata XML files and create a consolidated table.
 
@@ -411,9 +391,7 @@ def parse_metadata(
 
         # Save to file
         write_csv(metadata_df, output_file, sep="\t", index=False)
-        logger.info(
-            f"Saved metadata table with {len(metadata_df)} records to {output_file}"
-        )
+        logger.info(f"Saved metadata table with {len(metadata_df)} records to {output_file}")
 
         return metadata_df
 
@@ -442,9 +420,7 @@ def get_unique_sample_attributes(metadata_folder: Union[str, Path]) -> List[str]
                 tree = etree.parse(str(xml_file))
 
                 # Extract attribute tags
-                for attribute in tree.findall(
-                    ".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"
-                ):
+                for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"):
                     unique_attributes.add(attribute.text)
 
             except Exception as e:
@@ -457,9 +433,7 @@ def get_unique_sample_attributes(metadata_folder: Union[str, Path]) -> List[str]
         return []
 
 
-def check_metadata_attributes(
-    file_path: Union[str, Path], output_file: Union[str, Path]
-) -> Dict[str, int]:
+def check_metadata_attributes(file_path: Union[str, Path], output_file: Union[str, Path]) -> Dict[str, int]:
     """
     Count occurrences of metadata attributes and save to file.
 
@@ -479,18 +453,13 @@ def check_metadata_attributes(
 
         # Filter columns to exclude standard categories
         excluded_prefixes = ("Run_", "Project_", "Sample_", "Experiment_")
-        filtered_columns = [
-            col for col in df.columns if not col.startswith(excluded_prefixes)
-        ]
+        filtered_columns = [col for col in df.columns if not col.startswith(excluded_prefixes)]
 
         # Count non-null values for each column
         counts = {col: df[col].count() for col in filtered_columns}
 
         # Sort by count
-        sorted_counts = {
-            k: v
-            for k, v in sorted(counts.items(), key=lambda item: item[1], reverse=True)
-        }
+        sorted_counts = {k: v for k, v in sorted(counts.items(), key=lambda item: item[1], reverse=True)}
 
         # Save to file
         with open(output_file, "w") as f:

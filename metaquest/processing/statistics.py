@@ -94,9 +94,7 @@ def calculate_enrichment(
 
         # Add multiple testing correction
         if len(df) > 1:
-            df["adjusted_p_value"] = stats.multipletests(
-                df["p_value"], method="fdr_bh"
-            )[1]
+            df["adjusted_p_value"] = stats.false_discovery_control(df["p_value"])
         else:
             df["adjusted_p_value"] = df["p_value"]
 
@@ -121,10 +119,7 @@ def _validate_distance_method(method):
     """
     valid_methods = ("jaccard", "dice", "cosine")
     if method not in valid_methods:
-        raise ProcessingError(
-            f"Invalid distance method: {method}. "
-            f"Valid methods: {', '.join(valid_methods)}"
-        )
+        raise ProcessingError(f"Invalid distance method: {method}. " f"Valid methods: {', '.join(valid_methods)}")
 
 
 def _create_binary_presence_matrix(summary_df, genome_columns, threshold):
@@ -231,23 +226,17 @@ def calculate_distance_matrix(
         summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
 
         # Get genome columns
-        genome_columns = [
-            col for col in summary_df.columns if "GCF" in col or "GCA" in col
-        ]
+        genome_columns = [col for col in summary_df.columns if "GCF" in col or "GCA" in col]
 
         if not genome_columns:
             raise ProcessingError("No genome columns found in summary file")
 
         # Create binary presence/absence matrix
-        presence_df = _create_binary_presence_matrix(
-            summary_df, genome_columns, threshold
-        )
+        presence_df = _create_binary_presence_matrix(summary_df, genome_columns, threshold)
 
         # Initialize distance matrix
         sample_count = len(presence_df)
-        distance_matrix = pd.DataFrame(
-            index=presence_df.index, columns=presence_df.index
-        )
+        distance_matrix = pd.DataFrame(index=presence_df.index, columns=presence_df.index)
 
         # Calculate distances based on method
         distance_functions = {

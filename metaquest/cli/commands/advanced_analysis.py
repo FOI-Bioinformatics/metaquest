@@ -63,9 +63,7 @@ class DiversityAnalysisCommand(BaseCommand):
             choices=["bray_curtis", "jaccard", "euclidean", "manhattan"],
             help="Beta diversity metric",
         )
-        parser.add_argument(
-            "--permanova-formula", help="PERMANOVA formula (e.g., 'treatment + site')"
-        )
+        parser.add_argument("--permanova-formula", help="PERMANOVA formula (e.g., 'treatment + site')")
 
     def execute(self, args):
         try:
@@ -103,9 +101,7 @@ class DiversityAnalysisCommand(BaseCommand):
             # PERMANOVA if requested
             if args.permanova_formula and metadata_df is not None:
                 logger.info("Performing PERMANOVA...")
-                permanova_results = perform_permanova(
-                    beta_div, metadata_df, args.permanova_formula
-                )
+                permanova_results = perform_permanova(beta_div, metadata_df, args.permanova_formula)
 
                 permanova_output = output_dir / "permanova_results.txt"
                 with open(permanova_output, "w") as f:
@@ -139,9 +135,7 @@ class InteractivePlotCommand(BaseCommand):
         return "Create interactive visualizations"
 
     def configure_parser(self, parser):
-        parser.add_argument(
-            "--data-file", required=True, help="CSV file with data matrix"
-        )
+        parser.add_argument("--data-file", required=True, help="CSV file with data matrix")
         parser.add_argument("--metadata-file", help="CSV file with sample metadata")
         parser.add_argument(
             "--plot-type",
@@ -153,9 +147,7 @@ class InteractivePlotCommand(BaseCommand):
         parser.add_argument("--size-by", help="Metadata column for sizing points")
         parser.add_argument("--output-file", help="HTML file to save interactive plot")
         parser.add_argument("--title", help="Plot title")
-        parser.add_argument(
-            "--no-show", action="store_true", help="Don't display plot in browser"
-        )
+        parser.add_argument("--no-show", action="store_true", help="Don't display plot in browser")
 
     def execute(self, args):
         try:
@@ -240,12 +232,8 @@ class TaxonomyValidationCommand(BaseCommand):
             required=True,
             help="Text file with species names (one per line) or CSV with species column",  # noqa: E501
         )
-        parser.add_argument(
-            "--species-column", help="Column name containing species (for CSV files)"
-        )
-        parser.add_argument(
-            "--email", required=True, help="Email address for NCBI API access"
-        )
+        parser.add_argument("--species-column", help="Column name containing species (for CSV files)")
+        parser.add_argument("--email", required=True, help="Email address for NCBI API access")
         parser.add_argument("--api-key", help="NCBI API key for increased rate limits")
         parser.add_argument(
             "--output-file",
@@ -268,9 +256,7 @@ class TaxonomyValidationCommand(BaseCommand):
                 df = pd.read_csv(args.species_file)
                 if args.species_column:
                     if args.species_column not in df.columns:
-                        raise MetaQuestError(
-                            f"Column '{args.species_column}' not found"
-                        )
+                        raise MetaQuestError(f"Column '{args.species_column}' not found")
                     species_list = df[args.species_column].dropna().tolist()
                 else:
                     # Assume first column contains species
@@ -299,10 +285,7 @@ class TaxonomyValidationCommand(BaseCommand):
             print("\nTaxonomy Validation Summary:")
             print("============================")
             print(f"Total species: {total_count}")
-            print(
-                f"Valid species: {valid_count} "
-                f"({valid_count / total_count * 100:.1f}%)"
-            )
+            print(f"Valid species: {valid_count} " f"({valid_count / total_count * 100:.1f}%)")
             print(
                 f"Invalid species: {total_count - valid_count} ({(total_count - valid_count) / total_count * 100:.1f}%)"  # noqa: E501
             )

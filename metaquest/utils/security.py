@@ -31,10 +31,7 @@ class SecureSubprocess:
     ALLOWED_EXECUTABLES = set(ALLOWED_BIOINFORMATICS_TOOLS.keys())
 
     # Get safe parameters from constants
-    SAFE_PARAMETERS = {
-        tool: config["safe_params"]
-        for tool, config in ALLOWED_BIOINFORMATICS_TOOLS.items()
-    }
+    SAFE_PARAMETERS = {tool: config["safe_params"] for tool, config in ALLOWED_BIOINFORMATICS_TOOLS.items()}
 
     @staticmethod
     def validate_executable(executable: str) -> str:
@@ -144,9 +141,7 @@ class SecureSubprocess:
 
         # Additional security check - only alphanumeric characters allowed
         if not re.match(SRA_ACCESSION_PATTERN, accession):
-            raise SecurityError(
-                f"SRA accession contains invalid characters: {accession}"
-            )
+            raise SecurityError(f"SRA accession contains invalid characters: {accession}")
 
         return accession
 

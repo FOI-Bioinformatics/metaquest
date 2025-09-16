@@ -111,9 +111,7 @@ def count_single_sample(
 
         # Find accessions above threshold
         selected_accessions = summary_df[summary_df[summary_column] > threshold].index
-        logger.info(
-            f"Found {len(selected_accessions)} accessions with {summary_column} > {threshold}"
-        )
+        logger.info(f"Found {len(selected_accessions)} accessions with {summary_column} > {threshold}")
 
         if len(selected_accessions) == 0:
             logger.warning("No accessions found above threshold")
@@ -176,23 +174,16 @@ def filter_samples_by_containment(
         if genome_id is not None:
             if genome_id not in summary_df.columns:
                 genome_cols = [
-                    col
-                    for col in summary_df.columns
-                    if col not in ("max_containment", "max_containment_annotation")
+                    col for col in summary_df.columns if col not in ("max_containment", "max_containment_annotation")
                 ]
                 raise ProcessingError(
-                    f"Genome {genome_id} not found in summary file. "
-                    f"Available genomes: {', '.join(genome_cols)}"
+                    f"Genome {genome_id} not found in summary file. " f"Available genomes: {', '.join(genome_cols)}"
                 )
             filtered_df = summary_df[summary_df[genome_id] > threshold]
-            logger.info(
-                f"Found {len(filtered_df)} samples with {genome_id} > {threshold}"
-            )
+            logger.info(f"Found {len(filtered_df)} samples with {genome_id} > {threshold}")
         else:
             filtered_df = summary_df[summary_df["max_containment"] > threshold]
-            logger.info(
-                f"Found {len(filtered_df)} samples with max_containment > {threshold}"
-            )
+            logger.info(f"Found {len(filtered_df)} samples with max_containment > {threshold}")
 
         return filtered_df
 
@@ -227,8 +218,7 @@ def find_co_occurring_genomes(
         genome_cols = [
             col
             for col in summary_df.columns
-            if col not in ("max_containment", "max_containment_annotation")
-            and ("GCA" in col or "GCF" in col)
+            if col not in ("max_containment", "max_containment_annotation") and ("GCA" in col or "GCF" in col)
         ]
 
         if not genome_cols:
@@ -245,22 +235,16 @@ def find_co_occurring_genomes(
         frequent_genomes = genome_counts[genome_counts >= min_samples].index.tolist()
 
         if not frequent_genomes:
-            logger.warning(
-                f"No genomes found in at least {min_samples} samples at threshold {threshold}"
-            )
+            logger.warning(f"No genomes found in at least {min_samples} samples at threshold {threshold}")
             return pd.DataFrame()
 
         # Create co-occurrence matrix
-        cooccurrence_matrix = pd.DataFrame(
-            index=frequent_genomes, columns=frequent_genomes
-        )
+        cooccurrence_matrix = pd.DataFrame(index=frequent_genomes, columns=frequent_genomes)
 
         for i in frequent_genomes:
             for j in frequent_genomes:
                 # Count samples where both genomes are present
-                cooccurrence_matrix.loc[i, j] = (
-                    (presence_df[i] == 1) & (presence_df[j] == 1)
-                ).sum()
+                cooccurrence_matrix.loc[i, j] = ((presence_df[i] == 1) & (presence_df[j] == 1)).sum()
 
         logger.info(f"Created co-occurrence matrix for {len(frequent_genomes)} genomes")
         return cooccurrence_matrix

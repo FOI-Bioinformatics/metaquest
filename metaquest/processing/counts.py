@@ -30,8 +30,7 @@ def _validate_metadata_column(metadata_df, metadata_column):
     if metadata_column not in metadata_df.columns:
         available_columns = ", ".join(metadata_df.columns)
         raise ProcessingError(
-            f"Column '{metadata_column}' not found in metadata file. "
-            f"Available columns: {available_columns}"
+            f"Column '{metadata_column}' not found in metadata file. " f"Available columns: {available_columns}"
         )
 
 
@@ -56,9 +55,7 @@ def _get_genome_columns(summary_df):
     return genome_columns
 
 
-def _process_genome_accessions(
-    genome_column, summary_df, threshold, metadata_df, metadata_column, df_list
-):
+def _process_genome_accessions(genome_column, summary_df, threshold, metadata_df, metadata_column, df_list):
     """
     Process accessions for a single genome.
 
@@ -79,9 +76,7 @@ def _process_genome_accessions(
 
         # Skip if no matching accessions
         if len(selected_accessions) == 0:
-            logger.warning(
-                f"No accessions found for {genome_column} above threshold {threshold}"
-            )
+            logger.warning(f"No accessions found for {genome_column} above threshold {threshold}")
             return 0
 
         # Filter metadata to selected accessions
@@ -162,9 +157,7 @@ def count_metadata(
                 metadata_column,
                 df_list,
             )
-            unique_accessions.update(
-                summary_df[summary_df[genome_column] > threshold].index
-            )
+            unique_accessions.update(summary_df[summary_df[genome_column] > threshold].index)
             if selected_count > 0:
                 processed_count += 1
 
@@ -239,24 +232,17 @@ def count_metadata_by_category(
         if count_column not in metadata_df.columns:
             available_columns = ", ".join(metadata_df.columns)
             raise ProcessingError(
-                f"Count column '{count_column}' not found in metadata file. "
-                f"Available columns: {available_columns}"
+                f"Count column '{count_column}' not found in metadata file. " f"Available columns: {available_columns}"
             )
 
         # Create contingency table
-        contingency_table = pd.crosstab(
-            index=metadata_df[category_column], columns=metadata_df[count_column]
-        )
+        contingency_table = pd.crosstab(index=metadata_df[category_column], columns=metadata_df[count_column])
 
         # Filter by minimum count
-        contingency_table = contingency_table[
-            contingency_table.sum(axis=1) >= min_count
-        ]
+        contingency_table = contingency_table[contingency_table.sum(axis=1) >= min_count]
 
         # Sort by row sums
-        contingency_table = contingency_table.loc[
-            contingency_table.sum(axis=1).sort_values(ascending=False).index
-        ]
+        contingency_table = contingency_table.loc[contingency_table.sum(axis=1).sort_values(ascending=False).index]
 
         # Save to file if specified
         if output_file:
@@ -298,8 +284,7 @@ def summarize_metadata_column(
         if column not in metadata_df.columns:
             available_columns = ", ".join(metadata_df.columns)
             raise ProcessingError(
-                f"Column '{column}' not found in metadata file. "
-                f"Available columns: {available_columns}"
+                f"Column '{column}' not found in metadata file. " f"Available columns: {available_columns}"
             )
 
         # Count values
@@ -311,9 +296,7 @@ def summarize_metadata_column(
         non_null_percentage = (non_null_count / total_count) * 100
 
         logger.info(f"Column: {column}")
-        logger.info(
-            f"Non-null values: {non_null_count}/{total_count} ({non_null_percentage:.1f}%)"
-        )
+        logger.info(f"Non-null values: {non_null_count}/{total_count} ({non_null_percentage:.1f}%)")
         logger.info(f"Unique values: {len(value_counts)}")
 
         # Log top values
@@ -325,9 +308,7 @@ def summarize_metadata_column(
         if output_file:
             with open(output_file, "w") as f:
                 f.write(f"Column: {column}\n")
-                f.write(
-                    f"Non-null values: {non_null_count}/{total_count} ({non_null_percentage:.1f}%)\n"
-                )
+                f.write(f"Non-null values: {non_null_count}/{total_count} ({non_null_percentage:.1f}%)\n")
                 f.write(f"Unique values: {len(value_counts)}\n\n")
                 f.write("Value counts:\n")
 
