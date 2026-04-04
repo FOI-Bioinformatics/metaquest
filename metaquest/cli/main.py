@@ -29,6 +29,9 @@ from metaquest.cli.commands import (
     DownloadSraCommand,
     AssembleDatasetsCommand,
     DownloadTestGenomeCommand,
+    GenomeSearchCommand,
+    GenomeDownloadCommand,
+    GenomePrepareCommand,
 )
 from metaquest.cli.commands.advanced_analysis import (
     DiversityAnalysisCommand,
@@ -75,6 +78,10 @@ def register_all_commands() -> None:
         SRAQualityProfileCommand(),
         SRAInteractiveDashboardCommand(),
         SRAComparativeAnalysisCommand(),
+        # Genome commands
+        GenomeSearchCommand(),
+        GenomeDownloadCommand(),
+        GenomePrepareCommand(),
         # Advanced analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),

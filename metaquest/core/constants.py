@@ -7,6 +7,8 @@ This module centralizes all magic numbers and hard-coded values used throughout 
 # SRA Accession Validation
 SRA_VALID_PREFIXES = ("SRR", "ERR", "DRR")
 SRA_ACCESSION_PATTERN = r"^[A-Z]{3}[0-9]+$"
+GENOME_ACCESSION_PATTERN = r"^GC[AF]_\d{9}\.\d+$"
+GENOME_ACCESSION_PREFIXES = ("GCF_", "GCA_")
 
 # Default Thresholds
 DEFAULT_CONTAINMENT_THRESHOLD = 0.5
@@ -105,6 +107,20 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "--keep-haplotypes",
         },
         "description": "Long-read assembly tool",
+    },
+    "datasets": {
+        "safe_params": {
+            "download",
+            "genome",
+            "accession",
+            "--include",
+            "--filename",
+            "--inputfile",
+            "--assembly-level",
+            "--version",
+            "--no-progressbar",
+        },
+        "description": "NCBI datasets CLI for genome downloads",
     },
 }
 
