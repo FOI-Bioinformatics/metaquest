@@ -56,6 +56,21 @@ class SRAMetadata:
 
 
 @dataclass
+class TaxonomyInfo:
+    """Taxonomic classification for a genome."""
+
+    genome_id: str
+    species: Optional[str] = None
+    genus: Optional[str] = None
+    family: Optional[str] = None
+    order: Optional[str] = None
+    class_name: Optional[str] = None  # 'class' is reserved
+    phylum: Optional[str] = None
+    organism: Optional[str] = None
+    tax_id: Optional[str] = None
+
+
+@dataclass
 class ContainmentSummary:
     """Summary of containment data for analysis."""
 

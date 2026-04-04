@@ -32,6 +32,9 @@ from metaquest.cli.commands import (
     GenomeSearchCommand,
     GenomeDownloadCommand,
     GenomePrepareCommand,
+    EnrichTaxonomyCommand,
+    ExploreContainmentCommand,
+    FindByTaxonomyCommand,
 )
 from metaquest.cli.commands.advanced_analysis import (
     DiversityAnalysisCommand,
@@ -82,6 +85,10 @@ def register_all_commands() -> None:
         GenomeSearchCommand(),
         GenomeDownloadCommand(),
         GenomePrepareCommand(),
+        # Taxonomy exploration commands
+        EnrichTaxonomyCommand(),
+        ExploreContainmentCommand(),
+        FindByTaxonomyCommand(),
         # Advanced analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),

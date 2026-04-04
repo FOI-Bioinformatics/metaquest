@@ -16,6 +16,11 @@ from .samples import SingleSampleCommand
 from .sra import DownloadSraCommand, AssembleDatasetsCommand
 from .test_data import DownloadTestGenomeCommand
 from .genome import GenomeSearchCommand, GenomeDownloadCommand, GenomePrepareCommand
+from .explore import (
+    EnrichTaxonomyCommand,
+    ExploreContainmentCommand,
+    FindByTaxonomyCommand,
+)
 
 __all__ = [
     "UseBranchwaterCommand",
@@ -33,4 +38,7 @@ __all__ = [
     "GenomeSearchCommand",
     "GenomeDownloadCommand",
     "GenomePrepareCommand",
+    "EnrichTaxonomyCommand",
+    "ExploreContainmentCommand",
+    "FindByTaxonomyCommand",
 ]
