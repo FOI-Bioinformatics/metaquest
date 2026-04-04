@@ -9,24 +9,20 @@ This module provides comprehensive analysis capabilities for SRA datasets includ
 - Processing parameter recommendations
 """
 
-import json
 import logging
 import statistics
 from collections import Counter, defaultdict
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Any, Set
+from typing import Dict, List, Optional, Union, Any
 
 import numpy as np
 import pandas as pd
 from Bio import SeqIO
 from scipy import stats
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.sra_metadata import SRADatasetInfo, ReadStatistics
+from metaquest.data.sra_metadata import SRADatasetInfo
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +117,10 @@ class SequenceQualityAnalyzer:
 
         try:
             # Sample reads for analysis
-            with open(fastq_path, "r") as handle:
-                if fastq_path.suffix.endswith(".gz"):
-                    import gzip
+            import gzip
 
-                    handle = gzip.open(fastq_path, "rt")
-
+            opener = gzip.open if fastq_path.suffix.endswith(".gz") else open
+            with opener(fastq_path, "rt") as handle:
                 read_count = 0
                 for record in SeqIO.parse(handle, "fastq"):
                     if read_count >= sample_size:
@@ -753,7 +747,7 @@ class SRADatasetAnalyzer:
                 # Check if data is nearly identical (would cause precision loss)
                 all_values = np.concatenate(group_data)
                 variance = np.var(all_values)
-                
+
                 if variance < 1e-10:  # Extremely low variance, skip statistical tests
                     tests[col]["test"] = "skipped (identical values)"
                     tests[col]["statistic"] = np.nan

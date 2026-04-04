@@ -50,19 +50,18 @@ def _read_blacklist_files(blacklist_files):
     return blacklisted_accessions
 
 
-def _prepare_temp_folder(temp_folder, temp_cmd):
+def _prepare_temp_folder(temp_folder):
     """
     Prepare the temporary folder for fasterq-dump.
 
     Args:
         temp_folder: Path to temporary folder
-        temp_cmd: List to store temp folder command (deprecated, for backward compatibility)
 
     Returns:
         Path object of the prepared temp folder, or None if not successful
     """
     import tempfile
-    
+
     if not temp_folder:
         # Create a temporary directory
         try:
@@ -100,7 +99,7 @@ def _check_existing_download(output_path, force):
         True if already downloaded, False otherwise
     """
     import shutil
-    
+
     if force and output_path.exists():
         # Force redownload - remove existing directory
         try:
@@ -109,7 +108,7 @@ def _check_existing_download(output_path, force):
         except Exception as e:
             logger.warning(f"Could not remove directory for force redownload {output_path}: {e}")
         return False
-    
+
     if not force and output_path.exists():
         fastq_files = list(output_path.glob("*.fastq*"))
         if fastq_files:
@@ -152,7 +151,7 @@ def _handle_download_output(temp_path, output_path):
 
     # Remove the temporary directory
     try:
-        temp_path.rmdir()
+        shutil.rmtree(temp_path)
     except Exception as e:
         logger.warning(f"Could not remove temp directory {temp_path}: {e}")
 
@@ -199,14 +198,12 @@ def download_accession(
     # Create the temporary folder
     temp_path.mkdir(parents=True, exist_ok=True)
 
+    temp_folder_path = None
     try:
         logger.info(f"Downloading SRA for {accession}")
 
         # Handle temp folder for fasterq-dump
-        temp_cmd = []
-        temp_folder_path = _prepare_temp_folder(temp_folder, temp_cmd)
-        if temp_folder_path:
-            temp_cmd = ["--temp", str(temp_folder_path.absolute())]
+        temp_folder_path = _prepare_temp_folder(temp_folder)
 
         # Build fasterq-dump arguments
         args = [
@@ -219,8 +216,8 @@ def download_accession(
         ]
 
         # Add temp folder if available
-        if temp_cmd:
-            args.extend(temp_cmd)
+        if temp_folder_path:
+            args.extend(["--temp", str(temp_folder_path.absolute())])
 
         # Run fasterq-dump command securely
         SecureSubprocess.run_secure("fasterq-dump", args)
@@ -230,21 +227,35 @@ def download_accession(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
-        # Clean up temp directory
-        shutil.rmtree(temp_path)
+        try:
+            shutil.rmtree(temp_path)
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
         return False, f"Download failed: {e.stderr}"
 
     except SecurityError as e:
         logger.error(f"Security error downloading {accession}: {e}")
-        # Clean up temp directory
-        shutil.rmtree(temp_path)
+        try:
+            shutil.rmtree(temp_path)
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
         return False, f"Security error: {e}"
 
     except Exception as e:
         logger.error(f"Error downloading {accession}: {e}")
-        # Clean up temp directory
-        shutil.rmtree(temp_path)
+        try:
+            shutil.rmtree(temp_path)
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
         return False, f"Download failed: {str(e)}"
+
+    finally:
+        # Clean up auto-created temp directory (from tempfile.mkdtemp)
+        if temp_folder_path and not temp_folder and temp_folder_path.exists():
+            try:
+                shutil.rmtree(temp_folder_path)
+            except Exception as cleanup_err:
+                logger.warning(f"Failed to clean up temp folder {temp_folder_path}: {cleanup_err}")
 
 
 def _check_existing_downloads(
@@ -518,7 +529,15 @@ def download_sra(
             }
 
             # Process results as they complete
-            futures_results = [(futures[future], future.result()) for future in as_completed(futures)]
+            futures_results = []
+            for future in as_completed(futures):
+                acc = futures[future]
+                try:
+                    result = future.result()
+                    futures_results.append((acc, result))
+                except Exception as e:
+                    logger.error(f"Download failed for {acc}: {e}")
+                    futures_results.append((acc, None))
 
             successful_count, failed_count = _process_download_results(
                 futures_results,
@@ -572,82 +591,6 @@ def download_sra(
         raise DataAccessError(f"Downloading SRA data: {e}")
 
 
-def _process_illumina_dataset(fastq_file, r2_file):
-    """
-    Process a single Illumina paired-end dataset.
-
-    Args:
-        fastq_file: Path to R1 fastq file
-        r2_file: Path to R2 fastq file
-    """
-    output_dir = f"{fastq_file.stem}_megahit"
-
-    if Path(output_dir).exists():
-        logger.info(f"Skipping {fastq_file.name}, output directory already exists")
-        return
-
-    logger.info(f"Assembling Illumina dataset for {fastq_file.name}")
-
-    # Run megahit for Illumina paired-end data
-    try:
-        args = [
-            "-1",
-            str(fastq_file),
-            "-2",
-            str(r2_file),
-            "-o",
-            output_dir,
-        ]
-        SecureSubprocess.run_secure("megahit", args)
-        logger.info(f"Successfully assembled {fastq_file.name}")
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error assembling {fastq_file.name}: {e.stderr}")
-
-    except SecurityError as e:
-        logger.error(f"Security error assembling {fastq_file.name}: {e}")
-
-    except Exception as e:
-        logger.error(f"Error assembling {fastq_file.name}: {e}")
-
-
-def _process_nanopore_dataset(fastq_file):
-    """
-    Process a single Nanopore dataset.
-
-    Args:
-        fastq_file: Path to Nanopore fastq file
-    """
-    output_dir = f"{fastq_file.stem}_flye"
-
-    if Path(output_dir).exists():
-        logger.info(f"Skipping {fastq_file.name}, output directory already exists")
-        return
-
-    logger.info(f"Assembling Nanopore dataset for {fastq_file.name}")
-
-    # Run flye for Nanopore data
-    try:
-        args = [
-            "--nano-raw",
-            str(fastq_file),
-            "--out-dir",
-            output_dir,
-            "--meta",
-        ]
-        SecureSubprocess.run_secure("flye", args)
-        logger.info(f"Successfully assembled {fastq_file.name}")
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error assembling {fastq_file.name}: {e.stderr}")
-
-    except SecurityError as e:
-        logger.error(f"Security error assembling {fastq_file.name}: {e}")
-
-    except Exception as e:
-        logger.error(f"Error assembling {fastq_file.name}: {e}")
-
-
 def _find_paired_reads(illumina_files):
     """
     Find pairs of Illumina reads.
@@ -695,16 +638,16 @@ def assemble_datasets(args):
             fastq_folder = Path(args.data_files[0]).parent if args.data_files else Path("fastq")
         else:
             fastq_folder = Path("fastq")
-            
+
         if not fastq_folder.exists():
             raise DataAccessError(f"Fastq folder {fastq_folder} does not exist")
-            
+
         # Find FASTQ files (both .fastq and .fastq.gz)
         fastq_patterns = ["*.fastq", "*.fastq.gz"]
         all_files = []
         for pattern in fastq_patterns:
             all_files.extend(fastq_folder.glob(pattern))
-            
+
         # Identify Illumina and Nanopore files
         illumina_files = []
         nanopore_files = []
@@ -713,34 +656,34 @@ def assemble_datasets(args):
                 illumina_files.append(fastq_file)
             else:
                 nanopore_files.append(fastq_file)
-                
+
         logger.info(f"Found {len(illumina_files)} Illumina files and {len(nanopore_files)} Nanopore files")
-        
+
         if len(illumina_files) == 0 and len(nanopore_files) == 0:
             logger.warning(f"No FASTQ files found in {fastq_folder}")
             results = []
         else:
             results = []
-            
+
             # Process Illumina datasets (mock for testing)
             read_pairs = _find_paired_reads(illumina_files)
             for r1_file, r2_file in read_pairs:
                 # For testing, don't actually run assembly
                 pass
-                
-            # Process Nanopore datasets (mock for testing)  
+
+            # Process Nanopore datasets (mock for testing)
             for fastq_file in nanopore_files:
                 # For testing, don't actually run assembly
                 pass
-                
+
         # Write output file if specified
         if hasattr(args, 'output_file') and args.output_file:
             import json
             output_path = Path(args.output_file)
             with open(output_path, 'w') as f:
                 json.dump(results, f, indent=2)
-                
+
         return results
-        
+
     except Exception as e:
         raise DataAccessError(f"Error assembling datasets: {e}")

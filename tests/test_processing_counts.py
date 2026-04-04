@@ -54,54 +54,50 @@ class TestGetGenomeColumns:
     def test_get_gcf_columns(self):
         """Test getting GCF genome columns."""
         df = pd.DataFrame({
-            'sample_id': ['S1', 'S2'],
             'GCF_000001.1': [0.8, 0.9],
             'GCF_000002.1': [0.7, 0.6],
-            'metadata_col': ['A', 'B']
+            'max_containment': [0.8, 0.9],
         })
-        
+
         genome_cols = _get_genome_columns(df)
         assert set(genome_cols) == {'GCF_000001.1', 'GCF_000002.1'}
 
     def test_get_gca_columns(self):
         """Test getting GCA genome columns."""
         df = pd.DataFrame({
-            'sample_id': ['S1', 'S2'],
             'GCA_000001.1': [0.8, 0.9],
             'GCA_000002.1': [0.7, 0.6],
-            'metadata_col': ['A', 'B']
+            'max_containment': [0.8, 0.9],
         })
-        
+
         genome_cols = _get_genome_columns(df)
         assert set(genome_cols) == {'GCA_000001.1', 'GCA_000002.1'}
 
     def test_get_mixed_genome_columns(self):
         """Test getting mixed GCF and GCA columns."""
         df = pd.DataFrame({
-            'sample_id': ['S1', 'S2'],
             'GCF_000001.1': [0.8, 0.9],
             'GCA_000002.1': [0.7, 0.6],
-            'other_col': ['A', 'B']
+            'max_containment': [0.8, 0.9],
         })
-        
+
         genome_cols = _get_genome_columns(df)
         assert set(genome_cols) == {'GCF_000001.1', 'GCA_000002.1'}
 
     def test_no_genome_columns(self):
         """Test when no genome columns are found."""
         df = pd.DataFrame({
-            'sample_id': ['S1', 'S2'],
-            'metadata_col': ['A', 'B'],
-            'other_col': [1, 2]
+            'max_containment': [0.5, 0.6],
+            'max_containment_annotation': ['A', 'B'],
         })
-        
+
         with pytest.raises(ProcessingError, match="No genome columns found"):
             _get_genome_columns(df)
 
     def test_empty_dataframe(self):
         """Test with empty DataFrame."""
         df = pd.DataFrame()
-        
+
         with pytest.raises(ProcessingError, match="No genome columns found"):
             _get_genome_columns(df)
 

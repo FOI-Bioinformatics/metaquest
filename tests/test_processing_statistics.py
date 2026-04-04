@@ -291,10 +291,11 @@ class TestCalculateDistanceMatrix:
         """Test with no genome columns."""
         summary_file = tmp_path / "summary.txt"
         summary_data = pd.DataFrame({
-            'other_col': [0.5, 0.1],
+            'max_containment': [0.5, 0.1],
+            'max_containment_annotation': ['A', 'B'],
         }, index=['sample1', 'sample2'])
         summary_data.to_csv(summary_file, sep='\t', index_label='sample')
-        
+
         with pytest.raises(ProcessingError, match="No genome columns found"):
             calculate_distance_matrix(summary_file)
 

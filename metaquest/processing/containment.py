@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Optional, Union
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.core.utils import get_genome_columns
 from metaquest.data.file_io import ensure_directory
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,9 @@ def download_test_genome(output_folder: Union[str, Path]) -> Path:
 
         # Download compressed file
         temp_file = output_path.with_suffix(".gz")
-        urllib.request.urlretrieve(url, temp_file)
+        response = urllib.request.urlopen(url, timeout=30)
+        with open(temp_file, "wb") as dl_f:
+            dl_f.write(response.read())
 
         # Decompress file
         with gzip.open(temp_file, "rt") as f_in:
@@ -215,14 +218,7 @@ def find_co_occurring_genomes(
         summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
 
         # Get genome columns
-        genome_cols = [
-            col
-            for col in summary_df.columns
-            if col not in ("max_containment", "max_containment_annotation") and ("GCA" in col or "GCF" in col)
-        ]
-
-        if not genome_cols:
-            raise ProcessingError("No genome columns found in summary file")
+        genome_cols = get_genome_columns(summary_df)
 
         # Create binary presence/absence matrix
         presence_df = pd.DataFrame(index=summary_df.index)

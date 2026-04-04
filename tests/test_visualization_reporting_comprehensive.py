@@ -25,7 +25,7 @@ from metaquest.visualization.reporting import (
     _generate_html_report,
     _get_genome_columns,
 )
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import ProcessingError, VisualizationError
 
 
 @pytest.fixture
@@ -112,13 +112,13 @@ class TestGetGenomeColumns:
 
     def test_empty_dataframe(self):
         df = pd.DataFrame()
-        result = _get_genome_columns(df)
-        assert result == []
+        with pytest.raises(ProcessingError, match="No genome columns found"):
+            _get_genome_columns(df)
 
     def test_only_metadata_columns(self):
         df = pd.DataFrame({"max_containment": [0.5], "max_containment_annotation": ["Genome1"]})
-        result = _get_genome_columns(df)
-        assert result == []
+        with pytest.raises(ProcessingError, match="No genome columns found"):
+            _get_genome_columns(df)
 
 
 class TestCreateDefaultTemplate:

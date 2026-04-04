@@ -390,38 +390,6 @@ class TestIntelligentDownloadManager:
         assert "SRR123456" in active
         assert active["SRR123456"].progress_pct == 50.0
     
-    def test_update_progress(self):
-        """Test progress update functionality."""
-        # Add active download
-        progress = DownloadProgress(
-            accession="SRR123456",
-            status="downloading",
-            progress_pct=0.0,
-            downloaded_mb=0.0,
-            total_mb=None,
-            speed_mbps=0.0,
-            eta_seconds=None,
-            retry_count=0,
-            error_message=None
-        )
-        self.manager.active_downloads["SRR123456"] = progress
-        
-        # Update progress
-        progress_info = {
-            'percent': 75.0,
-            'downloaded_mb': 150.0,
-            'speed_mbps': 10.0,
-            'eta_seconds': 30
-        }
-        
-        self.manager._update_progress("SRR123456", progress_info)
-        
-        updated = self.manager.active_downloads["SRR123456"]
-        assert updated.progress_pct == 75.0
-        assert updated.downloaded_mb == 150.0
-        assert updated.speed_mbps == 10.0
-        assert updated.eta_seconds == 30
-    
     @patch('metaquest.sra.download_manager.BandwidthManager.measure_network_conditions')
     def test_download_with_resume_basic_flow(self, mock_network):
         """Test basic download flow without actual downloads."""

@@ -9,24 +9,18 @@ This module provides comprehensive reporting capabilities including:
 - Export capabilities for metadata and statistics
 """
 
-import base64
-import json
 import logging
 from datetime import datetime, timedelta
-from io import BytesIO
+from html import escape as html_escape
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Union, Any
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Conditional imports for enhanced features
 try:
     import plotly.graph_objects as go
-    import plotly.express as px
-    from plotly.subplots import make_subplots
     import plotly.offline as pyo
 
     PLOTLY_AVAILABLE = True
@@ -40,12 +34,10 @@ try:
 except ImportError:
     JINJA2_AVAILABLE = False
 
-from metaquest.sra.download_manager import DownloadSession, DownloadProgress, NetworkConditions
+from metaquest.sra.download_manager import DownloadSession
 from metaquest.sra.analytics import (
     QualityProfile,
     ComparativeAnalysis,
-    AnomalyReport,
-    ProcessingRecommendations,
     SRADatasetAnalyzer,
 )
 
@@ -462,12 +454,18 @@ class SRAReportGenerator:
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #3498db; color: white; padding: 20px; border-radius: 5px; }
-        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
-        .summary-card { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #3498db; }
-        .plot-container { margin: 20px 0; border: 1px solid #ddd; border-radius: 5px; }
-        .results-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        .results-table th, .results-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        .header { background-color: #3498db; color: white;
+            padding: 20px; border-radius: 5px; }
+        .summary-grid { display: grid; gap: 20px; margin: 20px 0;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+        .summary-card { background-color: #f8f9fa; padding: 15px;
+            border-radius: 5px; border-left: 4px solid #3498db; }
+        .plot-container { margin: 20px 0; border: 1px solid #ddd;
+            border-radius: 5px; }
+        .results-table { width: 100%; border-collapse: collapse;
+            margin: 20px 0; }
+        .results-table th, .results-table td {
+            border: 1px solid #ddd; padding: 8px; text-align: left; }
         .results-table th { background-color: #f2f2f2; }
         .status-completed { color: #27ae60; font-weight: bold; }
         .status-failed { color: #e74c3c; font-weight: bold; }
@@ -478,7 +476,7 @@ class SRAReportGenerator:
         <h1>SRA Download Summary</h1>
         <p>Session: {{ session.session_id }} | Generated: {{ timestamp }}</p>
     </div>
-    
+
     <div class="summary-grid">
         <div class="summary-card">
             <h3>Total Downloads</h3>
@@ -497,7 +495,7 @@ class SRAReportGenerator:
             <p style="font-size: 2em; margin: 0;">{{ "%.1f"|format(summary_stats.average_speed_mbps) }} MB/min</p>
         </div>
     </div>
-    
+
     {% if plots %}
     <h2>Download Analytics</h2>
     {% for plot_name, plot_html in plots.items() %}
@@ -506,7 +504,7 @@ class SRAReportGenerator:
     </div>
     {% endfor %}
     {% endif %}
-    
+
     <h2>Download Results</h2>
     <table class="results-table">
         <thead>
@@ -536,7 +534,7 @@ class SRAReportGenerator:
 </html>
         """
 
-        template = Environment(loader=BaseLoader()).from_string(template_str)
+        template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
         return template.render(**report_data)
 
     def _generate_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
@@ -552,12 +550,20 @@ class SRAReportGenerator:
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #2ecc71; color: white; padding: 20px; border-radius: 5px; }
-        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
-        .summary-card { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #2ecc71; }
-        .plot-container { margin: 20px 0; border: 1px solid #ddd; border-radius: 5px; }
-        .anomaly-section { background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .recommendations { background-color: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .header { background-color: #2ecc71; color: white;
+            padding: 20px; border-radius: 5px; }
+        .summary-grid { display: grid; gap: 20px; margin: 20px 0;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+        .summary-card { background-color: #f8f9fa; padding: 15px;
+            border-radius: 5px; border-left: 4px solid #2ecc71; }
+        .plot-container { margin: 20px 0; border: 1px solid #ddd;
+            border-radius: 5px; }
+        .anomaly-section { background-color: #fff3cd; padding: 15px;
+            border: 1px solid #ffeaa7; border-radius: 5px;
+            margin: 20px 0; }
+        .recommendations { background-color: #d4edda; padding: 15px;
+            border: 1px solid #c3e6cb; border-radius: 5px;
+            margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -565,33 +571,40 @@ class SRAReportGenerator:
         <h1>{{ title }}</h1>
         <p>Generated: {{ timestamp }} | Total Datasets: {{ total_datasets }}</p>
     </div>
-    
+
     <div class="summary-grid">
         <div class="summary-card">
             <h3>Total Reads</h3>
-            <p style="font-size: 1.5em; margin: 0;">{{ "{:,.0f}".format(summary_stats.total_reads) }}</p>
+            <p style="font-size: 1.5em; margin: 0;">
+                {{ "{:,.0f}".format(summary_stats.total_reads) }}</p>
         </div>
         <div class="summary-card">
             <h3>Average GC Content</h3>
-            <p style="font-size: 1.5em; margin: 0;">{{ "%.1f"|format(summary_stats.average_gc_content * 100) }}%</p>
+            <p style="font-size: 1.5em; margin: 0;">
+                {{ "%.1f"|format(summary_stats.average_gc_content * 100) }}%</p>
         </div>
         <div class="summary-card">
             <h3>High Quality</h3>
-            <p style="font-size: 1.5em; margin: 0;">{{ summary_stats.quality_grade_distribution.get('excellent', 0) + summary_stats.quality_grade_distribution.get('good', 0) }}</p>
+            <p style="font-size: 1.5em; margin: 0;">
+                {{ summary_stats.quality_grade_distribution.get('excellent', 0)
+                + summary_stats.quality_grade_distribution.get('good', 0) }}</p>
         </div>
         <div class="summary-card">
             <h3>Contamination Issues</h3>
-            <p style="font-size: 1.5em; margin: 0;">{{ summary_stats.high_contamination_count }}</p>
+            <p style="font-size: 1.5em; margin: 0;">
+                {{ summary_stats.high_contamination_count }}</p>
         </div>
     </div>
-    
+
     {% if anomaly_report.anomalous_datasets %}
     <div class="anomaly-section">
-        <h3>⚠️ Anomalies Detected</h3>
-        <p><strong>{{ anomaly_report.anomalous_datasets|length }}</strong> datasets flagged for review:</p>
+        <h3>Anomalies Detected</h3>
+        <p><strong>{{ anomaly_report.anomalous_datasets|length }}</strong>
+            datasets flagged for review:</p>
         <ul>
             {% for dataset in anomaly_report.anomalous_datasets[:10] %}
-            <li><strong>{{ dataset }}</strong>: {{ anomaly_report.explanations.get(dataset, 'Multiple issues') }}</li>
+            <li><strong>{{ dataset }}</strong>:
+                {{ anomaly_report.explanations.get(dataset, 'Multiple issues') }}</li>
             {% endfor %}
             {% if anomaly_report.anomalous_datasets|length > 10 %}
             <li>... and {{ anomaly_report.anomalous_datasets|length - 10 }} more</li>
@@ -599,7 +612,7 @@ class SRAReportGenerator:
         </ul>
     </div>
     {% endif %}
-    
+
     {% if plots %}
     <h2>Quality Metrics</h2>
     {% for plot_name, plot_html in plots.items() %}
@@ -608,12 +621,12 @@ class SRAReportGenerator:
     </div>
     {% endfor %}
     {% endif %}
-    
+
 </body>
 </html>
         """
 
-        template = Environment(loader=BaseLoader()).from_string(template_str)
+        template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
         return template.render(**dashboard_data)
 
     def _generate_comparative_html(self, report_data: Dict[str, Any]) -> str:
@@ -629,11 +642,16 @@ class SRAReportGenerator:
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #9b59b6; color: white; padding: 20px; border-radius: 5px; }
-        .group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
-        .group-card { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #9b59b6; }
-        .plot-container { margin: 20px 0; border: 1px solid #ddd; border-radius: 5px; }
-        .significant { background-color: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .header { background-color: #9b59b6; color: white;
+            padding: 20px; border-radius: 5px; }
+        .group-grid { display: grid; gap: 20px; margin: 20px 0;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+        .group-card { background-color: #f8f9fa; padding: 15px;
+            border-radius: 5px; border-left: 4px solid #9b59b6; }
+        .plot-container { margin: 20px 0; border: 1px solid #ddd;
+            border-radius: 5px; }
+        .significant { background-color: #fff3cd; padding: 10px;
+            border-radius: 5px; margin: 10px 0; }
     </style>
 </head>
 <body>
@@ -641,7 +659,7 @@ class SRAReportGenerator:
         <h1>{{ title }}</h1>
         <p>Generated: {{ timestamp }}</p>
     </div>
-    
+
     <h2>Group Summary</h2>
     <div class="group-grid">
         {% for group_name, count in group_counts.items() %}
@@ -651,7 +669,7 @@ class SRAReportGenerator:
         </div>
         {% endfor %}
     </div>
-    
+
     {% if comparison.statistical_tests %}
     <h2>Statistical Tests</h2>
     {% for test_name, test_result in comparison.statistical_tests.items() %}
@@ -663,7 +681,7 @@ class SRAReportGenerator:
     </div>
     {% endfor %}
     {% endif %}
-    
+
     {% if plots %}
     <h2>Comparative Visualizations</h2>
     {% for plot_name, plot_html in plots.items() %}
@@ -672,9 +690,9 @@ class SRAReportGenerator:
     </div>
     {% endfor %}
     {% endif %}
-    
+
     {% if comparison.recommendations %}
-    <div style="background-color: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 5px; margin: 20px 0;">
+    <div class="recommendations">
         <h3>Recommendations</h3>
         <ul>
             {% for rec in comparison.recommendations %}
@@ -683,12 +701,12 @@ class SRAReportGenerator:
         </ul>
     </div>
     {% endif %}
-    
+
 </body>
 </html>
         """
 
-        template = Environment(loader=BaseLoader()).from_string(template_str)
+        template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
         return template.render(**report_data)
 
     def _generate_simple_download_html(self, report_data: Dict[str, Any]) -> str:
@@ -696,15 +714,18 @@ class SRAReportGenerator:
         session = report_data["session"]
         stats = report_data["summary_stats"]
 
+        session_id = html_escape(str(session.session_id))
+        timestamp = html_escape(str(report_data['timestamp']))
+
         html = f"""
 <!DOCTYPE html>
 <html>
 <head><title>SRA Download Summary</title></head>
 <body>
     <h1>SRA Download Summary</h1>
-    <p>Session: {session.session_id}</p>
-    <p>Generated: {report_data['timestamp']}</p>
-    
+    <p>Session: {session_id}</p>
+    <p>Generated: {timestamp}</p>
+
     <h2>Summary</h2>
     <ul>
         <li>Total Downloads: {stats['total_accessions']}</li>
@@ -712,17 +733,19 @@ class SRAReportGenerator:
         <li>Total Size: {stats['total_size_mb']/1024:.1f} GB</li>
         <li>Average Speed: {stats['average_speed_mbps']:.1f} MB/min</li>
     </ul>
-    
+
     <h2>Results</h2>
     <table border="1">
         <tr><th>Accession</th><th>Status</th><th>Size (MB)</th><th>Progress</th></tr>
         """
 
         for accession, result in session.download_results.items():
+            acc_escaped = html_escape(str(accession))
+            status_escaped = html_escape(str(result.status))
             html += f"""
         <tr>
-            <td>{accession}</td>
-            <td>{result.status}</td>
+            <td>{acc_escaped}</td>
+            <td>{status_escaped}</td>
             <td>{result.downloaded_mb:.1f}</td>
             <td>{result.progress_pct:.1f}%</td>
         </tr>
@@ -738,15 +761,17 @@ class SRAReportGenerator:
 
     def _generate_simple_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate simple quality HTML without Jinja2."""
+        title = html_escape(str(dashboard_data['title']))
+        timestamp = html_escape(str(dashboard_data['timestamp']))
         return f"""
 <!DOCTYPE html>
 <html>
-<head><title>{dashboard_data['title']}</title></head>
+<head><title>{title}</title></head>
 <body>
-    <h1>{dashboard_data['title']}</h1>
-    <p>Generated: {dashboard_data['timestamp']}</p>
+    <h1>{title}</h1>
+    <p>Generated: {timestamp}</p>
     <p>Total Datasets: {dashboard_data['total_datasets']}</p>
-    
+
     <h2>Summary Statistics</h2>
     <ul>
         <li>Total Reads: {dashboard_data['summary_stats']['total_reads']:,}</li>
@@ -759,17 +784,23 @@ class SRAReportGenerator:
 
     def _generate_simple_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple comparative HTML without Jinja2."""
+        title = html_escape(str(report_data['title']))
+        timestamp = html_escape(str(report_data['timestamp']))
+        group_items = ''.join([
+            f"<li>{html_escape(str(name))}: {count} datasets</li>"
+            for name, count in report_data['group_counts'].items()
+        ])
         return f"""
 <!DOCTYPE html>
 <html>
-<head><title>{report_data['title']}</title></head>
+<head><title>{title}</title></head>
 <body>
-    <h1>{report_data['title']}</h1>
-    <p>Generated: {report_data['timestamp']}</p>
-    
+    <h1>{title}</h1>
+    <p>Generated: {timestamp}</p>
+
     <h2>Group Sizes</h2>
     <ul>
-        {''.join([f"<li>{name}: {count} datasets</li>" for name, count in report_data['group_counts'].items()])}
+        {group_items}
     </ul>
 </body>
 </html>

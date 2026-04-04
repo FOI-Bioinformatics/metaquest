@@ -20,8 +20,6 @@ from metaquest.data.sra import (
     _retry_failed_downloads,
     _handle_download_failure,
     download_sra,
-    _process_illumina_dataset,
-    _process_nanopore_dataset,
     _find_paired_reads,
     assemble_datasets,
 )
@@ -85,10 +83,9 @@ class TestPrepareTempFolder:
     def test_prepare_temp_folder_create_new(self, tmp_path):
         """Test creating new temp folder."""
         temp_base = tmp_path / "temp"
-        temp_cmd = "fasterq-dump"
-        
-        result = _prepare_temp_folder(temp_base, temp_cmd)
-        
+
+        result = _prepare_temp_folder(temp_base)
+
         assert result.exists()
         assert result.is_dir()
 
@@ -96,10 +93,9 @@ class TestPrepareTempFolder:
         """Test with existing temp folder."""
         temp_base = tmp_path / "temp"
         temp_base.mkdir()
-        temp_cmd = "fasterq-dump"
-        
-        result = _prepare_temp_folder(temp_base, temp_cmd)
-        
+
+        result = _prepare_temp_folder(temp_base)
+
         assert result.exists()
         assert result.is_dir()
 
@@ -110,7 +106,7 @@ class TestPrepareTempFolder:
         with patch('tempfile.mkdtemp') as mock_mkdtemp:
             mock_mkdtemp.return_value = "/tmp/test_temp"
             
-            result = _prepare_temp_folder(None, "fasterq-dump")
+            result = _prepare_temp_folder(None)
             
             mock_mkdtemp.assert_called_once()
             assert str(result) == "/tmp/test_temp"
@@ -212,17 +208,18 @@ class TestHandleDownloadOutput:
         mock_rmtree.assert_called_once_with(temp_path)
 
     def test_handle_download_output_rmdir_error(self, tmp_path):
-        """Test handling rmdir error."""
+        """Test handling rmtree error during cleanup."""
         temp_path = tmp_path / "temp"
         output_path = tmp_path / "output"
         temp_path.mkdir()
-        
+
         (temp_path / "SRR123.fastq").write_text("@seq1\nACGT\n+\nIIII\n")
-        
-        with patch.object(Path, 'rmdir', side_effect=OSError("Directory not empty")):
-            with patch('metaquest.data.sra.logger') as mock_logger:
-                success, message = _handle_download_output(temp_path, output_path)
-        
+
+        with patch('shutil.rmtree', side_effect=OSError("Permission denied")):
+            with patch('shutil.move'):
+                with patch('metaquest.data.sra.logger') as mock_logger:
+                    success, message = _handle_download_output(temp_path, output_path)
+
         assert success is True
         mock_logger.warning.assert_called()
 
@@ -582,75 +579,6 @@ class TestDownloadSra:
         }
         assert result == expected_result
         mock_logger.info.assert_called_with("Dry run: would download 2 accessions")
-
-
-class TestProcessIlluminaDataset:
-    """Test _process_illumina_dataset function."""
-
-    def test_process_illumina_dataset_paired(self, tmp_path):
-        """Test processing paired Illumina dataset."""
-        fastq_file = tmp_path / "SRR123_1.fastq"
-        r2_file = tmp_path / "SRR123_2.fastq"
-        
-        fastq_file.write_text("@seq1\nACGT\n+\nIIII\n")
-        r2_file.write_text("@seq1\nTGCA\n+\nIIII\n")
-        
-        # Mock the SecureSubprocess to avoid security errors with test paths
-        with patch('metaquest.data.sra.SecureSubprocess.run_secure') as mock_run:
-            with patch('metaquest.data.sra.logger') as mock_logger:
-                result = _process_illumina_dataset(fastq_file, r2_file)
-                
-                # Function should run without errors and call megahit
-                mock_run.assert_called_once()
-                args = mock_run.call_args[0][1]  # Second argument (args list)
-                assert "-1" in args
-                assert str(fastq_file) in args
-                assert "-2" in args
-                assert str(r2_file) in args
-                
-                # Function returns None (just performs assembly)
-                assert result is None
-
-    def test_process_illumina_dataset_single(self, tmp_path):
-        """Test processing single-end Illumina dataset."""
-        fastq_file = tmp_path / "SRR123.fastq"
-        fastq_file.write_text("@seq1\nACGT\n+\nIIII\n")
-        
-        # Mock the SecureSubprocess to avoid security errors with test paths
-        with patch('metaquest.data.sra.SecureSubprocess.run_secure') as mock_run:
-            with patch('metaquest.data.sra.logger') as mock_logger:
-                result = _process_illumina_dataset(fastq_file, None)
-                
-                # Function should run without errors and call megahit
-                mock_run.assert_called_once()
-                args = mock_run.call_args[0][1]  # Second argument (args list)
-                assert "-1" in args
-                assert str(fastq_file) in args
-                
-                # Function returns None (just performs assembly)
-                assert result is None
-
-
-class TestProcessNanoporeDataset:
-    """Test _process_nanopore_dataset function."""
-
-    def test_process_nanopore_dataset(self, tmp_path):
-        """Test processing Nanopore dataset."""
-        fastq_file = tmp_path / "SRR123.fastq"
-        fastq_file.write_text("@seq1\nACGTACGTACGT\n+\n~~~~~~~~~~~~\n")
-        
-        # Mock the SecureSubprocess to avoid security errors with test paths
-        with patch('metaquest.data.sra.SecureSubprocess.run_secure') as mock_run:
-            with patch('metaquest.data.sra.logger') as mock_logger:
-                result = _process_nanopore_dataset(fastq_file)
-                
-                # Function should run without errors and call flye
-                mock_run.assert_called_once()
-                args = mock_run.call_args[0][1]  # Second argument (args list)
-                assert str(fastq_file) in args
-                
-                # Function returns None (just performs assembly)
-                assert result is None
 
 
 class TestFindPairedReads:

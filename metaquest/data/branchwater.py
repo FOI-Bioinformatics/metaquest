@@ -293,6 +293,9 @@ def _generate_containment_summary(containment_data, output_file, summary_file, s
     Raises:
         DataAccessError: If generation fails
     """
+    if step_size <= 0:
+        raise DataAccessError("step_size must be positive")
+
     try:
         # Create DataFrame from containment data
         df = pd.DataFrame.from_dict(containment_data, orient="index")

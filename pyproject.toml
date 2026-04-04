@@ -51,6 +51,7 @@ sourmash = [
 dev = [
     "pytest>=6.0.0",
     "pytest-cov>=2.12.0",
+    "pytest-benchmark>=3.0.0",
     "flake8>=3.9.0",
     "black>=21.5b0",
     "mypy>=0.812",

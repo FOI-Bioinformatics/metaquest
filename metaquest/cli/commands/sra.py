@@ -95,7 +95,9 @@ class DownloadSraCommand(BaseCommand):
                 self.logger.info(
                     f"Dry run: would download {download_stats['to_download']} of {download_stats['total']} datasets"
                 )
-                self.logger.info(f"  {download_stats['already_downloaded']} datasets would be skipped (already downloaded)")
+                self.logger.info(
+                    f"  {download_stats['already_downloaded']} datasets would be skipped (already downloaded)"
+                )
                 if "blacklisted" in download_stats and download_stats["blacklisted"] > 0:
                     self.logger.info(f"  {download_stats['blacklisted']} datasets would be skipped (blacklisted)")
                 if "to_download" in download_stats and download_stats["to_download"] > 0:
@@ -113,7 +115,9 @@ class DownloadSraCommand(BaseCommand):
 
             # Return error if there were failed downloads
             if not args.dry_run and download_stats["failed"] > 0:
-                self.logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable automatic retry.")
+                self.logger.warning(
+                    "Some downloads failed. Use --force to retry or --max-retries to enable automatic retry."
+                )
                 if "failed_accessions" in download_stats and download_stats["failed_accessions"]:
                     # Write failed accessions to file for easier retry
                     failed_file = Path(args.fastq_folder) / "failed_accessions.txt"

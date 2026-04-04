@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional, Union
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.core.utils import get_genome_columns as _get_genome_columns
 from metaquest.data.file_io import write_csv
 
 logger = logging.getLogger(__name__)
@@ -32,27 +33,6 @@ def _validate_metadata_column(metadata_df, metadata_column):
         raise ProcessingError(
             f"Column '{metadata_column}' not found in metadata file. " f"Available columns: {available_columns}"
         )
-
-
-def _get_genome_columns(summary_df):
-    """
-    Get genome columns from summary DataFrame.
-
-    Args:
-        summary_df: Summary DataFrame
-
-    Returns:
-        List of genome column names
-
-    Raises:
-        ProcessingError: If no genome columns found
-    """
-    genome_columns = [col for col in summary_df.columns if "GCF" in col or "GCA" in col]
-
-    if not genome_columns:
-        raise ProcessingError("No genome columns found in summary file")
-
-    return genome_columns
 
 
 def _process_genome_accessions(genome_column, summary_df, threshold, metadata_df, metadata_column, df_list):

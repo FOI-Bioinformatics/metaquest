@@ -97,7 +97,10 @@ def _download_single_metadata(accession, metadata_path, entrez_email):
             # Fetch metadata from NCBI
             Entrez.email = entrez_email
             handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
-            metadata = handle.read().decode()
+            try:
+                metadata = handle.read().decode()
+            finally:
+                handle.close()
 
             # Save metadata to file
             with open(metadata_file, "w") as f:

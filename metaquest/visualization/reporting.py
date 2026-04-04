@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from metaquest.core.exceptions import VisualizationError
+from metaquest.core.utils import get_genome_columns as _get_genome_columns
 from metaquest.visualization.plots import (
     plot_containment,
     plot_metadata_counts,
@@ -21,22 +22,6 @@ from metaquest.visualization.plots import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Known metadata columns that are not genome identifiers
-_KNOWN_METADATA_COLUMNS = {"max_containment", "max_containment_annotation"}
-
-
-def _get_genome_columns(df):
-    """
-    Return genome columns by excluding known metadata columns.
-
-    Args:
-        df: DataFrame with containment data
-
-    Returns:
-        List of column names that represent genomes
-    """
-    return [col for col in df.columns if col not in _KNOWN_METADATA_COLUMNS]
 
 
 # Check if jinja2 is available for HTML reports

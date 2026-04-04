@@ -165,5 +165,16 @@ cython_debug/
 *.swp
 *.swo
 
+# Session/generated documentation
+FINAL_*.md
+TEST_*.md
+IMPLEMENTATION_PLAN.md
+TESTING_QUICK_START.md
+.remember/
+
+# Local data directories
+examples/
+genomes/
+
 # OS specific files
 .DS_Store

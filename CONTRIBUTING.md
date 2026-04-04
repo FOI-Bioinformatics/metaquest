@@ -38,7 +38,7 @@ Thank you for your interest in contributing to MetaQuest! This document provides
 
 3. **Run tests**:
    ```bash
-   make test        # Run comprehensive test suite (635 tests)
+   make test        # Run comprehensive test suite (995 tests)
    make pipeline    # Run full integration test
    ```
 

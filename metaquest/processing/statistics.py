@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Union
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.core.utils import get_genome_columns
 
 logger = logging.getLogger(__name__)
 
@@ -226,10 +227,7 @@ def calculate_distance_matrix(
         summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
 
         # Get genome columns
-        genome_columns = [col for col in summary_df.columns if "GCF" in col or "GCA" in col]
-
-        if not genome_columns:
-            raise ProcessingError("No genome columns found in summary file")
+        genome_columns = get_genome_columns(summary_df)
 
         # Create binary presence/absence matrix
         presence_df = _create_binary_presence_matrix(summary_df, genome_columns, threshold)

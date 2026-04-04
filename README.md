@@ -10,7 +10,7 @@
 - **Interactive Visualizations**: Create dynamic plots (PCA, heatmaps, diversity comparisons)
 - **Taxonomic Validation**: Validate species names against NCBI taxonomy database
 - **Plugin Architecture**: Extensible format handlers and visualization plugins
-- **Robust Implementation**: Type hints, comprehensive testing (834 tests, 88%+ coverage), numerical stability
+- **Robust Implementation**: Type hints, comprehensive testing (995 tests, 88%+ coverage), numerical stability
 
 ## Installation
 
@@ -31,7 +31,7 @@ python setup.py install
 ### Development Commands
 ```bash
 make help           # Show all available commands
-make test          # Run tests with coverage (834 tests passing, 88%+ coverage)
+make test          # Run tests with coverage (995 tests passing, 88%+ coverage)
 make lint          # Run code quality checks
 make check         # Full quality validation
 make clean         # Clean build artifacts
@@ -365,7 +365,7 @@ make help
 ```
 
 ### Testing Structure
-- **Comprehensive Test Suite**: 834 tests covering CLI, data processing, visualization, and advanced SRA features
+- **Comprehensive Test Suite**: 995 tests covering CLI, data processing, visualization, and advanced SRA features
   - Unit tests: 170+ tests per critical module with extended test files
   - Integration tests: 12 end-to-end workflow tests (`tests/test_integration_simple.py`)
   - Performance tests: 25 benchmarked tests (`tests/test_performance_simple.py`)

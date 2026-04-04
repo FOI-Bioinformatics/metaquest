@@ -5,6 +5,7 @@ Tests for containment analysis including test genome download
 and containment data analysis functions.
 """
 
+import io
 import tempfile
 import gzip
 from pathlib import Path
@@ -37,53 +38,46 @@ class TestDownloadTestGenome:
         assert output_path.exists()
         assert output_path.read_text() == "existing genome content"
 
-    @patch("metaquest.processing.containment.urllib.request.urlretrieve")
-    def test_download_test_genome_success(self, mock_urlretrieve, tmp_path):
+    @patch("metaquest.processing.containment.urllib.request.urlopen")
+    def test_download_test_genome_success(self, mock_urlopen, tmp_path):
         """Test successful genome download."""
         # Create temporary compressed file content
         genome_content = ">test_genome\nACGTACGTACGT\n"
-        temp_gz_file = tmp_path / "temp.gz"
-        
-        with gzip.open(temp_gz_file, 'wt') as f:
+        compressed = io.BytesIO()
+        with gzip.open(compressed, 'wt') as f:
             f.write(genome_content)
 
-        # Mock urlretrieve to "download" our test file
-        def mock_download(url, filename):
-            temp_gz_path = Path(filename)
-            temp_gz_path.write_bytes(temp_gz_file.read_bytes())
-
-        mock_urlretrieve.side_effect = mock_download
+        # Mock urlopen to return our compressed data
+        mock_response = Mock()
+        mock_response.read.return_value = compressed.getvalue()
+        mock_urlopen.return_value = mock_response
 
         result = download_test_genome(tmp_path)
-        
+
         expected_path = tmp_path / "GCF_000008985.1.fasta"
         assert result == expected_path
         assert expected_path.exists()
         assert expected_path.read_text() == genome_content
-        
+
         # Verify temporary gz file was cleaned up
         temp_gz_path = expected_path.with_suffix(".gz")
         assert not temp_gz_path.exists()
 
-    @patch("metaquest.processing.containment.urllib.request.urlretrieve")
-    def test_download_test_genome_download_failure(self, mock_urlretrieve, tmp_path):
+    @patch("metaquest.processing.containment.urllib.request.urlopen")
+    def test_download_test_genome_download_failure(self, mock_urlopen, tmp_path):
         """Test failure during download."""
-        mock_urlretrieve.side_effect = Exception("Download failed")
+        mock_urlopen.side_effect = Exception("Download failed")
 
         with pytest.raises(ProcessingError, match="Error downloading test genome"):
             download_test_genome(tmp_path)
 
-    @patch("metaquest.processing.containment.urllib.request.urlretrieve")
-    def test_download_test_genome_decompression_failure(self, mock_urlretrieve, tmp_path):
+    @patch("metaquest.processing.containment.urllib.request.urlopen")
+    def test_download_test_genome_decompression_failure(self, mock_urlopen, tmp_path):
         """Test failure during decompression."""
-        # Create invalid gz file
-        invalid_gz = tmp_path / "invalid.gz"
-        invalid_gz.write_bytes(b"not a valid gzip file")
-
-        def mock_download(url, filename):
-            Path(filename).write_bytes(invalid_gz.read_bytes())
-
-        mock_urlretrieve.side_effect = mock_download
+        # Mock urlopen to return invalid gzip data
+        mock_response = Mock()
+        mock_response.read.return_value = b"not a valid gzip file"
+        mock_urlopen.return_value = mock_response
 
         with pytest.raises(ProcessingError, match="Error downloading test genome"):
             download_test_genome(tmp_path)
@@ -497,16 +491,15 @@ class TestFindCoOccurringGenomes:
 
     def test_find_co_occurring_genomes_no_genome_columns(self, tmp_path):
         """Test error when no valid genome columns found."""
-        # Create data without GCA/GCF columns
+        # Create data with only known metadata columns
         invalid_data = pd.DataFrame({
-            'column1': [0.8, 0.2],
-            'column2': [0.6, 0.7],
-            'max_containment': [0.8, 0.7]
+            'max_containment': [0.8, 0.7],
+            'max_containment_annotation': ['A', 'B']
         }, index=['SRR001', 'SRR002'])
-        
+
         summary_file = tmp_path / "summary.tsv"
         invalid_data.to_csv(summary_file, sep='\t')
-        
+
         with pytest.raises(ProcessingError, match="No genome columns found in summary file"):
             find_co_occurring_genomes(summary_file)
 

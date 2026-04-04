@@ -31,28 +31,24 @@ mock_sra_metadata.generate_statistics_report = Mock()
 sys.modules['metaquest.data.sra_enhanced'] = mock_sra_enhanced
 sys.modules['metaquest.data.sra_metadata'] = mock_sra_metadata
 
-from metaquest.cli.commands.sra_enhanced import (
+from metaquest.cli.commands.sra_enhanced import (  # noqa: E402
     SRAInfoCommand,
     SRADownloadEnhancedCommand,
     SRAStatsCommand,
     SRAValidateCommand,
 )
 
-@pytest.fixture(scope='session', autouse=True)
-def cleanup_module_mocks():
-    """Clean up module mocks after all tests in session."""
-    yield
-    
-    # Cleanup: restore original modules
-    if _original_sra_enhanced is not None:
-        sys.modules['metaquest.data.sra_enhanced'] = _original_sra_enhanced
-    else:
-        sys.modules.pop('metaquest.data.sra_enhanced', None)
-        
-    if _original_sra_metadata is not None:
-        sys.modules['metaquest.data.sra_metadata'] = _original_sra_metadata
-    else:
-        sys.modules.pop('metaquest.data.sra_metadata', None)
+# Restore original modules immediately after importing the commands under test.
+# This prevents mock pollution of sys.modules that would affect other test files.
+if _original_sra_enhanced is not None:
+    sys.modules['metaquest.data.sra_enhanced'] = _original_sra_enhanced
+else:
+    sys.modules.pop('metaquest.data.sra_enhanced', None)
+
+if _original_sra_metadata is not None:
+    sys.modules['metaquest.data.sra_metadata'] = _original_sra_metadata
+else:
+    sys.modules.pop('metaquest.data.sra_metadata', None)
 
 
 class TestSRAInfoCommand:

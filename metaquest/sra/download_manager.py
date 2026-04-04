@@ -9,22 +9,16 @@ This module provides advanced download management capabilities including:
 - Advanced error recovery and retry strategies
 """
 
-import hashlib
 import json
 import logging
-import os
-import pickle
-import psutil
-import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union, Any
+from typing import Dict, List, Optional, Union, Any
 
-from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
 
@@ -101,8 +95,6 @@ class BandwidthManager:
 
     def measure_network_conditions(self) -> NetworkConditions:
         """Measure current network performance."""
-        start_time = time.time()
-
         # Simple bandwidth test using subprocess
         try:
             # Test with a small download to measure bandwidth
@@ -260,8 +252,16 @@ class CheckpointManager:
         """Save download checkpoint."""
         checkpoint_file = self.checkpoint_dir / f"{checkpoint.accession}.checkpoint"
         try:
-            with open(checkpoint_file, "wb") as f:
-                pickle.dump(checkpoint, f)
+            data = asdict(checkpoint)
+            data["download_start"] = checkpoint.download_start.isoformat()
+            data["last_progress"] = checkpoint.last_progress.isoformat()
+            data["estimated_completion"] = (
+                checkpoint.estimated_completion.isoformat()
+                if checkpoint.estimated_completion
+                else None
+            )
+            with open(checkpoint_file, "w") as f:
+                json.dump(data, f)
         except Exception as e:
             logger.error(f"Failed to save checkpoint for {checkpoint.accession}: {e}")
 
@@ -272,8 +272,17 @@ class CheckpointManager:
             return None
 
         try:
-            with open(checkpoint_file, "rb") as f:
-                return pickle.load(f)
+            with open(checkpoint_file, "r") as f:
+                data = json.load(f)
+            data["download_start"] = datetime.fromisoformat(data["download_start"])
+            data["last_progress"] = datetime.fromisoformat(data["last_progress"])
+            data["estimated_completion"] = (
+                datetime.fromisoformat(data["estimated_completion"])
+                if data["estimated_completion"]
+                else None
+            )
+            data["chunk_checksums"] = {int(k): v for k, v in data["chunk_checksums"].items()}
+            return DownloadCheckpoint(**data)
         except Exception as e:
             logger.error(f"Failed to load checkpoint for {accession}: {e}")
             return None
@@ -502,7 +511,6 @@ class IntelligentDownloadManager:
         try:
             # Determine output paths
             output_file = self.output_dir / f"{accession}.fastq.gz"
-            temp_file = self.temp_dir / f"{accession}.partial"
 
             # Check if already downloaded
             if output_file.exists() and not checkpoint:
@@ -521,7 +529,6 @@ class IntelligentDownloadManager:
                 logger.info(f"Resuming {accession} from byte {start_byte}")
 
             # Download with fasterq-dump and resume capability
-            download_start = time.time()
             cmd = [
                 "fasterq-dump",
                 "--progress",
@@ -533,21 +540,17 @@ class IntelligentDownloadManager:
             ]
 
             # Execute download
-            proc = SecureSubprocess.run_secure(
+            SecureSubprocess.run_secure(
                 cmd[0], cmd[1:], timeout=3600  # 1 hour timeout
             )
 
-            if proc.returncode == 0:
-                progress.status = "completed"
-                progress.progress_pct = 100.0
+            # run_secure uses check=True, so reaching here means success
+            progress.status = "completed"
+            progress.progress_pct = 100.0
 
-                # Get final file size
-                if output_file.exists():
-                    progress.downloaded_mb = output_file.stat().st_size / (1024 * 1024)
-
-            else:
-                progress.status = "failed"
-                progress.error_message = f"fasterq-dump failed: {proc.stderr}"
+            # Get final file size
+            if output_file.exists():
+                progress.downloaded_mb = output_file.stat().st_size / (1024 * 1024)
 
         except Exception as e:
             logger.error(f"Error downloading {accession}: {e}")
@@ -560,23 +563,6 @@ class IntelligentDownloadManager:
                 del self.active_downloads[accession]
 
         return progress
-
-    def _update_progress(self, accession: str, progress_info: Dict[str, Any]):
-        """Update progress for active download."""
-        if accession not in self.active_downloads:
-            return
-
-        progress = self.active_downloads[accession]
-
-        # Update progress information
-        if "percent" in progress_info:
-            progress.progress_pct = progress_info["percent"]
-        if "downloaded_mb" in progress_info:
-            progress.downloaded_mb = progress_info["downloaded_mb"]
-        if "speed_mbps" in progress_info:
-            progress.speed_mbps = progress_info["speed_mbps"]
-        if "eta_seconds" in progress_info:
-            progress.eta_seconds = progress_info["eta_seconds"]
 
     def pause_downloads(self):
         """Pause all active downloads."""

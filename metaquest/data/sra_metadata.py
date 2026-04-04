@@ -316,7 +316,7 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
         return "nanopore"
 
     # PacBio detection
-    if platform == "pacbio_smrt" or "pacbio" in instrument or "sequel" in instrument or "rs" in instrument:
+    if platform == "pacbio_smrt" or "pacbio" in instrument or "sequel" in instrument or "rs ii" in instrument:
         return "pacbio"
 
     # Check strategy for additional hints
@@ -367,10 +367,10 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
 
                     # Calculate average quality score
                     if hasattr(record, "letter_annotations") and "phred_quality" in record.letter_annotations:
-                        avg_qual = sum(record.letter_annotations["phred_quality"]) / len(
-                            record.letter_annotations["phred_quality"]
-                        )
-                        quality_scores.append(avg_qual)
+                        quals = record.letter_annotations["phred_quality"]
+                        if quals:
+                            avg_qual = sum(quals) / len(quals)
+                            quality_scores.append(avg_qual)
 
         except Exception as e:
             logger.error(f"Error processing {fastq_file}: {e}")
