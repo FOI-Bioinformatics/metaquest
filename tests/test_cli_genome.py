@@ -208,9 +208,11 @@ class TestGenomeDownloadCommand:
         result = cmd.execute(args)
         assert result == 1
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
-    def test_execute_with_accessions(self, mock_download):
-        mock_download.return_value = [Path("genomes/GCF_000006945.2.fna.gz")]
+    def test_execute_with_accessions(self, mock_download, mock_extract):
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {"GCF_000006945.2": Path("genomes/GCF_000006945.2.fna.gz")}
         cmd = GenomeDownloadCommand()
         with tempfile.TemporaryDirectory() as tmpdir:
             args = argparse.Namespace(
@@ -225,10 +227,13 @@ class TestGenomeDownloadCommand:
             result = cmd.execute(args)
             assert result == 0
             mock_download.assert_called_once()
+            mock_extract.assert_called_once()
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
-    def test_execute_with_accession_file(self, mock_download):
-        mock_download.return_value = [Path("genomes/GCF_000006945.2.fna.gz")]
+    def test_execute_with_accession_file(self, mock_download, mock_extract):
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {"GCF_000006945.2": Path("genomes/GCF_000006945.2.fna.gz")}
         cmd = GenomeDownloadCommand()
         with tempfile.TemporaryDirectory() as tmpdir:
             acc_file = Path(tmpdir) / "accessions.txt"
@@ -245,11 +250,13 @@ class TestGenomeDownloadCommand:
             result = cmd.execute(args)
             assert result == 0
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
     @patch("metaquest.cli.commands.genome.get_accessions_for_species")
-    def test_execute_with_species(self, mock_gtdb, mock_download):
+    def test_execute_with_species(self, mock_gtdb, mock_download, mock_extract):
         mock_gtdb.return_value = ["GCF_000006945.2"]
-        mock_download.return_value = [Path("genomes/GCF_000006945.2.fna.gz")]
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {"GCF_000006945.2": Path("genomes/GCF_000006945.2.fna.gz")}
         cmd = GenomeDownloadCommand()
         with tempfile.TemporaryDirectory() as tmpdir:
             args = argparse.Namespace(
@@ -316,11 +323,13 @@ class TestGenomePrepareCommand:
         assert args.manifest_file == "genome_manifest.csv"
         assert args.skip_download is False
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
     @patch("metaquest.cli.commands.genome.get_accessions_for_species")
-    def test_execute_full_pipeline(self, mock_gtdb, mock_download):
+    def test_execute_full_pipeline(self, mock_gtdb, mock_download, mock_extract):
         mock_gtdb.return_value = ["GCF_000006945.2"]
-        mock_download.return_value = [Path("GCF_000006945.2.fna.gz")]
+        mock_download.return_value = Path("download.zip")
+        mock_extract.return_value = {"GCF_000006945.2": Path("GCF_000006945.2.fna.gz")}
         cmd = GenomePrepareCommand()
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a fake genome file so manifest picks it up
@@ -416,11 +425,13 @@ class TestGenomePrepareCommand:
             result = cmd.execute(args)
             assert result == 0
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
     @patch("metaquest.cli.commands.genome.get_accessions_for_genus")
-    def test_execute_with_genus(self, mock_gtdb, mock_download):
+    def test_execute_with_genus(self, mock_gtdb, mock_download, mock_extract):
         mock_gtdb.return_value = ["GCF_000006945.2", "GCF_000007545.1"]
-        mock_download.return_value = []
+        mock_download.return_value = Path("download.zip")
+        mock_extract.return_value = {}
         cmd = GenomePrepareCommand()
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest = Path(tmpdir) / "manifest.csv"
@@ -437,9 +448,11 @@ class TestGenomePrepareCommand:
             assert result == 0
             mock_gtdb.assert_called_once_with("Salmonella", representative_only=True)
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
-    def test_execute_with_accession_file(self, mock_download):
-        mock_download.return_value = []
+    def test_execute_with_accession_file(self, mock_download, mock_extract):
+        mock_download.return_value = Path("download.zip")
+        mock_extract.return_value = {}
         cmd = GenomePrepareCommand()
         with tempfile.TemporaryDirectory() as tmpdir:
             acc_file = Path(tmpdir) / "accessions.txt"

@@ -293,8 +293,10 @@ def _generate_containment_summary(containment_data, output_file, summary_file, s
     Raises:
         DataAccessError: If generation fails
     """
-    if step_size <= 0:
-        raise DataAccessError("step_size must be positive")
+    if step_size <= 0 or step_size > 1.0:
+        raise DataAccessError("step_size must be between 0 and 1.0")
+    if step_size < 0.001:
+        raise DataAccessError("step_size too small (minimum 0.001)")
 
     try:
         # Create DataFrame from containment data

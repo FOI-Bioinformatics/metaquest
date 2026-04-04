@@ -7,7 +7,7 @@ from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.genome_download import download_genomes
+from metaquest.data.genome_download import download_genomes, extract_and_organize
 from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
@@ -194,13 +194,16 @@ class GenomeDownloadCommand(BaseCommand):
                 "Downloading %d genome(s) to %s", len(accessions), output_dir
             )
 
-            downloaded = download_genomes(
+            zip_path = download_genomes(
                 accessions,
                 output_dir,
                 assembly_level=args.assembly_level,
             )
 
-            self.logger.info("Downloaded %d genome(s)", len(downloaded))
+            genome_paths = extract_and_organize(zip_path, output_dir)
+            self.logger.info(
+                "Downloaded and extracted %d genome(s)", len(genome_paths)
+            )
             return 0
         except MetaQuestError as e:
             self.logger.error("Error downloading genomes: %s", e)
@@ -330,7 +333,8 @@ class GenomePrepareCommand(BaseCommand):
                     "Downloading %d genome(s) to %s", len(accessions), output_dir
                 )
 
-                download_genomes(accessions, output_dir)
+                zip_path = download_genomes(accessions, output_dir)
+                extract_and_organize(zip_path, output_dir)
 
             self._create_manifest(output_dir, args.manifest_file)
             return 0
