@@ -72,8 +72,12 @@ def create_interactive_pca(
         pca = PCA(n_components=min(n_components, X.shape[1], X.shape[0]))
         X_pca = pca.fit_transform(X)
 
-        # Create DataFrame for plotting
-        plot_data = pd.DataFrame({"PC1": X_pca[:, 0], "PC2": X_pca[:, 1], "Sample": sample_names})
+        # Create DataFrame for plotting - handle case where we have fewer components than expected
+        plot_data = pd.DataFrame({"Sample": sample_names})
+        plot_data["PC1"] = X_pca[:, 0]
+
+        if X_pca.shape[1] >= 2:
+            plot_data["PC2"] = X_pca[:, 1]
 
         if n_components >= 3 and X_pca.shape[1] >= 3:
             plot_data["PC3"] = X_pca[:, 2]
@@ -122,7 +126,7 @@ def create_interactive_pca(
                     "PC3": f"PC3 ({pca.explained_variance_ratio_[2]:.1%} variance)",
                 },
             )
-        else:
+        elif X_pca.shape[1] >= 2:
             fig = px.scatter(
                 plot_data,
                 x="PC1",
@@ -134,6 +138,20 @@ def create_interactive_pca(
                 labels={
                     "PC1": f"PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)",
                     "PC2": f"PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)",
+                },
+            )
+        else:
+            # Only 1 component - create a simple 1D plot
+            fig = px.scatter(
+                plot_data,
+                x="PC1",
+                y=[0] * len(plot_data),  # Flat y-axis for 1D data
+                color=color_by,
+                size=size_by,
+                hover_name="Sample",
+                title=title,
+                labels={
+                    "PC1": f"PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)",
                 },
             )
 
@@ -179,7 +197,7 @@ def create_interactive_tsne(
         metadata: Sample metadata for coloring points
         color_by: Metadata column for point colors
         perplexity: t-SNE perplexity parameter
-        n_iter: Number of iterations
+        n_iter: Number of iterations (max_iter parameter in sklearn)
         title: Plot title
         output_file: HTML file to save plot
         show_plot: Whether to display plot
@@ -196,8 +214,8 @@ def create_interactive_tsne(
             X = data
             sample_names = [f"Sample_{i}" for i in range(X.shape[0])]
 
-        # Perform t-SNE
-        tsne = TSNE(n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=42)
+        # Perform t-SNE (use max_iter parameter for sklearn compatibility)
+        tsne = TSNE(n_components=2, perplexity=perplexity, max_iter=n_iter, random_state=42)
         X_tsne = tsne.fit_transform(X)
 
         # Create DataFrame for plotting

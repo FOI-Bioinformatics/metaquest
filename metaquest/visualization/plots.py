@@ -25,9 +25,15 @@ visualizer_registry.register(HeatmapPlugin)
 visualizer_registry.register(MapVisualizerPlugin)
 
 
-def _load_and_validate_data(file_path: Union[str, Path], column: str, threshold: Optional[float]) -> pd.DataFrame:
+def _load_and_validate_data(
+    file_path: Union[str, Path, pd.DataFrame], column: str, threshold: Optional[float]
+) -> pd.DataFrame:
     """Load and validate containment data."""
-    df = pd.read_csv(file_path, sep="\t", index_col=0)
+    # Load data if file path, otherwise use the DataFrame directly
+    if isinstance(file_path, pd.DataFrame):
+        df = file_path.copy()
+    else:
+        df = pd.read_csv(file_path, sep="\t", index_col=0)
 
     # Check if column exists
     if column not in df.columns:
@@ -51,7 +57,7 @@ def _create_rank_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) 
         ax.set_xlabel("Rank")
         ax.set_ylabel(f"{column} Value")
         return
-    
+
     df_sorted = df.sort_values(by=column, ascending=False)
     df_sorted["rank"] = np.arange(1, len(df_sorted) + 1)
     ax.scatter(df_sorted["rank"], df_sorted[column], color=colors)
@@ -67,8 +73,8 @@ def _create_histogram_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: 
         ax.set_xlabel(column)
         ax.set_ylabel("Frequency")
         return
-    
-    # Adjust bin count for small datasets  
+
+    # Adjust bin count for small datasets
     data_size = len(df)
     if data_size <= 2:
         bin_count = 5  # Minimum bins for very small datasets
@@ -76,7 +82,7 @@ def _create_histogram_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: 
         bin_count = min(20, max(5, data_size // 2 + 1))
     else:
         bin_count = 20  # Default for normal datasets
-    
+
     ax.hist(df[column], bins=bin_count, color=colors, alpha=0.7)
     ax.set_xlabel(column)
     ax.set_ylabel("Frequency")
@@ -90,7 +96,7 @@ def _create_box_plot(ax: plt.Axes, df: pd.DataFrame, column: str) -> None:
         ax.set_ylabel(column)
         ax.set_xticklabels([column])
         return
-    
+
     ax.boxplot(df[column])
     ax.set_ylabel(column)
     ax.set_xticklabels([column])
@@ -104,7 +110,7 @@ def _create_violin_plot(ax: plt.Axes, df: pd.DataFrame, column: str) -> None:
         ax.set_ylabel(column)
         ax.set_xticklabels([column])
         return
-    
+
     ax.violinplot(df[column])
     ax.set_ylabel(column)
     ax.set_xticklabels([column])
@@ -134,7 +140,7 @@ def _save_plot_if_needed(file_path: Union[str, Path], plot_type: str, column: st
 
 
 def plot_containment(
-    file_path: Union[str, Path],
+    file_path: Union[str, Path, pd.DataFrame],
     column: str = "max_containment",
     title: Optional[str] = None,
     colors: Optional[Union[str, List[str]]] = None,
@@ -147,7 +153,7 @@ def plot_containment(
     Plot containment data with various plot types.
 
     Args:
-        file_path: Path to the containment file
+        file_path: Path to the containment file or DataFrame
         column: Column to plot
         title: Title for the plot
         colors: Colors to use in the plot
@@ -203,7 +209,7 @@ def plot_containment(
 
 
 def plot_metadata_counts(
-    file_path: Union[str, Path],
+    file_path: Union[str, Path, pd.DataFrame],
     title: Optional[str] = None,
     plot_type: str = "bar",
     colors: Optional[Union[str, List[str]]] = None,
@@ -215,7 +221,7 @@ def plot_metadata_counts(
     Plot metadata counts with various plot types.
 
     Args:
-        file_path: Path to the metadata counts file
+        file_path: Path to the metadata counts file or DataFrame
         title: Title for the plot
         plot_type: Type of plot to generate ('bar', 'pie', 'radar')
         colors: Colors to use in the plot
@@ -230,8 +236,11 @@ def plot_metadata_counts(
         VisualizationError: If the visualization fails
     """
     try:
-        # Load data
-        df = pd.read_csv(file_path, sep="\t", header=None)
+        # Load data if file path, otherwise use the DataFrame directly
+        if isinstance(file_path, pd.DataFrame):
+            df = file_path.copy()
+        else:
+            df = pd.read_csv(file_path, sep="\t", header=None)
 
         # If file has two columns, assume it's [category, count]
         if df.shape[1] >= 2:

@@ -131,7 +131,7 @@ def _create_title_page(title, summary_data, metadata_data):
     ax.text(
         0.5,
         0.45,
-        f"Containment Summary: {Path(summary_data).name}",
+        f"Containment Analysis: {len(summary_data)} samples",
         fontsize=10,
         ha="center",
     )
