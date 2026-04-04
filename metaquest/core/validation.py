@@ -13,20 +13,19 @@ from metaquest.core.exceptions import ValidationError, FormatError
 
 # Required columns for different file formats
 BRANCHWATER_REQUIRED_COLS = ["acc", "containment"]
-MASTIFF_REQUIRED_COLS = ["SRA accession", "containment"]
 
 logger = logging.getLogger(__name__)
 
 
 def detect_file_format(file_path: Union[str, Path]) -> str:
     """
-    Automatically detect the format of a CSV file (branchwater or mastiff).
+    Automatically detect the format of a CSV file.
 
     Args:
         file_path: Path to the CSV file to analyze
 
     Returns:
-        Detected format: 'branchwater' or 'mastiff'
+        Detected format: 'branchwater'
 
     Raises:
         FormatError: If the file format cannot be determined
@@ -38,10 +37,6 @@ def detect_file_format(file_path: Union[str, Path]) -> str:
 
             # Split the header into column names
             columns = [col.strip() for col in header.split(",")]
-
-            # Check for mastiff format - must have "SRA accession" as the first column
-            if "SRA accession" in columns and "containment" in columns:
-                return "mastiff"
 
             # Check for branchwater format - must have "acc" column
             if "acc" in columns and "containment" in columns:
@@ -102,7 +97,7 @@ def validate_csv_file(file_path: Union[str, Path], file_format: Optional[str] = 
 
     Args:
         file_path: Path to the CSV file to validate
-        file_format: The expected format ('branchwater' or 'mastiff')
+        file_format: The expected format ('branchwater')
                      If None, format will be automatically detected
 
     Returns:
@@ -118,8 +113,6 @@ def validate_csv_file(file_path: Union[str, Path], file_format: Optional[str] = 
         # Determine required columns based on format
         if detected_format == "branchwater":
             required_cols = BRANCHWATER_REQUIRED_COLS
-        elif detected_format == "mastiff":
-            required_cols = MASTIFF_REQUIRED_COLS
         else:
             raise ValidationError(f"Unsupported file format: {detected_format}")
 

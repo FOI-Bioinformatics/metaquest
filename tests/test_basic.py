@@ -32,21 +32,6 @@ def test_detect_file_format_branchwater():
     os.unlink(f.name)
 
 
-def test_detect_file_format_mastiff():
-    """Test detection of Mastiff format."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write("SRA accession,containment,similarity,query_name,query_md5,status\n")
-        f.write("SRR123456,0.95,0.98,test_genome,abcdef123456,completed\n")
-        f.flush()
-
-        # Test format detection
-        format_name = detect_file_format(f.name)
-        assert format_name == "mastiff"
-
-    # Clean up
-    os.unlink(f.name)
-
-
 def test_detect_file_format_unknown():
     """Test detection of unknown format."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:

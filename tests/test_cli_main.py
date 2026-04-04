@@ -188,7 +188,7 @@ class TestMainFunction:
         
         assert result == 1
         mock_setup_logging.assert_called_once_with(level=logging.DEBUG)
-        mock_log_error.assert_called_once_with("Error: Test error")
+        mock_log_error.assert_called_once_with("Exception: Test error")
     
     @patch('metaquest.cli.main.setup_logging')
     @patch('metaquest.cli.main.create_parser')

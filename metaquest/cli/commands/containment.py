@@ -46,8 +46,8 @@ class ParseContainmentCommand(BaseCommand):
         parser.add_argument(
             "--file-format",
             default=None,
-            choices=["branchwater", "mastiff"],
-            help="Format of the input files (branchwater or mastiff)",
+            choices=["branchwater"],
+            help="Format of the input files",
         )
 
     def execute(self, args: argparse.Namespace) -> int:

@@ -11,7 +11,7 @@ from typing import Any, DefaultDict, Dict, List, Union
 
 import pandas as pd
 
-from metaquest.core.exceptions import DataAccessError, ValidationError
+from metaquest.core.exceptions import DataAccessError
 from metaquest.core.models import ContainmentSummary
 from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import (
@@ -23,13 +23,11 @@ from metaquest.data.file_io import (
 )
 from metaquest.plugins.base import format_registry
 from metaquest.plugins.formats.branchwater import BranchWaterFormatPlugin
-from metaquest.plugins.formats.mastiff import MastiffFormatPlugin
 
 logger = logging.getLogger(__name__)
 
 # Register format plugins
 format_registry.register(BranchWaterFormatPlugin)
-format_registry.register(MastiffFormatPlugin)
 
 
 def process_branchwater_files(source_folder: Union[str, Path], target_folder: Union[str, Path]) -> Dict[str, Path]:
@@ -71,22 +69,12 @@ def process_branchwater_files(source_folder: Union[str, Path], target_folder: Un
             continue
 
         try:
-            # Determine file format
-            try:
-                # Try to load as Branchwater format
-                BranchWaterFormatPlugin.validate_header(read_csv(csv_file, nrows=0).columns.tolist())
-                format_name = "branchwater"
-            except (ValidationError, DataAccessError):
-                try:
-                    # Try to load as Mastiff format
-                    MastiffFormatPlugin.validate_header(read_csv(csv_file, nrows=0).columns.tolist())
-                    format_name = "mastiff"
-                except (ValidationError, DataAccessError):
-                    raise ValidationError(f"Unknown file format for {csv_file}")
+            # Validate branchwater format
+            BranchWaterFormatPlugin.validate_header(read_csv(csv_file, nrows=0).columns.tolist())
 
             # Copy the file
             result_file = copy_file(csv_file, output_file)
-            logger.info(f"Processed {format_name} file: {csv_file.name}")
+            logger.info(f"Processed branchwater file: {csv_file.name}")
             result_files[genome_id] = result_file
             processed_count += 1
 
@@ -269,18 +257,10 @@ def _process_genome_containments(csv_file, genome_id, containment_data):
         df_headers = read_csv(csv_file, nrows=0)
         headers = df_headers.columns.tolist()
 
-        try:
-            BranchWaterFormatPlugin.validate_header(headers)
-            format_plugin = BranchWaterFormatPlugin
-        except (ValidationError, DataAccessError):
-            try:
-                MastiffFormatPlugin.validate_header(headers)
-                format_plugin = MastiffFormatPlugin
-            except (ValidationError, DataAccessError):
-                raise ValidationError(f"Unknown file format for {csv_file}")
+        BranchWaterFormatPlugin.validate_header(headers)
 
         # Parse file to get containments
-        containments = format_plugin.parse_file(csv_file, genome_id)
+        containments = BranchWaterFormatPlugin.parse_file(csv_file, genome_id)
 
         # Add to containment data dictionary
         for containment in containments:

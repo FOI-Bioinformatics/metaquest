@@ -4,7 +4,7 @@ Comprehensive unit tests for MetaQuest plugin system.
 This module provides comprehensive testing for the plugin system including:
 - Plugin registry operations
 - Plugin discovery mechanisms
-- Format plugins (Branchwater, Mastiff)
+- Format plugins (Branchwater)
 - Visualizer plugins (Bar, Heatmap, Map)
 - Error handling and edge cases
 """
@@ -30,7 +30,6 @@ from metaquest.plugins.base import (
     visualizer_registry
 )
 from metaquest.plugins.formats.branchwater import BranchWaterFormatPlugin
-from metaquest.plugins.formats.mastiff import MastiffFormatPlugin
 from metaquest.plugins.visualizers.bar import BarChartPlugin
 from metaquest.plugins.visualizers.heatmap import HeatmapPlugin
 from metaquest.plugins.visualizers.map import MapVisualizerPlugin
@@ -738,15 +737,18 @@ class TestMapVisualizerPlugin:
                 )
 
     @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
-    @patch('matplotlib.pyplot.figure')
-    @patch('metaquest.plugins.visualizers.map.ccrs')
-    def test_create_plot_with_save(self, mock_ccrs, mock_figure):
+    @patch('metaquest.plugins.visualizers.map._plot_points')
+    @patch('metaquest.plugins.visualizers.map._add_map_features')
+    @patch('metaquest.plugins.visualizers.map._create_map_figure')
+    @patch('metaquest.plugins.visualizers.map._extract_coordinates')
+    def test_create_plot_with_save(self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points):
         """Test map creation with file saving."""
         mock_fig = Mock()
         mock_ax = Mock()
-        mock_figure.return_value = mock_fig
-        mock_fig.add_subplot.return_value = mock_ax
-        
+        mock_create_figure.return_value = (mock_fig, mock_ax)
+        mock_extract_coords.return_value = self.test_data
+        mock_plot_points.return_value = Mock()
+
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
             try:
                 result = MapVisualizerPlugin.create_plot(
@@ -754,7 +756,7 @@ class TestMapVisualizerPlugin:
                     lat_lon_column='lat_lon',
                     output_file=temp_file.name
                 )
-                
+
                 mock_fig.savefig.assert_called_once()
             finally:
                 os.unlink(temp_file.name)
@@ -797,8 +799,8 @@ class TestMapVisualizerPlugin:
 
     @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
     @patch('matplotlib.pyplot.figure')
-    @patch('metaquest.plugins.visualizers.map.cfeature')
-    @patch('metaquest.plugins.visualizers.map.ccrs')
+    @patch('metaquest.plugins.visualizers.map.cfeature', create=True)
+    @patch('metaquest.plugins.visualizers.map.ccrs', create=True)
     def test_create_choropleth(self, mock_ccrs, mock_cfeature, mock_figure):
         """Test choropleth map creation."""
         mock_fig = Mock()

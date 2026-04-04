@@ -22,6 +22,23 @@ from metaquest.visualization.plots import (
 
 logger = logging.getLogger(__name__)
 
+# Known metadata columns that are not genome identifiers
+_KNOWN_METADATA_COLUMNS = {"max_containment", "max_containment_annotation"}
+
+
+def _get_genome_columns(df):
+    """
+    Return genome columns by excluding known metadata columns.
+
+    Args:
+        df: DataFrame with containment data
+
+    Returns:
+        List of column names that represent genomes
+    """
+    return [col for col in df.columns if col not in _KNOWN_METADATA_COLUMNS]
+
+
 # Check if jinja2 is available for HTML reports
 try:
     import jinja2
@@ -176,11 +193,7 @@ def _create_containment_summary_page(summary_data, threshold):
     )
 
     # Get genome columns
-    genome_columns = [
-        col
-        for col in summary_data.columns
-        if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
-    ]
+    genome_columns = _get_genome_columns(summary_data)
 
     # Add genome counts
     ax.text(0.1, 0.84, f"Number of genomes: {len(genome_columns)}")
@@ -222,34 +235,38 @@ def _add_metadata_summary_page(pdf, metadata_data):
         metadata_data: Metadata DataFrame
     """
     fig, ax = plt.subplots(figsize=(8.5, 11))
-    ax.axis("off")
+    try:
+        ax.axis("off")
 
-    ax.text(0.5, 0.95, "Metadata Summary", fontsize=18, ha="center")
+        ax.text(0.5, 0.95, "Metadata Summary", fontsize=18, ha="center")
 
-    # Count non-null values in each column
-    non_null_counts = metadata_data.count()
+        # Count non-null values in each column
+        non_null_counts = metadata_data.count()
 
-    # Top 15 columns with most metadata
-    ax.text(0.1, 0.9, "Top metadata fields by availability:", fontsize=12)
+        # Top 15 columns with most metadata
+        ax.text(0.1, 0.9, "Top metadata fields by availability:", fontsize=12)
 
-    top_columns = non_null_counts.nlargest(15)
+        top_columns = non_null_counts.nlargest(15)
 
-    # Create table data
-    table_data = []
-    for col, count in top_columns.items():
-        table_data.append([col, count, f"{count / len(metadata_data) * 100:.1f}%"])
+        # Create table data
+        table_data = []
+        for col, count in top_columns.items():
+            table_data.append(
+                [col, count, f"{count / len(metadata_data) * 100:.1f}%"]
+            )
 
-    # Create table
-    ax.table(
-        cellText=table_data,
-        colLabels=["Field", "Count", "Percentage"],
-        loc="center",
-        cellLoc="center",
-        colWidths=[0.5, 0.15, 0.2],
-    )
+        # Create table
+        ax.table(
+            cellText=table_data,
+            colLabels=["Field", "Count", "Percentage"],
+            loc="center",
+            cellLoc="center",
+            colWidths=[0.5, 0.15, 0.2],
+        )
 
-    pdf.savefig(fig)
-    plt.close(fig)
+        pdf.savefig(fig)
+    finally:
+        plt.close(fig)
 
 
 def _add_correlation_heatmap(pdf, summary_data, threshold):
@@ -261,13 +278,10 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
         summary_data: Containment summary DataFrame
         threshold: Containment threshold
     """
+    fig = None
     try:
         # Get top 20 genomes by max containment
-        genome_columns = [
-            col
-            for col in summary_data.columns
-            if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
-        ]
+        genome_columns = _get_genome_columns(summary_data)
 
         if len(genome_columns) > 1:
             top_genomes = []
@@ -277,17 +291,23 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
                     top_genomes.append((col, len(top_samples)))
 
             top_genomes.sort(key=lambda x: x[1], reverse=True)
-            top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
+            top_genome_cols = [
+                g[0] for g in top_genomes[: min(20, len(top_genomes))]
+            ]
 
             if len(top_genome_cols) > 1:
                 # Create heatmap of top genome correlations
                 correlation_matrix = summary_data[top_genome_cols].corr()
 
-                fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
+                fig = plot_correlation_matrix(
+                    correlation_matrix, title="Genome Correlation Matrix"
+                )
                 pdf.savefig(fig)
-                plt.close(fig)
     except Exception as e:
         logger.warning(f"Error generating heatmap: {e}")
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 def _generate_pdf_report(
@@ -427,11 +447,7 @@ def _prepare_template_data(
     }
 
     # Get genome columns
-    genome_columns = [
-        col
-        for col in summary_data.columns
-        if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
-    ]
+    genome_columns = _get_genome_columns(summary_data)
 
     summary_stats["genome_count"] = len(genome_columns)
 
@@ -545,11 +561,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
         # Genome correlation heatmap
         try:
             # Get top 20 genomes by max containment
-            genome_columns = [
-                col
-                for col in summary_data.columns
-                if col not in ("max_containment", "max_containment_annotation") and ("GCF" in col or "GCA" in col)
-            ]
+            genome_columns = _get_genome_columns(summary_data)
 
             if len(genome_columns) > 1:
                 top_genomes = []

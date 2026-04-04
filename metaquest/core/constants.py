@@ -45,7 +45,7 @@ CONTAINMENT_PLOT_TYPES = ["rank", "histogram", "box", "violin"]
 METADATA_PLOT_TYPES = ["bar", "pie", "radar"]
 
 # File Formats
-SUPPORTED_FILE_FORMATS = ["branchwater", "mastiff"]
+SUPPORTED_FILE_FORMATS = ["branchwater"]
 
 # Logging Configuration
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]

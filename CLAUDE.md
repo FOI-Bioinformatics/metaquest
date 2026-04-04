@@ -102,7 +102,7 @@ The typical workflow involves:
 - **✅ API compatibility maintained** - DataFrame deprecation warnings addressed
 
 #### Quality Requirements
-- **Line length**: 88 characters maximum (Black default)
+- **Line length**: 120 characters maximum (configured in pyproject.toml)
 - **Formatting**: Use Black for consistent code formatting
 - **Linting**: All code must pass flake8 without violations
 - **Type hints**: Encouraged (mypy checking enabled)

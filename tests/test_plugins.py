@@ -9,7 +9,6 @@ import os
 from metaquest.core.exceptions import PluginError
 from metaquest.plugins.base import Plugin, PluginRegistry
 from metaquest.plugins.formats.branchwater import BranchWaterFormatPlugin
-from metaquest.plugins.formats.mastiff import MastiffFormatPlugin
 
 
 class TestPlugin(Plugin):
@@ -102,46 +101,3 @@ def test_branchwater_format_plugin():
     os.unlink(f.name)
 
 
-def test_mastiff_format_plugin():
-    """Test the MastiffFormatPlugin."""
-    # Test required columns
-    assert "SRA accession" in MastiffFormatPlugin.REQUIRED_COLS
-    assert "containment" in MastiffFormatPlugin.REQUIRED_COLS
-
-    # Create a temporary CSV file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write("SRA accession,containment,similarity,query_name,query_md5,status\n")
-        f.write("SRR123456,0.95,0.98,test_genome,abcdef123456,completed\n")
-        f.write("SRR789012,0.85,0.92,test_genome,abcdef123456,completed\n")
-        f.flush()
-
-        # Test header validation
-        assert MastiffFormatPlugin.validate_header(
-            [
-                "SRA accession",
-                "containment",
-                "similarity",
-                "query_name",
-                "query_md5",
-                "status",
-            ]
-        )
-
-        # Test parsing
-        containments = MastiffFormatPlugin.parse_file(f.name, "GCF_123456.1")
-
-        # Verify results
-        assert len(containments) == 2
-        assert containments[0].accession == "SRR123456"
-        assert containments[0].value == 0.95
-        assert containments[0].genome_id == "GCF_123456.1"
-        assert containments[0].additional_data["similarity"] == "0.98"
-
-        # Test metadata extraction
-        metadata = MastiffFormatPlugin.extract_metadata(containments[0])
-        assert metadata.accession == "SRR123456"
-        assert metadata.attributes["similarity"] == "0.98"
-        assert metadata.attributes["query_name"] == "test_genome"
-
-    # Clean up
-    os.unlink(f.name)

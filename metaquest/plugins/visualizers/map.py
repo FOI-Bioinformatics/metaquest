@@ -2,13 +2,13 @@
 Map visualization plugin for MetaQuest.
 """
 
+import json
 import logging
 import re
 import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
-from cartopy.mpl.geoaxes import GeoAxes
 
 from metaquest.core.exceptions import VisualizationError
 from metaquest.plugins.base import Plugin
@@ -19,10 +19,12 @@ logger = logging.getLogger(__name__)
 try:
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
+    from cartopy.mpl.geoaxes import GeoAxes
 
     CARTOPY_AVAILABLE = True
 except ImportError:
     CARTOPY_AVAILABLE = False
+    GeoAxes = None
     logger.warning("Cartopy not available. Map visualization will be limited.")
 
 
@@ -53,7 +55,8 @@ def _create_map_figure(figsize, projection):
     proj_class = getattr(ccrs, projection)
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(1, 1, 1, projection=proj_class())
-    ax = cast(GeoAxes, ax)
+    if GeoAxes is not None:
+        ax = cast(GeoAxes, ax)
     return fig, ax
 
 
@@ -85,6 +88,15 @@ def _parse_coordinate_string(coord_str):
 
     # Try to parse coordinates
     try:
+        # Handle JSON array format, e.g. "[52.6237924, 1.2243845]"
+        coord_str_stripped = coord_str.strip()
+        if coord_str_stripped.startswith("["):
+            parsed = json.loads(coord_str_stripped)
+            if isinstance(parsed, list) and len(parsed) == 2:
+                lat, lon = float(parsed[0]), float(parsed[1])
+                return lat, lon
+            return None, None
+
         # Handle various formats
         if "," in coord_str:
             # Format: "lat, lon"
@@ -325,7 +337,8 @@ class MapVisualizerPlugin(Plugin):
             proj_class = getattr(ccrs, projection)
             fig = plt.figure(figsize=figsize)
             ax = fig.add_subplot(1, 1, 1, projection=proj_class())
-            ax = cast(GeoAxes, ax)
+            if GeoAxes is not None:
+                ax = cast(GeoAxes, ax)
 
             # Get natural earth feature
             countries = cfeature.NaturalEarthFeature(

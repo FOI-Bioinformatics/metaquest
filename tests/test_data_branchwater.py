@@ -90,19 +90,18 @@ class TestProcessBranchwaterFiles:
         source_dir = tmp_path / "source"
         target_dir = tmp_path / "target"
         source_dir.mkdir()
-        
+
         # Create CSV with invalid format
         invalid_content = "invalid,header,format\ndata1,data2,data3"
         (source_dir / "invalid.csv").write_text(invalid_content)
-        
+
         with patch('metaquest.data.branchwater.read_csv') as mock_read_csv:
             mock_df = pd.DataFrame(columns=['invalid', 'header', 'format'])
             mock_read_csv.return_value = mock_df
-            
+
             with patch('metaquest.data.branchwater.BranchWaterFormatPlugin.validate_header', side_effect=ValidationError("Invalid")):
-                with patch('metaquest.data.branchwater.MastiffFormatPlugin.validate_header', side_effect=ValidationError("Invalid")):
-                    result = process_branchwater_files(source_dir, target_dir)
-        
+                result = process_branchwater_files(source_dir, target_dir)
+
         # Should have empty result due to validation errors
         assert result == {}
 
@@ -361,43 +360,20 @@ class TestProcessGenomeContainments:
         assert containment_data['ERR123']['genome1'] == 0.95
         assert containment_data['ERR456']['genome1'] == 0.87
 
-    def test_process_genome_containments_mastiff(self, tmp_path):
-        """Test processing with Mastiff format."""
-        csv_file = tmp_path / "genome1.csv"
-        containment_data = defaultdict(dict)
-        
-        with patch('metaquest.data.branchwater.read_csv') as mock_read_csv:
-            mock_headers = pd.DataFrame(columns=['query', 'target'])
-            mock_read_csv.return_value = mock_headers
-            
-            with patch('metaquest.data.branchwater.BranchWaterFormatPlugin.validate_header', side_effect=ValidationError("Not branchwater")):
-                with patch('metaquest.data.branchwater.MastiffFormatPlugin.validate_header', return_value=True):
-                    with patch('metaquest.data.branchwater.MastiffFormatPlugin.parse_file') as mock_parse:
-                        mock_parse.return_value = [
-                            Mock(accession='SRR123', value=0.78)
-                        ]
-                        
-                        _process_genome_containments(csv_file, "genome1", containment_data)
-        
-        assert 'SRR123' in containment_data
-        assert containment_data['SRR123']['genome1'] == 0.78
-
     def test_process_genome_containments_unknown_format(self, tmp_path):
         """Test processing with unknown format."""
         csv_file = tmp_path / "genome1.csv"
         containment_data = defaultdict(dict)
-        
+
         with patch('metaquest.data.branchwater.read_csv') as mock_read_csv:
             mock_headers = pd.DataFrame(columns=['unknown', 'format'])
             mock_read_csv.return_value = mock_headers
-            
+
             with patch('metaquest.data.branchwater.BranchWaterFormatPlugin') as mock_bw_plugin:
-                with patch('metaquest.data.branchwater.MastiffFormatPlugin') as mock_mastiff_plugin:
-                    mock_bw_plugin.validate_header.side_effect = ValidationError("Not branchwater")
-                    mock_mastiff_plugin.validate_header.side_effect = ValidationError("Not mastiff")
-                    
-                    with pytest.raises(DataAccessError, match="Error processing"):
-                        _process_genome_containments(csv_file, "genome1", containment_data)
+                mock_bw_plugin.validate_header.side_effect = ValidationError("Not branchwater")
+
+                with pytest.raises(DataAccessError, match="Error processing"):
+                    _process_genome_containments(csv_file, "genome1", containment_data)
 
     def test_process_genome_containments_max_value(self, tmp_path):
         """Test that maximum containment value is kept for duplicates."""

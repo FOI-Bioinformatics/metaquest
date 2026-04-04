@@ -7,10 +7,12 @@ This module provides the main CLI entry point with modular command architecture.
 import argparse
 import logging
 import sys
+import traceback
 from typing import List, Optional
 
 from metaquest import __version__
 from metaquest.cli.base import command_registry
+from metaquest.core.exceptions import MetaQuestError
 from metaquest.utils.logging import setup_logging
 
 # Import all command modules to register them
@@ -131,8 +133,23 @@ def main(args: Optional[List[str]] = None) -> int:
     try:
         # Execute the chosen command
         return parsed_args.func(parsed_args)
-    except Exception as e:
+    except MetaQuestError as e:
         logging.error(f"Error: {e}")
+        if parsed_args.log_level == "DEBUG":
+            logging.debug(traceback.format_exc())
+        else:
+            logging.info(
+                "Use --log-level DEBUG for full traceback."
+            )
+        return 1
+    except Exception as e:
+        logging.error(f"{type(e).__name__}: {e}")
+        if parsed_args.log_level == "DEBUG":
+            logging.debug(traceback.format_exc())
+        else:
+            logging.info(
+                "Use --log-level DEBUG for full traceback."
+            )
         return 1
 
 
