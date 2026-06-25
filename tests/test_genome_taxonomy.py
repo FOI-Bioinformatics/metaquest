@@ -17,6 +17,8 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data.genome_taxonomy import (
     parse_gtdb_taxonomy_string,
     _lookup_genome_taxonomy_gtdb,
+    _taxonomy_from_record,
+    _extract_search_rows,
     enrich_genomes_with_taxonomy,
     load_taxonomy_cache,
     save_taxonomy_cache,
@@ -339,6 +341,56 @@ class TestLookupGenomeTaxonomyGtdb:
         mock_get.side_effect = requests.exceptions.ConnectionError("boom")
         with pytest.raises(DataAccessError, match="GTDB API error"):
             _lookup_genome_taxonomy_gtdb("GCF_005")
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_search_endpoint_bare_list(self, mock_get):
+        # GTDB search may return a bare JSON list of records.
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, [{"gtdb_taxonomy": _GTDB_STRING, "ncbi_taxid": 1423}]),
+        ]
+        info = _lookup_genome_taxonomy_gtdb("GCF_006")
+        assert info is not None
+        assert info.genus == "Bacillus"
+        assert info.tax_id == "1423"
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_search_endpoint_rows_key(self, mock_get):
+        # GTDB search may wrap records under a "rows" key.
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, {"rows": [{"gtdb_taxonomy": _GTDB_STRING}]}),
+        ]
+        info = _lookup_genome_taxonomy_gtdb("GCF_007")
+        assert info is not None
+        assert info.species == "Bacillus subtilis"
+
+
+class TestSearchResponseHelpers:
+
+    def test_taxonomy_from_record_with_taxonomy(self):
+        info = _taxonomy_from_record({"gtdb_taxonomy": _GTDB_STRING, "ncbi_taxid": 1423}, "GCF_X")
+        assert info is not None
+        assert info.species == "Bacillus subtilis"
+        assert info.tax_id == "1423"
+
+    def test_taxonomy_from_record_without_taxonomy_returns_none(self):
+        assert _taxonomy_from_record({"organism_name": "Foo"}, "GCF_X") is None
+
+    def test_extract_rows_from_list(self):
+        assert _extract_search_rows([{"a": 1}]) == [{"a": 1}]
+
+    def test_extract_rows_from_rows_key(self):
+        assert _extract_search_rows({"rows": [{"a": 1}]}) == [{"a": 1}]
+
+    def test_extract_rows_from_results_key(self):
+        assert _extract_search_rows({"results": [{"b": 2}]}) == [{"b": 2}]
+
+    def test_extract_rows_empty_dict(self):
+        assert _extract_search_rows({}) == []
+
+    def test_extract_rows_unexpected_type(self):
+        assert _extract_search_rows("nonsense") == []
 
 
 class TestCacheAndEnrichEdges:
