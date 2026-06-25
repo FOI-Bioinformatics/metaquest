@@ -110,12 +110,11 @@ class SRAIntelligentDownloadCommand(BaseCommand):
             estimate = manager.estimate_download_time(accessions)
             print("\nDownload Estimate:")
             print("=================")
-            print(f"Total datasets: {estimate['total_datasets']}")
-            print(f"Total size: {estimate['total_size_gb']:.2f} GB")
-            print(f"Estimated time: {estimate['estimated_hours']:.1f} hours")
-            print(f"Optimal parallelization: {estimate['optimal_parallel']}")
-            if estimate["bandwidth_limited"]:
-                print("⚠️  Bandwidth may be limiting factor")
+            print(f"Total datasets: {len(accessions)}")
+            print(f"Total size: {estimate['total_size_mb'] / 1024:.2f} GB")
+            print(f"Estimated time: {estimate['estimated_time_formatted']}")
+            print(f"Network bandwidth: {estimate['network_bandwidth_mbps']:.1f} Mbps")
+            print(f"Optimal parallelization: {estimate['optimal_parallel_downloads']}")
         except Exception as e:
             logger.warning(f"Could not generate estimate: {e}")
 
@@ -125,22 +124,19 @@ class SRAIntelligentDownloadCommand(BaseCommand):
         print("========================")
         print(f"Session ID: {session.session_id}")
         print(f"Started: {session.start_time}")
-        print(f"Total datasets: {session.total_downloads}")
-        print(f"Completed: {session.completed_downloads}")
-        print(f"Failed: {session.failed_downloads}")
-        print(f"Status: {session.status}")
+        print(f"Total datasets: {len(session.accessions)}")
+        print(f"Completed: {session.success_count}")
+        print(f"Failed: {session.failure_count}")
 
         if session.end_time:
-            print(f"Completed: {session.end_time}")
+            print(f"Finished: {session.end_time}")
             duration = session.end_time - session.start_time
             print(f"Duration: {duration}")
 
-        if session.bandwidth_stats:
-            stats = session.bandwidth_stats
-            print("\nBandwidth Statistics:")
-            print(f"  Average: {stats.average_mbps:.1f} Mbps")
-            print(f"  Peak: {stats.peak_mbps:.1f} Mbps")
-            print(f"  Efficiency: {stats.efficiency:.1%}")
+        if session.network_conditions:
+            print("\nThroughput Statistics:")
+            print(f"  Measured bandwidth: {session.network_conditions.bandwidth_mbps:.1f} Mbps")
+            print(f"  Average speed: {session.average_speed_mbps:.1f} MB/min")
 
     def execute(self, args):
         try:
@@ -180,6 +176,9 @@ class SRAIntelligentDownloadCommand(BaseCommand):
             self._print_session_summary(session)
 
             # Save progress report
+            failed_accessions = [
+                acc for acc, result in session.download_results.items() if result.status == "failed"
+            ]
             progress_file = Path(args.progress_report)
             with open(progress_file, "w") as progress_f:
                 json.dump(
@@ -187,19 +186,13 @@ class SRAIntelligentDownloadCommand(BaseCommand):
                         "session_id": session.session_id,
                         "start_time": session.start_time.isoformat(),
                         "end_time": session.end_time.isoformat() if session.end_time else None,
-                        "total_downloads": session.total_downloads,
-                        "completed_downloads": session.completed_downloads,
-                        "failed_downloads": session.failed_downloads,
-                        "status": session.status,
-                        "failed_accessions": session.failed_accessions,
-                        "bandwidth_stats": (
-                            {
-                                "average_mbps": session.bandwidth_stats.average_mbps,
-                                "peak_mbps": session.bandwidth_stats.peak_mbps,
-                                "efficiency": session.bandwidth_stats.efficiency,
-                            }
-                            if session.bandwidth_stats
-                            else None
+                        "total_datasets": len(session.accessions),
+                        "completed_downloads": session.success_count,
+                        "failed_downloads": session.failure_count,
+                        "failed_accessions": failed_accessions,
+                        "average_speed_mbps": session.average_speed_mbps,
+                        "network_bandwidth_mbps": (
+                            session.network_conditions.bandwidth_mbps if session.network_conditions else None
                         ),
                     },
                     progress_f,
@@ -208,8 +201,8 @@ class SRAIntelligentDownloadCommand(BaseCommand):
 
             print(f"\nProgress report saved to: {progress_file}")
 
-            if session.failed_downloads > 0:
-                print(f"\n⚠️  {session.failed_downloads} downloads failed")
+            if session.failure_count > 0:
+                print(f"\n⚠️  {session.failure_count} downloads failed")
                 return 1
 
             print("\n✅ All downloads completed successfully!")
@@ -289,17 +282,18 @@ class SRAQualityProfileCommand(BaseCommand):
         print(f"Total bases: {profile.total_bases:,}")
         print(f"Average read length: {profile.avg_read_length:.1f}")
         print(f"GC content: {profile.gc_content:.1%}")
-        print(f"Average quality score: {profile.avg_quality:.1f}")
+        print(f"Quality grade: {profile.quality_grade}")
         print(f"Sequence complexity: {profile.complexity_score:.3f}")
 
         if profile.n_content > 0.01:  # > 1%
             print(f"⚠️  High N content: {profile.n_content:.1%}")
 
-        if profile.duplicate_rate > 0.20:  # > 20%
-            print(f"⚠️  High duplicate rate: {profile.duplicate_rate:.1%}")
+        if profile.duplication_rate is not None and profile.duplication_rate > 0.20:  # > 20%
+            print(f"⚠️  High duplicate rate: {profile.duplication_rate:.1%}")
 
-        if profile.adapter_contamination > 0.05:  # > 5%
-            print(f"⚠️  Adapter contamination: {profile.adapter_contamination:.1%}")
+        adapter_contamination = profile.contamination_indicators.get("adapter_contamination", 0)
+        if adapter_contamination > 0.05:  # > 5%
+            print(f"⚠️  Adapter contamination: {adapter_contamination:.1%}")
 
     def execute(self, args):
         try:
@@ -355,13 +349,13 @@ class SRAQualityProfileCommand(BaseCommand):
                                     "total_bases": profile.total_bases,
                                     "avg_read_length": profile.avg_read_length,
                                     "gc_content": profile.gc_content,
-                                    "avg_quality": profile.avg_quality,
+                                    "quality_grade": profile.quality_grade,
                                     "quality_distribution": profile.quality_distribution,
                                     "complexity_score": profile.complexity_score,
                                     "n_content": profile.n_content,
-                                    "duplicate_rate": profile.duplicate_rate,
-                                    "adapter_contamination": profile.adapter_contamination,
-                                    "warnings": profile.warnings,
+                                    "duplication_rate": profile.duplication_rate,
+                                    "contamination_indicators": profile.contamination_indicators,
+                                    "recommendations": profile.recommendations,
                                 },
                                 profile_f,
                                 indent=2,
@@ -381,17 +375,19 @@ class SRAQualityProfileCommand(BaseCommand):
                 total_reads = sum(p.total_reads for p in profiles)
                 total_bases = sum(p.total_bases for p in profiles)
                 avg_gc = sum(p.gc_content for p in profiles) / len(profiles)
-                avg_quality = sum(p.avg_quality for p in profiles) / len(profiles)
 
                 print(f"Total reads across all datasets: {total_reads:,}")
                 print(f"Total bases across all datasets: {total_bases:,}")
                 print(f"Average GC content: {avg_gc:.1%}")
-                print(f"Average quality score: {avg_quality:.1f}")
 
                 # Quality flags
                 high_n_content = len([p for p in profiles if p.n_content > 0.01])
-                high_duplicates = len([p for p in profiles if p.duplicate_rate > 0.20])
-                contaminated = len([p for p in profiles if p.adapter_contamination > 0.05])
+                high_duplicates = len(
+                    [p for p in profiles if p.duplication_rate is not None and p.duplication_rate > 0.20]
+                )
+                contaminated = len(
+                    [p for p in profiles if p.contamination_indicators.get("adapter_contamination", 0) > 0.05]
+                )
 
                 if high_n_content:
                     print(f"⚠️  {high_n_content} datasets with high N content")
@@ -413,7 +409,6 @@ class SRAQualityProfileCommand(BaseCommand):
                                 "total_reads": total_reads,
                                 "total_bases": total_bases,
                                 "avg_gc_content": avg_gc,
-                                "avg_quality_score": avg_quality,
                             }
                             if profiles
                             else None
@@ -641,12 +636,18 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             print("\nComparative Analysis Results:")
             print("=" * 40)
 
-            for group_name, stats in comparison.group_statistics.items():
+            for group_name, col_stats in comparison.summary_statistics.items():
                 print(f"\n{group_name}:")
-                print(f"  Datasets: {stats['dataset_count']}")
-                print(f"  Avg GC content: {stats['mean_gc_content']:.1%}")
-                print(f"  Avg quality: {stats['mean_quality']:.1f}")
-                print(f"  Total reads: {stats['total_reads']:,}")
+                print(f"  Datasets: {len(groups.get(group_name, []))}")
+                gc_stats = col_stats.get("gc_content")
+                if gc_stats:
+                    print(f"  Avg GC content: {gc_stats['mean']:.1%}")
+                length_stats = col_stats.get("avg_read_length")
+                if length_stats:
+                    print(f"  Avg read length: {length_stats['mean']:.1f}")
+                reads_stats = col_stats.get("total_reads")
+                if reads_stats:
+                    print(f"  Mean total reads: {reads_stats['mean']:,.0f}")
 
             # Statistical tests results
             if args.statistical_tests and comparison.statistical_tests:
@@ -658,14 +659,18 @@ class SRAComparativeAnalysisCommand(BaseCommand):
                     print(f"{test_name}: p={p_value:.4f} {'*' if significant else ''}")
 
             # Save detailed results
+            significant_differences = [
+                col for col, test in comparison.statistical_tests.items() if test.get("significant")
+            ]
             results_file = output_dir / "comparative_analysis.json"
             with open(results_file, "w") as results_f:
                 json.dump(
                     {
                         "groups": groups,
-                        "group_statistics": comparison.group_statistics,
+                        "summary_statistics": comparison.summary_statistics,
                         "statistical_tests": comparison.statistical_tests,
-                        "significant_differences": comparison.significant_differences,
+                        "significant_differences": significant_differences,
+                        "outlier_datasets": comparison.outlier_datasets,
                     },
                     results_f,
                     indent=2,
