@@ -97,8 +97,8 @@ class SRAInfoCommand(BaseCommand):
                     print(f"  {tech}: {count} datasets")
 
             # Platform breakdown
-            platforms = {}
-            layouts = {}
+            platforms: dict = {}
+            layouts: dict = {}
             for acc, info in metadata.items():
                 platforms[info.platform] = platforms.get(info.platform, 0) + 1
                 layouts[info.layout] = layouts.get(info.layout, 0) + 1

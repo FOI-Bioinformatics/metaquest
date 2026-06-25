@@ -19,7 +19,7 @@ try:
 except ImportError:
     SOURMASH_AVAILABLE = False
 
-    class CommandLinePlugin:
+    class CommandLinePlugin:  # type: ignore[no-redef]
         """Stub when sourmash is not installed."""
 
         command = None
@@ -210,6 +210,7 @@ class MetaquestDiversityPlugin(CommandLinePlugin):
 
             # Beta diversity
             beta_div = calculate_beta_diversity(abundance_df, args.beta_metric)
+            assert isinstance(beta_div, pd.DataFrame)
             beta_output = output_dir / f"beta_diversity_{args.beta_metric}.csv"
             beta_div.to_csv(beta_output)
             logger.info(f"Beta diversity results saved to {beta_output}")

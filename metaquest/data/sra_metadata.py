@@ -71,7 +71,7 @@ class SRAMetadataClient:
         self.email = email
         self.api_key = api_key
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-        self.last_request_time = 0
+        self.last_request_time: float = 0
         self.request_delay = 0.34 if api_key else 0.5  # Conservative rate limiting
 
     def _make_request(self, url: str, params: Dict[str, str]) -> str:
@@ -459,7 +459,7 @@ def create_download_preview(
     metadata = metadata_client.get_sra_metadata(accessions)
 
     # Count technologies
-    tech_counts = {}
+    tech_counts: dict = {}
     total_size_mb = 0.0
 
     for acc, info in metadata.items():

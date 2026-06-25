@@ -53,7 +53,7 @@ class ComparativeAnalysis:
     """Results from comparative analysis across datasets."""
 
     dataset_groups: Dict[str, List[str]]
-    summary_statistics: Dict[str, Dict[str, float]]
+    summary_statistics: Dict[str, Dict[str, Any]]
     statistical_tests: Dict[str, Dict[str, Any]]
     outlier_datasets: List[str]
     clustering_results: Optional[Dict[str, Any]]
@@ -420,7 +420,7 @@ class SRADatasetAnalyzer:
             )
 
         # Calculate summary statistics
-        summary_stats = {}
+        summary_stats: dict = {}
         numeric_cols = ["avg_read_length", "gc_content", "total_reads", "complexity_score"]
 
         for group in groups.keys():
@@ -722,7 +722,7 @@ class SRADatasetAnalyzer:
         self, comparison_df: pd.DataFrame, groups: Dict[str, List[str]]
     ) -> Dict[str, Dict[str, Any]]:
         """Perform statistical tests between groups."""
-        tests = {}
+        tests: dict = {}
 
         numeric_cols = ["avg_read_length", "gc_content", "total_reads", "complexity_score"]
         group_names = list(groups.keys())

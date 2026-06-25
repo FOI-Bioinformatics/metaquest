@@ -49,7 +49,7 @@ def _load_and_validate_data(
     return df
 
 
-def _create_rank_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) -> None:
+def _create_rank_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: Optional[Union[str, List[str]]]) -> None:
     """Create rank plot."""
     # Handle empty DataFrame or missing column
     if df.empty or column not in df.columns:
@@ -65,7 +65,9 @@ def _create_rank_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) 
     ax.set_ylabel(f"{column} Value")
 
 
-def _create_histogram_plot(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str) -> None:
+def _create_histogram_plot(
+    ax: plt.Axes, df: pd.DataFrame, column: str, colors: Optional[Union[str, List[str]]]
+) -> None:
     """Create histogram plot."""
     # Handle empty DataFrame or missing column
     if df.empty or column not in df.columns:
@@ -116,7 +118,9 @@ def _create_violin_plot(ax: plt.Axes, df: pd.DataFrame, column: str) -> None:
     ax.set_xticklabels([column])
 
 
-def _create_plot_by_type(ax: plt.Axes, df: pd.DataFrame, column: str, colors: str, plot_type: str) -> None:
+def _create_plot_by_type(
+    ax: plt.Axes, df: pd.DataFrame, column: str, colors: Optional[Union[str, List[str]]], plot_type: str
+) -> None:
     """Create plot based on plot type."""
     if plot_type == "rank":
         _create_rank_plot(ax, df, column, colors)
@@ -231,7 +235,7 @@ def _metadata_pie_chart(df: pd.DataFrame, colors, title: Optional[str]) -> plt.F
         labels=df["category"],
         autopct="%1.1f%%",
         startangle=90,
-        colors=colors if colors else plt.cm.tab20.colors,
+        colors=colors if colors else plt.cm.tab20.colors,  # type: ignore[attr-defined]
     )
     ax.axis("equal")  # Equal aspect ratio ensures that pie is drawn as a circle
     if title:
@@ -300,7 +304,7 @@ def plot_metadata_counts(
         # Create plot based on plot_type
         if plot_type == "bar":
             plugin = visualizer_registry.get("bar")
-            fig = plugin.create_plot(
+            fig = plugin.create_plot(  # type: ignore[attr-defined]
                 data=df,
                 x_column="category",
                 y_column="count",
@@ -377,7 +381,7 @@ def plot_heatmap(
 
         # Use heatmap plugin
         plugin = visualizer_registry.get("heatmap")
-        fig = plugin.create_plot(
+        fig = plugin.create_plot(  # type: ignore[attr-defined]
             data=df,
             title=title,
             cluster=cluster,
@@ -425,7 +429,7 @@ def plot_correlation_matrix(
 
         # Use heatmap plugin to create correlation matrix
         plugin = visualizer_registry.get("heatmap")
-        fig = plugin.create_correlation_heatmap(
+        fig = plugin.create_correlation_heatmap(  # type: ignore[attr-defined]
             data=df,
             title=title,
             method=method,

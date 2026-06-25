@@ -74,7 +74,7 @@ class BranchWaterFormatPlugin(Plugin):
                 reader = csv.DictReader(f)
 
                 # Validate headers
-                if not cls.validate_header(reader.fieldnames or []):
+                if not cls.validate_header(list(reader.fieldnames or [])):
                     missing = [col for col in cls.REQUIRED_COLS if col not in (reader.fieldnames or [])]
                     raise ValidationError(f"Missing required columns in {file_path}: {', '.join(missing)}")
 
@@ -137,6 +137,6 @@ class BranchWaterFormatPlugin(Plugin):
         # Add all other fields to the attributes dictionary
         for key, value in containment.additional_data.items():
             if key not in cls.METADATA_MAPPING:
-                metadata.attributes[key] = value
+                metadata.attributes[key] = str(value)
 
         return metadata

@@ -35,7 +35,7 @@ def _get_unique_accessions(matches_folder, threshold):
     Returns:
         Set of unique accessions
     """
-    unique_accessions = set()
+    unique_accessions: set = set()
     matches_path = Path(matches_folder)
 
     # Find all CSV files in matches folder

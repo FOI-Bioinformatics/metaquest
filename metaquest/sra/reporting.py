@@ -268,7 +268,7 @@ class SRAReportGenerator:
 
     def _create_download_plots(self, session: DownloadSession) -> Dict[str, str]:
         """Create interactive plots for download session."""
-        plots = {}
+        plots: dict = {}
 
         if not PLOTLY_AVAILABLE:
             return plots
@@ -330,7 +330,7 @@ class SRAReportGenerator:
 
     def _create_quality_plots(self, profiles: Dict[str, QualityProfile]) -> Dict[str, str]:
         """Create interactive plots for quality dashboard."""
-        plots = {}
+        plots: dict = {}
 
         if not PLOTLY_AVAILABLE:
             return plots
@@ -384,7 +384,7 @@ class SRAReportGenerator:
 
     def _create_comparative_plots(self, comparison: ComparativeAnalysis) -> Dict[str, str]:
         """Create interactive plots for comparative analysis."""
-        plots = {}
+        plots: dict = {}
 
         if not PLOTLY_AVAILABLE or not comparison.visualization_data:
             return plots

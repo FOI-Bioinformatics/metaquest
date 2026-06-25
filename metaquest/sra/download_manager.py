@@ -91,7 +91,7 @@ class BandwidthManager:
         self.max_bandwidth_mbps = max_bandwidth_mbps
         self.current_usage_mbps = 0.0
         self.active_downloads = 0
-        self.network_conditions = None
+        self.network_conditions: Optional[NetworkConditions] = None
 
     def measure_network_conditions(self) -> NetworkConditions:
         """Measure current network performance."""
@@ -373,17 +373,18 @@ class IntelligentDownloadManager:
             "network_bandwidth_mbps": network_conditions.bandwidth_mbps,
             "optimal_parallel_downloads": network_conditions.optimal_parallel_downloads,
             "individual_estimates": {
-                acc: {
-                    "size_mb": sizes[acc] / (1024 * 1024) if sizes[acc] else "unknown",
-                    "estimated_minutes": (
-                        (sizes[acc] / (1024 * 1024)) / effective_bandwidth
-                        if sizes[acc] and effective_bandwidth > 0
-                        else "unknown"
-                    ),
-                }
-                for acc in accessions
+                acc: self._individual_estimate(sizes[acc], effective_bandwidth) for acc in accessions
             },
         }
+
+    @staticmethod
+    def _individual_estimate(size: Optional[int], effective_bandwidth: float) -> Dict[str, Any]:
+        """Per-dataset size (MB) and time estimate; 'unknown' when size is missing."""
+        if not size:
+            return {"size_mb": "unknown", "estimated_minutes": "unknown"}
+        size_mb = size / (1024 * 1024)
+        estimated = size_mb / effective_bandwidth if effective_bandwidth > 0 else "unknown"
+        return {"size_mb": size_mb, "estimated_minutes": estimated}
 
     def download_with_resume(self, accessions: List[str], force_restart: bool = False) -> DownloadSession:
         """
@@ -414,7 +415,7 @@ class IntelligentDownloadManager:
 
         # Check for resumable downloads
         resumable = {}
-        if self.resume_enabled and not force_restart:
+        if self.checkpoint_manager and not force_restart:
             for accession in optimized_accessions:
                 checkpoint = self.checkpoint_manager.load_checkpoint(accession)
                 if checkpoint:

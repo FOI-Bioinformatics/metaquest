@@ -124,7 +124,7 @@ def count_metadata(
         logger.info(f"Processing {len(genome_columns)} genome columns")
 
         # Create result dataframes for each genome
-        df_list = []
+        df_list: list = []
         unique_accessions = set()
         processed_count = 0
 

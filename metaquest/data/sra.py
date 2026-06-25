@@ -29,7 +29,7 @@ def _read_blacklist_files(blacklist_files):
     Returns:
         Set of blacklisted accessions
     """
-    blacklisted_accessions = set()
+    blacklisted_accessions: set = set()
 
     if not blacklist_files:
         return blacklisted_accessions
@@ -518,8 +518,8 @@ def download_sra(
         # Download accessions in parallel
         successful_count = 0
         failed_count = 0
-        failed_accessions = []
-        download_results = {}
+        failed_accessions: list = []
+        download_results: dict = {}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit download jobs
@@ -529,7 +529,7 @@ def download_sra(
             }
 
             # Process results as they complete
-            futures_results = []
+            futures_results: list = []
             for future in as_completed(futures):
                 acc = futures[future]
                 try:
