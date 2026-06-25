@@ -61,9 +61,50 @@ class SRAInfoCommand(BaseCommand):
             help="Estimated bandwidth in Mbps for download time estimation",
         )
 
+    @staticmethod
+    def _print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, bandwidth_mbps):
+        """Print the SRA dataset analysis summary (counts, distributions, size, ETA)."""
+        print("\nSRA Dataset Analysis:")
+        print("===================")
+        print(f"Total accessions: {len(accessions)}")
+        print(f"Metadata fetched: {len(metadata)}")
+        print(f"Total estimated size: {total_size_gb:.2f} GB")
+
+        if tech_counts:
+            print("\nTechnology distribution:")
+            for tech, count in tech_counts.items():
+                print(f"  {tech}: {count} datasets")
+
+        platforms: dict = {}
+        layouts: dict = {}
+        for info in metadata.values():
+            platforms[info.platform] = platforms.get(info.platform, 0) + 1
+            layouts[info.layout] = layouts.get(info.layout, 0) + 1
+
+        if platforms:
+            print("\nPlatform distribution:")
+            for platform, count in platforms.items():
+                print(f"  {platform}: {count}")
+        if layouts:
+            print("\nLayout distribution:")
+            for layout, count in layouts.items():
+                print(f"  {layout}: {count}")
+
+        sizes = [info.size_mb / 1024 for info in metadata.values()]  # Convert to GB
+        if sizes:
+            print("\nSize statistics:")
+            print(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
+            print(f"  Largest dataset: {max(sizes):.2f} GB")
+            print(f"  Smallest dataset: {min(sizes):.2f} GB")
+
+        estimated_hours = estimate_download_time(total_size_gb, bandwidth_mbps, 4)
+        if estimated_hours < 1:
+            print(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
+        else:
+            print(f"  Estimated download time: {estimated_hours:.1f} hours")
+
     def execute(self, args):
         try:
-            # Read accessions
             with open(args.accessions_file, "r") as f:
                 accessions = [line.strip() for line in f if line.strip()]
 
@@ -73,62 +114,15 @@ class SRAInfoCommand(BaseCommand):
 
             print(f"Analyzing {len(accessions)} SRA accessions...")
 
-            # Initialize downloader
             downloader = EnhancedSRADownloader(args.email, args.api_key)
-
-            # Get preview
             metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
 
             if not metadata:
                 print("Could not fetch metadata for any accessions")
                 return 1
 
-            # Print summary
-            print("\nSRA Dataset Analysis:")
-            print("===================")
-            print(f"Total accessions: {len(accessions)}")
-            print(f"Metadata fetched: {len(metadata)}")
-            print(f"Total estimated size: {total_size_gb:.2f} GB")
+            self._print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, args.bandwidth_mbps)
 
-            # Technology breakdown
-            if tech_counts:
-                print("\nTechnology distribution:")
-                for tech, count in tech_counts.items():
-                    print(f"  {tech}: {count} datasets")
-
-            # Platform breakdown
-            platforms: dict = {}
-            layouts: dict = {}
-            for acc, info in metadata.items():
-                platforms[info.platform] = platforms.get(info.platform, 0) + 1
-                layouts[info.layout] = layouts.get(info.layout, 0) + 1
-
-            if platforms:
-                print("\nPlatform distribution:")
-                for platform, count in platforms.items():
-                    print(f"  {platform}: {count}")
-
-            if layouts:
-                print("\nLayout distribution:")
-                for layout, count in layouts.items():
-                    print(f"  {layout}: {count}")
-
-            # Size statistics
-            sizes = [info.size_mb / 1024 for info in metadata.values()]  # Convert to GB
-            if sizes:
-                print("\nSize statistics:")
-                print(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
-                print(f"  Largest dataset: {max(sizes):.2f} GB")
-                print(f"  Smallest dataset: {min(sizes):.2f} GB")
-
-            # Download time estimation
-            estimated_hours = estimate_download_time(total_size_gb, args.bandwidth_mbps, 4)
-            if estimated_hours < 1:
-                print(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
-            else:
-                print(f"  Estimated download time: {estimated_hours:.1f} hours")
-
-            # Save detailed report
             save_metadata_report(metadata, args.output_report)
             print(f"\nDetailed report saved to: {args.output_report}")
 
@@ -415,6 +409,35 @@ class SRAValidateCommand(BaseCommand):
             accession_dirs = [d for d in accession_dirs if d.name in specific_accessions]
         return accession_dirs
 
+    @staticmethod
+    def _empty_file_issues(fastq_files) -> list:
+        """Issues for any zero-byte FASTQ files."""
+        return [f"Empty file: {f.name}" for f in fastq_files if f.stat().st_size == 0]
+
+    @staticmethod
+    def _paired_end_issues(fastq_files) -> list:
+        """Issue if R1/R2 counts are mismatched."""
+        r1_files = [f for f in fastq_files if "_R1" in f.name or "_1" in f.name]
+        r2_files = [f for f in fastq_files if "_R2" in f.name or "_2" in f.name]
+        if len(r1_files) != len(r2_files) and len(r2_files) > 0:
+            return ["Mismatched paired-end files"]
+        return []
+
+    @staticmethod
+    def _fastq_format_issues(fastq_files) -> list:
+        """Issue if the first FASTQ file has no parseable records or fails to parse."""
+        try:
+            from Bio import SeqIO
+
+            for f in fastq_files[:1]:  # Check first file only for speed
+                with open(f, "rt") as handle:
+                    records = list(SeqIO.parse(handle, "fastq"))
+                    if len(records) == 0:
+                        return [f"No valid FASTQ records in {f.name}"]
+        except Exception as e:
+            return [f"FASTQ format error: {e}"]
+        return []
+
     def _validate_directory(self, acc_dir, check_pairs=False):
         """Validate a single accession directory."""
         print(f"Validating {acc_dir.name}...")
@@ -428,33 +451,10 @@ class SRAValidateCommand(BaseCommand):
                 "num_files": 0,
             }
 
-        issues = []
-
-        # Check file sizes
-        for f in fastq_files:
-            if f.stat().st_size == 0:
-                issues.append(f"Empty file: {f.name}")
-
-        # Check paired-end consistency
+        issues = self._empty_file_issues(fastq_files)
         if check_pairs:
-            r1_files = [f for f in fastq_files if "_R1" in f.name or "_1" in f.name]
-            r2_files = [f for f in fastq_files if "_R2" in f.name or "_2" in f.name]
-
-            if len(r1_files) != len(r2_files) and len(r2_files) > 0:
-                issues.append("Mismatched paired-end files")
-
-        # Basic FASTQ format validation
-        try:
-            from Bio import SeqIO
-
-            for f in fastq_files[:1]:  # Check first file only for speed
-                with open(f, "rt") as handle:
-                    records = list(SeqIO.parse(handle, "fastq"))
-                    if len(records) == 0:
-                        issues.append(f"No valid FASTQ records in {f.name}")
-                    break
-        except Exception as e:
-            issues.append(f"FASTQ format error: {e}")
+            issues += self._paired_end_issues(fastq_files)
+        issues += self._fastq_format_issues(fastq_files)
 
         return {
             "accession": acc_dir.name,
