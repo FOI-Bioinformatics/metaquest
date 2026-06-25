@@ -823,8 +823,55 @@ class TestMapVisualizerPlugin:
             country_column='country',
             value_column='value'
         )
-        
+
         assert result == mock_fig
+
+    @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
+    @patch('matplotlib.pyplot.figure')
+    @patch('metaquest.plugins.visualizers.map.cfeature', create=True)
+    @patch('metaquest.plugins.visualizers.map.ccrs', create=True)
+    def test_create_choropleth_colormap_not_deprecated(self, mock_ccrs, mock_cfeature, mock_figure):
+        """The colored-country branch must not use a deprecated matplotlib colormap API.
+
+        Exercises the geometry loop with a country that matches the data so the
+        colormap lookup actually runs, with MatplotlibDeprecationWarning promoted
+        to an error. plt.cm.get_cmap is removed in matplotlib 3.11.
+        """
+        import warnings
+        import matplotlib
+
+        mock_fig = Mock()
+        mock_ax = Mock()
+        mock_figure.return_value = mock_fig
+        mock_fig.add_subplot.return_value = mock_ax
+
+        # A geometry that matches a country in the data -> colormap branch runs
+        matching_geom = Mock()
+        matching_geom.attributes = {"NAME": "USA"}
+        mock_feature = Mock()
+        mock_cfeature.NaturalEarthFeature.return_value = mock_feature
+        mock_feature.geometries.return_value = [matching_geom]
+
+        country_data = pd.DataFrame({
+            'country': ['USA'],
+            'value': [0.8],
+        })
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", matplotlib.MatplotlibDeprecationWarning)
+            result = MapVisualizerPlugin.create_choropleth(
+                data=country_data,
+                country_column='country',
+                value_column='value',
+            )
+
+        assert result == mock_fig
+        # The colored branch must have been taken with a real RGBA facecolor
+        facecolors = [
+            call.kwargs.get("facecolor")
+            for call in mock_ax.add_geometries.call_args_list
+        ]
+        assert any(isinstance(fc, tuple) and len(fc) == 4 for fc in facecolors)
 
 
 class TestPluginRegistries:

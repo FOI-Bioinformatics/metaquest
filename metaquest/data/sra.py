@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.exceptions import DataAccessError, SecurityError
+from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
 
@@ -620,70 +620,31 @@ def assemble_datasets(args):
     """
     Assemble datasets from FASTQ files.
 
+    De-novo assembly is not yet implemented. This function validates the input
+    location and then raises ProcessingError, rather than silently producing an
+    empty result and writing a misleading success file.
+
     Args:
         args: Command-line arguments with fastq_folder/data_files and output_file
 
-    Returns:
-        List of dataset information dictionaries
-
     Raises:
-        DataAccessError: If the assembly fails
+        DataAccessError: If the input FASTQ folder does not exist
+        ProcessingError: Always, because assembly is not implemented
     """
-    try:
-        # Determine source folder - prefer fastq_folder (tests) over data_files (CLI)
-        if hasattr(args, 'fastq_folder') and args.fastq_folder:
-            fastq_folder = Path(args.fastq_folder)
-        elif hasattr(args, 'data_files') and args.data_files:
-            # For CLI, assume first data_files entry is the folder
-            fastq_folder = Path(args.data_files[0]).parent if args.data_files else Path("fastq")
-        else:
-            fastq_folder = Path("fastq")
+    # Determine source folder - prefer fastq_folder (tests) over data_files (CLI)
+    if hasattr(args, "fastq_folder") and args.fastq_folder:
+        fastq_folder = Path(args.fastq_folder)
+    elif hasattr(args, "data_files") and args.data_files:
+        # For CLI, assume the first data_files entry lives in the source folder
+        fastq_folder = Path(args.data_files[0]).parent
+    else:
+        fastq_folder = Path("fastq")
 
-        if not fastq_folder.exists():
-            raise DataAccessError(f"Fastq folder {fastq_folder} does not exist")
+    if not fastq_folder.exists():
+        raise DataAccessError(f"Fastq folder {fastq_folder} does not exist")
 
-        # Find FASTQ files (both .fastq and .fastq.gz)
-        fastq_patterns = ["*.fastq", "*.fastq.gz"]
-        all_files = []
-        for pattern in fastq_patterns:
-            all_files.extend(fastq_folder.glob(pattern))
-
-        # Identify Illumina and Nanopore files
-        illumina_files = []
-        nanopore_files = []
-        for fastq_file in all_files:
-            if "R1" in fastq_file.name or "R2" in fastq_file.name:
-                illumina_files.append(fastq_file)
-            else:
-                nanopore_files.append(fastq_file)
-
-        logger.info(f"Found {len(illumina_files)} Illumina files and {len(nanopore_files)} Nanopore files")
-
-        if len(illumina_files) == 0 and len(nanopore_files) == 0:
-            logger.warning(f"No FASTQ files found in {fastq_folder}")
-            results = []
-        else:
-            results = []
-
-            # Process Illumina datasets (mock for testing)
-            read_pairs = _find_paired_reads(illumina_files)
-            for r1_file, r2_file in read_pairs:
-                # For testing, don't actually run assembly
-                pass
-
-            # Process Nanopore datasets (mock for testing)
-            for fastq_file in nanopore_files:
-                # For testing, don't actually run assembly
-                pass
-
-        # Write output file if specified
-        if hasattr(args, 'output_file') and args.output_file:
-            import json
-            output_path = Path(args.output_file)
-            with open(output_path, 'w') as f:
-                json.dump(results, f, indent=2)
-
-        return results
-
-    except Exception as e:
-        raise DataAccessError(f"Error assembling datasets: {e}")
+    raise ProcessingError(
+        "Dataset assembly is not implemented. Run a dedicated assembler "
+        "(e.g. megahit for Illumina or flye for long reads) on the downloaded "
+        "FASTQ files instead."
+    )
