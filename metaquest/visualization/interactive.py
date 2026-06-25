@@ -24,6 +24,90 @@ from metaquest.core.exceptions import VisualizationError
 logger = logging.getLogger(__name__)
 
 
+def _pca_matrix(data):
+    """Return (X, sample_names) from a DataFrame or ndarray, validating PCA shape."""
+    if isinstance(data, pd.DataFrame):
+        X = data.values
+        sample_names = data.index
+    else:
+        X = data
+        sample_names = [f"Sample_{i}" for i in range(X.shape[0])]
+
+    if X.shape[0] < 2:
+        raise VisualizationError("PCA requires at least 2 samples")
+    if X.shape[1] < 1:
+        raise VisualizationError("PCA requires at least 1 feature")
+    return X, sample_names
+
+
+def _add_color_column(plot_data, metadata, color_by, sample_names):
+    """Attach the color metadata column to plot_data; return the resolved column or None."""
+    if metadata is None or color_by is None:
+        return color_by
+    if color_by in metadata.columns:
+        plot_data[color_by] = metadata.loc[sample_names, color_by]
+        return color_by
+    logger.warning(f"Column '{color_by}' not found in metadata")
+    return None
+
+
+def _add_size_column(plot_data, metadata, size_by, sample_names):
+    """Attach the size metadata column to plot_data; drop/skip it on NaN. Return resolved column or None."""
+    if metadata is None or size_by is None:
+        return size_by
+    if size_by not in metadata.columns:
+        logger.warning(f"Column '{size_by}' not found in metadata")
+        return None
+
+    size_values = metadata.loc[sample_names, size_by]
+    if size_values.isna().any():
+        logger.warning(f"Column '{size_by}' contains NaN values, removing size mapping")
+        return None
+
+    plot_data[size_by] = size_values
+    if plot_data[size_by].isna().any():
+        logger.warning(f"NaN values detected in plot data for '{size_by}', removing size mapping")
+        plot_data.drop(columns=[size_by], inplace=True)
+        return None
+    return size_by
+
+
+def _build_pca_figure(plot_data, n_components, n_pcs, color_by, size_by, title, variance) -> go.Figure:
+    """Build the 1D/2D/3D PCA scatter depending on the number of components available."""
+    common = dict(color=color_by, size=size_by, hover_name="Sample", title=title)
+    if n_components >= 3 and n_pcs >= 3:
+        return px.scatter_3d(
+            plot_data,
+            x="PC1",
+            y="PC2",
+            z="PC3",
+            labels={
+                "PC1": f"PC1 ({variance[0]:.1%} variance)",
+                "PC2": f"PC2 ({variance[1]:.1%} variance)",
+                "PC3": f"PC3 ({variance[2]:.1%} variance)",
+            },
+            **common,
+        )
+    if n_pcs >= 2:
+        return px.scatter(
+            plot_data,
+            x="PC1",
+            y="PC2",
+            labels={
+                "PC1": f"PC1 ({variance[0]:.1%} variance)",
+                "PC2": f"PC2 ({variance[1]:.1%} variance)",
+            },
+            **common,
+        )
+    return px.scatter(
+        plot_data,
+        x="PC1",
+        y=[0] * len(plot_data),  # Flat y-axis for 1D data
+        labels={"PC1": f"PC1 ({variance[0]:.1%} variance)"},
+        **common,
+    )
+
+
 def create_interactive_pca(
     data: Union[pd.DataFrame, np.ndarray],
     metadata: Optional[pd.DataFrame] = None,
@@ -54,122 +138,35 @@ def create_interactive_pca(
         VisualizationError: If PCA fails
     """
     try:
-        # Prepare data
-        if isinstance(data, pd.DataFrame):
-            X = data.values
-            sample_names = data.index
-        else:
-            X = data
-            sample_names = [f"Sample_{i}" for i in range(X.shape[0])]
+        X, sample_names = _pca_matrix(data)
 
-        # Validate input for PCA
-        if X.shape[0] < 2:
-            raise VisualizationError("PCA requires at least 2 samples")
-        if X.shape[1] < 1:
-            raise VisualizationError("PCA requires at least 1 feature")
-
-        # Perform PCA
         pca = PCA(n_components=min(n_components, X.shape[1], X.shape[0]))
         X_pca = pca.fit_transform(X)
+        n_pcs = X_pca.shape[1]
 
-        # Create DataFrame for plotting - handle case where we have fewer components than expected
+        # Assemble the plotting frame (PC columns + optional metadata mappings)
         plot_data = pd.DataFrame({"Sample": sample_names})
         plot_data["PC1"] = X_pca[:, 0]
-
-        if X_pca.shape[1] >= 2:
+        if n_pcs >= 2:
             plot_data["PC2"] = X_pca[:, 1]
-
-        if n_components >= 3 and X_pca.shape[1] >= 3:
+        if n_components >= 3 and n_pcs >= 3:
             plot_data["PC3"] = X_pca[:, 2]
 
-        # Add metadata if provided
-        if metadata is not None and color_by is not None:
-            if color_by in metadata.columns:
-                plot_data[color_by] = metadata.loc[sample_names, color_by]
-            else:
-                logger.warning(f"Column '{color_by}' not found in metadata")
-                color_by = None
+        color_by = _add_color_column(plot_data, metadata, color_by, sample_names)
+        size_by = _add_size_column(plot_data, metadata, size_by, sample_names)
 
-        if metadata is not None and size_by is not None:
-            if size_by in metadata.columns:
-                size_values = metadata.loc[sample_names, size_by]
-                # Check for NaN values and handle them
-                if size_values.isna().any():
-                    logger.warning(f"Column '{size_by}' contains NaN values, removing size mapping")
-                    size_by = None
-                else:
-                    plot_data[size_by] = size_values
-                    # Additional safety check
-                    if plot_data[size_by].isna().any():
-                        logger.warning(f"NaN values detected in plot data for '{size_by}', " "removing size mapping")
-                        column_to_drop = size_by
-                        size_by = None
-                        plot_data = plot_data.drop(columns=[column_to_drop])
-            else:
-                logger.warning(f"Column '{size_by}' not found in metadata")
-                size_by = None
+        fig = _build_pca_figure(plot_data, n_components, n_pcs, color_by, size_by, title, pca.explained_variance_ratio_)
 
-        # Create plot
-        if n_components >= 3 and X_pca.shape[1] >= 3:
-            fig = px.scatter_3d(
-                plot_data,
-                x="PC1",
-                y="PC2",
-                z="PC3",
-                color=color_by,
-                size=size_by,
-                hover_name="Sample",
-                title=title,
-                labels={
-                    "PC1": f"PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)",
-                    "PC2": f"PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)",
-                    "PC3": f"PC3 ({pca.explained_variance_ratio_[2]:.1%} variance)",
-                },
-            )
-        elif X_pca.shape[1] >= 2:
-            fig = px.scatter(
-                plot_data,
-                x="PC1",
-                y="PC2",
-                color=color_by,
-                size=size_by,
-                hover_name="Sample",
-                title=title,
-                labels={
-                    "PC1": f"PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)",
-                    "PC2": f"PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)",
-                },
-            )
-        else:
-            # Only 1 component - create a simple 1D plot
-            fig = px.scatter(
-                plot_data,
-                x="PC1",
-                y=[0] * len(plot_data),  # Flat y-axis for 1D data
-                color=color_by,
-                size=size_by,
-                hover_name="Sample",
-                title=title,
-                labels={
-                    "PC1": f"PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)",
-                },
-            )
-
-        # Customize layout
         fig.update_layout(width=800, height=600, showlegend=True, hovermode="closest")
-
-        # Add explained variance to title
         total_variance = sum(pca.explained_variance_ratio_[:n_components])
-        fig.update_layout(title=f"{title}<br><sub>Total variance explained: " f"{total_variance:.1%}</sub>")
+        fig.update_layout(title=f"{title}<br><sub>Total variance explained: {total_variance:.1%}</sub>")
 
-        # Save plot if requested
         if output_file:
             output_path = Path(output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             fig.write_html(str(output_path))
             logger.info(f"Interactive PCA plot saved to {output_path}")
 
-        # Show plot if requested
         if show_plot:
             fig.show()
 
