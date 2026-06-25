@@ -433,6 +433,27 @@ def _handle_download_failure(fastq_path, failed_accessions):
     )
 
 
+def _execute_parallel_downloads(
+    accessions, fastq_path, num_threads, max_workers, force, temp_folder, download_results, failed_accessions
+):
+    """Download accessions concurrently and tally results. Returns (successful, failed)."""
+    futures_results: list = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(download_accession, acc, fastq_path, num_threads, force, temp_folder): acc
+            for acc in accessions
+        }
+        for future in as_completed(futures):
+            acc = futures[future]
+            try:
+                futures_results.append((acc, future.result()))
+            except Exception as e:
+                logger.error(f"Download failed for {acc}: {e}")
+                futures_results.append((acc, None))
+
+    return _process_download_results(futures_results, accessions, download_results, failed_accessions)
+
+
 def download_sra(
     fastq_folder: Union[str, Path],
     accessions_file: Union[str, Path],
@@ -516,35 +537,18 @@ def download_sra(
             accessions_to_download = accessions_to_download[:max_downloads]
 
         # Download accessions in parallel
-        successful_count = 0
-        failed_count = 0
         failed_accessions: list = []
         download_results: dict = {}
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit download jobs
-            futures = {
-                executor.submit(download_accession, acc, fastq_path, num_threads, force, temp_folder): acc
-                for acc in accessions_to_download
-            }
-
-            # Process results as they complete
-            futures_results: list = []
-            for future in as_completed(futures):
-                acc = futures[future]
-                try:
-                    result = future.result()
-                    futures_results.append((acc, result))
-                except Exception as e:
-                    logger.error(f"Download failed for {acc}: {e}")
-                    futures_results.append((acc, None))
-
-            successful_count, failed_count = _process_download_results(
-                futures_results,
-                accessions_to_download,
-                download_results,
-                failed_accessions,
-            )
+        successful_count, failed_count = _execute_parallel_downloads(
+            accessions_to_download,
+            fastq_path,
+            num_threads,
+            max_workers,
+            force,
+            temp_folder,
+            download_results,
+            failed_accessions,
+        )
 
         # Retry failed downloads if requested
         if max_retries > 0 and failed_accessions:
