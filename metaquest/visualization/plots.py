@@ -208,6 +208,59 @@ def plot_containment(
         raise VisualizationError(f"Error plotting containment: {e}")
 
 
+def _load_counts_df(file_path: Union[str, Path, pd.DataFrame], limit: int) -> pd.DataFrame:
+    """Load a [category, count] table, name its columns, and keep the top `limit` rows."""
+    if isinstance(file_path, pd.DataFrame):
+        df = file_path.copy()
+    else:
+        df = pd.read_csv(file_path, sep="\t", header=None)
+
+    if df.shape[1] < 2:
+        raise VisualizationError("File must have at least two columns (category and count)")
+
+    df.columns = ["category", "count"] + [f"col{i + 3}" for i in range(df.shape[1] - 2)]
+    return df.sort_values(by="count", ascending=False).head(limit)
+
+
+def _metadata_pie_chart(df: pd.DataFrame, colors, title: Optional[str]) -> plt.Figure:
+    """Render a pie chart of category counts."""
+    fig, ax = plt.subplots(figsize=(10, 10))
+    df["category"] = df["category"].astype(str)
+    ax.pie(
+        df["count"],
+        labels=df["category"],
+        autopct="%1.1f%%",
+        startangle=90,
+        colors=colors if colors else plt.cm.tab20.colors,
+    )
+    ax.axis("equal")  # Equal aspect ratio ensures that pie is drawn as a circle
+    if title:
+        ax.set_title(title)
+    return fig
+
+
+def _metadata_radar_chart(df: pd.DataFrame, colors, title: Optional[str]) -> plt.Figure:
+    """Render a radar/polar chart of category counts (assumes >= 3 categories)."""
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
+
+    categories = df["category"].tolist()
+    values = df["count"].tolist()
+    angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+
+    # Close the loop by repeating the first point.
+    values += [values[0]]
+    angles += [angles[0]]
+
+    color = colors if isinstance(colors, str) else "blue"
+    ax.plot(angles, values, "o-", linewidth=2, color=color)
+    ax.fill(angles, values, alpha=0.25, color=color)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(categories)
+    if title:
+        ax.set_title(title)
+    return fig
+
+
 def plot_metadata_counts(
     file_path: Union[str, Path, pd.DataFrame],
     title: Optional[str] = None,
@@ -236,23 +289,7 @@ def plot_metadata_counts(
         VisualizationError: If the visualization fails
     """
     try:
-        # Load data if file path, otherwise use the DataFrame directly
-        if isinstance(file_path, pd.DataFrame):
-            df = file_path.copy()
-        else:
-            df = pd.read_csv(file_path, sep="\t", header=None)
-
-        # If file has two columns, assume it's [category, count]
-        if df.shape[1] >= 2:
-            # Set column names
-            df.columns = ["category", "count"] + [f"col{i + 3}" for i in range(df.shape[1] - 2)]
-
-            # Sort by count and limit number of items
-            df = df.sort_values(by="count", ascending=False).head(limit)
-
-        else:
-            # Single column format, can't create plot
-            raise VisualizationError("File must have at least two columns (category and count)")
+        df = _load_counts_df(file_path, limit)
 
         # Set default title if not specified
         if title is None and show_title:
@@ -262,7 +299,6 @@ def plot_metadata_counts(
 
         # Create plot based on plot_type
         if plot_type == "bar":
-            # Use bar chart plugin
             plugin = visualizer_registry.get("bar")
             fig = plugin.create_plot(
                 data=df,
@@ -273,78 +309,19 @@ def plot_metadata_counts(
                 horizontal=True,
                 output_format=save_format if save_format else None,
             )
-
         elif plot_type == "pie":
-            # Create pie chart (limit to top items for readability)
-            fig, ax = plt.subplots(figsize=(10, 10))
-
-            # Calculate percentage for "Other" category if data was limited
-            _ = df["count"].sum()  # For potential future use
-
-            # Create pie chart
-            df["category"] = df["category"].astype(str)
-            ax.pie(
-                df["count"],
-                labels=df["category"],
-                autopct="%1.1f%%",
-                startangle=90,
-                colors=colors if colors else plt.cm.tab20.colors,
-            )
-            ax.axis("equal")  # Equal aspect ratio ensures that pie is drawn as a circle
-
-            if title:
-                ax.set_title(title)
-
+            fig = _metadata_pie_chart(df, colors, title)
         elif plot_type == "radar":
-            # Create radar chart (requires at least 3 categories)
+            # Radar needs at least 3 categories; otherwise fall back to a bar chart.
             if len(df) < 3:
                 logger.warning("Radar chart requires at least 3 categories, falling back to bar chart")
                 return plot_metadata_counts(file_path, title, "bar", colors, show_title, save_format)
-
-            # Set up radar chart
-            fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
-
-            # Get categories and values
-            categories = df["category"].tolist()
-            values = df["count"].tolist()
-
-            # Number of categories
-            N = len(categories)
-
-            # Create angle values
-            angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
-
-            # Make the plot circular by repeating the first value
-            values += [values[0]]
-            angles += [angles[0]]
-
-            # Plot data
-            ax.plot(
-                angles,
-                values,
-                "o-",
-                linewidth=2,
-                color=colors if isinstance(colors, str) else "blue",
-            )
-            ax.fill(
-                angles,
-                values,
-                alpha=0.25,
-                color=colors if isinstance(colors, str) else "blue",
-            )
-
-            # Set category labels
-            ax.set_xticks(angles[:-1])
-            ax.set_xticklabels(categories)
-
-            if title:
-                ax.set_title(title)
-
+            fig = _metadata_radar_chart(df, colors, title)
         else:
-            raise VisualizationError(f"Unknown plot type: {plot_type}. " "Supported types: bar, pie, radar")
+            raise VisualizationError(f"Unknown plot type: {plot_type}. Supported types: bar, pie, radar")
 
-        # Save plot if format specified
-        if save_format and plot_type != "bar":  # bar plugin handles saving
+        # Save plot if format specified (the bar plugin handles its own saving)
+        if save_format and plot_type != "bar":
             output_file = f"{Path(file_path).stem}_{plot_type}.{save_format}"
             plt.savefig(output_file, format=save_format, dpi=300, bbox_inches="tight")
             logger.info(f"Plot saved to {output_file}")

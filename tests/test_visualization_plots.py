@@ -422,6 +422,31 @@ class TestPlotMetadataCounts:
         result = plot_metadata_counts(file_path=str(test_file), plot_type="pie")
         assert result is not None
 
+    def test_plot_metadata_counts_radar(self, tmp_path):
+        """Radar chart renders directly for >= 3 categories."""
+        test_file = tmp_path / "metadata_counts.tsv"
+        pd.DataFrame({"organism": ["E. coli", "S. enterica", "K. pneumoniae"], "count": [100, 80, 60]}).to_csv(
+            test_file, sep="\t", index=False, header=False
+        )
+
+        result = plot_metadata_counts(file_path=str(test_file), plot_type="radar", colors="green")
+        assert result is not None
+
+    def test_plot_metadata_counts_radar_falls_back_to_bar(self, tmp_path):
+        """Fewer than 3 categories falls back to the bar plugin."""
+        test_file = tmp_path / "metadata_counts.tsv"
+        pd.DataFrame({"organism": ["E. coli", "S. enterica"], "count": [100, 80]}).to_csv(
+            test_file, sep="\t", index=False, header=False
+        )
+
+        mock_plugin = Mock()
+        mock_plugin.create_plot.return_value = Mock()
+        with patch("metaquest.plugins.base.visualizer_registry.get", return_value=mock_plugin):
+            result = plot_metadata_counts(file_path=str(test_file), plot_type="radar")
+
+        assert result is not None
+        mock_plugin.create_plot.assert_called_once()
+
     def test_plot_metadata_counts_with_limit(self, tmp_path):
         """Test metadata counts with top N limit."""
         test_file = tmp_path / "metadata_counts.tsv"
