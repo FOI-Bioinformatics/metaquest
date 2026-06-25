@@ -176,9 +176,7 @@ class SRAIntelligentDownloadCommand(BaseCommand):
             self._print_session_summary(session)
 
             # Save progress report
-            failed_accessions = [
-                acc for acc, result in session.download_results.items() if result.status == "failed"
-            ]
+            failed_accessions = [acc for acc, result in session.download_results.items() if result.status == "failed"]
             progress_file = Path(args.progress_report)
             with open(progress_file, "w") as progress_f:
                 json.dump(

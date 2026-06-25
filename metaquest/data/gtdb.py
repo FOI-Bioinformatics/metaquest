@@ -63,9 +63,7 @@ def search_taxon(taxon_name: str, limit: int = 100) -> List[Dict]:
     return []
 
 
-def get_accessions_for_species(
-    species_name: str, representative_only: bool = True
-) -> List[str]:
+def get_accessions_for_species(species_name: str, representative_only: bool = True) -> List[str]:
     """Get assembly accessions (GCF_*/GCA_*) for a species.
 
     If representative_only is True, return only the representative genome.
@@ -94,9 +92,7 @@ def get_accessions_for_species(
     return accessions
 
 
-def get_accessions_for_genus(
-    genus_name: str, representative_only: bool = True
-) -> List[str]:
+def get_accessions_for_genus(genus_name: str, representative_only: bool = True) -> List[str]:
     """Get representative accessions for all species in a genus."""
     taxon_results = search_taxon(genus_name)
     if not taxon_results:

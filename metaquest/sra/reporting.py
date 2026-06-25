@@ -715,7 +715,7 @@ class SRAReportGenerator:
         stats = report_data["summary_stats"]
 
         session_id = html_escape(str(session.session_id))
-        timestamp = html_escape(str(report_data['timestamp']))
+        timestamp = html_escape(str(report_data["timestamp"]))
 
         html = f"""
 <!DOCTYPE html>
@@ -761,8 +761,8 @@ class SRAReportGenerator:
 
     def _generate_simple_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate simple quality HTML without Jinja2."""
-        title = html_escape(str(dashboard_data['title']))
-        timestamp = html_escape(str(dashboard_data['timestamp']))
+        title = html_escape(str(dashboard_data["title"]))
+        timestamp = html_escape(str(dashboard_data["timestamp"]))
         return f"""
 <!DOCTYPE html>
 <html>
@@ -784,12 +784,14 @@ class SRAReportGenerator:
 
     def _generate_simple_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple comparative HTML without Jinja2."""
-        title = html_escape(str(report_data['title']))
-        timestamp = html_escape(str(report_data['timestamp']))
-        group_items = ''.join([
-            f"<li>{html_escape(str(name))}: {count} datasets</li>"
-            for name, count in report_data['group_counts'].items()
-        ])
+        title = html_escape(str(report_data["title"]))
+        timestamp = html_escape(str(report_data["timestamp"]))
+        group_items = "".join(
+            [
+                f"<li>{html_escape(str(name))}: {count} datasets</li>"
+                for name, count in report_data["group_counts"].items()
+            ]
+        )
         return f"""
 <!DOCTYPE html>
 <html>

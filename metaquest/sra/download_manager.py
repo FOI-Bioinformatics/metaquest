@@ -256,9 +256,7 @@ class CheckpointManager:
             data["download_start"] = checkpoint.download_start.isoformat()
             data["last_progress"] = checkpoint.last_progress.isoformat()
             data["estimated_completion"] = (
-                checkpoint.estimated_completion.isoformat()
-                if checkpoint.estimated_completion
-                else None
+                checkpoint.estimated_completion.isoformat() if checkpoint.estimated_completion else None
             )
             with open(checkpoint_file, "w") as f:
                 json.dump(data, f)
@@ -277,9 +275,7 @@ class CheckpointManager:
             data["download_start"] = datetime.fromisoformat(data["download_start"])
             data["last_progress"] = datetime.fromisoformat(data["last_progress"])
             data["estimated_completion"] = (
-                datetime.fromisoformat(data["estimated_completion"])
-                if data["estimated_completion"]
-                else None
+                datetime.fromisoformat(data["estimated_completion"]) if data["estimated_completion"] else None
             )
             data["chunk_checksums"] = {int(k): v for k, v in data["chunk_checksums"].items()}
             return DownloadCheckpoint(**data)
@@ -540,9 +536,7 @@ class IntelligentDownloadManager:
             ]
 
             # Execute download
-            SecureSubprocess.run_secure(
-                cmd[0], cmd[1:], timeout=3600  # 1 hour timeout
-            )
+            SecureSubprocess.run_secure(cmd[0], cmd[1:], timeout=3600)  # 1 hour timeout
 
             # run_secure uses check=True, so reaching here means success
             progress.status = "completed"

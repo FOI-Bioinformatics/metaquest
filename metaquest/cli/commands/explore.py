@@ -51,16 +51,12 @@ class EnrichTaxonomyCommand(BaseCommand):
         try:
             containment_path = Path(args.parsed_containment)
             if not containment_path.exists():
-                self.logger.error(
-                    "Containment file not found: %s", containment_path
-                )
+                self.logger.error("Containment file not found: %s", containment_path)
                 return 1
 
             df = pd.read_csv(containment_path, sep="\t", index_col=0)
             genome_cols = get_genome_columns(df)
-            self.logger.info(
-                "Found %d genome columns in %s", len(genome_cols), containment_path
-            )
+            self.logger.info("Found %d genome columns in %s", len(genome_cols), containment_path)
 
             cache_file = Path(args.cache)
             taxonomy = enrich_genomes_with_taxonomy(genome_cols, cache_file=cache_file)
@@ -128,9 +124,7 @@ class ExploreContainmentCommand(BaseCommand):
 
             containment_path = Path(args.parsed_containment)
             if not containment_path.exists():
-                self.logger.error(
-                    "Containment file not found: %s", containment_path
-                )
+                self.logger.error("Containment file not found: %s", containment_path)
                 return 1
 
             df = pd.read_csv(containment_path, sep="\t", index_col=0)
@@ -139,26 +133,20 @@ class ExploreContainmentCommand(BaseCommand):
             if args.taxonomy_map:
                 taxonomy_path = Path(args.taxonomy_map)
                 if not taxonomy_path.exists():
-                    self.logger.error(
-                        "Taxonomy map not found: %s", taxonomy_path
-                    )
+                    self.logger.error("Taxonomy map not found: %s", taxonomy_path)
                     return 1
                 taxonomy = load_taxonomy_cache(taxonomy_path)
             else:
                 genome_cols = get_genome_columns(df)
                 cache_file = Path(args.cache)
-                taxonomy = enrich_genomes_with_taxonomy(
-                    genome_cols, cache_file=cache_file
-                )
+                taxonomy = enrich_genomes_with_taxonomy(genome_cols, cache_file=cache_file)
 
             # Load optional metadata
             metadata = None
             if args.metadata:
                 metadata_path = Path(args.metadata)
                 if not metadata_path.exists():
-                    self.logger.error(
-                        "Metadata file not found: %s", metadata_path
-                    )
+                    self.logger.error("Metadata file not found: %s", metadata_path)
                     return 1
                 metadata = pd.read_csv(metadata_path, sep="\t", index_col=0)
 
@@ -235,23 +223,17 @@ class FindByTaxonomyCommand(BaseCommand):
     def execute(self, args: argparse.Namespace) -> int:
         try:
             if not any([args.family, args.genus, args.species]):
-                self.logger.error(
-                    "At least one of --family, --genus, or --species is required"
-                )
+                self.logger.error("At least one of --family, --genus, or --species is required")
                 return 1
 
             containment_path = Path(args.parsed_containment)
             if not containment_path.exists():
-                self.logger.error(
-                    "Containment file not found: %s", containment_path
-                )
+                self.logger.error("Containment file not found: %s", containment_path)
                 return 1
 
             taxonomy_path = Path(args.taxonomy_map)
             if not taxonomy_path.exists():
-                self.logger.error(
-                    "Taxonomy map not found: %s", taxonomy_path
-                )
+                self.logger.error("Taxonomy map not found: %s", taxonomy_path)
                 return 1
 
             df = pd.read_csv(containment_path, sep="\t", index_col=0)
@@ -283,9 +265,7 @@ class FindByTaxonomyCommand(BaseCommand):
 
             if args.output:
                 result.to_csv(args.output, sep="\t")
-                self.logger.info(
-                    "Wrote %d results to %s", len(result), args.output
-                )
+                self.logger.info("Wrote %d results to %s", len(result), args.output)
             else:
                 sys.stdout.write(result.to_csv(sep="\t"))
 

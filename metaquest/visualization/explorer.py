@@ -140,12 +140,7 @@ def _build_summary_data(
     families = long_df.loc[long_df["family"] != "Unknown", "family"].unique()
     genera = long_df.loc[long_df["genus"] != "Unknown", "genus"].unique()
 
-    top_families = (
-        long_df.groupby("family")["sample"]
-        .nunique()
-        .sort_values(ascending=False)
-        .head(5)
-    )
+    top_families = long_df.groupby("family")["sample"].nunique().sort_values(ascending=False).head(5)
 
     return {
         "total_samples": samples_with_containment,
@@ -154,9 +149,7 @@ def _build_summary_data(
         "num_genera": len(genera),
         "containment_min": float(long_df["containment"].min()),
         "containment_max": float(long_df["containment"].max()),
-        "top_families": [
-            {"name": name, "count": int(count)} for name, count in top_families.items()
-        ],
+        "top_families": [{"name": name, "count": int(count)} for name, count in top_families.items()],
     }
 
 
@@ -181,9 +174,7 @@ def _build_sunburst(long_df: pd.DataFrame) -> str:
 
 def _build_heatmap(long_df: pd.DataFrame) -> str:
     """Build sample-by-taxon heatmap. Returns Plotly HTML fragment."""
-    pivot = long_df.pivot_table(
-        index="sample", columns="family", values="containment", aggfunc="max", fill_value=0
-    )
+    pivot = long_df.pivot_table(index="sample", columns="family", values="containment", aggfunc="max", fill_value=0)
     if pivot.empty:
         return ""
     fig = px.imshow(

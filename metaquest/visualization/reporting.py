@@ -236,9 +236,7 @@ def _add_metadata_summary_page(pdf, metadata_data):
         # Create table data
         table_data = []
         for col, count in top_columns.items():
-            table_data.append(
-                [col, count, f"{count / len(metadata_data) * 100:.1f}%"]
-            )
+            table_data.append([col, count, f"{count / len(metadata_data) * 100:.1f}%"])
 
         # Create table
         ax.table(
@@ -276,17 +274,13 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
                     top_genomes.append((col, len(top_samples)))
 
             top_genomes.sort(key=lambda x: x[1], reverse=True)
-            top_genome_cols = [
-                g[0] for g in top_genomes[: min(20, len(top_genomes))]
-            ]
+            top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
 
             if len(top_genome_cols) > 1:
                 # Create heatmap of top genome correlations
                 correlation_matrix = summary_data[top_genome_cols].corr()
 
-                fig = plot_correlation_matrix(
-                    correlation_matrix, title="Genome Correlation Matrix"
-                )
+                fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
                 pdf.savefig(fig)
     except Exception as e:
         logger.warning(f"Error generating heatmap: {e}")

@@ -76,12 +76,7 @@ def _lookup_genome_taxonomy_gtdb(accession: str) -> Optional[TaxonomyInfo]:
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             data = response.json()
-            gtdb_taxonomy = (
-                data.get("gtdb_taxonomy")
-                or data.get("gtdbTaxonomy")
-                or data.get("taxonomy")
-                or ""
-            )
+            gtdb_taxonomy = data.get("gtdb_taxonomy") or data.get("gtdbTaxonomy") or data.get("taxonomy") or ""
             if gtdb_taxonomy:
                 info = parse_gtdb_taxonomy_string(gtdb_taxonomy, accession)
                 info.organism = data.get("organism_name") or data.get("organismName")
@@ -102,25 +97,18 @@ def _lookup_genome_taxonomy_gtdb(accession: str) -> Optional[TaxonomyInfo]:
             if rows and len(rows) > 0:
                 record = rows[0]
                 gtdb_taxonomy = (
-                    record.get("gtdb_taxonomy")
-                    or record.get("gtdbTaxonomy")
-                    or record.get("taxonomy")
-                    or ""
+                    record.get("gtdb_taxonomy") or record.get("gtdbTaxonomy") or record.get("taxonomy") or ""
                 )
                 if gtdb_taxonomy:
                     info = parse_gtdb_taxonomy_string(gtdb_taxonomy, accession)
                     info.organism = record.get("organism_name") or record.get("organismName")
-                    info.tax_id = str(
-                        record.get("ncbi_taxid") or record.get("taxId") or ""
-                    )
+                    info.tax_id = str(record.get("ncbi_taxid") or record.get("taxId") or "")
                     if info.tax_id == "":
                         info.tax_id = None
                     return info
 
     except requests.exceptions.RequestException as e:
-        raise DataAccessError(
-            f"GTDB API error looking up genome '{accession}': {e}"
-        )
+        raise DataAccessError(f"GTDB API error looking up genome '{accession}': {e}")
 
     return None
 
@@ -152,9 +140,7 @@ def load_taxonomy_cache(cache_file: Path) -> Dict[str, TaxonomyInfo]:
     return cache
 
 
-def save_taxonomy_cache(
-    taxonomy: Dict[str, TaxonomyInfo], cache_file: Path
-) -> None:
+def save_taxonomy_cache(taxonomy: Dict[str, TaxonomyInfo], cache_file: Path) -> None:
     """Save a genome-to-taxonomy mapping to a TSV file."""
     with open(cache_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_CACHE_COLUMNS, delimiter="\t")
@@ -203,14 +189,10 @@ def enrich_genomes_with_taxonomy(
                 if info:
                     taxonomy[accession] = info
                 else:
-                    logger.warning(
-                        "No taxonomy found for genome '%s'", accession
-                    )
+                    logger.warning("No taxonomy found for genome '%s'", accession)
                     taxonomy[accession] = TaxonomyInfo(genome_id=accession)
             except DataAccessError:
-                logger.warning(
-                    "Failed to retrieve taxonomy for '%s'", accession
-                )
+                logger.warning("Failed to retrieve taxonomy for '%s'", accession)
                 taxonomy[accession] = TaxonomyInfo(genome_id=accession)
 
         if cache_file:
@@ -293,7 +275,5 @@ def summarize_by_taxonomy(
         return pd.DataFrame()
 
     grouped = df.groupby(["sample", level])["containment"].max().reset_index()
-    pivot = grouped.pivot_table(
-        index="sample", columns=level, values="containment", fill_value=0.0
-    )
+    pivot = grouped.pivot_table(index="sample", columns=level, values="containment", fill_value=0.0)
     return pivot

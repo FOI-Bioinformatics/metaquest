@@ -216,9 +216,7 @@ class MetaquestDiversityPlugin(CommandLinePlugin):
 
             # PERMANOVA
             if args.permanova_formula and metadata_df is not None:
-                permanova_results = perform_permanova(
-                    beta_div, metadata_df, args.permanova_formula
-                )
+                permanova_results = perform_permanova(beta_div, metadata_df, args.permanova_formula)
                 permanova_output = output_dir / "permanova_results.txt"
                 with open(permanova_output, "w") as f:
                     f.write("PERMANOVA Results\n")
@@ -284,18 +282,14 @@ class MetaquestTaxonomyPlugin(CommandLinePlugin):
                 df = pd.read_csv(args.species_file)
                 if args.species_column:
                     if args.species_column not in df.columns:
-                        logger.error(
-                            f"Column '{args.species_column}' not found"
-                        )
+                        logger.error(f"Column '{args.species_column}' not found")
                         sys.exit(1)
                     species_list = df[args.species_column].dropna().tolist()
                 else:
                     species_list = df.iloc[:, 0].dropna().tolist()
             else:
                 with open(args.species_file, "r") as f:
-                    species_list = [
-                        line.strip() for line in f if line.strip()
-                    ]
+                    species_list = [line.strip() for line in f if line.strip()]
 
             logger.info(f"Loaded {len(species_list)} species names")
 
@@ -309,8 +303,7 @@ class MetaquestTaxonomyPlugin(CommandLinePlugin):
 
             valid_count = results_df["is_valid"].sum()
             total_count = len(results_df)
-            print(f"\nValid: {valid_count}/{total_count} "
-                  f"({valid_count / total_count * 100:.1f}%)")
+            print(f"\nValid: {valid_count}/{total_count} " f"({valid_count / total_count * 100:.1f}%)")
 
         except Exception as e:
             logger.error(f"Taxonomy validation failed: {e}")

@@ -58,14 +58,10 @@ class GenomeSearchCommand(BaseCommand):
     def execute(self, args: argparse.Namespace) -> int:
         try:
             if args.species:
-                accessions = get_accessions_for_species(
-                    args.species, representative_only=args.representative_only
-                )
+                accessions = get_accessions_for_species(args.species, representative_only=args.representative_only)
                 label = args.species
             else:
-                accessions = get_accessions_for_genus(
-                    args.genus, representative_only=args.representative_only
-                )
+                accessions = get_accessions_for_genus(args.genus, representative_only=args.representative_only)
                 label = args.genus
 
             if not accessions:
@@ -158,18 +154,10 @@ class GenomeDownloadCommand(BaseCommand):
                     accessions.append(line)
 
         if args.species:
-            accessions.extend(
-                get_accessions_for_species(
-                    args.species, representative_only=args.representative_only
-                )
-            )
+            accessions.extend(get_accessions_for_species(args.species, representative_only=args.representative_only))
 
         if args.genus:
-            accessions.extend(
-                get_accessions_for_genus(
-                    args.genus, representative_only=args.representative_only
-                )
-            )
+            accessions.extend(get_accessions_for_genus(args.genus, representative_only=args.representative_only))
 
         return accessions
 
@@ -177,8 +165,7 @@ class GenomeDownloadCommand(BaseCommand):
         try:
             if not any([args.accessions, args.accession_file, args.species, args.genus]):
                 self.logger.error(
-                    "At least one of --accessions, --accession-file, --species, "
-                    "or --genus is required"
+                    "At least one of --accessions, --accession-file, --species, " "or --genus is required"
                 )
                 return 1
 
@@ -190,9 +177,7 @@ class GenomeDownloadCommand(BaseCommand):
             output_dir = Path(args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            self.logger.info(
-                "Downloading %d genome(s) to %s", len(accessions), output_dir
-            )
+            self.logger.info("Downloading %d genome(s) to %s", len(accessions), output_dir)
 
             zip_path = download_genomes(
                 accessions,
@@ -201,9 +186,7 @@ class GenomeDownloadCommand(BaseCommand):
             )
 
             genome_paths = extract_and_organize(zip_path, output_dir)
-            self.logger.info(
-                "Downloaded and extracted %d genome(s)", len(genome_paths)
-            )
+            self.logger.info("Downloaded and extracted %d genome(s)", len(genome_paths))
             return 0
         except MetaQuestError as e:
             self.logger.error("Error downloading genomes: %s", e)
@@ -272,26 +255,16 @@ class GenomePrepareCommand(BaseCommand):
                     accessions.append(line)
 
         if args.species:
-            accessions.extend(
-                get_accessions_for_species(
-                    args.species, representative_only=args.representative_only
-                )
-            )
+            accessions.extend(get_accessions_for_species(args.species, representative_only=args.representative_only))
 
         if args.genus:
-            accessions.extend(
-                get_accessions_for_genus(
-                    args.genus, representative_only=args.representative_only
-                )
-            )
+            accessions.extend(get_accessions_for_genus(args.genus, representative_only=args.representative_only))
 
         return accessions
 
     def _create_manifest(self, output_dir: Path, manifest_file: str) -> int:
         """Create a manifest CSV from genome files in output_dir."""
-        genome_files = sorted(output_dir.glob("*.fna.gz")) + sorted(
-            output_dir.glob("*.fasta.gz")
-        )
+        genome_files = sorted(output_dir.glob("*.fna.gz")) + sorted(output_dir.glob("*.fasta.gz"))
         if not genome_files:
             self.logger.warning("No genome files found in %s", output_dir)
             return 0
@@ -306,9 +279,7 @@ class GenomePrepareCommand(BaseCommand):
                 protein_name = str(protein_file) if protein_file.exists() else ""
                 writer.writerow([name, str(gf), protein_name])
 
-        self.logger.info(
-            "Created manifest with %d entries: %s", len(genome_files), manifest_path
-        )
+        self.logger.info("Created manifest with %d entries: %s", len(genome_files), manifest_path)
         return len(genome_files)
 
     def execute(self, args: argparse.Namespace) -> int:
@@ -329,9 +300,7 @@ class GenomePrepareCommand(BaseCommand):
                     self.logger.warning("No accessions found")
                     return 0
 
-                self.logger.info(
-                    "Downloading %d genome(s) to %s", len(accessions), output_dir
-                )
+                self.logger.info("Downloading %d genome(s) to %s", len(accessions), output_dir)
 
                 zip_path = download_genomes(accessions, output_dir)
                 extract_and_organize(zip_path, output_dir)

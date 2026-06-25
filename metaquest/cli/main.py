@@ -152,18 +152,14 @@ def main(args: Optional[List[str]] = None) -> int:
         if parsed_args.log_level == "DEBUG":
             logging.debug(traceback.format_exc())
         else:
-            logging.info(
-                "Use --log-level DEBUG for full traceback."
-            )
+            logging.info("Use --log-level DEBUG for full traceback.")
         return 1
     except Exception as e:
         logging.error(f"{type(e).__name__}: {e}")
         if parsed_args.log_level == "DEBUG":
             logging.debug(traceback.format_exc())
         else:
-            logging.info(
-                "Use --log-level DEBUG for full traceback."
-            )
+            logging.info("Use --log-level DEBUG for full traceback.")
         return 1
 
 
