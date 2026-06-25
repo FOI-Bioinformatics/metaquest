@@ -293,108 +293,123 @@ class SRAQualityProfileCommand(BaseCommand):
         if adapter_contamination > 0.05:  # > 5%
             print(f"⚠️  Adapter contamination: {adapter_contamination:.1%}")
 
+    def _resolve_accessions(self, args) -> List[str]:
+        """Return the accessions to profile (single or batch), or [] if none."""
+        if args.accession:
+            print(f"Profiling single accession: {args.accession}")
+            return [args.accession]
+        accessions = self._read_accessions(args.accessions_file)
+        if accessions:
+            print(f"Profiling {len(accessions)} accessions...")
+        return accessions
+
+    def _write_detailed_report(self, profile: QualityProfile, output_dir: Path) -> None:
+        """Write a per-accession quality profile as JSON."""
+        profile_file = output_dir / f"{profile.accession}_quality_profile.json"
+        with open(profile_file, "w") as profile_f:
+            json.dump(
+                {
+                    "accession": profile.accession,
+                    "total_reads": profile.total_reads,
+                    "total_bases": profile.total_bases,
+                    "avg_read_length": profile.avg_read_length,
+                    "gc_content": profile.gc_content,
+                    "quality_grade": profile.quality_grade,
+                    "quality_distribution": profile.quality_distribution,
+                    "complexity_score": profile.complexity_score,
+                    "n_content": profile.n_content,
+                    "duplication_rate": profile.duplication_rate,
+                    "contamination_indicators": profile.contamination_indicators,
+                    "recommendations": profile.recommendations,
+                },
+                profile_f,
+                indent=2,
+            )
+        print(f"  Detailed report saved: {profile_file}")
+
+    def _profile_accession(self, analyzer, args, accession: str, output_dir: Path):
+        """Profile a single accession; return its QualityProfile or None if unavailable."""
+        fastq_dir = Path(args.fastq_dir)
+        accession_files = list(fastq_dir.glob(f"**/{accession}*.fastq*"))
+        if not accession_files:
+            print(f"⚠️  No FASTQ files found for {accession}")
+            return None
+
+        profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_files[0]))
+        if not args.summary_only:
+            self._print_quality_profile(profile)
+        if args.detailed_reports:
+            self._write_detailed_report(profile, output_dir)
+        return profile
+
+    @staticmethod
+    def _summary_stats(profiles):
+        """Aggregate read/base/GC stats across profiles, or None when empty."""
+        if not profiles:
+            return None
+        return {
+            "total_reads": sum(p.total_reads for p in profiles),
+            "total_bases": sum(p.total_bases for p in profiles),
+            "avg_gc_content": sum(p.gc_content for p in profiles) / len(profiles),
+        }
+
+    @staticmethod
+    def _quality_flag_counts(profiles) -> dict:
+        """Count datasets tripping each quality flag (high N, duplicates, contamination)."""
+        return {
+            "high_n_content": len([p for p in profiles if p.n_content > 0.01]),
+            "high_duplicates": len(
+                [p for p in profiles if p.duplication_rate is not None and p.duplication_rate > 0.20]
+            ),
+            "contaminated": len(
+                [p for p in profiles if p.contamination_indicators.get("adapter_contamination", 0) > 0.05]
+            ),
+        }
+
+    def _print_summary_stats(self, profiles, stats) -> None:
+        """Print aggregate statistics and quality-flag counts for a batch."""
+        print(f"\nSummary Statistics ({len(profiles)} datasets):")
+        print("=" * 50)
+        print(f"Total reads across all datasets: {stats['total_reads']:,}")
+        print(f"Total bases across all datasets: {stats['total_bases']:,}")
+        print(f"Average GC content: {stats['avg_gc_content']:.1%}")
+
+        flags = self._quality_flag_counts(profiles)
+        if flags["high_n_content"]:
+            print(f"⚠️  {flags['high_n_content']} datasets with high N content")
+        if flags["high_duplicates"]:
+            print(f"⚠️  {flags['high_duplicates']} datasets with high duplicate rates")
+        if flags["contaminated"]:
+            print(f"⚠️  {flags['contaminated']} datasets with adapter contamination")
+
     def execute(self, args):
         try:
-            # Setup
             output_dir = Path(args.output_dir)
             output_dir.mkdir(exist_ok=True)
-
             analyzer = SRADatasetAnalyzer()
 
-            if args.accession:
-                # Single accession mode
-                accessions = [args.accession]
-                print(f"Profiling single accession: {args.accession}")
-            else:
-                # Batch mode
-                accessions = self._read_accessions(args.accessions_file)
-                if not accessions:
-                    return 1
-                print(f"Profiling {len(accessions)} accessions...")
+            accessions = self._resolve_accessions(args)
+            if not accessions:
+                return 1
 
             profiles = []
             failed_accessions = []
-
             for i, accession in enumerate(accessions, 1):
                 print(f"[{i}/{len(accessions)}] Analyzing {accession}...")
-
                 try:
-                    # Find FASTQ files for this accession
-                    fastq_dir = Path(args.fastq_dir)
-                    accession_files = list(fastq_dir.glob(f"**/{accession}*.fastq*"))
-
-                    if not accession_files:
-                        print(f"⚠️  No FASTQ files found for {accession}")
-                        failed_accessions.append(accession)
-                        continue
-
-                    # Profile the dataset
-                    profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_files[0]))
-
-                    profiles.append(profile)
-
-                    if not args.summary_only:
-                        self._print_quality_profile(profile)
-
-                    # Save detailed report if requested
-                    if args.detailed_reports:
-                        profile_file = output_dir / f"{accession}_quality_profile.json"
-                        with open(profile_file, "w") as profile_f:
-                            json.dump(
-                                {
-                                    "accession": profile.accession,
-                                    "total_reads": profile.total_reads,
-                                    "total_bases": profile.total_bases,
-                                    "avg_read_length": profile.avg_read_length,
-                                    "gc_content": profile.gc_content,
-                                    "quality_grade": profile.quality_grade,
-                                    "quality_distribution": profile.quality_distribution,
-                                    "complexity_score": profile.complexity_score,
-                                    "n_content": profile.n_content,
-                                    "duplication_rate": profile.duplication_rate,
-                                    "contamination_indicators": profile.contamination_indicators,
-                                    "recommendations": profile.recommendations,
-                                },
-                                profile_f,
-                                indent=2,
-                            )
-                        print(f"  Detailed report saved: {profile_file}")
-
+                    profile = self._profile_accession(analyzer, args, accession, output_dir)
                 except Exception as e:
                     logger.warning(f"Failed to profile {accession}: {e}")
+                    profile = None
+                if profile is None:
                     failed_accessions.append(accession)
-                    continue
+                else:
+                    profiles.append(profile)
 
-            # Generate summary statistics
-            if profiles:
-                print(f"\nSummary Statistics ({len(profiles)} datasets):")
-                print("=" * 50)
+            stats = self._summary_stats(profiles)
+            if stats:
+                self._print_summary_stats(profiles, stats)
 
-                total_reads = sum(p.total_reads for p in profiles)
-                total_bases = sum(p.total_bases for p in profiles)
-                avg_gc = sum(p.gc_content for p in profiles) / len(profiles)
-
-                print(f"Total reads across all datasets: {total_reads:,}")
-                print(f"Total bases across all datasets: {total_bases:,}")
-                print(f"Average GC content: {avg_gc:.1%}")
-
-                # Quality flags
-                high_n_content = len([p for p in profiles if p.n_content > 0.01])
-                high_duplicates = len(
-                    [p for p in profiles if p.duplication_rate is not None and p.duplication_rate > 0.20]
-                )
-                contaminated = len(
-                    [p for p in profiles if p.contamination_indicators.get("adapter_contamination", 0) > 0.05]
-                )
-
-                if high_n_content:
-                    print(f"⚠️  {high_n_content} datasets with high N content")
-                if high_duplicates:
-                    print(f"⚠️  {high_duplicates} datasets with high duplicate rates")
-                if contaminated:
-                    print(f"⚠️  {contaminated} datasets with adapter contamination")
-
-            # Save batch summary
             summary_file = output_dir / "quality_summary.json"
             with open(summary_file, "w") as summary_f:
                 json.dump(
@@ -402,15 +417,7 @@ class SRAQualityProfileCommand(BaseCommand):
                         "total_analyzed": len(profiles),
                         "total_failed": len(failed_accessions),
                         "failed_accessions": failed_accessions,
-                        "summary_stats": (
-                            {
-                                "total_reads": total_reads,
-                                "total_bases": total_bases,
-                                "avg_gc_content": avg_gc,
-                            }
-                            if profiles
-                            else None
-                        ),
+                        "summary_stats": stats,
                     },
                     summary_f,
                     indent=2,

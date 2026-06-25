@@ -461,6 +461,38 @@ class TestSRAQualityProfileCommand:
         assert report["quality_grade"] == "good"
         assert report["contamination_indicators"]["adapter_contamination"] == 0.02
 
+    def test_execute_missing_fastq_marks_failed(self, tmp_path):
+        """Accessions with no FASTQ files are recorded as failed and yield exit 1."""
+        cmd = SRAQualityProfileCommand()
+
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR404\n")
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()  # intentionally empty
+
+        args = Namespace(
+            accession=None,
+            accessions_file=str(accessions_file),
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+        )
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer_class.return_value = mock_analyzer
+            result = cmd.execute(args)
+            # No FASTQ files -> profiling never attempted
+            mock_analyzer.profile_dataset_quality.assert_not_called()
+
+        assert result == 1
+        summary = json.loads((tmp_path / "output" / "quality_summary.json").read_text())
+        assert summary["total_analyzed"] == 0
+        assert summary["failed_accessions"] == ["SRR404"]
+        assert summary["summary_stats"] is None
+
 
 # ============================================================================
 # TEST CLASS: SRAInteractiveDashboardCommand
