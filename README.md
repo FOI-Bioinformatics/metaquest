@@ -25,7 +25,7 @@ make dev-install  # Installs with all development dependencies
 ```bash
 # Traditional approach (still supported)
 pip install -r requirements.txt
-python setup.py install
+pip install .
 ```
 
 ### Development Commands
@@ -320,7 +320,6 @@ For comprehensive documentation including advanced features and technical detail
 - **[Branchwater Workflow](docs/branchwater_workflow.md)** - Detailed workflow guide for branchwater functionality
 - **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions
 - **[CLAUDE.md](CLAUDE.md)** - Development guidelines, testing strategies, and architectural patterns for contributors
-- **[Test Coverage Report](FINAL_TEST_COVERAGE_REPORT.md)** - Comprehensive test coverage metrics and methodology (199 tests, 88%+ coverage)
 
 ## Development & Testing
 
@@ -373,7 +372,7 @@ make help
 - **Integration Testing**: End-to-end workflow validation via `local_test.sh` and comprehensive integration suite
 - **Mock Architecture**: NCBI APIs (Entrez, Taxonomy), Plotly/Jinja2 templates, file operations, and subprocess calls systematically mocked
 - **Quality Assurance**: Automated formatting, linting, and type checking with zero warnings
-- **Detailed Coverage Reports**: See `FINAL_TEST_COVERAGE_REPORT.md` for complete metrics and methodology
+- **Coverage**: Run `make test` for current coverage metrics
 
 ### Architecture Highlights
 - **Layered Architecture**: CLI, Core, Data, Processing, Visualization layers
