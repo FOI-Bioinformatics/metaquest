@@ -146,37 +146,14 @@ class SecureSubprocess:
         return accession
 
     @classmethod
-    def run_secure(
-        cls,
-        executable: str,
-        args: List[str],
-        cwd: Optional[Union[str, Path]] = None,
-        env: Optional[Dict[str, str]] = None,
-        timeout: Optional[int] = None,
-        **kwargs,
-    ) -> subprocess.CompletedProcess:
+    def _build_validated_command(cls, executable: str, args: List[str]) -> List[str]:
+        """Validate the executable and each argument, returning the command list to run.
+
+        Flags are checked against the per-tool allowlist; path-valued flags and
+        SRA accessions are validated/sanitized. Raises SecurityError on any
+        disallowed component.
         """
-        Run subprocess with security validations.
-
-        Args:
-            executable: The executable to run
-            args: List of arguments
-            cwd: Working directory
-            env: Environment variables
-            timeout: Timeout in seconds
-            **kwargs: Additional subprocess.run arguments
-
-        Returns:
-            CompletedProcess result
-
-        Raises:
-            SecurityError: If any validation fails
-        """
-        # Validate executable
-        safe_executable = cls.validate_executable(executable)
-
-        # Build and validate command
-        cmd = [safe_executable]
+        cmd = [cls.validate_executable(executable)]
 
         i = 0
         while i < len(args):
@@ -206,6 +183,37 @@ class SecureSubprocess:
                 cmd.append(arg)
 
             i += 1
+
+        return cmd
+
+    @classmethod
+    def run_secure(
+        cls,
+        executable: str,
+        args: List[str],
+        cwd: Optional[Union[str, Path]] = None,
+        env: Optional[Dict[str, str]] = None,
+        timeout: Optional[int] = None,
+        **kwargs,
+    ) -> subprocess.CompletedProcess:
+        """
+        Run subprocess with security validations.
+
+        Args:
+            executable: The executable to run
+            args: List of arguments
+            cwd: Working directory
+            env: Environment variables
+            timeout: Timeout in seconds
+            **kwargs: Additional subprocess.run arguments
+
+        Returns:
+            CompletedProcess result
+
+        Raises:
+            SecurityError: If any validation fails
+        """
+        cmd = cls._build_validated_command(executable, args)
 
         # Validate working directory if provided
         if cwd:
