@@ -99,5 +99,3 @@ def test_branchwater_format_plugin():
 
     # Clean up
     os.unlink(f.name)
-
-

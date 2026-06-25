@@ -22,16 +22,16 @@ test:
 	pytest tests/ --cov=metaquest
 
 lint:
-	flake8 metaquest
+	flake8 metaquest tests
 
 format:
-	black metaquest
+	black metaquest tests
 
 check:
 	@echo "Running format check..."
-	black --check --diff metaquest
+	black --check --diff metaquest tests
 	@echo "Running linting..."
-	flake8 metaquest
+	flake8 metaquest tests
 	@echo "Running type check..."
 	mypy --ignore-missing-imports metaquest
 	@echo "All quality checks passed!"

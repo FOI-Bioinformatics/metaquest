@@ -10,10 +10,9 @@ This file tests all 4 intelligent SRA CLI commands:
 Run: pytest tests/test_cli_sra_intelligent.py -v
 """
 
-import pytest
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, mock_open
+from unittest.mock import Mock, patch
 from datetime import datetime
 from argparse import Namespace
 
@@ -24,7 +23,6 @@ from metaquest.cli.commands.sra_intelligent import (
     SRAComparativeAnalysisCommand,
 )
 
-
 # Builders that return the REAL backend dataclasses, so these tests exercise the
 # actual interface the CLI consumes (rather than masking mocks).
 from metaquest.sra.download_manager import (  # noqa: E402
@@ -33,7 +31,6 @@ from metaquest.sra.download_manager import (  # noqa: E402
     NetworkConditions,
 )
 from metaquest.sra.analytics import QualityProfile, ComparativeAnalysis  # noqa: E402
-
 
 # Keys returned by the real IntelligentDownloadManager.estimate_download_time()
 REAL_ESTIMATE = {
@@ -49,47 +46,79 @@ REAL_ESTIMATE = {
 def make_session(session_id, completed, failed, failed_accessions):
     """Build a real DownloadSession with the requested success/failure split."""
     nc = NetworkConditions(
-        bandwidth_mbps=10.0, latency_ms=100.0, packet_loss_pct=0.0,
-        connection_stability=1.0, optimal_parallel_downloads=4,
+        bandwidth_mbps=10.0,
+        latency_ms=100.0,
+        packet_loss_pct=0.0,
+        connection_stability=1.0,
+        optimal_parallel_downloads=4,
         last_measured=datetime.now(),
     )
     results = {}
     for acc in failed_accessions:
         results[acc] = DownloadProgress(
-            accession=acc, status="failed", progress_pct=0.0, downloaded_mb=0.0,
-            total_mb=None, speed_mbps=0.0, eta_seconds=None, retry_count=0,
+            accession=acc,
+            status="failed",
+            progress_pct=0.0,
+            downloaded_mb=0.0,
+            total_mb=None,
+            speed_mbps=0.0,
+            eta_seconds=None,
+            retry_count=0,
             error_message="err",
         )
     for i in range(completed):
         acc = f"SRRC{i}"
         results[acc] = DownloadProgress(
-            accession=acc, status="completed", progress_pct=100.0, downloaded_mb=1.0,
-            total_mb=1.0, speed_mbps=5.0, eta_seconds=0, retry_count=0, error_message=None,
+            accession=acc,
+            status="completed",
+            progress_pct=100.0,
+            downloaded_mb=1.0,
+            total_mb=1.0,
+            speed_mbps=5.0,
+            eta_seconds=0,
+            retry_count=0,
+            error_message=None,
         )
     return DownloadSession(
-        session_id=session_id, accessions=list(results.keys()),
-        start_time=datetime.now(), end_time=datetime.now(),
-        total_size_mb=float(len(results)), downloaded_mb=float(completed),
-        success_count=completed, failure_count=failed, average_speed_mbps=5.0,
-        network_conditions=nc, download_results=results,
+        session_id=session_id,
+        accessions=list(results.keys()),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        total_size_mb=float(len(results)),
+        downloaded_mb=float(completed),
+        success_count=completed,
+        failure_count=failed,
+        average_speed_mbps=5.0,
+        network_conditions=nc,
+        download_results=results,
     )
 
 
 def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0):
     """Build a real QualityProfile."""
     return QualityProfile(
-        accession=accession, total_reads=1000, total_bases=150000,
-        avg_read_length=150.0, read_length_distribution={}, gc_content=0.45,
-        gc_distribution=[], quality_distribution={"excellent_q30+": 0.9},
-        n_content=n_content, contamination_indicators={"adapter_contamination": adapter},
-        complexity_score=0.85, duplication_rate=duplication_rate,
-        technology_confidence=0.8, quality_grade="good", recommendations=[],
+        accession=accession,
+        total_reads=1000,
+        total_bases=150000,
+        avg_read_length=150.0,
+        read_length_distribution={},
+        gc_content=0.45,
+        gc_distribution=[],
+        quality_distribution={"excellent_q30+": 0.9},
+        n_content=n_content,
+        contamination_indicators={"adapter_contamination": adapter},
+        complexity_score=0.85,
+        duplication_rate=duplication_rate,
+        technology_confidence=0.8,
+        quality_grade="good",
+        recommendations=[],
     )
 
 
 # ============================================================================
 # TEST CLASS: SRAIntelligentDownloadCommand
 # ============================================================================
+
 
 class TestSRAIntelligentDownloadCommand:
     """Test SRAIntelligentDownloadCommand functionality."""
@@ -206,10 +235,10 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=True,
-            progress_report="progress.json"
+            progress_report="progress.json",
         )
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager'):
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager"):
             result = cmd.execute(args)
 
         assert result == 0
@@ -233,12 +262,12 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=False,
-            progress_report=str(tmp_path / "progress.json")
+            progress_report=str(tmp_path / "progress.json"),
         )
 
         mock_session = make_session("test_123", completed=2, failed=0, failed_accessions=[])
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager') as mock_mgr_class:
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
             mock_manager = Mock()
             mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
             mock_manager.download_with_resume.return_value = mock_session
@@ -270,12 +299,12 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=False,
-            progress_report=str(tmp_path / "progress.json")
+            progress_report=str(tmp_path / "progress.json"),
         )
 
         mock_session = make_session("test_123", completed=2, failed=1, failed_accessions=["SRR003"])
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager') as mock_mgr_class:
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
             mock_manager = Mock()
             mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
             mock_manager.download_with_resume.return_value = mock_session
@@ -304,10 +333,10 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=False,
-            progress_report=str(tmp_path / "progress.json")
+            progress_report=str(tmp_path / "progress.json"),
         )
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager') as mock_mgr_class:
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
             mock_manager = Mock()
             mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
             mock_manager.download_with_resume.side_effect = KeyboardInterrupt()
@@ -323,6 +352,7 @@ class TestSRAIntelligentDownloadCommand:
 # ============================================================================
 # TEST CLASS: SRAQualityProfileCommand
 # ============================================================================
+
 
 class TestSRAQualityProfileCommand:
     """Test SRAQualityProfileCommand functionality."""
@@ -376,12 +406,12 @@ class TestSRAQualityProfileCommand:
             output_dir=str(tmp_path / "output"),
             detailed_reports=False,
             include_contamination=False,
-            summary_only=False
+            summary_only=False,
         )
 
         mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer') as mock_analyzer_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
@@ -411,12 +441,12 @@ class TestSRAQualityProfileCommand:
             output_dir=str(tmp_path / "output"),
             detailed_reports=True,
             include_contamination=True,
-            summary_only=False
+            summary_only=False,
         )
 
         mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer') as mock_analyzer_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
@@ -435,6 +465,7 @@ class TestSRAQualityProfileCommand:
 # ============================================================================
 # TEST CLASS: SRAInteractiveDashboardCommand
 # ============================================================================
+
 
 class TestSRAInteractiveDashboardCommand:
     """Test SRAInteractiveDashboardCommand functionality."""
@@ -470,12 +501,12 @@ class TestSRAInteractiveDashboardCommand:
             quality_profiles=None,
             output_dir=str(tmp_path / "dashboards"),
             title="Test Dashboard",
-            dashboard_type="quality"
+            dashboard_type="quality",
         )
 
         mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRAReportGenerator') as mock_reporter_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
             mock_reporter = Mock()
             mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
             mock_reporter_class.return_value = mock_reporter
@@ -497,13 +528,13 @@ class TestSRAInteractiveDashboardCommand:
             quality_profiles=None,
             output_dir=str(tmp_path / "dashboards"),
             title="Full Dashboard",
-            dashboard_type="full"
+            dashboard_type="full",
         )
 
         mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRAReportGenerator') as mock_reporter_class:
-            with patch('webbrowser.open'):  # Mock browser opening
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            with patch("webbrowser.open"):  # Mock browser opening
                 mock_reporter = Mock()
                 mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
                 mock_reporter.create_comparative_analysis.return_value = mock_dashboard_path
@@ -517,6 +548,7 @@ class TestSRAInteractiveDashboardCommand:
 # ============================================================================
 # TEST CLASS: SRAComparativeAnalysisCommand
 # ============================================================================
+
 
 class TestSRAComparativeAnalysisCommand:
     """Test SRAComparativeAnalysisCommand functionality."""
@@ -543,10 +575,7 @@ class TestSRAComparativeAnalysisCommand:
         """Test successful group loading."""
         cmd = SRAComparativeAnalysisCommand()
         groups_file = tmp_path / "groups.json"
-        groups_data = {
-            "Group_A": ["SRR001", "SRR002"],
-            "Group_B": ["SRR003", "SRR004"]
-        }
+        groups_data = {"Group_A": ["SRR001", "SRR002"], "Group_B": ["SRR003", "SRR004"]}
         groups_file.write_text(json.dumps(groups_data))
 
         result = cmd._load_groups(str(groups_file))
@@ -582,10 +611,7 @@ class TestSRAComparativeAnalysisCommand:
         cmd = SRAComparativeAnalysisCommand()
 
         groups_file = tmp_path / "groups.json"
-        groups_data = {
-            "Group_A": ["SRR001", "SRR002"],
-            "Group_B": ["SRR003", "SRR004"]
-        }
+        groups_data = {"Group_A": ["SRR001", "SRR002"], "Group_B": ["SRR003", "SRR004"]}
         groups_file.write_text(json.dumps(groups_data))
 
         args = Namespace(
@@ -593,7 +619,7 @@ class TestSRAComparativeAnalysisCommand:
             fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "output"),
             statistical_tests=True,
-            generate_report=True
+            generate_report=True,
         )
 
         def grp_stats(gc, length, reads):
@@ -619,8 +645,8 @@ class TestSRAComparativeAnalysisCommand:
             visualization_data={},
         )
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer') as mock_analyzer_class:
-            with patch('metaquest.cli.commands.sra_intelligent.SRAReportGenerator') as mock_reporter_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
                 mock_analyzer = Mock()
                 mock_analyzer.compare_datasets.return_value = mock_comparison
                 mock_analyzer_class.return_value = mock_analyzer
@@ -642,6 +668,7 @@ class TestSRAComparativeAnalysisCommand:
 # ComparativeAnalysis objects returned by the sra/ backend (not mocks), to
 # guard against the CLI drifting away from the real dataclass interface.
 # ============================================================================
+
 
 class TestRealBackendInterface:
     """Drive the CLI summary helpers with the real backend dataclasses."""
@@ -665,15 +692,27 @@ class TestRealBackendInterface:
         results = {}
         for acc in failed_accs:
             results[acc] = DownloadProgress(
-                accession=acc, status="failed", progress_pct=0.0, downloaded_mb=0.0,
-                total_mb=None, speed_mbps=0.0, eta_seconds=None, retry_count=0,
+                accession=acc,
+                status="failed",
+                progress_pct=0.0,
+                downloaded_mb=0.0,
+                total_mb=None,
+                speed_mbps=0.0,
+                eta_seconds=None,
+                retry_count=0,
                 error_message="boom",
             )
         for i in range(success):
             acc = f"SRR9000{i}"
             results[acc] = DownloadProgress(
-                accession=acc, status="completed", progress_pct=100.0, downloaded_mb=1.0,
-                total_mb=1.0, speed_mbps=5.0, eta_seconds=0, retry_count=0,
+                accession=acc,
+                status="completed",
+                progress_pct=100.0,
+                downloaded_mb=1.0,
+                total_mb=1.0,
+                speed_mbps=5.0,
+                eta_seconds=0,
+                retry_count=0,
                 error_message=None,
             )
         accessions = list(results.keys())

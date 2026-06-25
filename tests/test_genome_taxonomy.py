@@ -22,18 +22,15 @@ from metaquest.data.genome_taxonomy import (
     summarize_by_taxonomy,
 )
 
-
 # ============================================================================
 # parse_gtdb_taxonomy_string
 # ============================================================================
 
+
 class TestParseGtdbTaxonomyString:
 
     def test_valid_full_string(self):
-        s = (
-            "d__Bacteria;p__Firmicutes;c__Bacilli;"
-            "o__Bacillales;f__Bacillaceae;g__Bacillus;s__Bacillus subtilis"
-        )
+        s = "d__Bacteria;p__Firmicutes;c__Bacilli;" "o__Bacillales;f__Bacillaceae;g__Bacillus;s__Bacillus subtilis"
         info = parse_gtdb_taxonomy_string(s, "GCF_000009045.1")
         assert info.genome_id == "GCF_000009045.1"
         assert info.phylum == "Firmicutes"
@@ -74,13 +71,12 @@ class TestParseGtdbTaxonomyString:
 # enrich_genomes_with_taxonomy (mocked API)
 # ============================================================================
 
+
 class TestEnrichGenomesWithTaxonomy:
 
     @patch("metaquest.data.genome_taxonomy._lookup_genome_taxonomy_gtdb")
     def test_basic_enrichment(self, mock_lookup):
-        mock_lookup.return_value = TaxonomyInfo(
-            genome_id="GCF_001", family="Bacillaceae", genus="Bacillus"
-        )
+        mock_lookup.return_value = TaxonomyInfo(genome_id="GCF_001", family="Bacillaceae", genus="Bacillus")
         result = enrich_genomes_with_taxonomy(["GCF_001"])
         assert "GCF_001" in result
         assert result["GCF_001"].family == "Bacillaceae"
@@ -113,6 +109,7 @@ class TestEnrichGenomesWithTaxonomy:
 # ============================================================================
 # load_taxonomy_cache / save_taxonomy_cache
 # ============================================================================
+
 
 class TestTaxonomyCache:
 
@@ -150,6 +147,7 @@ class TestTaxonomyCache:
 # annotate_containment_with_taxonomy
 # ============================================================================
 
+
 class TestAnnotateContainment:
 
     def _make_df(self):
@@ -175,6 +173,7 @@ class TestAnnotateContainment:
 # ============================================================================
 # filter_by_taxonomy
 # ============================================================================
+
 
 class TestFilterByTaxonomy:
 
@@ -217,6 +216,7 @@ class TestFilterByTaxonomy:
 # ============================================================================
 # summarize_by_taxonomy
 # ============================================================================
+
 
 class TestSummarizeByTaxonomy:
 

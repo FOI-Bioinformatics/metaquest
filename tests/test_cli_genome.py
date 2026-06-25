@@ -4,7 +4,7 @@ import argparse
 import csv
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -76,9 +76,7 @@ class TestGenomeSearchCommand:
         )
         result = cmd.execute(args)
         assert result == 0
-        mock_get.assert_called_once_with(
-            "Salmonella enterica", representative_only=True
-        )
+        mock_get.assert_called_once_with("Salmonella enterica", representative_only=True)
 
     @patch("metaquest.cli.commands.genome.get_accessions_for_genus")
     def test_execute_genus_search(self, mock_get):
@@ -189,9 +187,7 @@ class TestGenomeDownloadCommand:
         cmd = GenomeDownloadCommand()
         parser = argparse.ArgumentParser()
         cmd.configure_parser(parser)
-        args = parser.parse_args(
-            ["--accessions", "GCF_000006945.2", "GCF_000007545.1"]
-        )
+        args = parser.parse_args(["--accessions", "GCF_000006945.2", "GCF_000007545.1"])
         assert len(args.accessions) == 2
 
     def test_execute_missing_all_sources(self):
@@ -270,9 +266,7 @@ class TestGenomeDownloadCommand:
             )
             result = cmd.execute(args)
             assert result == 0
-            mock_gtdb.assert_called_once_with(
-                "Salmonella enterica", representative_only=True
-            )
+            mock_gtdb.assert_called_once_with("Salmonella enterica", representative_only=True)
 
     def test_execute_accession_file_not_found(self):
         cmd = GenomeDownloadCommand()

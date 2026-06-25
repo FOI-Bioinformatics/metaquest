@@ -3,38 +3,37 @@ Tests for enhanced SRA functionality.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
-import pandas as pd
-import numpy as np
+from unittest.mock import patch, MagicMock
 import tempfile
 from pathlib import Path
 import sys
-import importlib
+
 
 # Force fresh import of modules to avoid contamination from other tests
 def _force_fresh_import():
     """Force fresh import of SRA modules to get real implementations."""
     modules_to_clear = [
-        'metaquest.data.sra_metadata',
-        'metaquest.data.sra_enhanced',
+        "metaquest.data.sra_metadata",
+        "metaquest.data.sra_enhanced",
     ]
     for module_name in modules_to_clear:
         if module_name in sys.modules:
             # Only remove if it's a Mock object (contaminated)
-            if hasattr(sys.modules[module_name], '_mock_name'):
+            if hasattr(sys.modules[module_name], "_mock_name"):
                 del sys.modules[module_name]
+
 
 # Apply fresh import at start of test session
 _force_fresh_import()
 
-from metaquest.data.sra_metadata import (
+from metaquest.data.sra_metadata import (  # noqa: E402
     SRAMetadataClient,
     SRADatasetInfo,
     detect_sequencing_technology,
     calculate_read_statistics,
     create_download_preview,
 )
-from metaquest.data.sra_enhanced import (
+from metaquest.data.sra_enhanced import (  # noqa: E402
     EnhancedSRADownloader,
     verify_sra_tools,
     estimate_download_time,
@@ -60,7 +59,7 @@ class TestSRAMetadataClient:
         assert client.api_key == "api_key_123"
         assert client.request_delay < 0.5  # Should be faster with API key
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_make_request_success(self, mock_get):
         """Test successful API request."""
         mock_response = MagicMock()
@@ -73,7 +72,7 @@ class TestSRAMetadataClient:
         assert result == '{"test": "data"}'
         mock_get.assert_called_once()
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_make_request_failure(self, mock_get):
         """Test failed API request."""
         mock_get.side_effect = Exception("Network error")
@@ -177,21 +176,21 @@ class TestReadStatistics:
     def create_test_fastq_file(self, temp_dir, sequences):
         """Create a test FASTQ file."""
         fastq_path = temp_dir / "test.fastq"
-        
+
         with open(fastq_path, "w") as f:
             for i, seq in enumerate(sequences):
                 f.write(f"@read_{i}\n")
                 f.write(f"{seq}\n")
                 f.write("+\n")
                 f.write("I" * len(seq) + "\n")  # High quality scores
-        
+
         return fastq_path
 
     def test_read_statistics_calculation(self):
         """Test basic read statistics calculation."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            
+
             # Create test sequences
             sequences = [
                 "ATCGATCGATCGATCG",  # 16 bp
@@ -199,7 +198,7 @@ class TestReadStatistics:
                 "AAAAAAAAAAAAAAAA",  # 16 bp, no GC
                 "GGGGGGGGGGGGGGGG",  # 16 bp, all GC
             ]
-            
+
             fastq_file = self.create_test_fastq_file(temp_path, sequences)
             stats = calculate_read_statistics([fastq_file])
 
@@ -226,7 +225,7 @@ class TestReadStatistics:
         """Test N50 calculation."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            
+
             # Create sequences of different lengths for N50 test
             sequences = [
                 "A" * 100,  # 100 bp
@@ -234,7 +233,7 @@ class TestReadStatistics:
                 "C" * 300,  # 300 bp
                 "G" * 400,  # 400 bp
             ]
-            
+
             fastq_file = self.create_test_fastq_file(temp_path, sequences)
             stats = calculate_read_statistics([fastq_file])
 
@@ -249,13 +248,13 @@ class TestEnhancedSRADownloader:
         """Set up test downloader."""
         self.downloader = EnhancedSRADownloader("test@example.com")
 
-    @patch('metaquest.data.sra_enhanced.create_download_preview')
+    @patch("metaquest.data.sra_enhanced.create_download_preview")
     def test_preview_downloads(self, mock_preview):
         """Test download preview."""
         mock_metadata = {"SRR123": MagicMock()}
         mock_tech_counts = {"illumina": 1}
         mock_size_gb = 1.5
-        
+
         mock_preview.return_value = (mock_metadata, mock_tech_counts, mock_size_gb)
 
         metadata, tech_counts, size_gb = self.downloader.preview_downloads(["SRR123"])
@@ -267,14 +266,14 @@ class TestEnhancedSRADownloader:
     def test_build_download_command_illumina(self):
         """Test building download command for Illumina."""
         args = self.downloader._build_download_command("SRR123", Path("/tmp"), "illumina")
-        
+
         assert "SRR123" in args
         assert "--split-files" in args
 
     def test_build_download_command_nanopore(self):
         """Test building download command for Nanopore."""
         args = self.downloader._build_download_command("SRR123", Path("/tmp"), "nanopore")
-        
+
         assert "SRR123" in args
         assert "--include-technical" in args
 
@@ -283,17 +282,15 @@ class TestEnhancedSRADownloader:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             output_path = temp_path / "SRR123"
-            
+
             # Create test files
             file1 = temp_path / "SRR123_1.fastq"
             file2 = temp_path / "SRR123_2.fastq"
             file1.touch()
             file2.touch()
-            
-            renamed = self.downloader._rename_files_by_technology(
-                [file1, file2], "illumina", output_path
-            )
-            
+
+            renamed = self.downloader._rename_files_by_technology([file1, file2], "illumina", output_path)
+
             assert len(renamed) == 2
             assert str(renamed[file1]).endswith("_R1.fastq.gz")
             assert str(renamed[file2]).endswith("_R2.fastq.gz")
@@ -303,15 +300,13 @@ class TestEnhancedSRADownloader:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             output_path = temp_path / "SRR123"
-            
+
             # Create test file
             file1 = temp_path / "SRR123.fastq"
             file1.touch()
-            
-            renamed = self.downloader._rename_files_by_technology(
-                [file1], "nanopore", output_path
-            )
-            
+
+            renamed = self.downloader._rename_files_by_technology([file1], "nanopore", output_path)
+
             assert len(renamed) == 1
             assert str(renamed[file1]).endswith("_long.fastq")
 
@@ -319,30 +314,30 @@ class TestEnhancedSRADownloader:
 class TestSRAUtilities:
     """Test SRA utility functions."""
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_verify_sra_tools_success(self, mock_run):
         """Test successful SRA tools verification."""
         mock_run.return_value = MagicMock()
-        
+
         result = verify_sra_tools()
-        
-        assert result == True
+
+        assert result is True
         assert mock_run.call_count == 3  # Three tools to verify
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_verify_sra_tools_failure(self, mock_run):
         """Test SRA tools verification failure."""
         mock_run.side_effect = FileNotFoundError()
-        
+
         result = verify_sra_tools()
-        
-        assert result == False
+
+        assert result is False
 
     def test_estimate_download_time(self):
         """Test download time estimation."""
         # Test with 1 GB at 100 Mbps with 4 parallel downloads
         time_hours = estimate_download_time(1.0, 100.0, 4)
-        
+
         # Should be less than 1 hour
         assert time_hours < 1.0
         assert time_hours > 0
@@ -371,9 +366,7 @@ class TestSRAUtilities:
         )
         mock_client.get_sra_metadata.return_value = {"SRR123": mock_dataset}
 
-        metadata, tech_counts, total_size_gb = create_download_preview(
-            ["SRR123"], mock_client
-        )
+        metadata, tech_counts, total_size_gb = create_download_preview(["SRR123"], mock_client)
 
         assert len(metadata) == 1
         assert "SRR123" in metadata
@@ -418,7 +411,7 @@ class TestSRAIntegration:
         assert record["technology"] == "illumina"
         assert record["spots"] == 1000000
 
-    @patch('metaquest.data.sra_metadata.save_metadata_report')
+    @patch("metaquest.data.sra_metadata.save_metadata_report")
     def test_report_generation_integration(self, mock_save):
         """Test integration of metadata and report generation."""
         metadata = {

@@ -6,9 +6,8 @@ Run: pytest tests/test_sra_reporting_starter.py -v
 """
 
 import pytest
-from pathlib import Path
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from dataclasses import dataclass
 
 from metaquest.sra.reporting import SRAReportGenerator
@@ -18,6 +17,7 @@ from metaquest.sra.reporting import SRAReportGenerator
 @dataclass
 class MockDownloadResult:
     """Mock download result for testing."""
+
     status: str
     downloaded_mb: float
     progress_pct: float
@@ -28,12 +28,14 @@ class MockDownloadResult:
 @dataclass
 class MockNetworkConditions:
     """Mock network conditions."""
+
     bandwidth_mbps: float = 100.0
 
 
 @dataclass
 class MockDownloadSession:
     """Mock download session for testing."""
+
     session_id: str
     accessions: list
     download_results: dict
@@ -45,6 +47,7 @@ class MockDownloadSession:
 @dataclass
 class MockQualityProfile:
     """Mock quality profile for testing."""
+
     total_reads: int
     total_bases: int
     avg_read_length: float
@@ -58,6 +61,7 @@ class MockQualityProfile:
 @dataclass
 class MockProcessingRecommendations:
     """Mock processing recommendations."""
+
     recommended_pipeline: str
     quality_trimming: dict
     adapter_removal: dict
@@ -85,7 +89,7 @@ def mock_download_session():
         },
         start_time=datetime.now() - timedelta(hours=1),
         end_time=datetime.now(),
-        network_conditions=MockNetworkConditions(bandwidth_mbps=100.0)
+        network_conditions=MockNetworkConditions(bandwidth_mbps=100.0),
     )
 
 
@@ -100,7 +104,7 @@ def mock_quality_profile():
         quality_grade="good",
         complexity_score=0.85,
         n_content=0.02,
-        contamination_indicators={"adapter_contamination": 0.03}
+        contamination_indicators={"adapter_contamination": 0.03},
     )
 
 
@@ -138,12 +142,9 @@ class TestDownloadSummaryGeneration:
         """Test basic download summary creation."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-            with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
-                result_path = generator.create_download_summary(
-                    mock_download_session,
-                    include_plots=False
-                )
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+            with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
+                result_path = generator.create_download_summary(mock_download_session, include_plots=False)
 
         # Verify report was created
         assert result_path.exists()
@@ -155,17 +156,14 @@ class TestDownloadSummaryGeneration:
         """Test download summary with Jinja2 templating."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-            with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', True):
-                with patch('metaquest.sra.reporting.Environment') as mock_env:
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+            with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
+                with patch("metaquest.sra.reporting.Environment") as mock_env:
                     mock_template = Mock()
                     mock_template.render.return_value = "<html>Test Report</html>"
                     mock_env.return_value.from_string.return_value = mock_template
 
-                    result_path = generator.create_download_summary(
-                        mock_download_session,
-                        include_plots=False
-                    )
+                    result_path = generator.create_download_summary(mock_download_session, include_plots=False)
 
         assert result_path.exists()
         # Verify template was rendered
@@ -175,12 +173,9 @@ class TestDownloadSummaryGeneration:
         """Test that download summary calculates statistics correctly."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-            with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
-                result_path = generator.create_download_summary(
-                    mock_download_session,
-                    include_plots=False
-                )
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+            with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
+                result_path = generator.create_download_summary(mock_download_session, include_plots=False)
 
         # Read the generated HTML and verify statistics are present
         html_content = result_path.read_text()
@@ -207,8 +202,8 @@ class TestExportMetadata:
         generator = SRAReportGenerator(tmp_output_dir)
 
         # Mock the analyzer to avoid actual API calls
-        with patch.object(generator.analyzer, 'profile_dataset_quality') as mock_profile:
-            with patch.object(generator.analyzer, 'recommend_processing_params') as mock_recommend:
+        with patch.object(generator.analyzer, "profile_dataset_quality"):
+            with patch.object(generator.analyzer, "recommend_processing_params"):
                 result_path = generator.export_metadata_enriched([], output_format="csv")
 
         # Should create an empty CSV file
@@ -253,7 +248,7 @@ class TestPlotlyIntegration:
         """Test plot creation when Plotly is not available."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
             plots = generator._create_download_plots(mock_download_session)
 
         # Should return empty dict when Plotly unavailable
@@ -263,9 +258,9 @@ class TestPlotlyIntegration:
         """Test plot creation when Plotly is available."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
-            with patch('metaquest.sra.reporting.go.Figure') as mock_fig:
-                with patch('metaquest.sra.reporting.pyo.plot', return_value="<div>Plot HTML</div>"):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
+            with patch("metaquest.sra.reporting.go.Figure") as mock_fig:
+                with patch("metaquest.sra.reporting.pyo.plot", return_value="<div>Plot HTML</div>"):
                     mock_figure = Mock()
                     mock_fig.return_value = mock_figure
 
@@ -280,7 +275,7 @@ class TestPlotlyIntegration:
         """Test quality plot creation without Plotly."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
             plots = generator._create_quality_plots({})
 
         assert plots == {}
@@ -294,7 +289,7 @@ class TestErrorHandling:
         generator = SRAReportGenerator(tmp_output_dir)
 
         # Mock analyzer to fail for all accessions
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=Exception("API Error")):
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=Exception("API Error")):
             with pytest.raises(ValueError, match="No datasets could be profiled"):
                 generator.generate_quality_dashboard(["SRR001", "SRR002"])
 
@@ -308,7 +303,7 @@ class TestErrorHandling:
             quality_trimming={"enabled": True},
             adapter_removal={"enabled": False},
             computational_requirements={"memory_gb": 8},
-            estimated_processing_time="2 hours"
+            estimated_processing_time="2 hours",
         )
 
         def profile_side_effect(accession):
@@ -317,12 +312,9 @@ class TestErrorHandling:
             else:
                 raise Exception("Failed to profile")
 
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=profile_side_effect):
-            with patch.object(generator.analyzer, 'recommend_processing_params', return_value=mock_recommendations):
-                result_path = generator.export_metadata_enriched(
-                    ["SRR001", "SRR002"],
-                    output_format="csv"
-                )
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=profile_side_effect):
+            with patch.object(generator.analyzer, "recommend_processing_params", return_value=mock_recommendations):
+                result_path = generator.export_metadata_enriched(["SRR001", "SRR002"], output_format="csv")
 
         # Should still create file with successful ones
         assert result_path.exists()
@@ -343,7 +335,7 @@ class TestHTMLGeneration:
                 "success_rate": 0.67,
                 "total_size_mb": 1250.0,
                 "average_speed_mbps": 11.4,
-            }
+            },
         }
 
         html = generator._generate_simple_download_html(report_data)
@@ -362,11 +354,7 @@ class TestHTMLGeneration:
             "title": "Test Quality Dashboard",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_datasets": 5,
-            "summary_stats": {
-                "total_reads": 5000000,
-                "average_gc_content": 0.45,
-                "high_contamination_count": 2
-            }
+            "summary_stats": {"total_reads": 5000000, "average_gc_content": 0.45, "high_contamination_count": 2},
         }
 
         html = generator._generate_simple_quality_html(dashboard_data)
@@ -383,10 +371,7 @@ class TestHTMLGeneration:
         report_data = {
             "title": "Comparative Analysis",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "group_counts": {
-                "Group A": 10,
-                "Group B": 15
-            }
+            "group_counts": {"Group A": 10, "Group B": 15},
         }
 
         html = generator._generate_simple_comparative_html(report_data)

@@ -9,25 +9,22 @@ This module provides comprehensive testing for the plugin system including:
 - Error handling and edge cases
 """
 
-import csv
 import os
 import pandas as pd
 import pytest
 import tempfile
-from io import StringIO
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
-from typing import Dict, List
+from unittest.mock import Mock, patch
+from typing import List
 
 from metaquest.core.exceptions import PluginError, ValidationError, VisualizationError
 from metaquest.core.models import Containment, SRAMetadata
 from metaquest.plugins.base import (
-    Plugin, 
-    PluginRegistry, 
-    discover_plugins, 
+    Plugin,
+    PluginRegistry,
+    discover_plugins,
     register_discovered_plugins,
     format_registry,
-    visualizer_registry
+    visualizer_registry,
 )
 from metaquest.plugins.formats.branchwater import BranchWaterFormatPlugin
 from metaquest.plugins.visualizers.bar import BarChartPlugin
@@ -38,6 +35,7 @@ from metaquest.plugins.visualizers.map import MapVisualizerPlugin
 # Test Plugin Classes
 class MockFormatPlugin(Plugin):
     """Mock format plugin for testing."""
+
     name = "mock_format"
     description = "Mock format plugin"
     version = "0.1.0"
@@ -57,6 +55,7 @@ class MockFormatPlugin(Plugin):
 
 class MockVisualizerPlugin(Plugin):
     """Mock visualizer plugin for testing."""
+
     name = "mock_visualizer"
     description = "Mock visualizer plugin"
     version = "0.1.0"
@@ -96,7 +95,7 @@ class TestPluginRegistry:
     def test_plugin_registration(self):
         """Test registering plugins."""
         registry = PluginRegistry()
-        
+
         # Register a plugin
         registry.register(MockFormatPlugin)
         assert "mock_format" in registry.list()
@@ -111,7 +110,7 @@ class TestPluginRegistry:
         """Test error when registering duplicate plugins."""
         registry = PluginRegistry()
         registry.register(MockFormatPlugin)
-        
+
         with pytest.raises(PluginError, match="Plugin 'mock_format' is already registered"):
             registry.register(MockFormatPlugin)
 
@@ -119,7 +118,7 @@ class TestPluginRegistry:
         """Test retrieving registered plugins."""
         registry = PluginRegistry()
         registry.register(MockFormatPlugin)
-        
+
         # Get plugin by name
         plugin_class = registry.get("mock_format")
         assert plugin_class == MockFormatPlugin
@@ -127,7 +126,7 @@ class TestPluginRegistry:
     def test_get_nonexistent_plugin_error(self):
         """Test error when getting non-existent plugin."""
         registry = PluginRegistry()
-        
+
         with pytest.raises(PluginError, match="Plugin 'nonexistent' is not registered"):
             registry.get("nonexistent")
 
@@ -136,7 +135,7 @@ class TestPluginRegistry:
         registry = PluginRegistry()
         registry.register(MockFormatPlugin)
         assert "mock_format" in registry.list()
-        
+
         # Unregister plugin
         registry.unregister("mock_format")
         assert "mock_format" not in registry.list()
@@ -144,7 +143,7 @@ class TestPluginRegistry:
     def test_unregister_nonexistent_plugin_error(self):
         """Test error when unregistering non-existent plugin."""
         registry = PluginRegistry()
-        
+
         with pytest.raises(PluginError, match="Plugin 'nonexistent' is not registered"):
             registry.unregister("nonexistent")
 
@@ -153,7 +152,7 @@ class TestPluginRegistry:
         registry = PluginRegistry()
         registry.register(MockFormatPlugin)
         registry.register(MockVisualizerPlugin)
-        
+
         plugins = registry.list()
         assert len(plugins) == 2
         assert "mock_format" in plugins
@@ -164,7 +163,7 @@ class TestPluginRegistry:
         registry = PluginRegistry()
         registry.register(MockFormatPlugin)
         registry.register(MockVisualizerPlugin)
-        
+
         all_plugins = registry.get_all()
         assert len(all_plugins) == 2
         assert all_plugins["mock_format"] == MockFormatPlugin
@@ -179,40 +178,40 @@ class TestPluginDiscovery:
         # This is a simplified test that focuses on the registry behavior
         # rather than the complex mock setup of importlib
         registry = PluginRegistry()
-        
+
         # Manually register plugins (simulating discovery)
         registry.register(MockFormatPlugin)
         registry.register(MockVisualizerPlugin)
-        
+
         # Test that plugins were discovered/registered
         assert "mock_format" in registry.list()
         assert "mock_visualizer" in registry.list()
-        
+
         # Test retrieval
         format_plugin = registry.get("mock_format")
         viz_plugin = registry.get("mock_visualizer")
-        
+
         assert format_plugin == MockFormatPlugin
         assert viz_plugin == MockVisualizerPlugin
 
-    @patch('metaquest.plugins.base.importlib.import_module')
+    @patch("metaquest.plugins.base.importlib.import_module")
     def test_discover_plugins_import_error(self, mock_import_module):
         """Test plugin discovery with import errors."""
         mock_import_module.side_effect = ImportError("Package not found")
-        
-        plugins = discover_plugins('nonexistent.package', Plugin)
+
+        plugins = discover_plugins("nonexistent.package", Plugin)
         assert len(plugins) == 0
 
     def test_register_discovered_plugins(self):
         """Test registering discovered plugins."""
         registry = PluginRegistry()
-        
+
         # Mock discovered plugins
-        with patch('metaquest.plugins.base.discover_plugins') as mock_discover:
+        with patch("metaquest.plugins.base.discover_plugins") as mock_discover:
             mock_discover.return_value = {MockFormatPlugin, MockVisualizerPlugin}
-            
-            register_discovered_plugins(registry, 'fake.package', Plugin)
-            
+
+            register_discovered_plugins(registry, "fake.package", Plugin)
+
             assert "mock_format" in registry.list()
             assert "mock_visualizer" in registry.list()
 
@@ -220,13 +219,13 @@ class TestPluginDiscovery:
         """Test registering discovered plugins with errors."""
         registry = PluginRegistry()
         registry.register(MockFormatPlugin)  # Pre-register to cause conflict
-        
+
         # Mock discovered plugins
-        with patch('metaquest.plugins.base.discover_plugins') as mock_discover:
+        with patch("metaquest.plugins.base.discover_plugins") as mock_discover:
             mock_discover.return_value = {MockFormatPlugin, MockVisualizerPlugin}
-            
-            register_discovered_plugins(registry, 'fake.package', Plugin)
-            
+
+            register_discovered_plugins(registry, "fake.package", Plugin)
+
             # Should still register the non-conflicting plugin
             assert "mock_visualizer" in registry.list()
 
@@ -265,16 +264,16 @@ class TestBranchWaterFormatPlugin:
 SRR123456,0.95,Escherichia coli,SAMN123456,PRJNA123456
 SRR789012,0.85,Salmonella enterica,SAMN789012,PRJNA789012
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
             f.flush()
-            
+
             try:
                 containments = BranchWaterFormatPlugin.parse_file(f.name, "GCF_123456.1")
-                
+
                 assert len(containments) == 2
-                
+
                 # Test first containment
                 c1 = containments[0]
                 assert c1.accession == "SRR123456"
@@ -282,12 +281,12 @@ SRR789012,0.85,Salmonella enterica,SAMN789012,PRJNA789012
                 assert c1.genome_id == "GCF_123456.1"
                 assert c1.additional_data["organism"] == "Escherichia coli"
                 assert c1.additional_data["biosample"] == "SAMN123456"
-                
+
                 # Test second containment
                 c2 = containments[1]
                 assert c2.accession == "SRR789012"
                 assert c2.value == 0.85
-                
+
             finally:
                 os.unlink(f.name)
 
@@ -296,11 +295,11 @@ SRR789012,0.85,Salmonella enterica,SAMN789012,PRJNA789012
         csv_content = """accession,similarity,organism
 SRR123456,0.95,Escherichia coli
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
             f.flush()
-            
+
             try:
                 with pytest.raises(ValidationError, match="Missing required columns"):
                     BranchWaterFormatPlugin.parse_file(f.name, "GCF_123456.1")
@@ -313,11 +312,11 @@ SRR123456,0.95,Escherichia coli
 invalid_acc,0.95
 SRR123456,0.85
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
             f.flush()
-            
+
             try:
                 containments = BranchWaterFormatPlugin.parse_file(f.name, "GCF_123456.1")
                 # Should skip invalid accession and only return valid one
@@ -332,11 +331,11 @@ SRR123456,0.85
 SRR123456,invalid
 SRR789012,0.85
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
             f.flush()
-            
+
             try:
                 containments = BranchWaterFormatPlugin.parse_file(f.name, "GCF_123456.1")
                 # Should skip invalid containment and only return valid one
@@ -357,12 +356,12 @@ SRR789012,0.85
                 "organism": "Escherichia coli",
                 "collection_date_sam": "2023-01-01",
                 "geo_loc_name_country_calc": "USA",
-                "custom_field": "custom_value"
-            }
+                "custom_field": "custom_value",
+            },
         )
-        
+
         metadata = BranchWaterFormatPlugin.extract_metadata(containment)
-        
+
         assert metadata.accession == "SRR123456"
         assert metadata.biosample == "SAMN123456"
         assert metadata.bioproject == "PRJNA123456"
@@ -373,12 +372,8 @@ SRR789012,0.85
 
     def test_extract_metadata_no_additional_data(self):
         """Test metadata extraction with no additional data."""
-        containment = Containment(
-            accession="SRR123456",
-            value=0.95,
-            genome_id="GCF_123456.1"
-        )
-        
+        containment = Containment(accession="SRR123456", value=0.95, genome_id="GCF_123456.1")
+
         metadata = BranchWaterFormatPlugin.extract_metadata(containment)
         assert metadata is None
 
@@ -393,10 +388,7 @@ class TestBarChartPlugin:
 
     def setup_method(self):
         """Set up test data."""
-        self.test_data = pd.DataFrame({
-            'category': ['A', 'B', 'C', 'D', 'E'],
-            'count': [10, 25, 15, 30, 5]
-        })
+        self.test_data = pd.DataFrame({"category": ["A", "B", "C", "D", "E"], "count": [10, 25, 15, 30, 5]})
 
     def test_plugin_metadata(self):
         """Test plugin metadata."""
@@ -404,151 +396,136 @@ class TestBarChartPlugin:
         assert "Bar chart" in BarChartPlugin.description
         assert BarChartPlugin.version == "0.1.0"
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('metaquest.plugins.visualizers.bar._create_horizontal_bar')
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
+    @patch("metaquest.plugins.visualizers.bar._create_horizontal_bar")
     def test_create_plot_basic(self, mock_create_horizontal_bar, mock_tight_layout, mock_subplots):
         """Test basic plot creation."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
         mock_create_horizontal_bar.return_value = mock_ax
-        
+
         result = BarChartPlugin.create_plot(
-            data=self.test_data,
-            x_column='category',
-            y_column='count',
-            title='Test Chart'
+            data=self.test_data, x_column="category", y_column="count", title="Test Chart"
         )
-        
+
         assert result == mock_fig
         mock_subplots.assert_called_once()
         mock_tight_layout.assert_called_once()
         mock_create_horizontal_bar.assert_called_once()
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('metaquest.plugins.visualizers.bar._create_horizontal_bar')
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
+    @patch("metaquest.plugins.visualizers.bar._create_horizontal_bar")
     def test_create_plot_horizontal(self, mock_create_horizontal_bar, mock_tight_layout, mock_subplots):
         """Test horizontal bar chart creation."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
         mock_create_horizontal_bar.return_value = mock_ax
-        
-        result = BarChartPlugin.create_plot(
-            data=self.test_data,
-            x_column='category',
-            y_column='count',
-            horizontal=True
-        )
-        
+
+        result = BarChartPlugin.create_plot(data=self.test_data, x_column="category", y_column="count", horizontal=True)
+
         assert result == mock_fig
         mock_create_horizontal_bar.assert_called_once()
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('metaquest.plugins.visualizers.bar._create_vertical_bar')
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
+    @patch("metaquest.plugins.visualizers.bar._create_vertical_bar")
     def test_create_plot_vertical(self, mock_create_vertical_bar, mock_tight_layout, mock_subplots):
         """Test vertical bar chart creation."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
         mock_create_vertical_bar.return_value = mock_ax
-        
+
         result = BarChartPlugin.create_plot(
-            data=self.test_data,
-            x_column='category',
-            y_column='count',
-            horizontal=False
+            data=self.test_data, x_column="category", y_column="count", horizontal=False
         )
-        
+
         assert result == mock_fig
         mock_create_vertical_bar.assert_called_once()
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('metaquest.plugins.visualizers.bar._create_horizontal_bar')
-    @patch('metaquest.plugins.visualizers.bar._prepare_plot_data')
-    def test_create_plot_with_limit(self, mock_prepare_plot_data, mock_create_horizontal_bar, mock_tight_layout, mock_subplots):
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
+    @patch("metaquest.plugins.visualizers.bar._create_horizontal_bar")
+    @patch("metaquest.plugins.visualizers.bar._prepare_plot_data")
+    def test_create_plot_with_limit(
+        self, mock_prepare_plot_data, mock_create_horizontal_bar, mock_tight_layout, mock_subplots
+    ):
         """Test plot creation with data limit."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
         mock_create_horizontal_bar.return_value = mock_ax
-        
+
         # Mock prepared data
         limited_data = self.test_data.head(2)
-        mock_prepare_plot_data.return_value = (limited_data, 'count')
-        
-        result = BarChartPlugin.create_plot(
-            data=self.test_data,
-            x_column='category',
-            y_column='count',
-            limit=2
-        )
-        
-        mock_prepare_plot_data.assert_called_once_with(self.test_data, 'category', 'count', 2)
+        mock_prepare_plot_data.return_value = (limited_data, "count")
+
+        result = BarChartPlugin.create_plot(data=self.test_data, x_column="category", y_column="count", limit=2)
+
+        mock_prepare_plot_data.assert_called_once_with(self.test_data, "category", "count", 2)
         assert result == mock_fig
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('metaquest.plugins.visualizers.bar._create_horizontal_bar')
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
+    @patch("metaquest.plugins.visualizers.bar._create_horizontal_bar")
     def test_create_plot_save_file(self, mock_create_horizontal_bar, mock_tight_layout, mock_subplots):
         """Test plot creation with file saving."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
         mock_create_horizontal_bar.return_value = mock_ax
-        
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
             try:
-                result = BarChartPlugin.create_plot(
-                    data=self.test_data,
-                    x_column='category',
-                    y_column='count',
-                    output_file=temp_file.name
+                BarChartPlugin.create_plot(
+                    data=self.test_data, x_column="category", y_column="count", output_file=temp_file.name
                 )
-                
+
                 mock_fig.savefig.assert_called_once()
             finally:
                 os.unlink(temp_file.name)
 
-    @patch('matplotlib.pyplot.subplots')
+    @patch("matplotlib.pyplot.subplots")
     def test_create_plot_error_handling(self, mock_subplots):
         """Test plot creation error handling."""
         mock_subplots.side_effect = Exception("Test error")
-        
+
         with pytest.raises(VisualizationError, match="Error creating bar chart"):
             BarChartPlugin.create_plot(data=self.test_data)
 
-    @patch('matplotlib.pyplot.subplots')
+    @patch("matplotlib.pyplot.subplots")
     def test_create_grouped_bar_chart(self, mock_subplots):
         """Test grouped bar chart creation."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
-        
+
         # Create test data for grouped chart
-        grouped_data = pd.DataFrame({
-            'x_col': ['A', 'A', 'B', 'B', 'C', 'C'],
-            'group_col': ['G1', 'G2', 'G1', 'G2', 'G1', 'G2'],
-            'value_col': [10, 15, 20, 25, 30, 35]
-        })
-        
+        grouped_data = pd.DataFrame(
+            {
+                "x_col": ["A", "A", "B", "B", "C", "C"],
+                "group_col": ["G1", "G2", "G1", "G2", "G1", "G2"],
+                "value_col": [10, 15, 20, 25, 30, 35],
+            }
+        )
+
         # Mock pivot_table
         pivot_mock = Mock()
         pivot_mock.plot = Mock()
-        
-        with patch('pandas.DataFrame.pivot_table', return_value=pivot_mock):
+
+        with patch("pandas.DataFrame.pivot_table", return_value=pivot_mock):
             result = BarChartPlugin.create_grouped_bar_chart(
                 data=grouped_data,
-                x_column='x_col',
-                group_column='group_col',
-                value_column='value_col',
-                title='Grouped Chart'
+                x_column="x_col",
+                group_column="group_col",
+                value_column="value_col",
+                title="Grouped Chart",
             )
-            
+
             assert result == mock_fig
 
 
@@ -557,11 +534,14 @@ class TestHeatmapPlugin:
 
     def setup_method(self):
         """Set up test data."""
-        self.test_data = pd.DataFrame({
-            'sample1': [0.95, 0.80, 0.60, 0.40, 0.20],
-            'sample2': [0.85, 0.90, 0.55, 0.35, 0.15],
-            'sample3': [0.75, 0.70, 0.85, 0.45, 0.25]
-        }, index=['genome1', 'genome2', 'genome3', 'genome4', 'genome5'])
+        self.test_data = pd.DataFrame(
+            {
+                "sample1": [0.95, 0.80, 0.60, 0.40, 0.20],
+                "sample2": [0.85, 0.90, 0.55, 0.35, 0.15],
+                "sample3": [0.75, 0.70, 0.85, 0.45, 0.25],
+            },
+            index=["genome1", "genome2", "genome3", "genome4", "genome5"],
+        )
 
     def test_plugin_metadata(self):
         """Test plugin metadata."""
@@ -569,119 +549,97 @@ class TestHeatmapPlugin:
         assert "Heatmap" in HeatmapPlugin.description
         assert HeatmapPlugin.version == "0.1.0"
 
-    @patch('seaborn.clustermap')
+    @patch("seaborn.clustermap")
     def test_create_plot_with_clustering(self, mock_clustermap):
         """Test heatmap creation with clustering."""
         mock_grid = Mock()
         mock_grid.fig = Mock()
         mock_clustermap.return_value = mock_grid
-        
-        result = HeatmapPlugin.create_plot(
-            data=self.test_data,
-            title='Test Heatmap',
-            cluster=True
-        )
-        
+
+        result = HeatmapPlugin.create_plot(data=self.test_data, title="Test Heatmap", cluster=True)
+
         assert result == mock_grid.fig
         mock_clustermap.assert_called_once()
 
-    @patch('seaborn.heatmap')
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
+    @patch("seaborn.heatmap")
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
     def test_create_plot_no_clustering(self, mock_tight_layout, mock_subplots, mock_heatmap):
         """Test heatmap creation without clustering."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
-        
-        result = HeatmapPlugin.create_plot(
-            data=self.test_data,
-            cluster=False,
-            title='Test Heatmap'
-        )
-        
+
+        result = HeatmapPlugin.create_plot(data=self.test_data, cluster=False, title="Test Heatmap")
+
         assert result == mock_fig
         mock_heatmap.assert_called_once()
         mock_tight_layout.assert_called_once()
 
-    @patch('seaborn.clustermap')
+    @patch("seaborn.clustermap")
     def test_create_plot_save_file_clustered(self, mock_clustermap):
         """Test heatmap creation with file saving (clustered)."""
         mock_grid = Mock()
         mock_fig = Mock()
         mock_grid.fig = mock_fig
         mock_clustermap.return_value = mock_grid
-        
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
             try:
-                result = HeatmapPlugin.create_plot(
-                    data=self.test_data,
-                    output_file=temp_file.name,
-                    cluster=True
-                )
-                
+                HeatmapPlugin.create_plot(data=self.test_data, output_file=temp_file.name, cluster=True)
+
                 mock_fig.savefig.assert_called_once()
             finally:
                 os.unlink(temp_file.name)
 
-    @patch('seaborn.heatmap')
-    @patch('matplotlib.pyplot.subplots')
+    @patch("seaborn.heatmap")
+    @patch("matplotlib.pyplot.subplots")
     def test_create_plot_save_file_unclustered(self, mock_subplots, mock_heatmap):
         """Test heatmap creation with file saving (unclustered)."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
-        
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
             try:
-                result = HeatmapPlugin.create_plot(
-                    data=self.test_data,
-                    output_file=temp_file.name,
-                    cluster=False
-                )
-                
+                HeatmapPlugin.create_plot(data=self.test_data, output_file=temp_file.name, cluster=False)
+
                 mock_fig.savefig.assert_called_once()
             finally:
                 os.unlink(temp_file.name)
 
-    @patch('seaborn.clustermap')
+    @patch("seaborn.clustermap")
     def test_create_presence_heatmap(self, mock_clustermap):
         """Test presence/absence heatmap creation."""
         mock_grid = Mock()
         mock_grid.fig = Mock()
         mock_clustermap.return_value = mock_grid
-        
-        result = HeatmapPlugin.create_presence_heatmap(
-            data=self.test_data,
-            threshold=0.5,
-            title='Presence Heatmap'
-        )
-        
+
+        result = HeatmapPlugin.create_presence_heatmap(data=self.test_data, threshold=0.5, title="Presence Heatmap")
+
         assert result == mock_grid.fig
         mock_clustermap.assert_called_once()
 
-    @patch('seaborn.heatmap')
-    @patch('matplotlib.pyplot.subplots')
+    @patch("seaborn.heatmap")
+    @patch("matplotlib.pyplot.subplots")
     def test_create_correlation_heatmap(self, mock_subplots, mock_heatmap):
         """Test correlation heatmap creation."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
-        
+
         result = HeatmapPlugin.create_correlation_heatmap(
-            data=self.test_data,
-            method='pearson',
-            title='Correlation Heatmap'
+            data=self.test_data, method="pearson", title="Correlation Heatmap"
         )
-        
+
         assert result == mock_fig
         mock_heatmap.assert_called_once()
 
-    @patch('seaborn.clustermap')
+    @patch("seaborn.clustermap")
     def test_create_plot_error_handling(self, mock_clustermap):
         """Test heatmap creation error handling."""
         mock_clustermap.side_effect = Exception("Test error")
-        
+
         with pytest.raises(VisualizationError, match="Error creating heatmap"):
             HeatmapPlugin.create_plot(data=self.test_data)
 
@@ -691,11 +649,13 @@ class TestMapVisualizerPlugin:
 
     def setup_method(self):
         """Set up test data."""
-        self.test_data = pd.DataFrame({
-            'lat_lon': ['40.7128, -74.0060', '34.0522, -118.2437', '41.8781, -87.6298'],
-            'value': [0.95, 0.85, 0.75],
-            'location': ['New York', 'Los Angeles', 'Chicago']
-        })
+        self.test_data = pd.DataFrame(
+            {
+                "lat_lon": ["40.7128, -74.0060", "34.0522, -118.2437", "41.8781, -87.6298"],
+                "value": [0.95, 0.85, 0.75],
+                "location": ["New York", "Los Angeles", "Chicago"],
+            }
+        )
 
     def test_plugin_metadata(self):
         """Test plugin metadata."""
@@ -703,11 +663,11 @@ class TestMapVisualizerPlugin:
         assert "map" in MapVisualizerPlugin.description.lower()
         assert MapVisualizerPlugin.version == "0.1.0"
 
-    @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
-    @patch('metaquest.plugins.visualizers.map._plot_points')
-    @patch('metaquest.plugins.visualizers.map._add_map_features')
-    @patch('metaquest.plugins.visualizers.map._create_map_figure')
-    @patch('metaquest.plugins.visualizers.map._extract_coordinates')
+    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("metaquest.plugins.visualizers.map._plot_points")
+    @patch("metaquest.plugins.visualizers.map._add_map_features")
+    @patch("metaquest.plugins.visualizers.map._create_map_figure")
+    @patch("metaquest.plugins.visualizers.map._extract_coordinates")
     def test_create_plot_basic(self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points):
         """Test basic map creation."""
         mock_fig = Mock()
@@ -715,13 +675,9 @@ class TestMapVisualizerPlugin:
         mock_create_figure.return_value = (mock_fig, mock_ax)
         mock_extract_coords.return_value = self.test_data  # Return original data
         mock_plot_points.return_value = Mock()
-        
-        result = MapVisualizerPlugin.create_plot(
-            data=self.test_data,
-            lat_lon_column='lat_lon',
-            value_column='value'
-        )
-        
+
+        result = MapVisualizerPlugin.create_plot(data=self.test_data, lat_lon_column="lat_lon", value_column="value")
+
         assert result == mock_fig
         mock_create_figure.assert_called_once()
         mock_add_features.assert_called_once()
@@ -729,18 +685,15 @@ class TestMapVisualizerPlugin:
 
     def test_cartopy_unavailable_error(self):
         """Test error when cartopy is unavailable."""
-        with patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', False):
+        with patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", False):
             with pytest.raises(VisualizationError, match="Cartopy library is required"):
-                MapVisualizerPlugin.create_plot(
-                    data=self.test_data,
-                    lat_lon_column='lat_lon'
-                )
+                MapVisualizerPlugin.create_plot(data=self.test_data, lat_lon_column="lat_lon")
 
-    @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
-    @patch('metaquest.plugins.visualizers.map._plot_points')
-    @patch('metaquest.plugins.visualizers.map._add_map_features')
-    @patch('metaquest.plugins.visualizers.map._create_map_figure')
-    @patch('metaquest.plugins.visualizers.map._extract_coordinates')
+    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("metaquest.plugins.visualizers.map._plot_points")
+    @patch("metaquest.plugins.visualizers.map._add_map_features")
+    @patch("metaquest.plugins.visualizers.map._create_map_figure")
+    @patch("metaquest.plugins.visualizers.map._extract_coordinates")
     def test_create_plot_with_save(self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points):
         """Test map creation with file saving."""
         mock_fig = Mock()
@@ -749,12 +702,10 @@ class TestMapVisualizerPlugin:
         mock_extract_coords.return_value = self.test_data
         mock_plot_points.return_value = Mock()
 
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
             try:
-                result = MapVisualizerPlugin.create_plot(
-                    data=self.test_data,
-                    lat_lon_column='lat_lon',
-                    output_file=temp_file.name
+                MapVisualizerPlugin.create_plot(
+                    data=self.test_data, lat_lon_column="lat_lon", output_file=temp_file.name
                 )
 
                 mock_fig.savefig.assert_called_once()
@@ -764,72 +715,64 @@ class TestMapVisualizerPlugin:
     def test_parse_coordinate_string(self):
         """Test coordinate string parsing."""
         from metaquest.plugins.visualizers.map import _parse_coordinate_string
-        
+
         # Test standard format
         lat, lon = _parse_coordinate_string("40.7128, -74.0060")
         assert lat == 40.7128
         assert lon == -74.0060
-        
+
         # Test with N/S/E/W designations
         lat, lon = _parse_coordinate_string("40.7128N, 74.0060W")
         assert lat == 40.7128
         assert lon == -74.0060
-        
+
         # Test space-separated
         lat, lon = _parse_coordinate_string("40.7128 -74.0060")
         assert lat == 40.7128
         assert lon == -74.0060
-        
+
         # Test invalid format
         lat, lon = _parse_coordinate_string("invalid")
         assert lat is None
         assert lon is None
 
-    @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
-    @patch('matplotlib.pyplot.figure')
+    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("matplotlib.pyplot.figure")
     def test_create_plot_error_handling(self, mock_figure):
         """Test map creation error handling."""
         mock_figure.side_effect = Exception("Test error")
-        
-        with pytest.raises(VisualizationError, match="Error creating map"):
-            MapVisualizerPlugin.create_plot(
-                data=self.test_data,
-                lat_lon_column='lat_lon'
-            )
 
-    @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
-    @patch('matplotlib.pyplot.figure')
-    @patch('metaquest.plugins.visualizers.map.cfeature', create=True)
-    @patch('metaquest.plugins.visualizers.map.ccrs', create=True)
+        with pytest.raises(VisualizationError, match="Error creating map"):
+            MapVisualizerPlugin.create_plot(data=self.test_data, lat_lon_column="lat_lon")
+
+    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("matplotlib.pyplot.figure")
+    @patch("metaquest.plugins.visualizers.map.cfeature", create=True)
+    @patch("metaquest.plugins.visualizers.map.ccrs", create=True)
     def test_create_choropleth(self, mock_ccrs, mock_cfeature, mock_figure):
         """Test choropleth map creation."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_figure.return_value = mock_fig
         mock_fig.add_subplot.return_value = mock_ax
-        
+
         # Mock NaturalEarthFeature
         mock_feature = Mock()
         mock_cfeature.NaturalEarthFeature.return_value = mock_feature
         mock_feature.geometries.return_value = []
-        
-        country_data = pd.DataFrame({
-            'country': ['USA', 'Canada', 'Mexico'],
-            'value': [0.8, 0.7, 0.6]
-        })
-        
+
+        country_data = pd.DataFrame({"country": ["USA", "Canada", "Mexico"], "value": [0.8, 0.7, 0.6]})
+
         result = MapVisualizerPlugin.create_choropleth(
-            data=country_data,
-            country_column='country',
-            value_column='value'
+            data=country_data, country_column="country", value_column="value"
         )
 
         assert result == mock_fig
 
-    @patch('metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE', True)
-    @patch('matplotlib.pyplot.figure')
-    @patch('metaquest.plugins.visualizers.map.cfeature', create=True)
-    @patch('metaquest.plugins.visualizers.map.ccrs', create=True)
+    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("matplotlib.pyplot.figure")
+    @patch("metaquest.plugins.visualizers.map.cfeature", create=True)
+    @patch("metaquest.plugins.visualizers.map.ccrs", create=True)
     def test_create_choropleth_colormap_not_deprecated(self, mock_ccrs, mock_cfeature, mock_figure):
         """The colored-country branch must not use a deprecated matplotlib colormap API.
 
@@ -852,25 +795,24 @@ class TestMapVisualizerPlugin:
         mock_cfeature.NaturalEarthFeature.return_value = mock_feature
         mock_feature.geometries.return_value = [matching_geom]
 
-        country_data = pd.DataFrame({
-            'country': ['USA'],
-            'value': [0.8],
-        })
+        country_data = pd.DataFrame(
+            {
+                "country": ["USA"],
+                "value": [0.8],
+            }
+        )
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", matplotlib.MatplotlibDeprecationWarning)
             result = MapVisualizerPlugin.create_choropleth(
                 data=country_data,
-                country_column='country',
-                value_column='value',
+                country_column="country",
+                value_column="value",
             )
 
         assert result == mock_fig
         # The colored branch must have been taken with a real RGBA facecolor
-        facecolors = [
-            call.kwargs.get("facecolor")
-            for call in mock_ax.add_geometries.call_args_list
-        ]
+        facecolors = [call.kwargs.get("facecolor") for call in mock_ax.add_geometries.call_args_list]
         assert any(isinstance(fc, tuple) and len(fc) == 4 for fc in facecolors)
 
 
@@ -888,14 +830,14 @@ class TestPluginRegistries:
     def test_format_registry_has_plugins(self):
         """Test that format registry has expected plugins."""
         # Note: This depends on actual plugin registration in the module
-        plugins = format_registry.list()
+        format_registry.list()
         # At minimum should have branchwater if auto-discovery works
         # This test might need adjustment based on actual registration
 
     def test_visualizer_registry_has_plugins(self):
         """Test that visualizer registry has expected plugins."""
         # Note: This depends on actual plugin registration in the module
-        plugins = visualizer_registry.list()
+        visualizer_registry.list()
         # Should have bar, heatmap, map if registered in plots.py
         # This test might need adjustment based on actual registration
 
@@ -910,71 +852,63 @@ class TestPluginIntegration:
 SRR123456,0.95,Escherichia coli
 SRR789012,0.85,Salmonella enterica
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
             f.flush()
-            
+
             try:
                 # Parse file
                 containments = BranchWaterFormatPlugin.parse_file(f.name, "GCF_123456.1")
-                
+
                 # Extract metadata
                 metadata_list = []
                 for containment in containments:
                     metadata = BranchWaterFormatPlugin.extract_metadata(containment)
                     if metadata:
                         metadata_list.append(metadata)
-                
+
                 # Verify results
                 assert len(containments) == 2
                 assert len(metadata_list) == 2
                 assert metadata_list[0].organism == "Escherichia coli"
-                
+
             finally:
                 os.unlink(f.name)
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('metaquest.plugins.visualizers.bar._create_horizontal_bar')
+    @patch("matplotlib.pyplot.subplots")
+    @patch("matplotlib.pyplot.tight_layout")
+    @patch("metaquest.plugins.visualizers.bar._create_horizontal_bar")
     def test_end_to_end_visualizer_plugin_workflow(self, mock_create_horizontal_bar, mock_tight_layout, mock_subplots):
         """Test complete workflow with visualizer plugin."""
         mock_fig = Mock()
         mock_ax = Mock()
         mock_subplots.return_value = (mock_fig, mock_ax)
         mock_create_horizontal_bar.return_value = mock_ax
-        
+
         # Create test data
-        test_data = pd.DataFrame({
-            'category': ['A', 'B', 'C'],
-            'count': [10, 20, 15]
-        })
-        
+        test_data = pd.DataFrame({"category": ["A", "B", "C"], "count": [10, 20, 15]})
+
         # Create plot
-        result = BarChartPlugin.create_plot(
-            data=test_data,
-            x_column='category',
-            y_column='count',
-            title='Test Chart'
-        )
-        
+        result = BarChartPlugin.create_plot(data=test_data, x_column="category", y_column="count", title="Test Chart")
+
         assert result == mock_fig
 
     def test_plugin_discovery_and_registration_flow(self):
         """Test plugin discovery and registration workflow."""
         registry = PluginRegistry()
-        
+
         # Register plugins manually (simulating discovery)
         registry.register(BranchWaterFormatPlugin)
         registry.register(BarChartPlugin)
-        
+
         # Test retrieval
         format_plugin = registry.get("branchwater")
         viz_plugin = registry.get("bar")
-        
+
         assert format_plugin == BranchWaterFormatPlugin
         assert viz_plugin == BarChartPlugin
-        
+
         # Test listing
         all_plugins = registry.list()
         assert "branchwater" in all_plugins

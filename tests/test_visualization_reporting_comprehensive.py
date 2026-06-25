@@ -127,7 +127,7 @@ class TestCreateDefaultTemplate:
     def test_returns_path(self, tmp_path):
         with patch("metaquest.visualization.reporting.Path") as mock_path_class:
             # Make __file__ resolve to tmp_path so template is written there
-            template_path = tmp_path / "templates" / "report_template.html"
+            tmp_path / "templates" / "report_template.html"
             mock_path_class.return_value = tmp_path
             mock_path_class.__truediv__ = Path.__truediv__
 
@@ -499,7 +499,9 @@ class TestGeneratePdfReportComprehensive:
                 with patch("matplotlib.pyplot.close"):
                     with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
                         with patch("metaquest.visualization.reporting.plot_metadata_counts", return_value=mock_fig):
-                            with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
+                            with patch(
+                                "metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig
+                            ):
                                 result = _generate_pdf_report(
                                     title="Full Report",
                                     summary_data=summary_df,
@@ -529,7 +531,9 @@ class TestGeneratePdfReportComprehensive:
                             "metaquest.visualization.reporting.plot_metadata_counts",
                             side_effect=Exception("Counts error"),
                         ):
-                            with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
+                            with patch(
+                                "metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig
+                            ):
                                 # Should not raise
                                 result = _generate_pdf_report(
                                     title="Report",
@@ -704,7 +708,9 @@ class TestGenerateReportIntegration:
                 with patch("matplotlib.pyplot.close"):
                     with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
                         with patch("metaquest.visualization.reporting.plot_metadata_counts", return_value=mock_fig):
-                            with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
+                            with patch(
+                                "metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig
+                            ):
                                 result = generate_report(
                                     title="Full Integration Report",
                                     summary_file=str(summary_file),

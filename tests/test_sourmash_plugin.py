@@ -15,7 +15,6 @@ from metaquest.plugins.sourmash_plugin import (
     MetaquestTaxonomyPlugin,
 )
 
-
 # --- Fixtures ---
 
 
@@ -43,10 +42,14 @@ class TestMetaquestParsePlugin:
 
     def test_configure_parser(self, parser):
         MetaquestParsePlugin(parser)
-        args = parser.parse_args([
-            "--matches-folder", "my_matches",
-            "--step-size", "0.05",
-        ])
+        args = parser.parse_args(
+            [
+                "--matches-folder",
+                "my_matches",
+                "--step-size",
+                "0.05",
+            ]
+        )
         assert args.matches_folder == "my_matches"
         assert args.step_size == 0.05
         assert args.parsed_containment_file == "parsed_containment.txt"
@@ -69,19 +72,23 @@ class TestMetaquestParsePlugin:
     @patch("metaquest.data.branchwater.parse_containment_data")
     def test_main_calls_parse_containment(self, mock_parse, parser):
         cmd = MetaquestParsePlugin(parser)
-        args = parser.parse_args([
-            "--matches-folder", "test_matches",
-            "--parsed-containment-file", "parsed.txt",
-            "--summary-containment-file", "summary.txt",
-            "--step-size", "0.2",
-        ])
+        args = parser.parse_args(
+            [
+                "--matches-folder",
+                "test_matches",
+                "--parsed-containment-file",
+                "parsed.txt",
+                "--summary-containment-file",
+                "summary.txt",
+                "--step-size",
+                "0.2",
+            ]
+        )
         # Call main directly, bypassing super().main() since sourmash
         # may not be installed
         with patch.object(type(cmd).__bases__[0], "main"):
             cmd.main(args)
-        mock_parse.assert_called_once_with(
-            "test_matches", "parsed.txt", "summary.txt", 0.2
-        )
+        mock_parse.assert_called_once_with("test_matches", "parsed.txt", "summary.txt", 0.2)
 
     @patch("metaquest.data.branchwater.parse_containment_data", side_effect=RuntimeError("bad"))
     def test_main_handles_error(self, mock_parse, parser):
@@ -102,11 +109,16 @@ class TestMetaquestPlotPlugin:
 
     def test_configure_parser(self, parser):
         MetaquestPlotPlugin(parser)
-        args = parser.parse_args([
-            "--file-path", "data.txt",
-            "--plot-type", "histogram",
-            "--threshold", "0.5",
-        ])
+        args = parser.parse_args(
+            [
+                "--file-path",
+                "data.txt",
+                "--plot-type",
+                "histogram",
+                "--threshold",
+                "0.5",
+            ]
+        )
         assert args.file_path == "data.txt"
         assert args.plot_type == "histogram"
         assert args.threshold == 0.5
@@ -123,11 +135,15 @@ class TestMetaquestPlotPlugin:
     @patch("metaquest.visualization.plots.plot_containment")
     def test_main_calls_plot(self, mock_plot, parser):
         cmd = MetaquestPlotPlugin(parser)
-        args = parser.parse_args([
-            "--file-path", "data.txt",
-            "--plot-type", "box",
-            "--show-title",
-        ])
+        args = parser.parse_args(
+            [
+                "--file-path",
+                "data.txt",
+                "--plot-type",
+                "box",
+                "--show-title",
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             cmd.main(args)
         mock_plot.assert_called_once_with(
@@ -160,11 +176,17 @@ class TestMetaquestDiversityPlugin:
 
     def test_configure_parser(self, parser):
         MetaquestDiversityPlugin(parser)
-        args = parser.parse_args([
-            "--abundance-file", "abundance.csv",
-            "--beta-metric", "jaccard",
-            "--alpha-metrics", "shannon", "simpson",
-        ])
+        args = parser.parse_args(
+            [
+                "--abundance-file",
+                "abundance.csv",
+                "--beta-metric",
+                "jaccard",
+                "--alpha-metrics",
+                "shannon",
+                "simpson",
+            ]
+        )
         assert args.abundance_file == "abundance.csv"
         assert args.beta_metric == "jaccard"
         assert args.alpha_metrics == ["shannon", "simpson"]
@@ -180,23 +202,21 @@ class TestMetaquestDiversityPlugin:
     @patch("metaquest.processing.diversity.calculate_beta_diversity")
     @patch("metaquest.processing.diversity.calculate_alpha_diversity")
     @patch("pandas.read_csv")
-    def test_main_runs_diversity(
-        self, mock_read, mock_alpha, mock_beta, parser, tmp_output
-    ):
-        abundance_df = pd.DataFrame(
-            {"sp1": [1, 2], "sp2": [3, 4]}, index=["s1", "s2"]
-        )
+    def test_main_runs_diversity(self, mock_read, mock_alpha, mock_beta, parser, tmp_output):
+        abundance_df = pd.DataFrame({"sp1": [1, 2], "sp2": [3, 4]}, index=["s1", "s2"])
         mock_read.return_value = abundance_df
         mock_alpha.return_value = pd.DataFrame({"shannon": [1.0, 1.1]})
-        mock_beta.return_value = pd.DataFrame(
-            {"s1": [0, 0.5], "s2": [0.5, 0]}, index=["s1", "s2"]
-        )
+        mock_beta.return_value = pd.DataFrame({"s1": [0, 0.5], "s2": [0.5, 0]}, index=["s1", "s2"])
 
         cmd = MetaquestDiversityPlugin(parser)
-        args = parser.parse_args([
-            "--abundance-file", "abundance.csv",
-            "--output-dir", str(tmp_output / "div_out"),
-        ])
+        args = parser.parse_args(
+            [
+                "--abundance-file",
+                "abundance.csv",
+                "--output-dir",
+                str(tmp_output / "div_out"),
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             cmd.main(args)
 
@@ -206,10 +226,14 @@ class TestMetaquestDiversityPlugin:
     @patch("pandas.read_csv", side_effect=FileNotFoundError("not found"))
     def test_main_handles_missing_file(self, mock_read, parser, tmp_output):
         cmd = MetaquestDiversityPlugin(parser)
-        args = parser.parse_args([
-            "--abundance-file", "missing.csv",
-            "--output-dir", str(tmp_output / "div_out"),
-        ])
+        args = parser.parse_args(
+            [
+                "--abundance-file",
+                "missing.csv",
+                "--output-dir",
+                str(tmp_output / "div_out"),
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             with pytest.raises(SystemExit):
                 cmd.main(args)
@@ -225,21 +249,30 @@ class TestMetaquestTaxonomyPlugin:
 
     def test_configure_parser(self, parser):
         MetaquestTaxonomyPlugin(parser)
-        args = parser.parse_args([
-            "--species-file", "species.txt",
-            "--email", "test@example.com",
-            "--api-key", "mykey",
-        ])
+        args = parser.parse_args(
+            [
+                "--species-file",
+                "species.txt",
+                "--email",
+                "test@example.com",
+                "--api-key",
+                "mykey",
+            ]
+        )
         assert args.species_file == "species.txt"
         assert args.email == "test@example.com"
         assert args.api_key == "mykey"
 
     def test_default_arguments(self, parser):
         MetaquestTaxonomyPlugin(parser)
-        args = parser.parse_args([
-            "--species-file", "species.txt",
-            "--email", "test@example.com",
-        ])
+        args = parser.parse_args(
+            [
+                "--species-file",
+                "species.txt",
+                "--email",
+                "test@example.com",
+            ]
+        )
         assert args.output_file == "taxonomy_validation.csv"
         assert args.cache_file == "taxonomy_cache.csv"
         assert args.species_column is None
@@ -249,18 +282,24 @@ class TestMetaquestTaxonomyPlugin:
         species_file = tmp_output / "species.txt"
         species_file.write_text("E. coli\nB. subtilis\n")
 
-        results_df = pd.DataFrame({
-            "species": ["E. coli", "B. subtilis"],
-            "is_valid": [True, True],
-            "confidence": ["high", "high"],
-        })
+        results_df = pd.DataFrame(
+            {
+                "species": ["E. coli", "B. subtilis"],
+                "is_valid": [True, True],
+                "confidence": ["high", "high"],
+            }
+        )
         mock_validate.return_value = results_df
 
         cmd = MetaquestTaxonomyPlugin(parser)
-        args = parser.parse_args([
-            "--species-file", str(species_file),
-            "--email", "test@example.com",
-        ])
+        args = parser.parse_args(
+            [
+                "--species-file",
+                str(species_file),
+                "--email",
+                "test@example.com",
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             cmd.main(args)
 
@@ -271,22 +310,31 @@ class TestMetaquestTaxonomyPlugin:
     @patch("metaquest.data.taxonomy.validate_taxonomic_assignments")
     @patch("pandas.read_csv")
     def test_main_with_csv_file(self, mock_read, mock_validate, parser):
-        mock_read.return_value = pd.DataFrame({
-            "organism": ["E. coli", "B. subtilis"],
-        })
-        results_df = pd.DataFrame({
-            "species": ["E. coli", "B. subtilis"],
-            "is_valid": [True, False],
-            "confidence": ["high", "low"],
-        })
+        mock_read.return_value = pd.DataFrame(
+            {
+                "organism": ["E. coli", "B. subtilis"],
+            }
+        )
+        results_df = pd.DataFrame(
+            {
+                "species": ["E. coli", "B. subtilis"],
+                "is_valid": [True, False],
+                "confidence": ["high", "low"],
+            }
+        )
         mock_validate.return_value = results_df
 
         cmd = MetaquestTaxonomyPlugin(parser)
-        args = parser.parse_args([
-            "--species-file", "species.csv",
-            "--species-column", "organism",
-            "--email", "test@example.com",
-        ])
+        args = parser.parse_args(
+            [
+                "--species-file",
+                "species.csv",
+                "--species-column",
+                "organism",
+                "--email",
+                "test@example.com",
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             cmd.main(args)
 
@@ -297,11 +345,16 @@ class TestMetaquestTaxonomyPlugin:
         csv_file.write_text("name\nE. coli\n")
 
         cmd = MetaquestTaxonomyPlugin(parser)
-        args = parser.parse_args([
-            "--species-file", str(csv_file),
-            "--species-column", "nonexistent",
-            "--email", "test@example.com",
-        ])
+        args = parser.parse_args(
+            [
+                "--species-file",
+                str(csv_file),
+                "--species-column",
+                "nonexistent",
+                "--email",
+                "test@example.com",
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             with pytest.raises(SystemExit):
                 cmd.main(args)
@@ -312,10 +365,14 @@ class TestMetaquestTaxonomyPlugin:
         species_file.write_text("E. coli\n")
 
         cmd = MetaquestTaxonomyPlugin(parser)
-        args = parser.parse_args([
-            "--species-file", str(species_file),
-            "--email", "test@example.com",
-        ])
+        args = parser.parse_args(
+            [
+                "--species-file",
+                str(species_file),
+                "--email",
+                "test@example.com",
+            ]
+        )
         with patch.object(type(cmd).__bases__[0], "main"):
             with pytest.raises(SystemExit):
                 cmd.main(args)
@@ -355,6 +412,4 @@ class TestPluginDiscovery:
             MetaquestTaxonomyPlugin,
         ]
         for cls in classes:
-            assert cls.command.startswith("metaquest_"), (
-                f"{cls.__name__}.command should start with 'metaquest_'"
-            )
+            assert cls.command.startswith("metaquest_"), f"{cls.__name__}.command should start with 'metaquest_'"

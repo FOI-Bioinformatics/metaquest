@@ -133,7 +133,7 @@ class TestPathValidation:
     def test_validate_safe_path(self):
         """Test that safe paths in allowed directories are accepted."""
         # Use a path that's definitely allowed
-        with patch.object(SecureSubprocess, 'validate_path') as mock_validate:
+        with patch.object(SecureSubprocess, "validate_path") as mock_validate:
             mock_validate.return_value = Path("/tmp/safe_directory")
 
             result = SecureSubprocess.validate_path("/tmp/safe_directory")
@@ -239,50 +239,38 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_basic(self):
         """Test basic secure subprocess execution."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout="success",
-                stderr=""
-            )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="success", stderr="")
 
             # Mock the validation to pass
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='echo'):
-                with patch.object(SecureSubprocess, 'validate_parameter', side_effect=lambda e, p: p):
-                    result = SecureSubprocess.run_secure(
-                        'echo',
-                        ['Hello', 'World']
-                    )
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
+                    SecureSubprocess.run_secure("echo", ["Hello", "World"])
 
             assert mock_run.called
 
     def test_run_secure_validates_executable(self):
         """Test that run_secure validates the executable."""
         with pytest.raises(SecurityError, match="not allowed"):
-            SecureSubprocess.run_secure('rm', ['-rf', '/'])
+            SecureSubprocess.run_secure("rm", ["-rf", "/"])
 
     def test_run_secure_validates_parameters(self):
         """Test that run_secure validates parameters."""
-        with patch('subprocess.run'):
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='fasterq-dump'):
-                with patch.object(SecureSubprocess, 'validate_parameter', side_effect=SecurityError("Unsafe param")):
+        with patch("subprocess.run"):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="fasterq-dump"):
+                with patch.object(SecureSubprocess, "validate_parameter", side_effect=SecurityError("Unsafe param")):
                     with pytest.raises(SecurityError, match="Unsafe param"):
-                        SecureSubprocess.run_secure(
-                            'fasterq-dump',
-                            ['--evil-param', 'value']
-                        )
+                        SecureSubprocess.run_secure("fasterq-dump", ["--evil-param", "value"])
 
     def test_run_secure_removes_dangerous_env_vars(self):
         """Test that dangerous environment variables are removed."""
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='echo'):
-                with patch.object(SecureSubprocess, 'validate_parameter', side_effect=lambda e, p: p):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
                     SecureSubprocess.run_secure(
-                        'echo',
-                        ['test'],
-                        env={'LD_PRELOAD': '/evil/lib.so', 'SAFE_VAR': 'value'}
+                        "echo", ["test"], env={"LD_PRELOAD": "/evil/lib.so", "SAFE_VAR": "value"}
                     )
 
             # Check that subprocess.run was called
@@ -290,38 +278,34 @@ class TestSecureSubprocessRun:
             call_kwargs = mock_run.call_args[1]
 
             # Dangerous env vars should be removed
-            assert 'LD_PRELOAD' not in call_kwargs['env']
+            assert "LD_PRELOAD" not in call_kwargs["env"]
 
     def test_run_secure_timeout_handling(self):
         """Test timeout handling in secure subprocess."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired('cmd', 10)
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired("cmd", 10)
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='echo'):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with pytest.raises(SecurityError, match="timed out"):
-                    SecureSubprocess.run_secure('echo', ['test'], timeout=1)
+                    SecureSubprocess.run_secure("echo", ["test"], timeout=1)
 
     def test_run_secure_preserves_calledprocesserror(self):
         """Test that CalledProcessError is preserved (not wrapped)."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, 'cmd')
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='echo'):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with pytest.raises(subprocess.CalledProcessError):
-                    SecureSubprocess.run_secure('echo', ['test'])
+                    SecureSubprocess.run_secure("echo", ["test"])
 
     def test_run_secure_with_cwd(self, tmp_path):
         """Test secure subprocess with working directory."""
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='echo'):
-                with patch.object(SecureSubprocess, 'validate_path', return_value=tmp_path):
-                    SecureSubprocess.run_secure(
-                        'echo',
-                        ['test'],
-                        cwd=str(tmp_path)
-                    )
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                with patch.object(SecureSubprocess, "validate_path", return_value=tmp_path):
+                    SecureSubprocess.run_secure("echo", ["test"], cwd=str(tmp_path))
 
                 # Verify cwd was validated and used
                 assert mock_run.called
@@ -332,19 +316,19 @@ class TestPathValidationFunction:
 
     def test_validate_file_path_basic(self):
         """Test basic file path validation."""
-        with patch.object(SecureSubprocess, 'validate_path', return_value=Path("/tmp/test.txt")):
+        with patch.object(SecureSubprocess, "validate_path", return_value=Path("/tmp/test.txt")):
             result = validate_file_path("/tmp/test.txt", must_exist=True)
             assert result.is_absolute()
 
     def test_validate_file_path_must_exist(self):
         """Test file path validation with must_exist flag."""
-        with patch.object(SecureSubprocess, 'validate_path', return_value=Path("/tmp/nonexistent.txt")):
+        with patch.object(SecureSubprocess, "validate_path", return_value=Path("/tmp/nonexistent.txt")):
             result = validate_file_path("/tmp/nonexistent.txt", must_exist=False)
             assert result.is_absolute()
 
     def test_validate_file_path_delegates_to_secure_subprocess(self):
         """Test that validate_file_path delegates to SecureSubprocess."""
-        with patch.object(SecureSubprocess, 'validate_path') as mock_validate:
+        with patch.object(SecureSubprocess, "validate_path") as mock_validate:
             mock_validate.return_value = Path("/safe/path")
 
             result = validate_file_path("/safe/path", must_exist=True)
@@ -368,9 +352,9 @@ class TestAdvancedSecurityScenarios:
         for args in injection_attempts:
             # These should be caught by parameter validation
             try:
-                with patch('subprocess.run'):
-                    with patch.object(SecureSubprocess, 'validate_executable', return_value='tool'):
-                        SecureSubprocess.run_secure('tool', args)
+                with patch("subprocess.run"):
+                    with patch.object(SecureSubprocess, "validate_executable", return_value="tool"):
+                        SecureSubprocess.run_secure("tool", args)
             except (SecurityError, subprocess.CalledProcessError):
                 # Either caught by validation or would fail execution
                 pass
@@ -378,22 +362,22 @@ class TestAdvancedSecurityScenarios:
     def test_environment_variable_injection(self):
         """Test that environment variable injection is prevented."""
         dangerous_env = {
-            'LD_PRELOAD': '/tmp/evil.so',
-            'LD_LIBRARY_PATH': '/tmp/evil',
-            'PYTHONPATH': '/tmp/evil_modules',
+            "LD_PRELOAD": "/tmp/evil.so",
+            "LD_LIBRARY_PATH": "/tmp/evil",
+            "PYTHONPATH": "/tmp/evil_modules",
         }
 
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0)
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='echo'):
-                SecureSubprocess.run_secure('echo', ['test'], env=dangerous_env)
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                SecureSubprocess.run_secure("echo", ["test"], env=dangerous_env)
 
             # Verify dangerous vars were removed
             call_kwargs = mock_run.call_args[1]
-            env = call_kwargs['env']
+            env = call_kwargs["env"]
 
-            assert 'LD_PRELOAD' not in env or env.get('LD_PRELOAD') != '/tmp/evil.so'
+            assert "LD_PRELOAD" not in env or env.get("LD_PRELOAD") != "/tmp/evil.so"
 
     def test_null_byte_injection(self):
         """Test that null byte injection is prevented."""
@@ -425,38 +409,32 @@ class TestArgumentParsing:
 
     def test_parse_flag_with_value(self):
         """Test parsing of flag with value argument."""
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0)
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='tool'):
-                with patch.object(SecureSubprocess, 'validate_parameter', side_effect=lambda e, p: p):
-                    with patch.object(SecureSubprocess, 'validate_path', side_effect=lambda p, **k: Path(p)):
-                        SecureSubprocess.run_secure(
-                            'tool',
-                            ['-O', '/tmp/output', '--threads', '4']
-                        )
+            with patch.object(SecureSubprocess, "validate_executable", return_value="tool"):
+                with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
+                    with patch.object(SecureSubprocess, "validate_path", side_effect=lambda p, **k: Path(p)):
+                        SecureSubprocess.run_secure("tool", ["-O", "/tmp/output", "--threads", "4"])
 
             # Verify command was built correctly
             call_args = mock_run.call_args[0][0]
-            assert '-O' in call_args
-            assert '--threads' in call_args
+            assert "-O" in call_args
+            assert "--threads" in call_args
 
     def test_parse_standalone_argument(self):
         """Test parsing of standalone arguments."""
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0)
 
-            with patch.object(SecureSubprocess, 'validate_executable', return_value='fasterq-dump'):
-                with patch.object(SecureSubprocess, 'validate_accession_for_subprocess', return_value='SRR000001'):
-                    with patch.object(SecureSubprocess, 'validate_parameter', side_effect=lambda e, p: p):
-                        SecureSubprocess.run_secure(
-                            'fasterq-dump',
-                            ['SRR000001']
-                        )
+            with patch.object(SecureSubprocess, "validate_executable", return_value="fasterq-dump"):
+                with patch.object(SecureSubprocess, "validate_accession_for_subprocess", return_value="SRR000001"):
+                    with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
+                        SecureSubprocess.run_secure("fasterq-dump", ["SRR000001"])
 
             # Verify accession was validated
             call_args = mock_run.call_args[0][0]
-            assert 'SRR000001' in call_args
+            assert "SRR000001" in call_args
 
 
 # ============================================================================

@@ -62,18 +62,14 @@ class TestGenerateContainmentExplorer:
 
     def test_with_metadata(self, containment_df, taxonomy, metadata_df, tmp_path):
         out = tmp_path / "meta.html"
-        generate_containment_explorer(
-            containment_df, taxonomy, metadata=metadata_df, output_file=out
-        )
+        generate_containment_explorer(containment_df, taxonomy, metadata=metadata_df, output_file=out)
         html = out.read_text()
         assert "USA" in html
         assert "Sweden" in html
 
     def test_min_containment_filtering(self, containment_df, taxonomy, tmp_path):
         out = tmp_path / "filtered.html"
-        generate_containment_explorer(
-            containment_df, taxonomy, output_file=out, min_containment=0.5
-        )
+        generate_containment_explorer(containment_df, taxonomy, output_file=out, min_containment=0.5)
         html = out.read_text()
         # SRR002 has genA=0.1 and genB=0.9. genA should be excluded but genB included.
         assert "SRR002" in html  # still present via genB=0.9
@@ -87,9 +83,7 @@ class TestGenerateContainmentExplorer:
 
     def test_custom_title(self, containment_df, taxonomy, tmp_path):
         out = tmp_path / "titled.html"
-        generate_containment_explorer(
-            containment_df, taxonomy, output_file=out, title="Custom Title"
-        )
+        generate_containment_explorer(containment_df, taxonomy, output_file=out, title="Custom Title")
         html = out.read_text()
         assert "Custom Title" in html
 

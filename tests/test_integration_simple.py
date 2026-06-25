@@ -13,12 +13,12 @@ Run: pytest tests/test_integration_simple.py -v
 import pytest
 import pandas as pd
 import numpy as np
-from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 import matplotlib
-matplotlib.use('Agg')  # Use non-GUI backend for testing
 
-from metaquest.data.sra_metadata import (
+matplotlib.use("Agg")  # Use non-GUI backend for testing
+
+from metaquest.data.sra_metadata import (  # noqa: E402
     SRAMetadataClient,
     SRADatasetInfo,
     detect_sequencing_technology,
@@ -26,12 +26,12 @@ from metaquest.data.sra_metadata import (
     generate_statistics_report,
     create_download_preview,
 )
-from metaquest.plugins.visualizers.bar import BarChartPlugin
-
+from metaquest.plugins.visualizers.bar import BarChartPlugin  # noqa: E402
 
 # ============================================================================
 # TEST CLASS: SRA Metadata to Visualization Workflow
 # ============================================================================
+
 
 class TestSRAMetadataWorkflow:
     """Test complete SRA metadata workflow."""
@@ -40,59 +40,59 @@ class TestSRAMetadataWorkflow:
     def sample_metadata(self):
         """Create sample SRA metadata."""
         return {
-            'SRR001': SRADatasetInfo(
-                accession='SRR001',
-                title='E. coli WGS',
-                organism='Escherichia coli',
-                platform='ILLUMINA',
-                instrument='HiSeq 2500',
-                strategy='WGS',
-                layout='PAIRED',
+            "SRR001": SRADatasetInfo(
+                accession="SRR001",
+                title="E. coli WGS",
+                organism="Escherichia coli",
+                platform="ILLUMINA",
+                instrument="HiSeq 2500",
+                strategy="WGS",
+                layout="PAIRED",
                 spots=1000000,
                 bases=150000000,
                 avg_length=150.0,
                 size_mb=100.0,
-                release_date='2023-01-01',
-                bioproject='PRJNA001',
-                biosample='SAMN001',
-                library_selection='RANDOM',
-                library_source='GENOMIC',
+                release_date="2023-01-01",
+                bioproject="PRJNA001",
+                biosample="SAMN001",
+                library_selection="RANDOM",
+                library_source="GENOMIC",
             ),
-            'SRR002': SRADatasetInfo(
-                accession='SRR002',
-                title='S. aureus WGS',
-                organism='Staphylococcus aureus',
-                platform='OXFORD_NANOPORE',
-                instrument='MinION',
-                strategy='WGS',
-                layout='SINGLE',
+            "SRR002": SRADatasetInfo(
+                accession="SRR002",
+                title="S. aureus WGS",
+                organism="Staphylococcus aureus",
+                platform="OXFORD_NANOPORE",
+                instrument="MinION",
+                strategy="WGS",
+                layout="SINGLE",
                 spots=500000,
                 bases=500000000,
                 avg_length=1000.0,
                 size_mb=400.0,
-                release_date='2023-01-02',
-                bioproject='PRJNA002',
-                biosample='SAMN002',
-                library_selection='RANDOM',
-                library_source='GENOMIC',
+                release_date="2023-01-02",
+                bioproject="PRJNA002",
+                biosample="SAMN002",
+                library_selection="RANDOM",
+                library_source="GENOMIC",
             ),
-            'SRR003': SRADatasetInfo(
-                accession='SRR003',
-                title='K. pneumoniae WGS',
-                organism='Klebsiella pneumoniae',
-                platform='ILLUMINA',
-                instrument='MiSeq',
-                strategy='WGS',
-                layout='PAIRED',
+            "SRR003": SRADatasetInfo(
+                accession="SRR003",
+                title="K. pneumoniae WGS",
+                organism="Klebsiella pneumoniae",
+                platform="ILLUMINA",
+                instrument="MiSeq",
+                strategy="WGS",
+                layout="PAIRED",
                 spots=750000,
                 bases=112500000,
                 avg_length=150.0,
                 size_mb=75.0,
-                release_date='2023-01-03',
-                bioproject='PRJNA003',
-                biosample='SAMN003',
-                library_selection='RANDOM',
-                library_source='GENOMIC',
+                release_date="2023-01-03",
+                bioproject="PRJNA003",
+                biosample="SAMN003",
+                library_selection="RANDOM",
+                library_source="GENOMIC",
             ),
         }
 
@@ -107,9 +107,9 @@ class TestSRAMetadataWorkflow:
         # Verify can read back
         df = pd.read_csv(report_file)
         assert len(df) == 3
-        assert set(df['accession']) == {'SRR001', 'SRR002', 'SRR003'}
-        assert 'organism' in df.columns
-        assert 'technology' in df.columns
+        assert set(df["accession"]) == {"SRR001", "SRR002", "SRR003"}
+        assert "organism" in df.columns
+        assert "technology" in df.columns
 
     def test_metadata_to_visualization_workflow(self, sample_metadata, tmp_path):
         """Test: metadata → technology analysis → visualization."""
@@ -119,22 +119,24 @@ class TestSRAMetadataWorkflow:
             tech = detect_sequencing_technology(info)
             tech_counts[tech] = tech_counts.get(tech, 0) + 1
 
-        assert tech_counts['illumina'] == 2
-        assert tech_counts['nanopore'] == 1
+        assert tech_counts["illumina"] == 2
+        assert tech_counts["nanopore"] == 1
 
         # Step 2: Create visualization
-        tech_df = pd.DataFrame({
-            'technology': list(tech_counts.keys()),
-            'count': list(tech_counts.values()),
-        })
+        tech_df = pd.DataFrame(
+            {
+                "technology": list(tech_counts.keys()),
+                "count": list(tech_counts.values()),
+            }
+        )
 
         plot_file = tmp_path / "technology_distribution.png"
-        fig = BarChartPlugin.create_plot(
+        BarChartPlugin.create_plot(
             data=tech_df,
-            x_column='technology',
-            y_column='count',
-            title='Sequencing Technology Distribution',
-            output_file=str(plot_file)
+            x_column="technology",
+            y_column="count",
+            title="Sequencing Technology Distribution",
+            output_file=str(plot_file),
         )
 
         assert plot_file.exists()
@@ -147,20 +149,18 @@ class TestSRAMetadataWorkflow:
 
         # Get download preview
         accessions = list(sample_metadata.keys())
-        metadata, tech_counts, total_size_gb = create_download_preview(
-            accessions,
-            mock_client
-        )
+        metadata, tech_counts, total_size_gb = create_download_preview(accessions, mock_client)
 
         assert len(metadata) == 3
-        assert tech_counts['illumina'] == 2
-        assert tech_counts['nanopore'] == 1
+        assert tech_counts["illumina"] == 2
+        assert tech_counts["nanopore"] == 1
         assert total_size_gb == pytest.approx((100 + 400 + 75) / 1024, rel=0.01)
 
 
 # ============================================================================
 # TEST CLASS: FASTQ Processing Workflow
 # ============================================================================
+
 
 class TestFASTQProcessingWorkflow:
     """Test FASTQ file processing workflows."""
@@ -202,8 +202,8 @@ class TestFASTQProcessingWorkflow:
         # Verify report
         stats_df = pd.read_csv(output_report)
         assert len(stats_df) == 3
-        assert all(stats_df['layout'] == 'PAIRED')
-        assert all(stats_df['total_reads'] == 20)  # 10 reads per file, 2 files
+        assert all(stats_df["layout"] == "PAIRED")
+        assert all(stats_df["total_reads"] == 20)  # 10 reads per file, 2 files
 
     def test_fastq_to_visualization_workflow(self, fastq_workspace, tmp_path):
         """Test: FASTQ stats → visualization."""
@@ -216,12 +216,12 @@ class TestFASTQProcessingWorkflow:
 
         # Create visualization of read counts
         plot_file = tmp_path / "read_counts.png"
-        fig = BarChartPlugin.create_plot(
+        BarChartPlugin.create_plot(
             data=stats_df,
-            x_column='accession',
-            y_column='total_reads',
-            title='Read Counts per Sample',
-            output_file=str(plot_file)
+            x_column="accession",
+            y_column="total_reads",
+            title="Read Counts per Sample",
+            output_file=str(plot_file),
         )
 
         assert plot_file.exists()
@@ -231,6 +231,7 @@ class TestFASTQProcessingWorkflow:
 # TEST CLASS: Multi-Sample Comparison Workflow
 # ============================================================================
 
+
 class TestMultiSampleComparison:
     """Test workflows comparing multiple samples."""
 
@@ -239,13 +240,15 @@ class TestMultiSampleComparison:
         # Create sample data with different technologies
         samples = []
         for i in range(10):
-            tech = ['illumina', 'nanopore', 'pacbio'][i % 3]
-            samples.append({
-                'sample_id': f'SRR{i:04d}',
-                'technology': tech,
-                'read_count': np.random.randint(100000, 1000000),
-                'quality_score': np.random.uniform(20, 40),
-            })
+            tech = ["illumina", "nanopore", "pacbio"][i % 3]
+            samples.append(
+                {
+                    "sample_id": f"SRR{i:04d}",
+                    "technology": tech,
+                    "read_count": np.random.randint(100000, 1000000),
+                    "quality_score": np.random.uniform(20, 40),
+                }
+            )
 
         samples_df = pd.DataFrame(samples)
 
@@ -254,21 +257,23 @@ class TestMultiSampleComparison:
         samples_df.to_csv(samples_file, index=False)
 
         # Analyze technology distribution
-        tech_counts = samples_df['technology'].value_counts()
+        tech_counts = samples_df["technology"].value_counts()
 
         # Create visualization
         tech_plot = tmp_path / "tech_comparison.png"
-        tech_df = pd.DataFrame({
-            'technology': tech_counts.index,
-            'count': tech_counts.values,
-        })
+        tech_df = pd.DataFrame(
+            {
+                "technology": tech_counts.index,
+                "count": tech_counts.values,
+            }
+        )
 
-        fig = BarChartPlugin.create_plot(
+        BarChartPlugin.create_plot(
             data=tech_df,
-            x_column='technology',
-            y_column='count',
-            title='Technology Distribution',
-            output_file=str(tech_plot)
+            x_column="technology",
+            y_column="count",
+            title="Technology Distribution",
+            output_file=str(tech_plot),
         )
 
         assert tech_plot.exists()
@@ -278,12 +283,14 @@ class TestMultiSampleComparison:
         # Create quality data for multiple samples
         quality_data = []
         for i in range(20):
-            quality_data.append({
-                'sample': f'Sample_{i+1}',
-                'mean_quality': np.random.uniform(25, 40),
-                'gc_content': np.random.uniform(40, 60),
-                'read_length': np.random.randint(50, 300),
-            })
+            quality_data.append(
+                {
+                    "sample": f"Sample_{i+1}",
+                    "mean_quality": np.random.uniform(25, 40),
+                    "gc_content": np.random.uniform(40, 60),
+                    "read_length": np.random.randint(50, 300),
+                }
+            )
 
         quality_df = pd.DataFrame(quality_data)
 
@@ -293,12 +300,12 @@ class TestMultiSampleComparison:
 
         # Create quality visualization
         quality_plot = tmp_path / "quality_distribution.png"
-        fig = BarChartPlugin.create_plot(
+        BarChartPlugin.create_plot(
             data=quality_df.head(10),  # Top 10 samples
-            x_column='sample',
-            y_column='mean_quality',
-            title='Quality Scores by Sample',
-            output_file=str(quality_plot)
+            x_column="sample",
+            y_column="mean_quality",
+            title="Quality Scores by Sample",
+            output_file=str(quality_plot),
         )
 
         assert quality_plot.exists()
@@ -308,6 +315,7 @@ class TestMultiSampleComparison:
 # TEST CLASS: Data Export and Reporting Workflow
 # ============================================================================
 
+
 class TestDataExportWorkflow:
     """Test data export and reporting workflows."""
 
@@ -315,23 +323,23 @@ class TestDataExportWorkflow:
         """Test: Metadata → export to multiple formats."""
         # Create test metadata
         metadata = {
-            'SRR001': SRADatasetInfo(
-                accession='SRR001',
-                title='Test 1',
-                organism='E. coli',
-                platform='ILLUMINA',
-                instrument='HiSeq',
-                strategy='WGS',
-                layout='PAIRED',
+            "SRR001": SRADatasetInfo(
+                accession="SRR001",
+                title="Test 1",
+                organism="E. coli",
+                platform="ILLUMINA",
+                instrument="HiSeq",
+                strategy="WGS",
+                layout="PAIRED",
                 spots=1000000,
                 bases=150000000,
                 avg_length=150.0,
                 size_mb=100.0,
-                release_date='2023-01-01',
-                bioproject='PRJNA001',
-                biosample='SAMN001',
-                library_selection='RANDOM',
-                library_source='GENOMIC',
+                release_date="2023-01-01",
+                bioproject="PRJNA001",
+                biosample="SAMN001",
+                library_selection="RANDOM",
+                library_source="GENOMIC",
             ),
         }
 
@@ -345,30 +353,30 @@ class TestDataExportWorkflow:
 
         # Export to TSV
         tsv_file = tmp_path / "metadata.tsv"
-        df.to_csv(tsv_file, sep='\t', index=False)
+        df.to_csv(tsv_file, sep="\t", index=False)
         assert tsv_file.exists()
 
         # Export to JSON
         json_file = tmp_path / "metadata.json"
-        df.to_json(json_file, orient='records', indent=2)
+        df.to_json(json_file, orient="records", indent=2)
         assert json_file.exists()
 
     def test_summary_report_generation_workflow(self, tmp_path):
         """Test: Data analysis → summary report → export."""
         # Create analysis results
         results = {
-            'total_samples': 100,
-            'illumina_count': 60,
-            'nanopore_count': 30,
-            'pacbio_count': 10,
-            'total_reads': 50000000,
-            'total_bases': 7500000000,
-            'mean_quality': 35.2,
+            "total_samples": 100,
+            "illumina_count": 60,
+            "nanopore_count": 30,
+            "pacbio_count": 10,
+            "total_reads": 50000000,
+            "total_bases": 7500000000,
+            "mean_quality": 35.2,
         }
 
         # Create summary report file
         report_file = tmp_path / "summary_report.txt"
-        with open(report_file, 'w') as f:
+        with open(report_file, "w") as f:
             f.write("Analysis Summary Report\n")
             f.write("=" * 50 + "\n\n")
             for key, value in results.items():
@@ -386,6 +394,7 @@ class TestDataExportWorkflow:
 # ============================================================================
 # TEST CLASS: Error Handling in Workflows
 # ============================================================================
+
 
 class TestErrorHandlingWorkflows:
     """Test error handling in complete workflows."""
