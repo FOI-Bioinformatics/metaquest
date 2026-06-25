@@ -183,28 +183,47 @@ class SRAMetadataClient:
             logger.error(f"Failed to parse SRA XML: {e}")
             return {}
 
+    def _extract_platform(self, experiment) -> Tuple[str, str]:
+        """Return (platform, instrument) from the first PLATFORM child of an experiment."""
+        platform_elem = experiment.find(".//PLATFORM")
+        if platform_elem is None:
+            return "", ""
+        for child in platform_elem:
+            instrument_elem = child.find(".//INSTRUMENT_MODEL")
+            instrument = (instrument_elem.text or "") if instrument_elem is not None else ""
+            return child.tag, instrument
+        return "", ""
+
+    def _aggregate_runs(self, package) -> Tuple[int, int, float]:
+        """Sum spots, bases, and size (MB) across all RUN statistics in the package."""
+        spots = 0
+        bases = 0
+        size_mb = 0.0
+        run_set = package.find(".//RUN_SET")
+        if run_set is not None:
+            for run in run_set.findall(".//RUN"):
+                spots += int(self._get_text(run, ".//Statistics/@nspots", "0"))
+                bases += int(self._get_text(run, ".//Statistics/@nbases", "0"))
+                size_mb += float(self._get_text(run, ".//Statistics/@size", "0")) / (1024 * 1024)
+        return spots, bases, size_mb
+
+    def _extract_biosample(self, package) -> str:
+        """Return the BioSample accession from SAMPLE_ATTRIBUTE tags, or ''."""
+        for attr in package.findall(".//SAMPLE_ATTRIBUTE"):
+            if self._get_text(attr, ".//TAG", "").lower() == "biosample":
+                return self._get_text(attr, ".//VALUE", "")
+        return ""
+
     def _extract_dataset_info(self, package) -> Optional[SRADatasetInfo]:
         """Extract dataset information from XML package."""
         try:
-            # Get experiment info
             experiment = package.find(".//EXPERIMENT")
             if experiment is None:
                 return None
 
             accession = experiment.get("accession", "")
             title = self._get_text(experiment, ".//TITLE", "")
-
-            # Get platform info
-            platform_elem = experiment.find(".//PLATFORM")
-            platform = ""
-            instrument = ""
-            if platform_elem is not None:
-                for child in platform_elem:
-                    platform = child.tag
-                    instrument_elem = child.find(".//INSTRUMENT_MODEL")
-                    if instrument_elem is not None:
-                        instrument = instrument_elem.text or ""
-                    break
+            platform, instrument = self._extract_platform(experiment)
 
             # Get library info
             library_descriptor = experiment.find(".//LIBRARY_DESCRIPTOR")
@@ -214,39 +233,17 @@ class SRAMetadataClient:
             layout_elem = library_descriptor.find(".//LIBRARY_LAYOUT") if library_descriptor else None
             layout = "PAIRED" if layout_elem and layout_elem.find(".//PAIRED") is not None else "SINGLE"
 
-            # Get run info
-            run_set = package.find(".//RUN_SET")
-            spots = 0
-            bases = 0
-            size_mb = 0.0
-            if run_set is not None:
-                for run in run_set.findall(".//RUN"):
-                    spots += int(self._get_text(run, ".//Statistics/@nspots", "0"))
-                    bases += int(self._get_text(run, ".//Statistics/@nbases", "0"))
-                    size_mb += float(self._get_text(run, ".//Statistics/@size", "0")) / (1024 * 1024)
-
+            spots, bases, size_mb = self._aggregate_runs(package)
             avg_length = bases / spots if spots > 0 else 0.0
 
-            # Get sample info
+            # Get sample / study / submission info
             sample = package.find(".//SAMPLE")
             organism = self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample else ""
-
-            # Get study info
             study = package.find(".//STUDY")
             bioproject = self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "") if study else ""
-
-            # Get submission info
             submission = package.find(".//SUBMISSION")
             release_date = self._get_text(submission, "./@received", "") if submission else ""
-
-            # Get biosample
-            sample_attrs = package.findall(".//SAMPLE_ATTRIBUTE")
-            biosample = ""
-            for attr in sample_attrs:
-                tag = self._get_text(attr, ".//TAG", "")
-                if tag.lower() == "biosample":
-                    biosample = self._get_text(attr, ".//VALUE", "")
-                    break
+            biosample = self._extract_biosample(package)
 
             return SRADatasetInfo(
                 accession=accession,
