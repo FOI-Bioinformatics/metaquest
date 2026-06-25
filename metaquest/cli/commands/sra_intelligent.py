@@ -23,6 +23,23 @@ from metaquest.sra import (
 logger = logging.getLogger(__name__)
 
 
+def _read_accession_file(filename: str, warn_if_empty: bool = False) -> List[str]:
+    """Read non-empty, stripped accession lines from a file.
+
+    A missing file prints a message and returns []. When ``warn_if_empty`` is
+    set, an existing-but-empty file also prints a "No accessions found" message.
+    """
+    try:
+        with open(filename, "r") as f:
+            accessions = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        print(f"Accessions file not found: {filename}")
+        return []
+    if warn_if_empty and not accessions:
+        print(f"No accessions found in {filename}")
+    return accessions
+
+
 class SRAIntelligentDownloadCommand(BaseCommand):
     """Command for intelligent SRA downloading with resume capability."""
 
@@ -92,17 +109,8 @@ class SRAIntelligentDownloadCommand(BaseCommand):
         )
 
     def _read_accessions(self, filename: str) -> List[str]:
-        """Read accessions from file."""
-        try:
-            with open(filename, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-            if not accessions:
-                print(f"No accessions found in {filename}")
-                return []
-            return accessions
-        except FileNotFoundError:
-            print(f"Accessions file not found: {filename}")
-            return []
+        """Read accessions from file, warning if the file is empty."""
+        return _read_accession_file(filename, warn_if_empty=True)
 
     def _print_download_estimate(self, manager: IntelligentDownloadManager, accessions: List[str]):
         """Print download time estimates."""
@@ -264,13 +272,7 @@ class SRAQualityProfileCommand(BaseCommand):
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
-        try:
-            with open(filename, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-            return accessions
-        except FileNotFoundError:
-            print(f"Accessions file not found: {filename}")
-            return []
+        return _read_accession_file(filename)
 
     def _print_quality_profile(self, profile: QualityProfile):
         """Print quality profile summary."""
@@ -481,13 +483,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
-        try:
-            with open(filename, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-            return accessions
-        except FileNotFoundError:
-            print(f"Accessions file not found: {filename}")
-            return []
+        return _read_accession_file(filename)
 
     def execute(self, args):
         try:
