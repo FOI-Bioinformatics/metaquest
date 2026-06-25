@@ -14,7 +14,7 @@ import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import numpy as np
 import pandas as pd
@@ -288,6 +288,40 @@ class SequenceQualityAnalyzer:
         return indicators
 
 
+# Remediation actions implied by each anomaly type (ordered for stable output).
+_ANOMALY_ACTIONS = {
+    "high_contamination": ["Perform adapter trimming", "Check for vector contamination"],
+    "poor_quality": ["Apply quality filtering", "Consider excluding from analysis"],
+    "low_complexity": ["Check for PCR artifacts", "Verify sample preparation"],
+}
+
+
+def _detect_profile_anomalies(profile) -> List[Tuple[str, str, float]]:
+    """Return (anomaly_type, human-readable reason, severity weight) for each anomaly tripped."""
+    flags: List[Tuple[str, str, float]] = []
+    if profile.complexity_score < 0.1:
+        flags.append(("low_complexity", "Very low sequence complexity", 0.3))
+    adapter = profile.contamination_indicators.get("adapter_contamination", 0)
+    if adapter > 0.1:
+        flags.append(("high_contamination", f"High adapter contamination: {adapter:.1%}", 0.4))
+    if profile.gc_content < 0.2 or profile.gc_content > 0.8:
+        flags.append(("unusual_gc", f"Unusual GC content: {profile.gc_content:.1%}", 0.2))
+    if profile.n_content > 0.05:
+        flags.append(("high_n_content", f"High N content: {profile.n_content:.1%}", 0.3))
+    if profile.quality_grade == "poor":
+        flags.append(("poor_quality", "Poor overall quality", 0.5))
+    return flags
+
+
+def _actions_for_anomalies(tripped_types: set) -> List[str]:
+    """Remediation actions for the anomaly types a dataset tripped, in a stable order."""
+    actions: List[str] = []
+    for atype, acts in _ANOMALY_ACTIONS.items():
+        if atype in tripped_types:
+            actions.extend(acts)
+    return actions
+
+
 class SRADatasetAnalyzer:
     """Main analyzer for comprehensive SRA dataset analysis."""
 
@@ -480,64 +514,18 @@ class SRADatasetAnalyzer:
         explanations = {}
         recommended_actions = defaultdict(list)
 
-        # Profile each dataset and look for anomalies
         for accession in accessions:
             try:
-                profile = self.profile_dataset_quality(accession)
+                flags = _detect_profile_anomalies(self.profile_dataset_quality(accession))
+                for atype, _reason, _weight in flags:
+                    anomaly_types[atype].append(accession)
 
-                # Check for various anomaly types
-                severity = 0.0
-                anomaly_reasons = []
-
-                # Low complexity
-                if profile.complexity_score < 0.1:
-                    anomaly_types["low_complexity"].append(accession)
-                    anomaly_reasons.append("Very low sequence complexity")
-                    severity += 0.3
-
-                # High contamination
-                adapter_contamination = profile.contamination_indicators.get("adapter_contamination", 0)
-                if adapter_contamination > 0.1:
-                    anomaly_types["high_contamination"].append(accession)
-                    anomaly_reasons.append(f"High adapter contamination: {adapter_contamination:.1%}")
-                    severity += 0.4
-
-                # Unusual GC content
-                if profile.gc_content < 0.2 or profile.gc_content > 0.8:
-                    anomaly_types["unusual_gc"].append(accession)
-                    anomaly_reasons.append(f"Unusual GC content: {profile.gc_content:.1%}")
-                    severity += 0.2
-
-                # High N content
-                if profile.n_content > 0.05:
-                    anomaly_types["high_n_content"].append(accession)
-                    anomaly_reasons.append(f"High N content: {profile.n_content:.1%}")
-                    severity += 0.3
-
-                # Poor quality grade
-                if profile.quality_grade == "poor":
-                    anomaly_types["poor_quality"].append(accession)
-                    anomaly_reasons.append("Poor overall quality")
-                    severity += 0.5
-
+                severity = sum(weight for _atype, _reason, weight in flags)
                 if severity > 0.2:  # Threshold for anomaly
                     anomalous_datasets.append(accession)
                     severity_scores[accession] = min(severity, 1.0)
-                    explanations[accession] = "; ".join(anomaly_reasons)
-
-                    # Generate recommendations
-                    actions = []
-                    if "high_contamination" in [t for t in anomaly_types if accession in anomaly_types[t]]:
-                        actions.append("Perform adapter trimming")
-                        actions.append("Check for vector contamination")
-                    if "poor_quality" in [t for t in anomaly_types if accession in anomaly_types[t]]:
-                        actions.append("Apply quality filtering")
-                        actions.append("Consider excluding from analysis")
-                    if "low_complexity" in [t for t in anomaly_types if accession in anomaly_types[t]]:
-                        actions.append("Check for PCR artifacts")
-                        actions.append("Verify sample preparation")
-
-                    recommended_actions[accession] = actions
+                    explanations[accession] = "; ".join(reason for _atype, reason, _weight in flags)
+                    recommended_actions[accession] = _actions_for_anomalies({a for a, _r, _w in flags})
 
             except Exception as e:
                 logger.error(f"Error analyzing {accession} for anomalies: {e}")
