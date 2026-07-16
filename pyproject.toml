@@ -57,6 +57,7 @@ dev = [
     "flake8>=3.9.0",
     "black>=21.5b0",
     "mypy>=0.812",
+    "radon>=6.0.0",
 ]
 all = [
     "metaquest[maps,sourmash]",
