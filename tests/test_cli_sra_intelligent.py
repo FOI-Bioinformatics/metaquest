@@ -534,6 +534,7 @@ class TestSRAInteractiveDashboardCommand:
             output_dir=str(tmp_path / "dashboards"),
             title="Test Dashboard",
             dashboard_type="quality",
+            no_open=True,
         )
 
         mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
@@ -546,6 +547,36 @@ class TestSRAInteractiveDashboardCommand:
             result = cmd.execute(args)
 
         assert result == 0
+
+    def test_execute_opens_dashboard_when_not_suppressed(self, tmp_path):
+        """Without --no-open the generated dashboard is passed to open_in_browser."""
+        cmd = SRAInteractiveDashboardCommand()
+
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR001\n")
+
+        args = Namespace(
+            accessions_file=str(accessions_file),
+            download_session=None,
+            quality_profiles=None,
+            output_dir=str(tmp_path / "dashboards"),
+            title="Test Dashboard",
+            dashboard_type="quality",
+            no_open=False,
+        )
+
+        mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            with patch("metaquest.cli.commands.sra_intelligent.open_in_browser", return_value=True) as mock_open:
+                mock_reporter = Mock()
+                mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
+                mock_reporter_class.return_value = mock_reporter
+
+                result = cmd.execute(args)
+
+        assert result == 0
+        mock_open.assert_called_once_with(mock_dashboard_path)
 
     def test_execute_full_dashboard(self, tmp_path):
         """Test full dashboard generation."""
@@ -561,6 +592,7 @@ class TestSRAInteractiveDashboardCommand:
             output_dir=str(tmp_path / "dashboards"),
             title="Full Dashboard",
             dashboard_type="full",
+            no_open=True,
         )
 
         mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"

@@ -117,6 +117,12 @@ class ExploreContainmentCommand(BaseCommand):
             default="taxonomy_cache.tsv",
             help="Taxonomy cache file for GTDB lookups",
         )
+        parser.add_argument(
+            "--open",
+            dest="open_browser",
+            action="store_true",
+            help="Open the generated explorer in a browser",
+        )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -158,6 +164,13 @@ class ExploreContainmentCommand(BaseCommand):
                 min_containment=args.min_containment,
             )
             self.logger.info("Generated containment explorer: %s", output_path)
+
+            if getattr(args, "open_browser", False):
+                from metaquest.utils.browser import open_in_browser
+
+                if not open_in_browser(output_path):
+                    self.logger.warning("Could not open a browser automatically for %s", output_path)
+
             return 0
         except MetaQuestError as e:
             self.logger.error("Error generating explorer: %s", e)
