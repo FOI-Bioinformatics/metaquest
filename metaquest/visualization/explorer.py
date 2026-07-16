@@ -16,7 +16,7 @@ import pandas as pd
 
 from metaquest.core.models import TaxonomyInfo
 from metaquest.core.utils import get_genome_columns
-from metaquest.utils.html import plotly_cdn_script, TABLE_SCRIPT
+from metaquest.utils.html import plotly_js_script, TABLE_SCRIPT
 
 try:
     import plotly.express as px
@@ -236,7 +236,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <title>{{ title }}</title>
-    {{ plotly_cdn|safe }}
+    {{ plotly_js|safe }}
     <style>
         * { box-sizing: border-box; }
         body {
@@ -418,7 +418,7 @@ def _assemble_html(title, summary, sunburst_html, heatmap_html, table_rows, box_
             table_rows=table_rows,
             box_html=box_html,
             bar_html=bar_html,
-            plotly_cdn=plotly_cdn_script(),
+            plotly_js=plotly_js_script(),
             table_script=TABLE_SCRIPT,
         )
     return _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_html, box_html, bar_html)
@@ -455,7 +455,7 @@ def _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_htm
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>{safe_title}</title>
-{plotly_cdn_script()}
+{plotly_js_script()}
 <style>
 body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; background: #fafafa; }}
 .header {{ background: #2c3e50; color: #ecf0f1; padding: 24px 32px; }}

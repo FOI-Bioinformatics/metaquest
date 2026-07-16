@@ -5,25 +5,26 @@ from unittest.mock import patch
 from metaquest.utils import html
 
 
-class TestPlotlyCdnScript:
-    """Tests for the pinned Plotly CDN script tag."""
+class TestPlotlyJsScript:
+    """Tests for the inline Plotly script tag."""
 
-    def test_uses_installed_plotlyjs_version(self):
-        """The tag pins the version reported by the installed plotly."""
-        with patch("plotly.offline.get_plotlyjs_version", return_value="9.9.9"):
-            tag = html.plotly_cdn_script()
-        assert tag == '<script src="https://cdn.plot.ly/plotly-9.9.9.min.js"></script>'
+    def test_embeds_plotlyjs_inline(self):
+        """The tag embeds the bundled plotly.js inline, not a network URL."""
+        with patch("plotly.offline.get_plotlyjs", return_value="PLOTLY_JS_BODY"):
+            tag = html.plotly_js_script()
+        assert tag == '<script type="text/javascript">PLOTLY_JS_BODY</script>'
 
-    def test_never_emits_the_frozen_latest_alias(self):
-        """The frozen 'plotly-latest' alias must never be produced."""
-        assert "plotly-latest" not in html.plotly_cdn_script()
+    def test_never_references_a_remote_cdn(self):
+        """The opening <script> tag must be inline, never loading from a remote host."""
+        tag = html.plotly_js_script()
+        opening = tag[: tag.index(">") + 1]
+        assert "src=" not in opening
+        assert "cdn.plot.ly" not in opening
 
-    def test_falls_back_when_version_lookup_fails(self):
-        """A lookup failure yields the conservative fallback version, not a crash."""
-        with patch("plotly.offline.get_plotlyjs_version", side_effect=RuntimeError("boom")):
-            tag = html.plotly_cdn_script()
-        assert html._FALLBACK_PLOTLYJS_VERSION in tag
-        assert tag.startswith("<script") and tag.endswith("</script>")
+    def test_returns_empty_when_plotly_unavailable(self):
+        """A failure to obtain plotly.js yields an empty string, not a crash."""
+        with patch("plotly.offline.get_plotlyjs", side_effect=RuntimeError("boom")):
+            assert html.plotly_js_script() == ""
 
 
 class TestTableScript:
