@@ -52,6 +52,34 @@ class BranchWaterFormatPlugin(Plugin):
         return all(col in headers for col in cls.REQUIRED_COLS)
 
     @classmethod
+    def _validate_headers(cls, file_path: Path, fieldnames: List[str]) -> None:
+        """Raise ValidationError if the required columns are missing."""
+        if not cls.validate_header(fieldnames):
+            missing = [col for col in cls.REQUIRED_COLS if col not in fieldnames]
+            raise ValidationError(f"Missing required columns in {file_path}: {', '.join(missing)}")
+
+    @classmethod
+    def _row_to_containment(cls, row: dict, genome_id: str, file_path: Path) -> Optional[Containment]:
+        """Convert one CSV row into a Containment, or None if the row is invalid."""
+        accession = row.get("acc", "")
+        if not validate_accession(accession):
+            logger.warning(f"Skipping row with invalid accession '{accession}' in {file_path}")
+            return None
+
+        containment_value = validate_containment_value(row.get("containment", ""))
+        if containment_value is None:
+            logger.warning(f"Skipping row with invalid containment value for {accession} in {file_path}")
+            return None
+
+        additional_data = {key: value for key, value in row.items() if key not in ("acc", "containment") and value}
+        return Containment(
+            accession=accession,
+            value=containment_value,
+            genome_id=genome_id,
+            additional_data=additional_data,
+        )
+
+    @classmethod
     def parse_file(cls, file_path: Union[str, Path], genome_id: str) -> List[Containment]:
         """
         Parse a Branchwater format file and return containment data.
@@ -72,39 +100,12 @@ class BranchWaterFormatPlugin(Plugin):
         try:
             with open(file_path, "r") as f:
                 reader = csv.DictReader(f)
-
-                # Validate headers
-                if not cls.validate_header(list(reader.fieldnames or [])):
-                    missing = [col for col in cls.REQUIRED_COLS if col not in (reader.fieldnames or [])]
-                    raise ValidationError(f"Missing required columns in {file_path}: {', '.join(missing)}")
+                cls._validate_headers(file_path, list(reader.fieldnames or []))
 
                 for row in reader:
-                    # Extract and validate accession
-                    accession = row.get("acc", "")
-                    if not validate_accession(accession):
-                        logger.warning(f"Skipping row with invalid accession '{accession}' in {file_path}")
-                        continue
-
-                    # Extract and validate containment value
-                    containment_value = validate_containment_value(row.get("containment", ""))
-                    if containment_value is None:
-                        logger.warning(f"Skipping row with invalid containment value for {accession} in {file_path}")
-                        continue
-
-                    # Create containment object with additional metadata
-                    additional_data = {}
-                    for key, value in row.items():
-                        if key not in ("acc", "containment") and value:
-                            additional_data[key] = value
-
-                    containment = Containment(
-                        accession=accession,
-                        value=containment_value,
-                        genome_id=genome_id,
-                        additional_data=additional_data,
-                    )
-
-                    containments.append(containment)
+                    containment = cls._row_to_containment(row, genome_id, file_path)
+                    if containment is not None:
+                        containments.append(containment)
 
             return containments
 
