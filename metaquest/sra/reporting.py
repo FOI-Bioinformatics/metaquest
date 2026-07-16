@@ -40,7 +40,7 @@ from metaquest.sra.analytics import (
     ComparativeAnalysis,
     SRADatasetAnalyzer,
 )
-from metaquest.utils.html import plotly_cdn_script
+from metaquest.utils.html import plotly_js_script
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +452,7 @@ class SRAReportGenerator:
 <html>
 <head>
     <title>SRA Download Summary - {{ session.session_id }}</title>
-    {{ plotly_cdn|safe }}
+    {{ plotly_js|safe }}
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #3498db; color: white;
@@ -536,7 +536,7 @@ class SRAReportGenerator:
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_cdn=plotly_cdn_script(), **report_data)
+        return template.render(plotly_js=plotly_js_script(), **report_data)
 
     def _generate_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate HTML content for quality dashboard."""
@@ -548,7 +548,7 @@ class SRAReportGenerator:
 <html>
 <head>
     <title>{{ title }}</title>
-    {{ plotly_cdn|safe }}
+    {{ plotly_js|safe }}
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #2ecc71; color: white;
@@ -628,7 +628,7 @@ class SRAReportGenerator:
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_cdn=plotly_cdn_script(), **dashboard_data)
+        return template.render(plotly_js=plotly_js_script(), **dashboard_data)
 
     def _generate_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate HTML content for comparative analysis report."""
@@ -640,7 +640,7 @@ class SRAReportGenerator:
 <html>
 <head>
     <title>{{ title }}</title>
-    {{ plotly_cdn|safe }}
+    {{ plotly_js|safe }}
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #9b59b6; color: white;
@@ -708,7 +708,7 @@ class SRAReportGenerator:
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_cdn=plotly_cdn_script(), **report_data)
+        return template.render(plotly_js=plotly_js_script(), **report_data)
 
     def _generate_simple_download_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple HTML without Jinja2."""

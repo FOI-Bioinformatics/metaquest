@@ -1,29 +1,26 @@
 """Shared HTML assets for MetaQuest report and dashboard generators.
 
-Centralizes the Plotly CDN ``<script>`` tag and the sortable/filterable table
+Centralizes the inline Plotly ``<script>`` tag and the sortable/filterable table
 JavaScript so the several HTML generators do not each carry their own copy.
 """
 
-# Fallback plotly.js version used only if the installed plotly cannot report
-# its bundled version. Kept close to a recent release.
-_FALLBACK_PLOTLYJS_VERSION = "3.0.1"
 
+def plotly_js_script() -> str:
+    """Return a ``<script>`` tag with plotly.js embedded inline.
 
-def plotly_cdn_script() -> str:
-    """Return a ``<script>`` tag loading the plotly.js the report expects.
-
-    The version is taken from the installed plotly.py so the CDN runtime
-    matches the figures it renders. This avoids the old
-    ``plotly-latest.min.js`` alias, which is frozen at plotly.js v1 and cannot
-    render output produced by modern plotly.py.
+    Uses the plotly.js bundled with the installed plotly.py, so the runtime
+    always matches the figures it renders and the report renders with no
+    network access (the individual figures are emitted with
+    ``include_plotlyjs=False`` and share this single embedded copy). Returns an
+    empty string if plotly is unavailable, in which case no figures are
+    generated either.
     """
     try:
-        from plotly.offline import get_plotlyjs_version
+        from plotly.offline import get_plotlyjs
 
-        version = get_plotlyjs_version()
+        return f'<script type="text/javascript">{get_plotlyjs()}</script>'
     except Exception:
-        version = _FALLBACK_PLOTLYJS_VERSION
-    return f'<script src="https://cdn.plot.ly/plotly-{version}.min.js"></script>'
+        return ""
 
 
 # Client-side helpers for the interactive results table: full-text filtering,
