@@ -11,7 +11,7 @@ This module provides advanced download management capabilities including:
 
 import json
 import logging
-import subprocess
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union, Any
 
 from metaquest.data.file_io import ensure_directory
-from metaquest.utils.security import SecureSubprocess
+from metaquest.data.sra import download_accession
+
+# Conservative bandwidth assumption (Mbps) used only for rough time estimates.
+# The download manager no longer probes the network to measure this.
+_DEFAULT_BANDWIDTH_MBPS = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -94,55 +98,22 @@ class BandwidthManager:
         self.network_conditions: Optional[NetworkConditions] = None
 
     def measure_network_conditions(self) -> NetworkConditions:
-        """Measure current network performance."""
-        # Simple bandwidth test using subprocess
-        try:
-            # Test with a small download to measure bandwidth
-            test_result = subprocess.run(
-                [
-                    "curl",
-                    "-s",
-                    "-w",
-                    "%{speed_download}\\n%{time_total}\\n",
-                    "-o",
-                    "/dev/null",
-                    "https://httpbin.org/bytes/1048576",  # 1MB test download
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+        """Derive a parallelism recommendation from local CPU count.
 
-            if test_result.returncode == 0:
-                lines = test_result.stdout.strip().split("\n")
-                if len(lines) >= 2:
-                    bandwidth_bps = float(lines[0])
-                    latency_ms = float(lines[1]) * 1000
-                    bandwidth_mbps = bandwidth_bps / (1024 * 1024)
-                else:
-                    bandwidth_mbps, latency_ms = 10.0, 100.0  # Conservative defaults
-            else:
-                bandwidth_mbps, latency_ms = 10.0, 100.0
-
-        except Exception as e:
-            logger.warning(f"Network measurement failed: {e}")
-            bandwidth_mbps, latency_ms = 10.0, 100.0
-
-        # Calculate optimal parallel downloads based on bandwidth
-        if bandwidth_mbps > 50:
-            optimal_parallel = 8
-        elif bandwidth_mbps > 20:
-            optimal_parallel = 6
-        elif bandwidth_mbps > 10:
-            optimal_parallel = 4
-        else:
-            optimal_parallel = 2
+        This deliberately performs no network I/O. A previous implementation
+        shelled out to curl against an external host to measure bandwidth,
+        which was unreliable and issued a request to a third party on every
+        session. Parallelism is now based on the CPU count, and bandwidth is
+        reported as a conservative default used only for rough time estimates.
+        """
+        cpu_count = os.cpu_count() or 4
+        optimal_parallel = max(2, min(8, cpu_count))
 
         self.network_conditions = NetworkConditions(
-            bandwidth_mbps=bandwidth_mbps,
-            latency_ms=latency_ms,
-            packet_loss_pct=0.0,  # Would need more sophisticated testing
-            connection_stability=1.0,  # Would need historical data
+            bandwidth_mbps=_DEFAULT_BANDWIDTH_MBPS,
+            latency_ms=0.0,
+            packet_loss_pct=0.0,
+            connection_stability=1.0,
             optimal_parallel_downloads=optimal_parallel,
             last_measured=datetime.now(),
         )
@@ -388,11 +359,16 @@ class IntelligentDownloadManager:
 
     def download_with_resume(self, accessions: List[str], force_restart: bool = False) -> DownloadSession:
         """
-        Download SRA accessions with intelligent resume capability.
+        Download SRA accessions, skipping any already present on disk.
+
+        "Resume" here means accession-level: an accession whose FASTQ files
+        already exist is skipped rather than re-downloaded, unless
+        ``force_restart`` is set. fasterq-dump provides no byte-range resume,
+        so partially downloaded accessions are restarted.
 
         Args:
             accessions: List of SRA accessions to download
-            force_restart: Force restart of all downloads, ignoring checkpoints
+            force_restart: Re-download every accession even if files exist
 
         Returns:
             DownloadSession with comprehensive results
@@ -400,30 +376,15 @@ class IntelligentDownloadManager:
         session_start = datetime.now()
         logger.info(f"Starting download session {self.session_id} for {len(accessions)} accessions")
 
-        # Network assessment
+        # Choose parallelism from the CPU-based recommendation (no network probe).
         network_conditions = self.bandwidth_manager.measure_network_conditions()
-        logger.info(
-            f"Network conditions: {network_conditions.bandwidth_mbps:.1f} Mbps, "
-            f"optimal parallel: {network_conditions.optimal_parallel_downloads}"
-        )
 
         # Optimize download order
         optimized_accessions = self.optimizer.optimize_download_order(accessions)
 
         # Determine parallelism
         max_parallel = self.max_parallel_downloads or network_conditions.optimal_parallel_downloads
-
-        # Check for resumable downloads
-        resumable = {}
-        if self.checkpoint_manager and not force_restart:
-            for accession in optimized_accessions:
-                checkpoint = self.checkpoint_manager.load_checkpoint(accession)
-                if checkpoint:
-                    resumable[accession] = checkpoint
-                    logger.info(
-                        f"Found resumable download for {accession}: "
-                        f"{checkpoint.downloaded_bytes/(1024*1024):.1f}MB already downloaded"
-                    )
+        logger.info(f"Downloading with up to {max_parallel} parallel workers")
 
         # Initialize session tracking
         session = DownloadSession(
@@ -448,7 +409,7 @@ class IntelligentDownloadManager:
                 if self.is_paused:
                     break
 
-                future = executor.submit(self._download_single_accession, accession, resumable.get(accession))
+                future = executor.submit(self._download_single_accession, accession, force_restart)
                 future_to_accession[future] = accession
 
             # Process results as they complete
@@ -463,8 +424,6 @@ class IntelligentDownloadManager:
 
                     if result.status == "completed":
                         session.success_count += 1
-                        if self.checkpoint_manager:
-                            self.checkpoint_manager.remove_checkpoint(accession)
                     else:
                         session.failure_count += 1
 
@@ -486,10 +445,16 @@ class IntelligentDownloadManager:
 
         return session
 
-    def _download_single_accession(
-        self, accession: str, checkpoint: Optional[DownloadCheckpoint] = None
-    ) -> DownloadProgress:
-        """Download a single SRA accession with resume capability."""
+    def _download_single_accession(self, accession: str, force: bool = False) -> DownloadProgress:
+        """Download a single SRA accession via the shared, validated path.
+
+        Delegates to ``metaquest.data.sra.download_accession``, which runs
+        fasterq-dump through ``SecureSubprocess`` and writes FASTQ files to
+        ``output_dir/<accession>/``. That helper skips accessions whose FASTQ
+        files already exist unless ``force`` is set, which is how a re-run
+        resumes at accession granularity; fasterq-dump has no byte-range
+        resume, so a partial download is always restarted.
+        """
         progress = DownloadProgress(
             accession=accession,
             status="downloading",
@@ -506,46 +471,22 @@ class IntelligentDownloadManager:
         self.active_downloads[accession] = progress
 
         try:
-            # Determine output paths
-            output_file = self.output_dir / f"{accession}.fastq.gz"
+            success, message = download_accession(
+                accession,
+                self.output_dir,
+                force=force,
+                temp_folder=self.temp_dir,
+            )
 
-            # Check if already downloaded
-            if output_file.exists() and not checkpoint:
-                logger.info(f"File {accession} already exists, skipping")
+            if success:
                 progress.status = "completed"
                 progress.progress_pct = 100.0
-                progress.downloaded_mb = output_file.stat().st_size / (1024 * 1024)
-                return progress
-
-            # Carry over the retry count from a prior attempt if present. Note
-            # that fasterq-dump has no byte-range resume, so a partial download
-            # is always restarted from the beginning rather than continued.
-            if checkpoint:
-                progress.retry_count = checkpoint.retry_count
-
-            # Download with fasterq-dump. -O sets the output directory and
-            # --gzip produces the .fastq.gz files this method looks for below.
-            cmd = [
-                "fasterq-dump",
-                "--progress",
-                "--gzip",
-                "--temp",
-                str(self.temp_dir),
-                "-O",
-                str(self.output_dir),
-                accession,
-            ]
-
-            # Execute download
-            SecureSubprocess.run_secure(cmd[0], cmd[1:], timeout=3600)  # 1 hour timeout
-
-            # run_secure uses check=True, so reaching here means success
-            progress.status = "completed"
-            progress.progress_pct = 100.0
-
-            # Get final file size
-            if output_file.exists():
-                progress.downloaded_mb = output_file.stat().st_size / (1024 * 1024)
+                acc_dir = self.output_dir / accession
+                total_bytes = sum(f.stat().st_size for f in acc_dir.glob("*.fastq*"))
+                progress.downloaded_mb = total_bytes / (1024 * 1024)
+            else:
+                progress.status = "failed"
+                progress.error_message = message
 
         except Exception as e:
             logger.error(f"Error downloading {accession}: {e}")
@@ -554,8 +495,7 @@ class IntelligentDownloadManager:
 
         finally:
             # Clean up tracking
-            if accession in self.active_downloads:
-                del self.active_downloads[accession]
+            self.active_downloads.pop(accession, None)
 
         return progress
 

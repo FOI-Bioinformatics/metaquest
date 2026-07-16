@@ -12,7 +12,7 @@ Tests cover:
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 import pytest
 
 from metaquest.sra.download_manager import (
@@ -85,29 +85,23 @@ class TestBandwidthManager:
         assert self.manager.active_downloads == 0
 
     @patch("subprocess.run")
-    def test_measure_network_conditions(self, mock_subprocess):
-        """Test network condition measurement."""
-        # Mock subprocess response for bandwidth test
-        mock_subprocess.return_value = Mock(returncode=0, stdout="10485760\n2.5\n")  # 10MB/s, 2.5s latency
-
+    def test_measure_network_conditions_does_no_network_io(self, mock_subprocess):
+        """Parallelism is derived from CPU count without any network probe."""
         conditions = self.manager.measure_network_conditions()
+
+        # The previous implementation shelled out to curl; it no longer does.
+        mock_subprocess.assert_not_called()
 
         assert isinstance(conditions, NetworkConditions)
-        assert conditions.bandwidth_mbps == 10.0  # 10MB/s = 10 Mbps
-        assert conditions.latency_ms == 2500  # 2.5s = 2500ms
-        assert conditions.optimal_parallel_downloads > 0
+        assert conditions.bandwidth_mbps == 10.0  # conservative default, not measured
+        assert 2 <= conditions.optimal_parallel_downloads <= 8
         assert isinstance(conditions.last_measured, datetime)
 
-    @patch("subprocess.run")
-    def test_measure_network_conditions_failure(self, mock_subprocess):
-        """Test network measurement with subprocess failure."""
-        mock_subprocess.return_value = Mock(returncode=1, stdout="")
-
+    @patch("metaquest.sra.download_manager.os.cpu_count", return_value=1)
+    def test_measure_network_conditions_low_cpu_floor(self, _mock_cpu):
+        """A minimum of 2 parallel workers is used even on a single-CPU host."""
         conditions = self.manager.measure_network_conditions()
-
-        # Should use conservative defaults
-        assert conditions.bandwidth_mbps == 10.0
-        assert conditions.latency_ms == 100.0
+        assert conditions.optimal_parallel_downloads == 2
 
     def test_allocate_bandwidth(self):
         """Test bandwidth allocation."""
@@ -431,6 +425,41 @@ class TestIntelligentDownloadManager:
             assert "SRR789012" in session.download_results
             assert session.download_results["SRR123456"].status == "completed"
             assert session.download_results["SRR789012"].status == "failed"
+
+    @patch("metaquest.sra.download_manager.download_accession")
+    def test_download_single_accession_delegates_on_success(self, mock_download):
+        """A successful download delegates to data.sra and sizes the output dir."""
+        mock_download.return_value = (True, "Downloaded 2 files")
+
+        # Simulate the files the shared download path writes to output_dir/<acc>/
+        acc_dir = Path(self.temp_dir) / "SRR123456"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR123456_1.fastq.gz").write_bytes(b"x" * 1024)
+        (acc_dir / "SRR123456_2.fastq.gz").write_bytes(b"y" * 1024)
+
+        progress = self.manager._download_single_accession("SRR123456", force=True)
+
+        assert progress.status == "completed"
+        assert progress.progress_pct == 100.0
+        assert progress.downloaded_mb == pytest.approx(2048 / (1024 * 1024))
+
+        # force is threaded through and the manager's temp dir is reused
+        _, kwargs = mock_download.call_args
+        assert kwargs["force"] is True
+        assert kwargs["temp_folder"] == self.manager.temp_dir
+        # Tracking is cleaned up afterwards
+        assert "SRR123456" not in self.manager.active_downloads
+
+    @patch("metaquest.sra.download_manager.download_accession")
+    def test_download_single_accession_reports_failure(self, mock_download):
+        """A failed download surfaces the helper's message on the progress."""
+        mock_download.return_value = (False, "Download failed: boom")
+
+        progress = self.manager._download_single_accession("SRR999999")
+
+        assert progress.status == "failed"
+        assert progress.error_message == "Download failed: boom"
+        assert "SRR999999" not in self.manager.active_downloads
 
 
 class TestDownloadProgressAndSession:
