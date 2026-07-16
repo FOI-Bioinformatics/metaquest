@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import requests
@@ -512,6 +512,52 @@ def save_metadata_report(metadata: Dict[str, SRADatasetInfo], output_file: Union
     logger.info(f"Metadata report saved to {output_file}")
 
 
+def _dataset_stats_row(acc_dir: Path) -> Optional[Dict[str, Any]]:
+    """Compute a statistics row for one accession directory, or None if unavailable."""
+    logger.info(f"Processing {acc_dir.name}")
+
+    fastq_files = list(acc_dir.glob("*.fastq*"))
+    if not fastq_files:
+        logger.warning(f"No FASTQ files found in {acc_dir}")
+        return None
+
+    try:
+        stats = calculate_read_statistics(fastq_files)
+    except Exception as e:
+        logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
+        return None
+
+    layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in fastq_files) else "SINGLE"
+    return {
+        "accession": acc_dir.name,
+        "num_files": len(fastq_files),
+        "layout": layout,
+        "total_reads": stats.total_reads,
+        "total_bases": stats.total_bases,
+        "avg_read_length": stats.avg_read_length,
+        "min_read_length": stats.min_read_length,
+        "max_read_length": stats.max_read_length,
+        "n50": stats.n50,
+        "gc_content": stats.gc_content,
+        "avg_quality": (stats.quality_scores["mean"] if stats.quality_scores else None),
+    }
+
+
+def _print_statistics_summary(df: pd.DataFrame) -> None:
+    """Print the aggregate statistics and layout distribution for a report DataFrame."""
+    print("\nDataset Statistics Summary:")
+    print("==========================")
+    print(f"Total datasets: {len(df)}")
+    print(f"Total reads: {df['total_reads'].sum():,}")
+    print(f"Total bases: {df['total_bases'].sum():,}")
+    print(f"Average read length: {df['avg_read_length'].mean():.1f}")
+    print(f"Average GC content: {df['gc_content'].mean():.1f}%")
+
+    print("\nLayout distribution:")
+    for layout, count in df["layout"].value_counts().items():
+        print(f"  {layout}: {count}")
+
+
 def generate_statistics_report(fastq_folder: Union[str, Path], output_file: Union[str, Path]) -> None:
     """
     Generate comprehensive statistics report for downloaded datasets.
@@ -526,71 +572,18 @@ def generate_statistics_report(fastq_folder: Union[str, Path], output_file: Unio
 
     logger.info("Generating statistics report for downloaded datasets")
 
-    # Find all accession directories
     accession_dirs = [d for d in fastq_path.iterdir() if d.is_dir()]
-
     if not accession_dirs:
         logger.warning("No accession directories found")
         return
 
-    # Calculate statistics for each dataset
-    report_data = []
+    report_data = [row for acc_dir in accession_dirs if (row := _dataset_stats_row(acc_dir)) is not None]
 
-    for acc_dir in accession_dirs:
-        logger.info(f"Processing {acc_dir.name}")
-
-        # Find FASTQ files
-        fastq_files = list(acc_dir.glob("*.fastq*"))
-
-        if not fastq_files:
-            logger.warning(f"No FASTQ files found in {acc_dir}")
-            continue
-
-        try:
-            stats = calculate_read_statistics(fastq_files)
-
-            # Detect layout and technology from file patterns
-            layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in fastq_files) else "SINGLE"
-
-            report_data.append(
-                {
-                    "accession": acc_dir.name,
-                    "num_files": len(fastq_files),
-                    "layout": layout,
-                    "total_reads": stats.total_reads,
-                    "total_bases": stats.total_bases,
-                    "avg_read_length": stats.avg_read_length,
-                    "min_read_length": stats.min_read_length,
-                    "max_read_length": stats.max_read_length,
-                    "n50": stats.n50,
-                    "gc_content": stats.gc_content,
-                    "avg_quality": (stats.quality_scores["mean"] if stats.quality_scores else None),
-                }
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
-            continue
-
-    if report_data:
-        # Save report
-        df = pd.DataFrame(report_data)
-        df.to_csv(output_file, index=False)
-        logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
-
-        # Print summary
-        print("\nDataset Statistics Summary:")
-        print("==========================")
-        print(f"Total datasets: {len(report_data)}")
-        print(f"Total reads: {df['total_reads'].sum():,}")
-        print(f"Total bases: {df['total_bases'].sum():,}")
-        print(f"Average read length: {df['avg_read_length'].mean():.1f}")
-        print(f"Average GC content: {df['gc_content'].mean():.1f}%")
-
-        # Technology breakdown
-        layout_counts = df["layout"].value_counts()
-        print("\nLayout distribution:")
-        for layout, count in layout_counts.items():
-            print(f"  {layout}: {count}")
-    else:
+    if not report_data:
         logger.error("No statistics could be calculated")
+        return
+
+    df = pd.DataFrame(report_data)
+    df.to_csv(output_file, index=False)
+    logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
+    _print_statistics_summary(df)
