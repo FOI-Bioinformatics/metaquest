@@ -16,7 +16,13 @@ import pandas as pd
 
 from metaquest.core.models import TaxonomyInfo
 from metaquest.core.utils import get_genome_columns
-from metaquest.utils.html import plotly_js_script, TABLE_SCRIPT
+from metaquest.utils.html import (
+    CONTAINMENT_SCALE,
+    REPORT_CSS,
+    TABLE_SCRIPT,
+    plotly_js_script,
+    plotly_layout,
+)
 
 try:
     import plotly.express as px
@@ -166,10 +172,10 @@ def _build_sunburst(long_df: pd.DataFrame) -> str:
         path=["family", "genus", "species"],
         values="sample_count",
         color="mean_containment",
-        color_continuous_scale="Viridis",
-        title="Taxonomy Sunburst",
+        color_continuous_scale=CONTAINMENT_SCALE,
+        title="Mean containment by taxon",
     )
-    fig.update_layout(margin=dict(t=40, l=0, r=0, b=0), height=500)
+    fig.update_layout(**plotly_layout(height=500, margin=dict(t=46, l=6, r=6, b=6)))
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
@@ -180,12 +186,12 @@ def _build_heatmap(long_df: pd.DataFrame) -> str:
         return ""
     fig = px.imshow(
         pivot,
-        color_continuous_scale="YlOrRd",
+        color_continuous_scale=CONTAINMENT_SCALE,
         labels=dict(x="Family", y="Sample", color="Containment"),
-        title="Sample x Family Containment Heatmap",
+        title="Sample-by-family containment",
         aspect="auto",
     )
-    fig.update_layout(height=max(300, 20 * len(pivot.index) + 100))
+    fig.update_layout(**plotly_layout(height=max(320, 22 * len(pivot.index) + 110)))
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
@@ -195,10 +201,11 @@ def _build_distributions(long_df: pd.DataFrame) -> tuple:
         long_df,
         x="family",
         y="containment",
-        title="Containment Distribution per Family",
+        color="family",
+        title="Containment by family",
         labels={"family": "Family", "containment": "Containment"},
     )
-    box_fig.update_layout(xaxis_tickangle=-45, height=450)
+    box_fig.update_layout(**plotly_layout(height=450, xaxis_tickangle=-30, showlegend=False))
     box_html = box_fig.to_html(full_html=False, include_plotlyjs=False)
 
     genus_counts = long_df.groupby("genus")["sample"].nunique().reset_index()
@@ -208,198 +215,135 @@ def _build_distributions(long_df: pd.DataFrame) -> tuple:
         genus_counts,
         x="genus",
         y="sample_count",
-        title="Sample Count per Genus",
+        title="Samples per genus",
         labels={"genus": "Genus", "sample_count": "Samples"},
     )
-    bar_fig.update_layout(xaxis_tickangle=-45, height=450)
+    bar_fig.update_layout(**plotly_layout(height=450, xaxis_tickangle=-30))
     bar_html = bar_fig.to_html(full_html=False, include_plotlyjs=False)
 
     return box_html, bar_html
 
 
 def _build_table_html(long_df: pd.DataFrame) -> str:
-    """Build HTML table rows from long-format data."""
+    """Build HTML table rows from long-format data.
+
+    The containment cell renders an inline heat-bar (width proportional to the
+    value) beside the number, so magnitude is scannable down the column while
+    the number remains the cell's text for numeric sorting.
+    """
     if long_df.empty:
         return ""
     rows = []
     for _, r in long_df.iterrows():
-        cells = "".join(
-            f"<td>{html_escape(str(r.get(c, '')))}</td>"
-            for c in ["sample", "genome", "containment", "species", "genus", "family", "location", "date"]
+        raw = r.get("containment", 0)
+        val = 0.0 if pd.isna(raw) else max(0.0, min(1.0, float(raw)))
+        before = "".join(f"<td>{html_escape(str(r.get(c, '')))}</td>" for c in ["sample", "genome"])
+        containment = (
+            f'<td class="mq-num"><span class="mq-cell">'
+            f'<span class="mq-heatbar" style="--v:{val:.3f}"></span>'
+            f"<span>{val:.3f}</span></span></td>"
         )
-        rows.append(f"<tr>{cells}</tr>")
+        after = "".join(
+            f"<td>{html_escape(str(r.get(c, '')))}</td>" for c in ["species", "genus", "family", "location", "date"]
+        )
+        rows.append(f"<tr>{before}{containment}{after}</tr>")
     return "\n".join(rows)
+
+
+_TABLE_HEADERS = ["Sample", "Genome", "Containment", "Species", "Genus", "Family", "Location", "Date"]
 
 
 _HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
     {{ plotly_js|safe }}
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: "Helvetica Neue", Arial, sans-serif;
-            margin: 0; padding: 0;
-            background: #fafafa; color: #333;
-        }
-        .header {
-            background: #2c3e50; color: #ecf0f1;
-            padding: 24px 32px; margin-bottom: 24px;
-        }
-        .header h1 { margin: 0 0 4px 0; font-size: 1.6em; }
-        .header p { margin: 0; opacity: 0.8; font-size: 0.9em; }
-        .container { max-width: 1400px; margin: 0 auto; padding: 0 24px 48px; }
-        .cards {
-            display: flex; flex-wrap: wrap; gap: 16px;
-            margin-bottom: 32px;
-        }
-        .card {
-            flex: 1 1 180px; background: #fff;
-            border-radius: 6px; padding: 16px 20px;
-            border-left: 4px solid #2980b9;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .card h3 { margin: 0 0 6px; font-size: 0.85em; color: #7f8c8d; text-transform: uppercase; }
-        .card .value { font-size: 1.8em; font-weight: 600; color: #2c3e50; }
-        .top-families { margin-top: 8px; font-size: 0.85em; color: #555; }
-        .section { margin-bottom: 32px; }
-        .section h2 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 8px; }
-        .chart-row {
-            display: flex; flex-wrap: wrap; gap: 24px;
-        }
-        .chart-cell { flex: 1 1 48%; min-width: 300px; background: #fff;
-            border-radius: 6px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-        .chart-full { background: #fff; border-radius: 6px; padding: 12px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-        .search-bar { margin-bottom: 12px; }
-        .search-bar input {
-            padding: 8px 12px; width: 300px; border: 1px solid #ccc;
-            border-radius: 4px; font-size: 0.95em;
-        }
-        .search-bar button {
-            padding: 8px 16px; margin-left: 8px;
-            background: #2980b9; color: #fff; border: none;
-            border-radius: 4px; cursor: pointer; font-size: 0.95em;
-        }
-        .search-bar button:hover { background: #2471a3; }
-        table.results {
-            width: 100%; border-collapse: collapse;
-            font-size: 0.9em;
-        }
-        table.results th {
-            background: #2c3e50; color: #fff;
-            padding: 10px 12px; text-align: left; cursor: pointer;
-            user-select: none; position: sticky; top: 0;
-        }
-        table.results th:hover { background: #34495e; }
-        table.results td {
-            padding: 8px 12px; border-bottom: 1px solid #eee;
-        }
-        table.results tr:hover { background: #f5f9fc; }
-        @media (max-width: 800px) {
-            .chart-row { flex-direction: column; }
-            .chart-cell { flex: 1 1 100%; }
-        }
-    </style>
+    <style>{{ report_css|safe }}</style>
 </head>
 <body>
-    <div class="header">
-        <h1>{{ title }}</h1>
-        <p>Generated by MetaQuest</p>
-    </div>
-    <div class="container">
-        <div class="cards">
-            <div class="card">
-                <h3>Samples</h3>
-                <div class="value">{{ summary.total_samples }}</div>
-            </div>
-            <div class="card">
-                <h3>Genomes</h3>
-                <div class="value">{{ summary.total_genomes }}</div>
-            </div>
-            <div class="card">
-                <h3>Families</h3>
-                <div class="value">{{ summary.num_families }}</div>
-            </div>
-            <div class="card">
-                <h3>Genera</h3>
-                <div class="value">{{ summary.num_genera }}</div>
-            </div>
-            <div class="card">
-                <h3>Containment Range</h3>
-                <div class="value">{{ "%.3f"|format(summary.containment_min) }} -
-                {{ "%.3f"|format(summary.containment_max) }}</div>
-            </div>
+    <a class="mq-skip" href="#results">Skip to results</a>
+    <header class="mq-header">
+        <div class="mq-wrap">
+            <p class="mq-eyebrow">MetaQuest &middot; containment report</p>
+            <h1 class="mq-title">{{ title }}</h1>
+            <p class="mq-readout">
+                <span><b>{{ summary.total_samples }}</b> samples</span>
+                <span><b>{{ summary.total_genomes }}</b> genomes</span>
+                <span><b>{{ summary.num_families }}</b> families</span>
+                <span><b>{{ summary.num_genera }}</b> genera</span>
+                <span>containment
+                    <b>{{ "%.3f"|format(summary.containment_min) }}</b>&ndash;<b>{{
+                        "%.3f"|format(summary.containment_max) }}</b></span>
+            </p>
+        </div>
+    </header>
+    <main class="mq-wrap">
+        <section class="mq-stats" aria-label="Run summary">
+            <div class="mq-stat"><p class="k">Samples</p><div class="v">{{ summary.total_samples }}</div></div>
+            <div class="mq-stat"><p class="k">Genomes</p><div class="v">{{ summary.total_genomes }}</div></div>
+            <div class="mq-stat"><p class="k">Families</p><div class="v">{{ summary.num_families }}</div></div>
+            <div class="mq-stat"><p class="k">Genera</p><div class="v">{{ summary.num_genera }}</div></div>
             {% if summary.top_families %}
-            <div class="card" style="flex: 2 1 300px;">
-                <h3>Top Families by Sample Count</h3>
-                <div class="top-families">
-                {% for fam in summary.top_families %}
-                    {{ fam.name }} ({{ fam.count }}){% if not loop.last %}, {% endif %}
-                {% endfor %}
+            <div class="mq-stat wide">
+                <p class="k">Top families by sample count</p>
+                <div class="sub">
+                {%- for fam in summary.top_families -%}
+                    {{ fam.name }} ({{ fam.count }}){% if not loop.last %} &middot; {% endif %}
+                {%- endfor -%}
                 </div>
             </div>
             {% endif %}
-        </div>
+        </section>
 
         {% if sunburst_html or heatmap_html %}
-        <div class="section">
-            <h2>Taxonomy Overview</h2>
-            <div class="chart-row">
-                {% if sunburst_html %}
-                <div class="chart-cell">{{ sunburst_html|safe }}</div>
-                {% endif %}
-                {% if heatmap_html %}
-                <div class="chart-cell">{{ heatmap_html|safe }}</div>
-                {% endif %}
+        <section class="mq-section">
+            <h2>Taxonomy overview</h2>
+            <div class="mq-grid">
+                {% if sunburst_html %}<div class="mq-panel">{{ sunburst_html|safe }}</div>{% endif %}
+                {% if heatmap_html %}<div class="mq-panel">{{ heatmap_html|safe }}</div>{% endif %}
             </div>
-        </div>
+        </section>
         {% endif %}
 
-        <div class="section">
-            <h2>Results Table</h2>
-            <div class="search-bar">
+        <section class="mq-section" id="results">
+            <h2>Results</h2>
+            <div class="mq-toolbar">
                 <input type="text" id="searchInput" onkeyup="filterTable()"
-                       placeholder="Search across all columns...">
-                <button onclick="exportCSV()">Export CSV</button>
+                       aria-label="Filter results" placeholder="Filter across all columns&hellip;">
+                <button class="mq-btn" onclick="exportCSV()">Export CSV</button>
             </div>
-            <div style="max-height: 600px; overflow-y: auto;">
-            <table class="results" id="resultsTable">
-                <thead>
-                    <tr>
-                        <th onclick="sortTable(0)">Sample</th>
-                        <th onclick="sortTable(1)">Genome</th>
-                        <th onclick="sortTable(2)">Containment</th>
-                        <th onclick="sortTable(3)">Species</th>
-                        <th onclick="sortTable(4)">Genus</th>
-                        <th onclick="sortTable(5)">Family</th>
-                        <th onclick="sortTable(6)">Location</th>
-                        <th onclick="sortTable(7)">Date</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{ table_rows|safe }}
-                </tbody>
-            </table>
+            <div class="mq-table-wrap">
+                <table class="mq-table" id="resultsTable">
+                    <thead>
+                        <tr>
+                        {%- for h in headers %}
+                            <th tabindex="0" role="button"
+                                onclick="sortTable({{ loop.index0 }})"
+                                onkeydown="sortKey(event,{{ loop.index0 }})">{{ h }}</th>
+                        {%- endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{ table_rows|safe }}
+                    </tbody>
+                </table>
             </div>
-        </div>
+        </section>
 
         {% if box_html or bar_html %}
-        <div class="section">
-            <h2>Distribution Plots</h2>
-            <div class="chart-row">
-                {% if box_html %}
-                <div class="chart-cell">{{ box_html|safe }}</div>
-                {% endif %}
-                {% if bar_html %}
-                <div class="chart-cell">{{ bar_html|safe }}</div>
-                {% endif %}
+        <section class="mq-section">
+            <h2>Distributions</h2>
+            <div class="mq-grid">
+                {% if box_html %}<div class="mq-panel">{{ box_html|safe }}</div>{% endif %}
+                {% if bar_html %}<div class="mq-panel">{{ bar_html|safe }}</div>{% endif %}
             </div>
-        </div>
+        </section>
         {% endif %}
-    </div>
+
+        <footer class="mq-footer">Generated by MetaQuest</footer>
+    </main>
 
     {{ table_script|safe }}
 </body>
@@ -419,80 +363,84 @@ def _assemble_html(title, summary, sunburst_html, heatmap_html, table_rows, box_
             box_html=box_html,
             bar_html=bar_html,
             plotly_js=plotly_js_script(),
+            report_css=REPORT_CSS,
             table_script=TABLE_SCRIPT,
+            headers=_TABLE_HEADERS,
         )
     return _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_html, box_html, bar_html)
 
 
 def _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_html, box_html, bar_html):
-    """Fallback HTML assembly without Jinja2."""
+    """Fallback HTML assembly without Jinja2 (same design system as the Jinja path)."""
     safe_title = html_escape(title)
 
-    top_fam_str = ""
+    top_fam_html = ""
     if summary.get("top_families"):
-        top_fam_str = ", ".join(f"{f['name']} ({f['count']})" for f in summary["top_families"])
+        top_fam_str = " &middot; ".join(f"{f['name']} ({f['count']})" for f in summary["top_families"])
+        top_fam_html = (
+            '<div class="mq-stat wide"><p class="k">Top families by sample count</p>'
+            f'<div class="sub">{top_fam_str}</div></div>'
+        )
+
+    def _panels(*fragments):
+        return "".join(f'<div class="mq-panel">{h}</div>' for h in fragments if h)
 
     charts_section = ""
     if sunburst_html or heatmap_html:
-        charts_section = f"""
-        <div class="section"><h2>Taxonomy Overview</h2>
-        <div class="chart-row">
-        {"<div class='chart-cell'>" + sunburst_html + "</div>" if sunburst_html else ""}
-        {"<div class='chart-cell'>" + heatmap_html + "</div>" if heatmap_html else ""}
-        </div></div>"""
+        charts_section = (
+            '<section class="mq-section"><h2>Taxonomy overview</h2>'
+            f'<div class="mq-grid">{_panels(sunburst_html, heatmap_html)}</div></section>'
+        )
 
     dist_section = ""
     if box_html or bar_html:
-        dist_section = f"""
-        <div class="section"><h2>Distribution Plots</h2>
-        <div class="chart-row">
-        {"<div class='chart-cell'>" + box_html + "</div>" if box_html else ""}
-        {"<div class='chart-cell'>" + bar_html + "</div>" if bar_html else ""}
-        </div></div>"""
+        dist_section = (
+            '<section class="mq-section"><h2>Distributions</h2>'
+            f'<div class="mq-grid">{_panels(box_html, bar_html)}</div></section>'
+        )
 
     c_min = f"{summary['containment_min']:.3f}"
     c_max = f"{summary['containment_max']:.3f}"
 
+    ths = "".join(
+        f'<th tabindex="0" role="button" onclick="sortTable({i})" ' f'onkeydown="sortKey(event,{i})">{label}</th>'
+        for i, label in enumerate(_TABLE_HEADERS)
+    )
+
     return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>{safe_title}</title>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{safe_title}</title>
 {plotly_js_script()}
-<style>
-body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; background: #fafafa; }}
-.header {{ background: #2c3e50; color: #ecf0f1; padding: 24px 32px; }}
-.container {{ max-width: 1400px; margin: 0 auto; padding: 0 24px 48px; }}
-.cards {{ display: flex; flex-wrap: wrap; gap: 16px; margin: 24px 0; }}
-.card {{ flex: 1 1 180px; background: #fff; border-radius: 6px; padding: 16px;
-    border-left: 4px solid #2980b9; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-.card h3 {{ margin: 0 0 6px; font-size: 0.85em; color: #7f8c8d; }}
-.card .value {{ font-size: 1.8em; font-weight: 600; }}
-.section {{ margin-bottom: 32px; }}
-.chart-row {{ display: flex; flex-wrap: wrap; gap: 24px; }}
-.chart-cell {{ flex: 1 1 48%; min-width: 300px; background: #fff; border-radius: 6px; padding: 12px; }}
-table.results {{ width: 100%; border-collapse: collapse; font-size: 0.9em; }}
-table.results th {{ background: #2c3e50; color: #fff; padding: 10px; cursor: pointer; }}
-table.results td {{ padding: 8px 12px; border-bottom: 1px solid #eee; }}
-</style></head><body>
-<div class="header"><h1>{safe_title}</h1><p>Generated by MetaQuest</p></div>
-<div class="container">
-<div class="cards">
-<div class="card"><h3>Samples</h3><div class="value">{summary['total_samples']}</div></div>
-<div class="card"><h3>Genomes</h3><div class="value">{summary['total_genomes']}</div></div>
-<div class="card"><h3>Families</h3><div class="value">{summary['num_families']}</div></div>
-<div class="card"><h3>Genera</h3><div class="value">{summary['num_genera']}</div></div>
-<div class="card"><h3>Range</h3><div class="value">{c_min} - {c_max}</div></div>
-{"<div class='card'><h3>Top Families</h3><div>" + top_fam_str + "</div></div>" if top_fam_str else ""}
-</div>
+<style>{REPORT_CSS}</style></head><body>
+<a class="mq-skip" href="#results">Skip to results</a>
+<header class="mq-header"><div class="mq-wrap">
+<p class="mq-eyebrow">MetaQuest &middot; containment report</p>
+<h1 class="mq-title">{safe_title}</h1>
+<p class="mq-readout"><span><b>{summary['total_samples']}</b> samples</span>
+<span><b>{summary['total_genomes']}</b> genomes</span>
+<span><b>{summary['num_families']}</b> families</span>
+<span><b>{summary['num_genera']}</b> genera</span>
+<span>containment <b>{c_min}</b>&ndash;<b>{c_max}</b></span></p>
+</div></header>
+<main class="mq-wrap">
+<section class="mq-stats" aria-label="Run summary">
+<div class="mq-stat"><p class="k">Samples</p><div class="v">{summary['total_samples']}</div></div>
+<div class="mq-stat"><p class="k">Genomes</p><div class="v">{summary['total_genomes']}</div></div>
+<div class="mq-stat"><p class="k">Families</p><div class="v">{summary['num_families']}</div></div>
+<div class="mq-stat"><p class="k">Genera</p><div class="v">{summary['num_genera']}</div></div>
+{top_fam_html}
+</section>
 {charts_section}
-<div class="section"><h2>Results Table</h2>
-<input type="text" id="searchInput" onkeyup="filterTable()"
-    placeholder="Search..." style="padding:8px;width:300px;margin-bottom:12px;">
-<table class="results" id="resultsTable"><thead><tr>
-<th onclick="sortTable(0)">Sample</th><th onclick="sortTable(1)">Genome</th>
-<th onclick="sortTable(2)">Containment</th><th onclick="sortTable(3)">Species</th>
-<th onclick="sortTable(4)">Genus</th><th onclick="sortTable(5)">Family</th>
-<th onclick="sortTable(6)">Location</th><th onclick="sortTable(7)">Date</th>
-</tr></thead><tbody>{table_rows}</tbody></table></div>
+<section class="mq-section" id="results"><h2>Results</h2>
+<div class="mq-toolbar">
+<input type="text" id="searchInput" onkeyup="filterTable()" aria-label="Filter results"
+    placeholder="Filter across all columns&hellip;">
+<button class="mq-btn" onclick="exportCSV()">Export CSV</button></div>
+<div class="mq-table-wrap"><table class="mq-table" id="resultsTable">
+<thead><tr>{ths}</tr></thead><tbody>{table_rows}</tbody></table></div></section>
 {dist_section}
-</div>
+<footer class="mq-footer">Generated by MetaQuest</footer>
+</main>
 {TABLE_SCRIPT}
 </body></html>"""
