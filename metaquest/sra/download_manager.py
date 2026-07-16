@@ -517,21 +517,21 @@ class IntelligentDownloadManager:
                 progress.downloaded_mb = output_file.stat().st_size / (1024 * 1024)
                 return progress
 
-            # Initialize or restore from checkpoint
-            start_byte = 0
+            # Carry over the retry count from a prior attempt if present. Note
+            # that fasterq-dump has no byte-range resume, so a partial download
+            # is always restarted from the beginning rather than continued.
             if checkpoint:
-                start_byte = checkpoint.downloaded_bytes
-                progress.downloaded_mb = start_byte / (1024 * 1024)
                 progress.retry_count = checkpoint.retry_count
-                logger.info(f"Resuming {accession} from byte {start_byte}")
 
-            # Download with fasterq-dump and resume capability
+            # Download with fasterq-dump. -O sets the output directory and
+            # --gzip produces the .fastq.gz files this method looks for below.
             cmd = [
                 "fasterq-dump",
                 "--progress",
+                "--gzip",
                 "--temp",
                 str(self.temp_dir),
-                "--outdir",
+                "-O",
                 str(self.output_dir),
                 accession,
             ]

@@ -116,9 +116,34 @@ warn_unreachable = true
 strict_equality = true
 explicit_package_bases = true
 
-# requests ships no inline types and stubs are not a runtime dependency.
+# These third-party libraries ship no inline types, and their stub packages are
+# not runtime dependencies. Missing-import errors from them are environmental
+# noise rather than type defects, so they are ignored here.
 [[tool.mypy.overrides]]
-module = ["requests", "requests.*"]
+module = [
+    "requests",
+    "requests.*",
+    "pandas",
+    "pandas.*",
+    "lxml",
+    "lxml.*",
+    "Bio",
+    "Bio.*",
+    "scipy",
+    "scipy.*",
+    "sklearn",
+    "sklearn.*",
+    "seaborn",
+    "seaborn.*",
+    "plotly",
+    "plotly.*",
+    "matplotlib",
+    "matplotlib.*",
+    "cartopy",
+    "cartopy.*",
+    "sourmash",
+    "sourmash.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
