@@ -112,13 +112,12 @@ class SecureSubprocess:
             if not any(str(path_obj).startswith(str(root)) for root in allowed_roots):
                 raise SecurityError(f"Path outside allowed directories: {path}")
 
-        # Check for suspicious path components
-        unsafe_components = ["..", ".", "~"]
-        if any(comp in unsafe_components for comp in path_obj.parts):
-            # Allow single '.' and legitimate parent directory traversal
-            if not (len(path_obj.parts) == 1 and path_obj.parts[0] == "."):
-                if ".." in str(path) and not allow_creation:
-                    raise SecurityError(f"Unsafe path component in: {path}")
+        # Reject parent-directory traversal. Path.resolve() above collapses
+        # ".." segments, so the original path is inspected here. Only enforced
+        # when not creating: callers that create output/temp directories pass
+        # allow_creation=True and legitimately supply new paths.
+        if not allow_creation and ".." in Path(path).parts:
+            raise SecurityError(f"Unsafe path component in: {path}")
 
         return path_obj
 

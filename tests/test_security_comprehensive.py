@@ -456,10 +456,10 @@ class TestDefensiveGuards:
         with pytest.raises(SecurityError, match="invalid characters"):
             SecureSubprocess.validate_accession_for_subprocess(accession)
 
-    def test_path_with_parent_traversal_and_tilde_rejected(self):
-        """A '..' segment plus a literal '~' component is rejected when creation is off."""
+    def test_path_with_parent_traversal_rejected(self):
+        """A '..' segment is rejected when creation is disabled, on any platform."""
         with pytest.raises(SecurityError, match="Unsafe path component"):
-            SecureSubprocess.validate_path("foo/../~", allow_creation=False)
+            SecureSubprocess.validate_path("foo/../bar", allow_creation=False)
 
     def test_run_secure_wraps_unexpected_subprocess_error(self):
         """A non-CalledProcessError from subprocess.run becomes a SecurityError."""
