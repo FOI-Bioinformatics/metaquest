@@ -19,6 +19,7 @@ from metaquest.sra import (
     DownloadSession,
     QualityProfile,
 )
+from metaquest.utils.browser import open_in_browser
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +481,11 @@ class SRAInteractiveDashboardCommand(BaseCommand):
             default="full",
             help="Type of dashboard to generate",
         )
+        parser.add_argument(
+            "--no-open",
+            action="store_true",
+            help="Do not open the generated dashboard in a browser",
+        )
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
@@ -534,16 +540,13 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
             if dashboard_path:
                 print("\n✅ Dashboard generated successfully!")
-                print(f"Open in browser: {dashboard_path}")
+                print(f"Open in browser: {dashboard_path.resolve().as_uri()}")
 
-                # Try to open in browser
-                try:
-                    import webbrowser
-
-                    webbrowser.open(f"file://{dashboard_path.absolute()}")
-                    print("Dashboard opened in browser")
-                except Exception:
-                    pass
+                if not args.no_open:
+                    if open_in_browser(dashboard_path):
+                        print("Dashboard opened in browser")
+                    else:
+                        print("Could not open a browser automatically; open the link above manually.")
 
                 return 0
             else:
