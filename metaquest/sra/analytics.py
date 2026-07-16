@@ -400,6 +400,70 @@ class SRADatasetAnalyzer:
             recommendations=recommendations,
         )
 
+    def _collect_group_profiles(self, groups: Dict[str, List[str]]) -> Dict[str, QualityProfile]:
+        """Profile every accession across all groups, skipping and logging failures."""
+        all_profiles: Dict[str, QualityProfile] = {}
+        for accessions in groups.values():
+            for accession in accessions:
+                try:
+                    all_profiles[accession] = self.profile_dataset_quality(accession)
+                except Exception as e:
+                    logger.warning(f"Failed to profile {accession}: {e}")
+        return all_profiles
+
+    @staticmethod
+    def _group_of(accession: str, groups: Dict[str, List[str]]) -> Optional[str]:
+        """Return the first group name containing the accession, or None."""
+        for group_name, acc_list in groups.items():
+            if accession in acc_list:
+                return group_name
+        return None
+
+    @classmethod
+    def _build_comparison_dataframe(cls, all_profiles, groups) -> pd.DataFrame:
+        """Assemble a per-accession comparison DataFrame tagged with each group."""
+        rows = []
+        for accession, profile in all_profiles.items():
+            group = cls._group_of(accession, groups)
+            if not group:
+                continue
+            rows.append(
+                {
+                    "accession": accession,
+                    "group": group,
+                    "avg_read_length": profile.avg_read_length,
+                    "gc_content": profile.gc_content,
+                    "total_reads": profile.total_reads,
+                    "complexity_score": profile.complexity_score,
+                    "quality_grade": profile.quality_grade,
+                    "adapter_contamination": profile.contamination_indicators.get("adapter_contamination", 0),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _group_summary_statistics(comparison_df, groups, numeric_cols) -> Dict[str, Dict[str, Any]]:
+        """Compute mean/std/median/min/max per numeric column for each non-empty group."""
+        summary_stats: dict = {}
+        for group in groups.keys():
+            group_data = comparison_df[comparison_df["group"] == group]
+            if group_data.empty:
+                continue
+            summary_stats[group] = {}
+            for col in numeric_cols:
+                if col not in group_data.columns:
+                    continue
+                values = group_data[col].dropna()
+                if not values.empty:
+                    summary_stats[group][col] = {
+                        "mean": float(values.mean()),
+                        "std": float(values.std()),
+                        "median": float(values.median()),
+                        "min": float(values.min()),
+                        "max": float(values.max()),
+                    }
+        return summary_stats
+
     def compare_datasets(
         self, groups: Dict[str, List[str]], metadata_df: Optional[pd.DataFrame] = None
     ) -> ComparativeAnalysis:
@@ -415,41 +479,8 @@ class SRADatasetAnalyzer:
         """
         logger.info(f"Comparing {len(groups)} dataset groups")
 
-        # Collect quality profiles for all datasets
-        all_profiles = {}
-        for group_name, accessions in groups.items():
-            for accession in accessions:
-                try:
-                    profile = self.profile_dataset_quality(accession)
-                    all_profiles[accession] = profile
-                except Exception as e:
-                    logger.warning(f"Failed to profile {accession}: {e}")
-
-        # Create comparison DataFrame
-        comparison_data = []
-        for accession, profile in all_profiles.items():
-            # Find which group this accession belongs to
-            group = None
-            for group_name, acc_list in groups.items():
-                if accession in acc_list:
-                    group = group_name
-                    break
-
-            if group:
-                comparison_data.append(
-                    {
-                        "accession": accession,
-                        "group": group,
-                        "avg_read_length": profile.avg_read_length,
-                        "gc_content": profile.gc_content,
-                        "total_reads": profile.total_reads,
-                        "complexity_score": profile.complexity_score,
-                        "quality_grade": profile.quality_grade,
-                        "adapter_contamination": profile.contamination_indicators.get("adapter_contamination", 0),
-                    }
-                )
-
-        comparison_df = pd.DataFrame(comparison_data)
+        all_profiles = self._collect_group_profiles(groups)
+        comparison_df = self._build_comparison_dataframe(all_profiles, groups)
 
         if comparison_df.empty:
             logger.warning("No data available for comparison")
@@ -464,33 +495,10 @@ class SRADatasetAnalyzer:
                 visualization_data={},
             )
 
-        # Calculate summary statistics
-        summary_stats: dict = {}
         numeric_cols = ["avg_read_length", "gc_content", "total_reads", "complexity_score"]
-
-        for group in groups.keys():
-            group_data = comparison_df[comparison_df["group"] == group]
-            if not group_data.empty:
-                summary_stats[group] = {}
-                for col in numeric_cols:
-                    if col in group_data.columns:
-                        values = group_data[col].dropna()
-                        if not values.empty:
-                            summary_stats[group][col] = {
-                                "mean": float(values.mean()),
-                                "std": float(values.std()),
-                                "median": float(values.median()),
-                                "min": float(values.min()),
-                                "max": float(values.max()),
-                            }
-
-        # Perform statistical tests
+        summary_stats = self._group_summary_statistics(comparison_df, groups, numeric_cols)
         statistical_tests = self._perform_statistical_tests(comparison_df, groups)
-
-        # Detect outliers
         outliers = self._detect_outliers(comparison_df)
-
-        # Generate recommendations
         recommendations = self._generate_comparative_recommendations(summary_stats, statistical_tests, outliers)
 
         return ComparativeAnalysis(
