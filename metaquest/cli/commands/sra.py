@@ -76,6 +76,45 @@ class DownloadSraCommand(BaseCommand):
             help="One or more files containing blacklisted accessions, one per line",
         )
 
+    def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
+        """Log the summary for a dry run."""
+        self.logger.info(f"Dry run: would download {stats['to_download']} of {stats['total']} datasets")
+        self.logger.info(f"  {stats['already_downloaded']} datasets would be skipped (already downloaded)")
+        if stats.get("blacklisted", 0) > 0:
+            self.logger.info(f"  {stats['blacklisted']} datasets would be skipped (blacklisted)")
+        if stats.get("to_download", 0) > 0:
+            self.logger.info(f"  Output folder would be: {args.fastq_folder}")
+            if args.max_downloads:
+                self.logger.info(f"  Limited to {args.max_downloads} downloads")
+
+    def _log_download_summary(self, stats: dict) -> None:
+        """Log the summary for a completed download run."""
+        self.logger.info("Download summary:")
+        self.logger.info(f"  Successfully downloaded: {stats['successful']} datasets")
+        self.logger.info(f"  Failed downloads: {stats['failed']} datasets")
+        self.logger.info(f"  Already downloaded: {stats['already_downloaded']} datasets")
+        if stats.get("blacklisted", 0) > 0:
+            self.logger.info(f"  Blacklisted: {stats['blacklisted']} datasets")
+        self.logger.info(f"  Total processed: {stats['total']} datasets")
+
+    def _report_failed_downloads(self, args: argparse.Namespace, stats: dict) -> None:
+        """Warn about failures and write the failed accessions to a retry file."""
+        self.logger.warning(
+            "Some downloads failed. Use --force to retry or --max-retries to enable automatic retry."
+        )
+        if not stats.get("failed_accessions"):
+            return
+        failed_file = Path(args.fastq_folder) / "failed_accessions.txt"
+        with open(failed_file, "w") as f:
+            for acc in stats["failed_accessions"]:
+                f.write(f"{acc}\n")
+        self.logger.info(f"Failed accessions written to {failed_file}")
+        self.logger.info(
+            f"To retry only failed accessions: metaquest download_sra "
+            f"--accessions-file {failed_file} "
+            f"--fastq-folder {args.fastq_folder}"
+        )
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             download_stats = download_sra(
@@ -92,45 +131,13 @@ class DownloadSraCommand(BaseCommand):
             )
 
             if args.dry_run:
-                self.logger.info(
-                    f"Dry run: would download {download_stats['to_download']} of {download_stats['total']} datasets"
-                )
-                self.logger.info(
-                    f"  {download_stats['already_downloaded']} datasets would be skipped (already downloaded)"
-                )
-                if "blacklisted" in download_stats and download_stats["blacklisted"] > 0:
-                    self.logger.info(f"  {download_stats['blacklisted']} datasets would be skipped (blacklisted)")
-                if "to_download" in download_stats and download_stats["to_download"] > 0:
-                    self.logger.info(f"  Output folder would be: {args.fastq_folder}")
-                    if args.max_downloads:
-                        self.logger.info(f"  Limited to {args.max_downloads} downloads")
+                self._log_dry_run_summary(args, download_stats)
             else:
-                self.logger.info("Download summary:")
-                self.logger.info(f"  Successfully downloaded: {download_stats['successful']} datasets")
-                self.logger.info(f"  Failed downloads: {download_stats['failed']} datasets")
-                self.logger.info(f"  Already downloaded: {download_stats['already_downloaded']} datasets")
-                if "blacklisted" in download_stats and download_stats["blacklisted"] > 0:
-                    self.logger.info(f"  Blacklisted: {download_stats['blacklisted']} datasets")
-                self.logger.info(f"  Total processed: {download_stats['total']} datasets")
+                self._log_download_summary(download_stats)
 
-            # Return error if there were failed downloads
             if not args.dry_run and download_stats["failed"] > 0:
-                self.logger.warning(
-                    "Some downloads failed. Use --force to retry or --max-retries to enable automatic retry."
-                )
-                if "failed_accessions" in download_stats and download_stats["failed_accessions"]:
-                    # Write failed accessions to file for easier retry
-                    failed_file = Path(args.fastq_folder) / "failed_accessions.txt"
-                    with open(failed_file, "w") as f:
-                        for acc in download_stats["failed_accessions"]:
-                            f.write(f"{acc}\n")
-                    self.logger.info(f"Failed accessions written to {failed_file}")
-                    self.logger.info(
-                        f"To retry only failed accessions: metaquest download_sra "
-                        f"--accessions-file {failed_file} "
-                        f"--fastq-folder {args.fastq_folder}"
-                    )
-                return 1  # Return error code
+                self._report_failed_downloads(args, download_stats)
+                return 1
 
             return 0
 
