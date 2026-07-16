@@ -607,6 +607,55 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             print(f"Invalid JSON in groups file: {e}")
             return {}
 
+    @staticmethod
+    def _print_group_summaries(groups, comparison) -> None:
+        """Print per-group dataset counts and available summary statistics."""
+        print("\nComparative Analysis Results:")
+        print("=" * 40)
+        for group_name, col_stats in comparison.summary_statistics.items():
+            print(f"\n{group_name}:")
+            print(f"  Datasets: {len(groups.get(group_name, []))}")
+            gc_stats = col_stats.get("gc_content")
+            if gc_stats:
+                print(f"  Avg GC content: {gc_stats['mean']:.1%}")
+            length_stats = col_stats.get("avg_read_length")
+            if length_stats:
+                print(f"  Avg read length: {length_stats['mean']:.1f}")
+            reads_stats = col_stats.get("total_reads")
+            if reads_stats:
+                print(f"  Mean total reads: {reads_stats['mean']:,.0f}")
+
+    @staticmethod
+    def _print_statistical_tests(comparison) -> None:
+        """Print statistical test results, marking significant ones."""
+        if not comparison.statistical_tests:
+            return
+        print("\nStatistical Tests:")
+        print("-" * 20)
+        for test_name, result in comparison.statistical_tests.items():
+            p_value = result.get("p_value", 1.0)
+            significant = p_value < 0.05
+            print(f"{test_name}: p={p_value:.4f} {'*' if significant else ''}")
+
+    @staticmethod
+    def _save_comparison_results(output_dir, groups, comparison) -> Path:
+        """Write the comparison results as JSON and return the output path."""
+        significant_differences = [col for col, test in comparison.statistical_tests.items() if test.get("significant")]
+        results_file = output_dir / "comparative_analysis.json"
+        with open(results_file, "w") as results_f:
+            json.dump(
+                {
+                    "groups": groups,
+                    "summary_statistics": comparison.summary_statistics,
+                    "statistical_tests": comparison.statistical_tests,
+                    "significant_differences": significant_differences,
+                    "outlier_datasets": comparison.outlier_datasets,
+                },
+                results_f,
+                indent=2,
+            )
+        return results_file
+
     def execute(self, args):
         try:
             # Load groups
@@ -626,57 +675,14 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             output_dir = Path(args.output_dir)
             output_dir.mkdir(exist_ok=True)
 
-            analyzer = SRADatasetAnalyzer()
-
             print("\nPerforming comparative analysis...")
+            comparison = SRADatasetAnalyzer().compare_datasets(groups)
 
-            # Run comparative analysis
-            comparison = analyzer.compare_datasets(groups)
+            self._print_group_summaries(groups, comparison)
+            if args.statistical_tests:
+                self._print_statistical_tests(comparison)
 
-            # Print summary results
-            print("\nComparative Analysis Results:")
-            print("=" * 40)
-
-            for group_name, col_stats in comparison.summary_statistics.items():
-                print(f"\n{group_name}:")
-                print(f"  Datasets: {len(groups.get(group_name, []))}")
-                gc_stats = col_stats.get("gc_content")
-                if gc_stats:
-                    print(f"  Avg GC content: {gc_stats['mean']:.1%}")
-                length_stats = col_stats.get("avg_read_length")
-                if length_stats:
-                    print(f"  Avg read length: {length_stats['mean']:.1f}")
-                reads_stats = col_stats.get("total_reads")
-                if reads_stats:
-                    print(f"  Mean total reads: {reads_stats['mean']:,.0f}")
-
-            # Statistical tests results
-            if args.statistical_tests and comparison.statistical_tests:
-                print("\nStatistical Tests:")
-                print("-" * 20)
-                for test_name, result in comparison.statistical_tests.items():
-                    p_value = result.get("p_value", 1.0)
-                    significant = p_value < 0.05
-                    print(f"{test_name}: p={p_value:.4f} {'*' if significant else ''}")
-
-            # Save detailed results
-            significant_differences = [
-                col for col, test in comparison.statistical_tests.items() if test.get("significant")
-            ]
-            results_file = output_dir / "comparative_analysis.json"
-            with open(results_file, "w") as results_f:
-                json.dump(
-                    {
-                        "groups": groups,
-                        "summary_statistics": comparison.summary_statistics,
-                        "statistical_tests": comparison.statistical_tests,
-                        "significant_differences": significant_differences,
-                        "outlier_datasets": comparison.outlier_datasets,
-                    },
-                    results_f,
-                    indent=2,
-                )
-
+            results_file = self._save_comparison_results(output_dir, groups, comparison)
             print(f"\nDetailed results saved to: {results_file}")
 
             # Generate HTML report

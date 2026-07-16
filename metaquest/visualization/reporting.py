@@ -263,25 +263,11 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
     """
     fig = None
     try:
-        # Get top 20 genomes by max containment
-        genome_columns = _get_genome_columns(summary_data)
-
-        if len(genome_columns) > 1:
-            top_genomes = []
-            for col in genome_columns:
-                top_samples = summary_data[summary_data[col] > threshold]
-                if not top_samples.empty:
-                    top_genomes.append((col, len(top_samples)))
-
-            top_genomes.sort(key=lambda x: x[1], reverse=True)
-            top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
-
-            if len(top_genome_cols) > 1:
-                # Create heatmap of top genome correlations
-                correlation_matrix = summary_data[top_genome_cols].corr()
-
-                fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
-                pdf.savefig(fig)
+        top_genome_cols = _top_correlated_genome_columns(summary_data, threshold)
+        if len(top_genome_cols) > 1:
+            correlation_matrix = summary_data[top_genome_cols].corr()
+            fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
+            pdf.savefig(fig)
     except Exception as e:
         logger.warning(f"Error generating heatmap: {e}")
     finally:
@@ -473,6 +459,77 @@ def _prepare_template_data(
     return template_data
 
 
+def _save_report_fig(fig, images_dir, filename):
+    """Save a figure under images_dir and return its 'images/<filename>' path, or None."""
+    if fig is None:
+        return None
+    fig.savefig(images_dir / filename, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return f"images/{filename}"
+
+
+def _top_correlated_genome_columns(summary_data, threshold, limit=20):
+    """Return up to `limit` genome columns ranked by sample count above threshold.
+
+    Returns an empty list when there are one or zero genome columns to correlate.
+    """
+    genome_columns = _get_genome_columns(summary_data)
+    if len(genome_columns) <= 1:
+        return []
+
+    ranked = []
+    for col in genome_columns:
+        above = summary_data[summary_data[col] > threshold]
+        if not above.empty:
+            ranked.append((col, len(above)))
+
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    return [col for col, _ in ranked[:limit]]
+
+
+def _add_containment_plot_files(summary_data, images_dir, plot_files):
+    """Add the containment rank and histogram plots to plot_files."""
+    plots = (
+        ("rank", "Containment Rank Plot", "containment_rank.png", "rank_plot"),
+        ("histogram", "Containment Histogram", "containment_histogram.png", "hist_plot"),
+    )
+    for plot_type, title, filename, key in plots:
+        fig = plot_containment(summary_data, column="max_containment", title=title, plot_type=plot_type, threshold=0)
+        rel = _save_report_fig(fig, images_dir, filename)
+        if rel:
+            plot_files[key] = rel
+
+
+def _add_metadata_count_plot_files(counts_data, images_dir, plot_files):
+    """Add the metadata bar and pie plots to plot_files; log and skip on failure."""
+    try:
+        fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
+        rel = _save_report_fig(fig, images_dir, "metadata_counts.png")
+        if rel:
+            plot_files["counts_plot"] = rel
+
+        fig = plot_metadata_counts(counts_data.head(8), title="Top Categories (Pie Chart)", plot_type="pie")
+        rel = _save_report_fig(fig, images_dir, "metadata_pie.png")
+        if rel:
+            plot_files["pie_plot"] = rel
+    except Exception as e:
+        logger.warning(f"Error generating metadata count plots: {e}")
+
+
+def _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files):
+    """Add the top-genome correlation heatmap to plot_files; log and skip on failure."""
+    try:
+        top_genome_cols = _top_correlated_genome_columns(summary_data, threshold)
+        if len(top_genome_cols) > 1:
+            correlation_matrix = summary_data[top_genome_cols].corr()
+            fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
+            rel = _save_report_fig(fig, images_dir, "genome_correlation.png")
+            if rel:
+                plot_files["heatmap_plot"] = rel
+    except Exception as e:
+        logger.warning(f"Error generating heatmap: {e}")
+
+
 def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
     """
     Generate plots for HTML report.
@@ -486,88 +543,13 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
     Returns:
         Dictionary of plot file paths
     """
-    plot_files = {}
+    plot_files: dict = {}
 
     try:
-        # Containment rank plot
-        fig = plot_containment(
-            summary_data,
-            column="max_containment",
-            title="Containment Rank Plot",
-            plot_type="rank",
-            threshold=0,
-        )
-        rank_plot_file = images_dir / "containment_rank.png"
-        assert fig is not None
-        fig.savefig(rank_plot_file, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        plot_files["rank_plot"] = "images/containment_rank.png"
-
-        # Containment histogram
-        fig = plot_containment(
-            summary_data,
-            column="max_containment",
-            title="Containment Histogram",
-            plot_type="histogram",
-            threshold=0,
-        )
-        hist_plot_file = images_dir / "containment_histogram.png"
-        assert fig is not None
-        fig.savefig(hist_plot_file, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        plot_files["hist_plot"] = "images/containment_histogram.png"
-
-        # Metadata counts plot if available
+        _add_containment_plot_files(summary_data, images_dir, plot_files)
         if counts_data is not None:
-            try:
-                fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
-                counts_plot_file = images_dir / "metadata_counts.png"
-                assert fig is not None
-                fig.savefig(counts_plot_file, dpi=300, bbox_inches="tight")
-                plt.close(fig)
-                plot_files["counts_plot"] = "images/metadata_counts.png"
-
-                # Pie chart
-                fig = plot_metadata_counts(
-                    counts_data.head(8),
-                    title="Top Categories (Pie Chart)",
-                    plot_type="pie",
-                )
-                pie_plot_file = images_dir / "metadata_pie.png"
-                assert fig is not None
-                fig.savefig(pie_plot_file, dpi=300, bbox_inches="tight")
-                plt.close(fig)
-                plot_files["pie_plot"] = "images/metadata_pie.png"
-            except Exception as e:
-                logger.warning(f"Error generating metadata count plots: {e}")
-
-        # Genome correlation heatmap
-        try:
-            # Get top 20 genomes by max containment
-            genome_columns = _get_genome_columns(summary_data)
-
-            if len(genome_columns) > 1:
-                top_genomes = []
-                for col in genome_columns:
-                    top_samples = summary_data[summary_data[col] > threshold]
-                    if not top_samples.empty:
-                        top_genomes.append((col, len(top_samples)))
-
-                top_genomes.sort(key=lambda x: x[1], reverse=True)
-                top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
-
-                if len(top_genome_cols) > 1:
-                    # Create heatmap of top genome correlations
-                    correlation_matrix = summary_data[top_genome_cols].corr()
-
-                    fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
-                    heatmap_file = images_dir / "genome_correlation.png"
-                    assert fig is not None
-                    fig.savefig(heatmap_file, dpi=300, bbox_inches="tight")
-                    plt.close(fig)
-                    plot_files["heatmap_plot"] = "images/genome_correlation.png"
-        except Exception as e:
-            logger.warning(f"Error generating heatmap: {e}")
+            _add_metadata_count_plot_files(counts_data, images_dir, plot_files)
+        _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files)
     except Exception as e:
         logger.warning(f"Error generating plots: {e}")
 

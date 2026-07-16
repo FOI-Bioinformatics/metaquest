@@ -444,6 +444,58 @@ def _execute_parallel_downloads(
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
 
 
+def _resolve_fastq_path(fastq_folder: Union[str, Path], dry_run: bool) -> Path:
+    """Return the FASTQ output path, creating it unless in dry-run mode.
+
+    In dry-run mode the folder is not created, but an existing non-directory
+    at that location is still rejected.
+    """
+    fastq_path = Path(fastq_folder)
+    if dry_run:
+        if fastq_path.exists() and not fastq_path.is_dir():
+            raise DataAccessError(f"{fastq_folder} exists but is not a directory")
+        logger.info(f"Dry run mode: Would use {fastq_path} for downloads")
+        return fastq_path
+    return ensure_directory(fastq_folder)
+
+
+def _download_with_retries(
+    accessions_to_download, fastq_path, num_threads, max_workers, force, temp_folder, max_retries
+) -> Tuple[int, int, List[str], Dict[str, Any]]:
+    """Run the parallel downloads and optional retry pass.
+
+    Returns (successful_count, failed_count, failed_accessions, download_results).
+    """
+    failed_accessions: list = []
+    download_results: dict = {}
+    successful_count, failed_count = _execute_parallel_downloads(
+        accessions_to_download,
+        fastq_path,
+        num_threads,
+        max_workers,
+        force,
+        temp_folder,
+        download_results,
+        failed_accessions,
+    )
+
+    if max_retries > 0 and failed_accessions:
+        retried_successful, failed_accessions = _retry_failed_downloads(
+            failed_accessions,
+            max_retries,
+            fastq_path,
+            num_threads,
+            temp_folder,
+            download_results,
+        )
+        successful_count += retried_successful
+        failed_count -= retried_successful
+        if retried_successful > 0:
+            logger.info(f"Successfully downloaded {retried_successful} accessions on retry")
+
+    return successful_count, failed_count, failed_accessions, download_results
+
+
 def download_sra(
     fastq_folder: Union[str, Path],
     accessions_file: Union[str, Path],
@@ -479,16 +531,7 @@ def download_sra(
     """
     try:
         # Handle the output folder based on dry run status
-        fastq_path = Path(fastq_folder)
-
-        if dry_run:
-            # In dry-run mode, don't create folders
-            if fastq_path.exists() and not fastq_path.is_dir():
-                raise DataAccessError(f"{fastq_folder} exists but is not a directory")
-            logger.info(f"Dry run mode: Would use {fastq_path} for downloads")
-        else:
-            # Normal mode - ensure the directory exists
-            fastq_path = ensure_directory(fastq_folder)
+        fastq_path = _resolve_fastq_path(fastq_folder, dry_run)
 
         # Read accessions from file
         with open(accessions_file, "r") as f:
@@ -526,36 +569,10 @@ def download_sra(
             logger.info(f"Limiting to {max_downloads} downloads")
             accessions_to_download = accessions_to_download[:max_downloads]
 
-        # Download accessions in parallel
-        failed_accessions: list = []
-        download_results: dict = {}
-        successful_count, failed_count = _execute_parallel_downloads(
-            accessions_to_download,
-            fastq_path,
-            num_threads,
-            max_workers,
-            force,
-            temp_folder,
-            download_results,
-            failed_accessions,
+        # Download accessions in parallel, with an optional retry pass
+        successful_count, failed_count, failed_accessions, download_results = _download_with_retries(
+            accessions_to_download, fastq_path, num_threads, max_workers, force, temp_folder, max_retries
         )
-
-        # Retry failed downloads if requested
-        if max_retries > 0 and failed_accessions:
-            retried_successful, failed_accessions = _retry_failed_downloads(
-                failed_accessions,
-                max_retries,
-                fastq_path,
-                num_threads,
-                temp_folder,
-                download_results,
-            )
-
-            successful_count += retried_successful
-            failed_count -= retried_successful
-
-            if retried_successful > 0:
-                logger.info(f"Successfully downloaded {retried_successful} accessions on retry")
 
         # Log final summary
         logger.info("Download summary:")
