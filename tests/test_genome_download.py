@@ -19,7 +19,6 @@ from metaquest.data.genome_download import (
     read_accession_file,
 )
 
-
 # --- _validate_genome_accession ---
 
 
@@ -114,9 +113,7 @@ class TestDownloadGenomes:
 
         mock_run.return_value = MagicMock(returncode=0)
 
-        download_genomes(
-            ["GCF_000005845.2"], tmp_path, assembly_level="complete"
-        )
+        download_genomes(["GCF_000005845.2"], tmp_path, assembly_level="complete")
 
         call_args = mock_run.call_args[0][1]
         assert "--assembly-level" in call_args
@@ -132,9 +129,7 @@ class TestDownloadGenomes:
 
     @patch("metaquest.data.genome_download.SecureSubprocess.run_secure")
     def test_download_failure(self, mock_run, tmp_path):
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, "datasets", stderr="Connection failed"
-        )
+        mock_run.side_effect = subprocess.CalledProcessError(1, "datasets", stderr="Connection failed")
         with pytest.raises(DataAccessError, match="Failed to download genomes"):
             download_genomes(["GCF_000005845.2"], tmp_path)
 
@@ -211,9 +206,7 @@ def _create_mock_ncbi_zip(zip_path, accessions_and_files):
 class TestExtractAndOrganize:
     def test_single_genome(self, tmp_path):
         zip_path = tmp_path / "test.zip"
-        _create_mock_ncbi_zip(
-            zip_path, {"GCF_000005845.2": ">seq1\nATCG\n"}
-        )
+        _create_mock_ncbi_zip(zip_path, {"GCF_000005845.2": ">seq1\nATCG\n"})
 
         output_dir = tmp_path / "genomes"
         result = extract_and_organize(zip_path, output_dir)
@@ -302,9 +295,7 @@ class TestExtractAndOrganize:
     def test_cleanup_on_success(self, tmp_path):
         """Verify temp extraction dir is cleaned up after success."""
         zip_path = tmp_path / "test.zip"
-        _create_mock_ncbi_zip(
-            zip_path, {"GCF_000005845.2": ">seq\nATCG\n"}
-        )
+        _create_mock_ncbi_zip(zip_path, {"GCF_000005845.2": ">seq\nATCG\n"})
 
         extract_and_organize(zip_path, tmp_path / "genomes")
 

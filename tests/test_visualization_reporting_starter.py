@@ -9,7 +9,6 @@ After running these tests, coverage for reporting.py will increase from 0% to ~2
 
 import pytest
 import pandas as pd
-from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from metaquest.visualization.reporting import generate_report
 from metaquest.core.exceptions import VisualizationError
@@ -19,19 +18,22 @@ from metaquest.core.exceptions import VisualizationError
 def sample_summary_data(tmp_path):
     """Create minimal containment summary data."""
     summary_file = tmp_path / "summary.tsv"
-    data = pd.DataFrame({
-        'max_containment': [0.95, 0.87, 0.65, 0.23],
-        'max_containment_annotation': [
-            'Escherichia coli',
-            'Salmonella enterica',
-            'Klebsiella pneumoniae',
-            'Pseudomonas aeruginosa'
-        ],
-        'GCF_000005825.2': [0.95, 0.12, 0.05, 0.02],
-        'GCF_000006945.2': [0.23, 0.87, 0.15, 0.08],
-        'GCF_000009605.1': [0.15, 0.25, 0.65, 0.12]
-    }, index=['SRR001', 'SRR002', 'SRR003', 'SRR004'])
-    data.to_csv(summary_file, sep='\t')
+    data = pd.DataFrame(
+        {
+            "max_containment": [0.95, 0.87, 0.65, 0.23],
+            "max_containment_annotation": [
+                "Escherichia coli",
+                "Salmonella enterica",
+                "Klebsiella pneumoniae",
+                "Pseudomonas aeruginosa",
+            ],
+            "GCF_000005825.2": [0.95, 0.12, 0.05, 0.02],
+            "GCF_000006945.2": [0.23, 0.87, 0.15, 0.08],
+            "GCF_000009605.1": [0.15, 0.25, 0.65, 0.12],
+        },
+        index=["SRR001", "SRR002", "SRR003", "SRR004"],
+    )
+    data.to_csv(summary_file, sep="\t")
     return summary_file
 
 
@@ -39,13 +41,15 @@ def sample_summary_data(tmp_path):
 def sample_metadata(tmp_path):
     """Create minimal metadata."""
     metadata_file = tmp_path / "metadata.tsv"
-    data = pd.DataFrame({
-        'run_accession': ['SRR001', 'SRR002', 'SRR003', 'SRR004'],
-        'organism_name': ['E. coli', 'Salmonella', 'Klebsiella', 'Pseudomonas'],
-        'platform': ['ILLUMINA'] * 4,
-        'library_source': ['GENOMIC'] * 4
-    })
-    data.to_csv(metadata_file, sep='\t', index=False)
+    data = pd.DataFrame(
+        {
+            "run_accession": ["SRR001", "SRR002", "SRR003", "SRR004"],
+            "organism_name": ["E. coli", "Salmonella", "Klebsiella", "Pseudomonas"],
+            "platform": ["ILLUMINA"] * 4,
+            "library_source": ["GENOMIC"] * 4,
+        }
+    )
+    data.to_csv(metadata_file, sep="\t", index=False)
     return metadata_file
 
 
@@ -63,18 +67,18 @@ class TestReportingErrorPaths:
                 title="Test Report",
                 summary_file=str(sample_summary_data),
                 output_file=str(tmp_path / "report.unknown"),
-                format="unknown"
+                format="unknown",
             )
 
     def test_html_without_jinja2_raises_error(self, sample_summary_data, tmp_path):
         """Test that HTML generation without jinja2 raises error."""
-        with patch('metaquest.visualization.reporting.JINJA2_AVAILABLE', False):
+        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", False):
             with pytest.raises(VisualizationError, match="requires jinja2"):
                 generate_report(
                     title="Test Report",
                     summary_file=str(sample_summary_data),
                     output_file=str(tmp_path / "report.html"),
-                    format="html"
+                    format="html",
                 )
 
 
@@ -99,12 +103,12 @@ class TestPDFReportGeneration:
         mock_fig = Mock()
         mock_ax = Mock()
 
-        with patch('metaquest.visualization.reporting.PdfPages', return_value=mock_pdf_pages):
-            with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
-                with patch('matplotlib.pyplot.close'):
+        with patch("metaquest.visualization.reporting.PdfPages", return_value=mock_pdf_pages):
+            with patch("matplotlib.pyplot.subplots", return_value=(mock_fig, mock_ax)):
+                with patch("matplotlib.pyplot.close"):
                     # Mock the plotting functions that are called
-                    with patch('metaquest.visualization.plots.plot_containment', return_value=mock_fig):
-                        with patch('metaquest.visualization.plots.plot_correlation_matrix', return_value=mock_fig):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=mock_fig):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=mock_fig):
                             result = generate_report(
                                 title="Test Report",
                                 summary_file=str(sample_summary_data),
@@ -112,7 +116,7 @@ class TestPDFReportGeneration:
                                 format="pdf",
                                 threshold=0.1,
                                 include_plots=True,
-                                include_tables=True
+                                include_tables=True,
                             )
 
         # Verify the result
@@ -130,17 +134,17 @@ class TestPDFReportGeneration:
         mock_fig = Mock()
         mock_ax = Mock()
 
-        with patch('metaquest.visualization.reporting.PdfPages', return_value=mock_pdf_pages):
-            with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
-                with patch('matplotlib.pyplot.close'):
-                    with patch('metaquest.visualization.plots.plot_containment', return_value=mock_fig):
-                        with patch('metaquest.visualization.plots.plot_correlation_matrix', return_value=mock_fig):
+        with patch("metaquest.visualization.reporting.PdfPages", return_value=mock_pdf_pages):
+            with patch("matplotlib.pyplot.subplots", return_value=(mock_fig, mock_ax)):
+                with patch("matplotlib.pyplot.close"):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=mock_fig):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=mock_fig):
                             result = generate_report(
                                 title="Test Report",
                                 summary_file=str(sample_summary_data),
                                 metadata_file=str(sample_metadata),
                                 output_file=str(output_file),
-                                format="pdf"
+                                format="pdf",
                             )
 
         assert result == output_file
@@ -153,18 +157,18 @@ class TestPDFReportGeneration:
         mock_fig = Mock()
         mock_ax = Mock()
 
-        with patch('metaquest.visualization.reporting.PdfPages', return_value=mock_pdf_pages):
-            with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
-                with patch('matplotlib.pyplot.close'):
+        with patch("metaquest.visualization.reporting.PdfPages", return_value=mock_pdf_pages):
+            with patch("matplotlib.pyplot.subplots", return_value=(mock_fig, mock_ax)):
+                with patch("matplotlib.pyplot.close"):
                     # Should NOT call plotting functions
-                    with patch('metaquest.visualization.plots.plot_containment') as mock_plot:
+                    with patch("metaquest.visualization.plots.plot_containment") as mock_plot:
                         result = generate_report(
                             title="Test Report",
                             summary_file=str(sample_summary_data),
                             output_file=str(output_file),
                             format="pdf",
                             include_plots=False,
-                            include_tables=True
+                            include_tables=True,
                         )
 
         assert result == output_file
@@ -179,18 +183,18 @@ class TestPDFReportGeneration:
         mock_fig = Mock()
         mock_ax = Mock()
 
-        with patch('metaquest.visualization.reporting.PdfPages', return_value=mock_pdf_pages):
-            with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
-                with patch('matplotlib.pyplot.close'):
-                    with patch('metaquest.visualization.plots.plot_containment', return_value=mock_fig):
-                        with patch('metaquest.visualization.plots.plot_correlation_matrix', return_value=mock_fig):
+        with patch("metaquest.visualization.reporting.PdfPages", return_value=mock_pdf_pages):
+            with patch("matplotlib.pyplot.subplots", return_value=(mock_fig, mock_ax)):
+                with patch("matplotlib.pyplot.close"):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=mock_fig):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=mock_fig):
                             result = generate_report(
                                 title="Test Report",
                                 summary_file=str(sample_summary_data),
                                 output_file=str(output_file),
                                 format="pdf",
                                 include_plots=True,
-                                include_tables=False
+                                include_tables=False,
                             )
 
         assert result == output_file
@@ -208,16 +212,14 @@ class TestHelperFunctions:
         from metaquest.visualization.reporting import _create_title_page
 
         # Create minimal metadata
-        metadata = pd.DataFrame({'run_accession': ['SRR001']})
+        metadata = pd.DataFrame({"run_accession": ["SRR001"]})
 
         mock_fig = Mock()
         mock_ax = Mock()
 
-        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
+        with patch("matplotlib.pyplot.subplots", return_value=(mock_fig, mock_ax)):
             result = _create_title_page(
-                title="Test Report",
-                summary_data=str(sample_summary_data),
-                metadata_data=metadata
+                title="Test Report", summary_data=str(sample_summary_data), metadata_data=metadata
             )
 
         # Verify result
@@ -243,23 +245,20 @@ class TestHelperFunctions:
         from metaquest.visualization.reporting import _create_containment_summary_page
 
         # Load the data
-        data = pd.read_csv(sample_summary_data, sep='\t', index_col=0)
+        data = pd.read_csv(sample_summary_data, sep="\t", index_col=0)
 
         mock_fig = Mock()
         mock_ax = Mock()
 
-        with patch('matplotlib.pyplot.subplots', return_value=(mock_fig, mock_ax)):
-            fig, filtered = _create_containment_summary_page(
-                summary_data=data,
-                threshold=0.5
-            )
+        with patch("matplotlib.pyplot.subplots", return_value=(mock_fig, mock_ax)):
+            fig, filtered = _create_containment_summary_page(summary_data=data, threshold=0.5)
 
         # Verify result
         assert fig == mock_fig
 
         # Verify threshold filtering worked
         assert len(filtered) == 3  # 3 samples above 0.5
-        assert all(filtered['max_containment'] > 0.5)
+        assert all(filtered["max_containment"] > 0.5)
 
         # Verify axis was turned off
         mock_ax.axis.assert_called_once_with("off")
@@ -278,17 +277,17 @@ class TestDataLoading:
 
         mock_pdf_pages = MagicMock()
 
-        with patch('metaquest.visualization.reporting.PdfPages', return_value=mock_pdf_pages):
-            with patch('matplotlib.pyplot.subplots', return_value=(Mock(), Mock())):
-                with patch('matplotlib.pyplot.close'):
-                    with patch('metaquest.visualization.plots.plot_containment', return_value=Mock()):
-                        with patch('metaquest.visualization.plots.plot_correlation_matrix', return_value=Mock()):
+        with patch("metaquest.visualization.reporting.PdfPages", return_value=mock_pdf_pages):
+            with patch("matplotlib.pyplot.subplots", return_value=(Mock(), Mock())):
+                with patch("matplotlib.pyplot.close"):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=Mock()):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=Mock()):
                             # This should succeed if data loading works
                             result = generate_report(
                                 title="Test",
                                 summary_file=str(sample_summary_data),
                                 output_file=str(output_file),
-                                format="pdf"
+                                format="pdf",
                             )
 
         assert result == output_file
@@ -300,18 +299,18 @@ class TestDataLoading:
 
         mock_pdf_pages = MagicMock()
 
-        with patch('metaquest.visualization.reporting.PdfPages', return_value=mock_pdf_pages):
-            with patch('matplotlib.pyplot.subplots', return_value=(Mock(), Mock())):
-                with patch('matplotlib.pyplot.close'):
-                    with patch('metaquest.visualization.plots.plot_containment', return_value=Mock()):
-                        with patch('metaquest.visualization.plots.plot_correlation_matrix', return_value=Mock()):
+        with patch("metaquest.visualization.reporting.PdfPages", return_value=mock_pdf_pages):
+            with patch("matplotlib.pyplot.subplots", return_value=(Mock(), Mock())):
+                with patch("matplotlib.pyplot.close"):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=Mock()):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=Mock()):
                             # Should not raise error for missing optional metadata
                             result = generate_report(
                                 title="Test",
                                 summary_file=str(sample_summary_data),
                                 metadata_file=str(nonexistent_metadata),
                                 output_file=str(output_file),
-                                format="pdf"
+                                format="pdf",
                             )
 
         assert result == output_file

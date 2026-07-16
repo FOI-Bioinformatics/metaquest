@@ -19,10 +19,10 @@ from metaquest.cli.commands.explore import (
 )
 from metaquest.core.models import TaxonomyInfo
 
-
 # ============================================================================
 # Helpers
 # ============================================================================
+
 
 def _write_containment_tsv(path: Path):
     """Write a small containment TSV file for testing."""
@@ -44,6 +44,7 @@ def _write_taxonomy_tsv(path: Path):
 # ============================================================================
 # EnrichTaxonomyCommand
 # ============================================================================
+
 
 class TestEnrichTaxonomyCommand:
 
@@ -99,6 +100,7 @@ class TestEnrichTaxonomyCommand:
 # ExploreContainmentCommand
 # ============================================================================
 
+
 class TestExploreContainmentCommand:
 
     def test_properties(self):
@@ -110,11 +112,16 @@ class TestExploreContainmentCommand:
         cmd = ExploreContainmentCommand()
         parser = argparse.ArgumentParser()
         cmd.configure_parser(parser)
-        args = parser.parse_args([
-            "--parsed-containment", "data.tsv",
-            "--taxonomy-map", "tax.tsv",
-            "--min-containment", "0.1",
-        ])
+        args = parser.parse_args(
+            [
+                "--parsed-containment",
+                "data.tsv",
+                "--taxonomy-map",
+                "tax.tsv",
+                "--min-containment",
+                "0.1",
+            ]
+        )
         assert args.parsed_containment == "data.tsv"
         assert args.taxonomy_map == "tax.tsv"
         assert args.min_containment == 0.1
@@ -201,6 +208,7 @@ class TestExploreContainmentCommand:
 # FindByTaxonomyCommand
 # ============================================================================
 
+
 class TestFindByTaxonomyCommand:
 
     def test_properties(self):
@@ -212,12 +220,18 @@ class TestFindByTaxonomyCommand:
         cmd = FindByTaxonomyCommand()
         parser = argparse.ArgumentParser()
         cmd.configure_parser(parser)
-        args = parser.parse_args([
-            "--parsed-containment", "data.tsv",
-            "--taxonomy-map", "tax.tsv",
-            "--family", "Bacillaceae",
-            "--min-containment", "0.1",
-        ])
+        args = parser.parse_args(
+            [
+                "--parsed-containment",
+                "data.tsv",
+                "--taxonomy-map",
+                "tax.tsv",
+                "--family",
+                "Bacillaceae",
+                "--min-containment",
+                "0.1",
+            ]
+        )
         assert args.family == "Bacillaceae"
         assert args.min_containment == 0.1
         assert args.output_format == "table"
@@ -226,12 +240,18 @@ class TestFindByTaxonomyCommand:
         cmd = FindByTaxonomyCommand()
         parser = argparse.ArgumentParser()
         cmd.configure_parser(parser)
-        args = parser.parse_args([
-            "--parsed-containment", "d.tsv",
-            "--taxonomy-map", "t.tsv",
-            "--genus", "Bacillus",
-            "--format", "summary",
-        ])
+        args = parser.parse_args(
+            [
+                "--parsed-containment",
+                "d.tsv",
+                "--taxonomy-map",
+                "t.tsv",
+                "--genus",
+                "Bacillus",
+                "--format",
+                "summary",
+            ]
+        )
         assert args.output_format == "summary"
         assert args.genus == "Bacillus"
 
@@ -247,14 +267,26 @@ class TestFindByTaxonomyCommand:
         mock_load.return_value = {
             "genA": TaxonomyInfo(genome_id="genA", family="Fam1"),
         }
-        mock_annotate.return_value = pd.DataFrame({
-            "sample": ["S1"], "genome": ["genA"], "containment": [0.5],
-            "family": ["Fam1"], "genus": ["G1"], "species": ["Sp1"],
-        })
-        mock_filter.return_value = pd.DataFrame({
-            "sample": ["S1"], "genome": ["genA"], "containment": [0.5],
-            "family": ["Fam1"], "genus": ["G1"], "species": ["Sp1"],
-        })
+        mock_annotate.return_value = pd.DataFrame(
+            {
+                "sample": ["S1"],
+                "genome": ["genA"],
+                "containment": [0.5],
+                "family": ["Fam1"],
+                "genus": ["G1"],
+                "species": ["Sp1"],
+            }
+        )
+        mock_filter.return_value = pd.DataFrame(
+            {
+                "sample": ["S1"],
+                "genome": ["genA"],
+                "containment": [0.5],
+                "family": ["Fam1"],
+                "genus": ["G1"],
+                "species": ["Sp1"],
+            }
+        )
 
         cmd = FindByTaxonomyCommand()
         output_file = tmp_path / "results.tsv"

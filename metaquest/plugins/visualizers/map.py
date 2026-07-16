@@ -364,7 +364,7 @@ class MapVisualizerPlugin(Plugin):
                     ax.add_geometries(
                         [country],
                         ccrs.PlateCarree(),
-                        facecolor=plt.cm.get_cmap(cmap)(value),
+                        facecolor=plt.get_cmap(cmap)(value),
                         edgecolor="black",
                         **kwargs,
                     )

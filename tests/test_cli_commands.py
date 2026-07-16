@@ -6,9 +6,8 @@ focusing on argument parsing, validation, and proper delegation.
 """
 
 import argparse
-import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -51,10 +50,7 @@ class TestUseBranchwaterCommand:
         assert args.matches_folder == "matches"  # default value
 
         # Test with custom matches folder
-        args = parser.parse_args([
-            "--branchwater-folder", "test_folder",
-            "--matches-folder", "custom_matches"
-        ])
+        args = parser.parse_args(["--branchwater-folder", "test_folder", "--matches-folder", "custom_matches"])
         assert args.matches_folder == "custom_matches"
 
     def test_configure_parser_missing_required(self):
@@ -71,12 +67,9 @@ class TestUseBranchwaterCommand:
         """Test successful command execution."""
         mock_command.return_value = {"file1": Path("test")}
         command = UseBranchwaterCommand()
-        
-        args = argparse.Namespace(
-            branchwater_folder="test_folder",
-            matches_folder="matches"
-        )
-        
+
+        args = argparse.Namespace(branchwater_folder="test_folder", matches_folder="matches")
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with("test_folder", "matches")
@@ -86,12 +79,9 @@ class TestUseBranchwaterCommand:
         """Test command execution failure."""
         mock_command.side_effect = MetaQuestError("Test error")
         command = UseBranchwaterCommand()
-        
-        args = argparse.Namespace(
-            branchwater_folder="test_folder",
-            matches_folder="matches"
-        )
-        
+
+        args = argparse.Namespace(branchwater_folder="test_folder", matches_folder="matches")
+
         result = command.execute(args)
         assert result == 1
         mock_command.assert_called_once_with("test_folder", "matches")
@@ -122,14 +112,12 @@ class TestExtractBranchwaterMetadataCommand:
     def test_execute(self, mock_mkdir, mock_command):
         """Test command execution."""
         import pandas as pd
+
         mock_command.return_value = pd.DataFrame()
         command = ExtractBranchwaterMetadataCommand()
-        
-        args = argparse.Namespace(
-            branchwater_folder="test_folder",
-            metadata_folder="metadata"
-        )
-        
+
+        args = argparse.Namespace(branchwater_folder="test_folder", metadata_folder="metadata")
+
         result = command.execute(args)
         assert result == 0
         mock_mkdir.assert_called_once_with(exist_ok=True)
@@ -166,14 +154,21 @@ class TestParseContainmentCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--matches-folder", "test_matches",
-            "--parsed-containment-file", "custom_parsed.txt",
-            "--summary-containment-file", "custom_summary.txt",
-            "--step-size", "0.1",
-            "--file-format", "branchwater"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--matches-folder",
+                "test_matches",
+                "--parsed-containment-file",
+                "custom_parsed.txt",
+                "--summary-containment-file",
+                "custom_summary.txt",
+                "--step-size",
+                "0.1",
+                "--file-format",
+                "branchwater",
+            ]
+        )
+
         assert args.parsed_containment_file == "custom_parsed.txt"
         assert args.summary_containment_file == "custom_summary.txt"
         assert args.step_size == 0.1
@@ -184,15 +179,15 @@ class TestParseContainmentCommand:
         """Test command execution."""
         mock_command.return_value = None
         command = ParseContainmentCommand()
-        
+
         args = argparse.Namespace(
             matches_folder="test_matches",
             parsed_containment_file="parsed.txt",
             summary_containment_file="summary.txt",
             step_size=0.05,
-            file_format=None
+            file_format=None,
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with("test_matches", "parsed.txt", "summary.txt", 0.05)
@@ -228,14 +223,20 @@ class TestDownloadMetadataCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--email", "test@example.com",
-            "--matches-folder", "custom_matches",
-            "--metadata-folder", "custom_metadata",
-            "--threshold", "0.5",
-            "--dry-run"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--email",
+                "test@example.com",
+                "--matches-folder",
+                "custom_matches",
+                "--metadata-folder",
+                "custom_metadata",
+                "--threshold",
+                "0.5",
+                "--dry-run",
+            ]
+        )
+
         assert args.threshold == 0.5
         assert args.dry_run is True
 
@@ -244,23 +245,15 @@ class TestDownloadMetadataCommand:
         """Test command execution."""
         mock_command.return_value = None
         command = DownloadMetadataCommand()
-        
+
         args = argparse.Namespace(
-            email="test@example.com",
-            matches_folder="matches",
-            metadata_folder="metadata",
-            threshold=0.0,
-            dry_run=False
+            email="test@example.com", matches_folder="matches", metadata_folder="metadata", threshold=0.0, dry_run=False
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
-            email="test@example.com",
-            matches_folder="matches",
-            metadata_folder="metadata",
-            threshold=0.0,
-            dry_run=False
+            email="test@example.com", matches_folder="matches", metadata_folder="metadata", threshold=0.0, dry_run=False
         )
 
 
@@ -293,10 +286,10 @@ class TestDownloadTestGenomeCommand:
         """Test command execution."""
         mock_command.return_value = None
         command = DownloadTestGenomeCommand()
-        
+
         args = argparse.Namespace(output_folder="genomes")
         result = command.execute(args)
-        
+
         assert result == 0
         mock_command.assert_called_once_with("genomes")
 
@@ -332,16 +325,23 @@ class TestDownloadSraCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--accessions-file", "accessions.txt",
-            "--fastq-folder", "custom_fastq",
-            "--num-threads", "8",
-            "--max-workers", "2",
-            "--max-downloads", "10",
-            "--dry-run",
-            "--force"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--accessions-file",
+                "accessions.txt",
+                "--fastq-folder",
+                "custom_fastq",
+                "--num-threads",
+                "8",
+                "--max-workers",
+                "2",
+                "--max-downloads",
+                "10",
+                "--dry-run",
+                "--force",
+            ]
+        )
+
         assert args.fastq_folder == "custom_fastq"
         assert args.num_threads == 8
         assert args.max_workers == 2
@@ -353,15 +353,15 @@ class TestDownloadSraCommand:
     def test_execute(self, mock_command):
         """Test command execution."""
         mock_command.return_value = {
-            "total": 1, 
-            "to_download": 1, 
+            "total": 1,
+            "to_download": 1,
             "already_downloaded": 0,
             "successful": 1,
             "failed": 0,
-            "failed_accessions": []
+            "failed_accessions": [],
         }
         command = DownloadSraCommand()
-        
+
         args = argparse.Namespace(
             accessions_file="accessions.txt",
             fastq_folder="fastq",
@@ -372,9 +372,9 @@ class TestDownloadSraCommand:
             force=False,
             max_retries=1,
             temp_folder=None,
-            blacklist=None
+            blacklist=None,
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
@@ -387,8 +387,88 @@ class TestDownloadSraCommand:
             force=False,
             max_retries=1,
             temp_folder=None,
-            blacklist=None
+            blacklist=None,
         )
+
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_dry_run(self, mock_command):
+        """Dry-run logs the plan (incl. blacklisted and max-downloads branches) and returns 0."""
+        mock_command.return_value = {
+            "total": 10,
+            "to_download": 5,
+            "already_downloaded": 3,
+            "blacklisted": 2,
+            "successful": 0,
+            "failed": 0,
+        }
+        command = DownloadSraCommand()
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder="fastq",
+            max_downloads=5,
+            num_threads=4,
+            max_workers=4,
+            dry_run=True,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=["bl.txt"],
+        )
+
+        result = command.execute(args)
+        assert result == 0
+
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_with_failures_writes_failed_file(self, mock_command, tmp_path):
+        """Failed downloads return 1 and write failed_accessions.txt for retry."""
+        mock_command.return_value = {
+            "total": 3,
+            "already_downloaded": 1,
+            "blacklisted": 1,
+            "successful": 1,
+            "failed": 1,
+            "failed_accessions": ["SRR999"],
+        }
+        command = DownloadSraCommand()
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder=str(tmp_path),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+        )
+
+        result = command.execute(args)
+        assert result == 1
+        failed_file = tmp_path / "failed_accessions.txt"
+        assert failed_file.exists()
+        assert "SRR999" in failed_file.read_text()
+
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_metaquest_error(self, mock_command):
+        """A MetaQuestError from the backend is caught and returns 1."""
+        mock_command.side_effect = MetaQuestError("backend boom")
+        command = DownloadSraCommand()
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder="fastq",
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+        )
+
+        result = command.execute(args)
+        assert result == 1
 
 
 class TestSingleSampleCommand:
@@ -408,11 +488,8 @@ class TestSingleSampleCommand:
         command.configure_parser(parser)
 
         # Test with required arguments
-        args = parser.parse_args([
-            "--summary-column", "test_genome",
-            "--metadata-column", "organism"
-        ])
-        
+        args = parser.parse_args(["--summary-column", "test_genome", "--metadata-column", "organism"])
+
         assert args.summary_column == "test_genome"
         assert args.metadata_column == "organism"
         assert args.summary_file == "parsed_containment.txt"
@@ -426,15 +503,23 @@ class TestSingleSampleCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--summary-column", "test_genome",
-            "--metadata-column", "organism",
-            "--summary-file", "custom_summary.txt",
-            "--metadata-file", "custom_metadata.txt",
-            "--threshold", "0.5",
-            "--top-n", "50"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--summary-column",
+                "test_genome",
+                "--metadata-column",
+                "organism",
+                "--summary-file",
+                "custom_summary.txt",
+                "--metadata-file",
+                "custom_metadata.txt",
+                "--threshold",
+                "0.5",
+                "--top-n",
+                "50",
+            ]
+        )
+
         assert args.summary_file == "custom_summary.txt"
         assert args.metadata_file == "custom_metadata.txt"
         assert args.threshold == 0.5
@@ -445,25 +530,25 @@ class TestSingleSampleCommand:
         """Test command execution."""
         mock_command.return_value = {"organism1": 5, "organism2": 3}
         command = SingleSampleCommand()
-        
+
         args = argparse.Namespace(
             summary_column="test_genome",
             metadata_column="organism",
             summary_file="summary.txt",
             metadata_file="metadata.txt",
             threshold=0.1,
-            top_n=100
+            top_n=100,
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
             summary_file="summary.txt",
-            metadata_file="metadata.txt", 
+            metadata_file="metadata.txt",
             summary_column="test_genome",
             metadata_column="organism",
             threshold=0.1,
-            top_n=100
+            top_n=100,
         )
 
 
@@ -484,11 +569,8 @@ class TestAssembleDatasetsCommand:
         command.configure_parser(parser)
 
         # Test with required arguments
-        args = parser.parse_args([
-            "--data-files", "file1.txt", "file2.txt",
-            "--output-file", "assembled.txt"
-        ])
-        
+        args = parser.parse_args(["--data-files", "file1.txt", "file2.txt", "--output-file", "assembled.txt"])
+
         assert args.data_files == ["file1.txt", "file2.txt"]
         assert args.output_file == "assembled.txt"
 
@@ -497,15 +579,22 @@ class TestAssembleDatasetsCommand:
         """Test command execution."""
         mock_command.return_value = None
         command = AssembleDatasetsCommand()
-        
-        args = argparse.Namespace(
-            data_files=["file1.txt", "file2.txt"],
-            output_file="assembled.txt"
-        )
-        
+
+        args = argparse.Namespace(data_files=["file1.txt", "file2.txt"], output_file="assembled.txt")
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(args)
+
+    @patch("metaquest.cli.commands.sra.assemble_datasets")
+    def test_execute_metaquest_error(self, mock_command):
+        """A MetaQuestError from assemble_datasets is caught and returns 1."""
+        mock_command.side_effect = MetaQuestError("not implemented")
+        command = AssembleDatasetsCommand()
+        args = argparse.Namespace(data_files=["file1.txt"], output_file="assembled.txt")
+
+        result = command.execute(args)
+        assert result == 1
 
 
 class TestParseMetadataCommand:
@@ -530,10 +619,7 @@ class TestParseMetadataCommand:
         assert args.metadata_table_file == "metadata_table.txt"
 
         # Test custom values
-        args = parser.parse_args([
-            "--metadata-folder", "custom_metadata",
-            "--metadata-table-file", "custom_table.txt"
-        ])
+        args = parser.parse_args(["--metadata-folder", "custom_metadata", "--metadata-table-file", "custom_table.txt"])
         assert args.metadata_folder == "custom_metadata"
         assert args.metadata_table_file == "custom_table.txt"
 
@@ -542,12 +628,9 @@ class TestParseMetadataCommand:
         """Test command execution."""
         mock_command.return_value = None
         command = ParseMetadataCommand()
-        
-        args = argparse.Namespace(
-            metadata_folder="metadata",
-            metadata_table_file="metadata_table.txt"
-        )
-        
+
+        args = argparse.Namespace(metadata_folder="metadata", metadata_table_file="metadata_table.txt")
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with("metadata", "metadata_table.txt")
@@ -584,14 +667,21 @@ class TestCountMetadataCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--metadata-column", "organism",
-            "--summary-file", "custom_summary.txt",
-            "--threshold", "0.8",
-            "--output-file", "custom_counts.txt",
-            "--stat-file", "statistics.txt"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--metadata-column",
+                "organism",
+                "--summary-file",
+                "custom_summary.txt",
+                "--threshold",
+                "0.8",
+                "--output-file",
+                "custom_counts.txt",
+                "--stat-file",
+                "statistics.txt",
+            ]
+        )
+
         assert args.summary_file == "custom_summary.txt"
         assert args.threshold == 0.8
         assert args.output_file == "custom_counts.txt"
@@ -602,16 +692,16 @@ class TestCountMetadataCommand:
         """Test command execution."""
         mock_command.return_value = None
         command = CountMetadataCommand()
-        
+
         args = argparse.Namespace(
             metadata_column="organism",
             summary_file="summary.txt",
             metadata_file="metadata.txt",
             threshold=0.5,
             output_file="counts.txt",
-            stat_file=None
+            stat_file=None,
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
@@ -620,7 +710,7 @@ class TestCountMetadataCommand:
             metadata_column="organism",
             threshold=0.5,
             output_file="counts.txt",
-            stat_file=None
+            stat_file=None,
         )
 
 
@@ -655,17 +745,26 @@ class TestPlotContainmentCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--file-path", "containment.txt",
-            "--column", "custom_column",
-            "--plot-type", "histogram",
-            "--title", "Custom Title",
-            "--colors", "red",
-            "--save-format", "png",
-            "--threshold", "0.5",
-            "--show-title"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--file-path",
+                "containment.txt",
+                "--column",
+                "custom_column",
+                "--plot-type",
+                "histogram",
+                "--title",
+                "Custom Title",
+                "--colors",
+                "red",
+                "--save-format",
+                "png",
+                "--threshold",
+                "0.5",
+                "--show-title",
+            ]
+        )
+
         assert args.column == "custom_column"
         assert args.plot_type == "histogram"
         assert args.title == "Custom Title"
@@ -678,9 +777,10 @@ class TestPlotContainmentCommand:
     def test_execute(self, mock_command):
         """Test command execution."""
         import matplotlib.pyplot as plt
+
         mock_command.return_value = plt.figure()
         command = PlotContainmentCommand()
-        
+
         args = argparse.Namespace(
             file_path="containment.txt",
             column="max_containment",
@@ -689,9 +789,9 @@ class TestPlotContainmentCommand:
             colors=None,
             save_format=None,
             threshold=None,
-            show_title=False
+            show_title=False,
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
@@ -702,7 +802,7 @@ class TestPlotContainmentCommand:
             show_title=False,
             save_format=None,
             threshold=None,
-            plot_type="rank"
+            plot_type="rank",
         )
 
 
@@ -738,15 +838,22 @@ class TestPlotMetadataCountsCommand:
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args([
-            "--file-path", "counts.txt",
-            "--plot-type", "pie",
-            "--title", "Metadata Counts",
-            "--colors", "viridis",
-            "--save-format", "pdf",
-            "--show-title"
-        ])
-        
+        args = parser.parse_args(
+            [
+                "--file-path",
+                "counts.txt",
+                "--plot-type",
+                "pie",
+                "--title",
+                "Metadata Counts",
+                "--colors",
+                "viridis",
+                "--save-format",
+                "pdf",
+                "--show-title",
+            ]
+        )
+
         assert args.plot_type == "pie"
         assert args.title == "Metadata Counts"
         assert args.colors == "viridis"
@@ -757,25 +864,16 @@ class TestPlotMetadataCountsCommand:
     def test_execute(self, mock_command):
         """Test command execution."""
         import matplotlib.pyplot as plt
+
         mock_command.return_value = plt.figure()
         command = PlotMetadataCountsCommand()
-        
+
         args = argparse.Namespace(
-            file_path="counts.txt",
-            plot_type="bar",
-            title=None,
-            colors=None,
-            save_format=None,
-            show_title=False
+            file_path="counts.txt", plot_type="bar", title=None, colors=None, save_format=None, show_title=False
         )
-        
+
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
-            file_path="counts.txt",
-            title=None,
-            plot_type="bar",
-            colors=None,
-            show_title=False,
-            save_format=None
+            file_path="counts.txt", title=None, plot_type="bar", colors=None, show_title=False, save_format=None
         )

@@ -13,13 +13,9 @@ This file adds tests for untested methods:
 Run: pytest tests/test_sra_enhanced_extended.py -v
 """
 
-import pytest
 import subprocess
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 from dataclasses import dataclass
-import tempfile
-import shutil
 
 from metaquest.data.sra_enhanced import (
     EnhancedSRADownloader,
@@ -32,6 +28,7 @@ from metaquest.core.exceptions import SecurityError
 @dataclass
 class MockSRADatasetInfo:
     """Mock SRA dataset info."""
+
     accession: str
     platform: str
     instrument: str
@@ -45,6 +42,7 @@ class MockSRADatasetInfo:
 @dataclass
 class MockReadStatistics:
     """Mock read statistics."""
+
     total_reads: int
     total_bases: int
     avg_read_length: float
@@ -54,6 +52,7 @@ class MockReadStatistics:
 # ============================================================================
 # TEST CLASS: EnhancedSRADownloader - Main Download Logic
 # ============================================================================
+
 
 class TestDownloadAccessionEnhanced:
     """Test download_accession_enhanced method comprehensively."""
@@ -74,34 +73,27 @@ class TestDownloadAccessionEnhanced:
             spots=1000,
             bases=150000,
             avg_length=150.0,
-            size_mb=100.0
+            size_mb=100.0,
         )
 
-        mock_stats = MockReadStatistics(
-            total_reads=1000,
-            total_bases=150000,
-            avg_read_length=150.0,
-            gc_content=45.0
-        )
+        mock_stats = MockReadStatistics(total_reads=1000, total_bases=150000, avg_read_length=150.0, gc_content=45.0)
 
-        with patch.object(self.downloader.metadata_client, 'get_sra_metadata') as mock_meta:
+        with patch.object(self.downloader.metadata_client, "get_sra_metadata") as mock_meta:
             mock_meta.return_value = {"SRR001": mock_dataset}
 
-            with patch.object(self.downloader, '_check_existing_download', return_value=False):
-                with patch.object(self.downloader, '_download_with_optimizations', return_value=(True, "Downloaded")):
-                    with patch('metaquest.data.sra_enhanced.calculate_read_statistics', return_value=mock_stats):
+            with patch.object(self.downloader, "_check_existing_download", return_value=False):
+                with patch.object(self.downloader, "_download_with_optimizations", return_value=(True, "Downloaded")):
+                    with patch("metaquest.data.sra_enhanced.calculate_read_statistics", return_value=mock_stats):
                         # Create dummy fastq file
                         output_path = output_folder / "SRR001"
                         output_path.mkdir(parents=True, exist_ok=True)
                         (output_path / "test.fastq.gz").touch()
 
                         success, message, metadata = self.downloader.download_accession_enhanced(
-                            "SRR001",
-                            output_folder,
-                            force=False
+                            "SRR001", output_folder, force=False
                         )
 
-        assert success == True
+        assert success is True
         assert "technology" in metadata
         assert metadata["technology"] == "illumina"
         assert metadata["downloaded_reads"] == 1000
@@ -118,39 +110,35 @@ class TestDownloadAccessionEnhanced:
             spots=1000,
             bases=150000,
             avg_length=150.0,
-            size_mb=100.0
+            size_mb=100.0,
         )
 
-        with patch.object(self.downloader.metadata_client, 'get_sra_metadata') as mock_meta:
+        with patch.object(self.downloader.metadata_client, "get_sra_metadata") as mock_meta:
             mock_meta.return_value = {"SRR001": mock_dataset}
 
-            with patch.object(self.downloader, '_check_existing_download', return_value=True):
+            with patch.object(self.downloader, "_check_existing_download", return_value=True):
                 success, message, metadata = self.downloader.download_accession_enhanced(
-                    "SRR001",
-                    output_folder,
-                    force=False
+                    "SRR001", output_folder, force=False
                 )
 
-        assert success == True
+        assert success is True
         assert "Already downloaded" in message
 
     def test_download_accession_no_metadata(self, tmp_path):
         """Test download when metadata fetch fails."""
         output_folder = tmp_path / "downloads"
 
-        with patch.object(self.downloader.metadata_client, 'get_sra_metadata') as mock_meta:
+        with patch.object(self.downloader.metadata_client, "get_sra_metadata") as mock_meta:
             mock_meta.return_value = {}  # No metadata returned
 
-            with patch.object(self.downloader, '_check_existing_download', return_value=False):
-                with patch.object(self.downloader, '_download_with_optimizations', return_value=(True, "Downloaded")):
+            with patch.object(self.downloader, "_check_existing_download", return_value=False):
+                with patch.object(self.downloader, "_download_with_optimizations", return_value=(True, "Downloaded")):
                     success, message, metadata = self.downloader.download_accession_enhanced(
-                        "SRR001",
-                        output_folder,
-                        force=False
+                        "SRR001", output_folder, force=False
                     )
 
         # Should still attempt download even without metadata
-        assert success == True
+        assert success is True
 
     def test_download_accession_force_redownload(self, tmp_path):
         """Test force redownload ignores existing files."""
@@ -164,44 +152,41 @@ class TestDownloadAccessionEnhanced:
             spots=1000,
             bases=150000,
             avg_length=150.0,
-            size_mb=100.0
+            size_mb=100.0,
         )
 
-        with patch.object(self.downloader.metadata_client, 'get_sra_metadata') as mock_meta:
+        with patch.object(self.downloader.metadata_client, "get_sra_metadata") as mock_meta:
             mock_meta.return_value = {"SRR001": mock_dataset}
 
             # Even though files exist, force=True should skip the check
-            with patch.object(self.downloader, '_check_existing_download', return_value=True):
-                with patch.object(self.downloader, '_download_with_optimizations', return_value=(True, "Downloaded")):
+            with patch.object(self.downloader, "_check_existing_download", return_value=True):
+                with patch.object(self.downloader, "_download_with_optimizations", return_value=(True, "Downloaded")):
                     success, message, metadata = self.downloader.download_accession_enhanced(
-                        "SRR001",
-                        output_folder,
-                        force=True  # Force redownload
+                        "SRR001", output_folder, force=True  # Force redownload
                     )
 
-        assert success == True
+        assert success is True
         assert "Downloaded" in message
 
     def test_download_accession_exception_handling(self, tmp_path):
         """Test exception handling in download_accession_enhanced."""
         output_folder = tmp_path / "downloads"
 
-        with patch.object(self.downloader.metadata_client, 'get_sra_metadata') as mock_meta:
+        with patch.object(self.downloader.metadata_client, "get_sra_metadata") as mock_meta:
             mock_meta.side_effect = Exception("API Error")
 
             success, message, metadata = self.downloader.download_accession_enhanced(
-                "SRR001",
-                output_folder,
-                force=False
+                "SRR001", output_folder, force=False
             )
 
-        assert success == False
+        assert success is False
         assert "Enhanced download failed" in message
 
 
 # ============================================================================
 # TEST CLASS: Download With Optimizations
 # ============================================================================
+
 
 class TestDownloadWithOptimizations:
     """Test _download_with_optimizations method."""
@@ -214,77 +199,62 @@ class TestDownloadWithOptimizations:
         """Test successful download with optimizations."""
         output_path = tmp_path / "SRR001"
 
-        with patch.object(self.downloader, '_build_download_command', return_value=["--help"]):
-            with patch('metaquest.data.sra_enhanced.SecureSubprocess.run_secure'):
-                with patch.object(self.downloader, '_handle_download_output', return_value=(True, "Success")):
-                    success, message = self.downloader._download_with_optimizations(
-                        "SRR001",
-                        output_path,
-                        "illumina"
-                    )
+        with patch.object(self.downloader, "_build_download_command", return_value=["--help"]):
+            with patch("metaquest.data.sra_enhanced.SecureSubprocess.run_secure"):
+                with patch.object(self.downloader, "_handle_download_output", return_value=(True, "Success")):
+                    success, message = self.downloader._download_with_optimizations("SRR001", output_path, "illumina")
 
-        assert success == True
+        assert success is True
         assert message == "Success"
 
     def test_download_called_process_error(self, tmp_path):
         """Test handling of CalledProcessError."""
         output_path = tmp_path / "SRR001"
 
-        with patch.object(self.downloader, '_build_download_command', return_value=["--help"]):
-            with patch('metaquest.data.sra_enhanced.SecureSubprocess.run_secure') as mock_run:
+        with patch.object(self.downloader, "_build_download_command", return_value=["--help"]):
+            with patch("metaquest.data.sra_enhanced.SecureSubprocess.run_secure") as mock_run:
                 error = subprocess.CalledProcessError(1, "fasterq-dump", stderr="Download failed")
                 mock_run.side_effect = error
 
-                with patch.object(self.downloader, '_cleanup_temp'):
-                    success, message = self.downloader._download_with_optimizations(
-                        "SRR001",
-                        output_path,
-                        "illumina"
-                    )
+                with patch.object(self.downloader, "_cleanup_temp"):
+                    success, message = self.downloader._download_with_optimizations("SRR001", output_path, "illumina")
 
-        assert success == False
+        assert success is False
         assert "Download command failed" in message
 
     def test_download_security_error(self, tmp_path):
         """Test handling of SecurityError."""
         output_path = tmp_path / "SRR001"
 
-        with patch.object(self.downloader, '_build_download_command', return_value=["--help"]):
-            with patch('metaquest.data.sra_enhanced.SecureSubprocess.run_secure') as mock_run:
+        with patch.object(self.downloader, "_build_download_command", return_value=["--help"]):
+            with patch("metaquest.data.sra_enhanced.SecureSubprocess.run_secure") as mock_run:
                 mock_run.side_effect = SecurityError("Unsafe command")
 
-                with patch.object(self.downloader, '_cleanup_temp'):
-                    success, message = self.downloader._download_with_optimizations(
-                        "SRR001",
-                        output_path,
-                        "illumina"
-                    )
+                with patch.object(self.downloader, "_cleanup_temp"):
+                    success, message = self.downloader._download_with_optimizations("SRR001", output_path, "illumina")
 
-        assert success == False
+        assert success is False
         assert "Security error" in message
 
     def test_download_unexpected_error(self, tmp_path):
         """Test handling of unexpected exceptions."""
         output_path = tmp_path / "SRR001"
 
-        with patch.object(self.downloader, '_build_download_command', return_value=["--help"]):
-            with patch('metaquest.data.sra_enhanced.SecureSubprocess.run_secure') as mock_run:
+        with patch.object(self.downloader, "_build_download_command", return_value=["--help"]):
+            with patch("metaquest.data.sra_enhanced.SecureSubprocess.run_secure") as mock_run:
                 mock_run.side_effect = RuntimeError("Unexpected error")
 
-                with patch.object(self.downloader, '_cleanup_temp'):
-                    success, message = self.downloader._download_with_optimizations(
-                        "SRR001",
-                        output_path,
-                        "illumina"
-                    )
+                with patch.object(self.downloader, "_cleanup_temp"):
+                    success, message = self.downloader._download_with_optimizations("SRR001", output_path, "illumina")
 
-        assert success == False
+        assert success is False
         assert "Download failed" in message
 
 
 # ============================================================================
 # TEST CLASS: Handle Download Output
 # ============================================================================
+
 
 class TestHandleDownloadOutput:
     """Test _handle_download_output method."""
@@ -303,20 +273,16 @@ class TestHandleDownloadOutput:
         (temp_path / "SRR001_1.fastq").touch()
         (temp_path / "SRR001_2.fastq").touch()
 
-        with patch.object(self.downloader, '_rename_files_by_technology') as mock_rename:
+        with patch.object(self.downloader, "_rename_files_by_technology") as mock_rename:
             mock_rename.return_value = {
                 temp_path / "SRR001_1.fastq": output_path / "SRR001_R1.fastq.gz",
                 temp_path / "SRR001_2.fastq": output_path / "SRR001_R2.fastq.gz",
             }
 
-            with patch('shutil.move'):
-                success, message = self.downloader._handle_download_output(
-                    temp_path,
-                    output_path,
-                    "illumina"
-                )
+            with patch("shutil.move"):
+                success, message = self.downloader._handle_download_output(temp_path, output_path, "illumina")
 
-        assert success == True
+        assert success is True
         assert "Downloaded 2 files" in message
 
     def test_handle_output_no_fastq_files(self, tmp_path):
@@ -326,20 +292,17 @@ class TestHandleDownloadOutput:
         output_path = tmp_path / "output" / "SRR001"
 
         # No FASTQ files created
-        with patch.object(self.downloader, '_cleanup_temp'):
-            success, message = self.downloader._handle_download_output(
-                temp_path,
-                output_path,
-                "illumina"
-            )
+        with patch.object(self.downloader, "_cleanup_temp"):
+            success, message = self.downloader._handle_download_output(temp_path, output_path, "illumina")
 
-        assert success == False
+        assert success is False
         assert "No FASTQ files created" in message
 
 
 # ============================================================================
 # TEST CLASS: File Renaming Edge Cases
 # ============================================================================
+
 
 class TestFileRenamingEdgeCases:
     """Test _rename_files_by_technology edge cases."""
@@ -362,9 +325,7 @@ class TestFileRenamingEdgeCases:
         for f in files:
             f.touch()
 
-        renamed = self.downloader._rename_files_by_technology(
-            files, "illumina", output_path
-        )
+        renamed = self.downloader._rename_files_by_technology(files, "illumina", output_path)
 
         assert len(renamed) == 4
         # Should be numbered R1, R2, R3, R4
@@ -378,9 +339,7 @@ class TestFileRenamingEdgeCases:
         file1 = tmp_path / "SRR001.fastq"
         file1.touch()
 
-        renamed = self.downloader._rename_files_by_technology(
-            [file1], "illumina", output_path
-        )
+        renamed = self.downloader._rename_files_by_technology([file1], "illumina", output_path)
 
         assert len(renamed) == 1
         assert str(renamed[file1]).endswith("_R1.fastq.gz")
@@ -396,9 +355,7 @@ class TestFileRenamingEdgeCases:
         for f in files:
             f.touch()
 
-        renamed = self.downloader._rename_files_by_technology(
-            files, "nanopore", output_path
-        )
+        renamed = self.downloader._rename_files_by_technology(files, "nanopore", output_path)
 
         assert len(renamed) == 2
         assert str(renamed[files[0]]).endswith("_long_1.fastq.gz")
@@ -415,9 +372,7 @@ class TestFileRenamingEdgeCases:
         for f in files:
             f.touch()
 
-        renamed = self.downloader._rename_files_by_technology(
-            files, "unknown", output_path
-        )
+        renamed = self.downloader._rename_files_by_technology(files, "unknown", output_path)
 
         assert len(renamed) == 2
         # Should use generic naming with suffixes
@@ -428,6 +383,7 @@ class TestFileRenamingEdgeCases:
 # ============================================================================
 # TEST CLASS: Existing Download Check
 # ============================================================================
+
 
 class TestCheckExistingDownload:
     """Test _check_existing_download method."""
@@ -442,7 +398,7 @@ class TestCheckExistingDownload:
 
         result = self.downloader._check_existing_download(output_path)
 
-        assert result == False
+        assert result is False
 
     def test_check_existing_empty_directory(self, tmp_path):
         """Test check with empty directory."""
@@ -451,7 +407,7 @@ class TestCheckExistingDownload:
 
         result = self.downloader._check_existing_download(output_path)
 
-        assert result == False
+        assert result is False
 
     def test_check_existing_with_fastq_files(self, tmp_path):
         """Test check with existing FASTQ files."""
@@ -461,12 +417,13 @@ class TestCheckExistingDownload:
 
         result = self.downloader._check_existing_download(output_path)
 
-        assert result == True
+        assert result is True
 
 
 # ============================================================================
 # TEST CLASS: Cleanup Temp
 # ============================================================================
+
 
 class TestCleanupTemp:
     """Test _cleanup_temp method."""
@@ -497,7 +454,7 @@ class TestCleanupTemp:
         temp_path = tmp_path / "temp"
         temp_path.mkdir()
 
-        with patch('shutil.rmtree', side_effect=PermissionError("Access denied")):
+        with patch("shutil.rmtree", side_effect=PermissionError("Access denied")):
             # Should log warning but not raise
             self.downloader._cleanup_temp(temp_path)
 
@@ -505,6 +462,7 @@ class TestCleanupTemp:
 # ============================================================================
 # TEST CLASS: Batch Download
 # ============================================================================
+
 
 class TestDownloadBatchEnhanced:
     """Test download_batch_enhanced method."""
@@ -518,17 +476,13 @@ class TestDownloadBatchEnhanced:
         output_folder = tmp_path / "downloads"
         accessions = ["SRR001", "SRR002"]
 
-        with patch.object(self.downloader, 'download_accession_enhanced') as mock_download:
+        with patch.object(self.downloader, "download_accession_enhanced") as mock_download:
             mock_download.side_effect = [
                 (True, "Success", {"technology": "illumina"}),
                 (True, "Success", {"technology": "nanopore"}),
             ]
 
-            results = self.downloader.download_batch_enhanced(
-                accessions,
-                output_folder,
-                force=False
-            )
+            results = self.downloader.download_batch_enhanced(accessions, output_folder, force=False)
 
         assert results["total"] == 2
         assert results["successful"] == 2
@@ -541,18 +495,14 @@ class TestDownloadBatchEnhanced:
         output_folder = tmp_path / "downloads"
         accessions = ["SRR001", "SRR002", "SRR003"]
 
-        with patch.object(self.downloader, 'download_accession_enhanced') as mock_download:
+        with patch.object(self.downloader, "download_accession_enhanced") as mock_download:
             mock_download.side_effect = [
                 (True, "Success", {"technology": "illumina"}),
                 (False, "Failed", {}),
                 (True, "Success", {"technology": "illumina"}),
             ]
 
-            results = self.downloader.download_batch_enhanced(
-                accessions,
-                output_folder,
-                force=False
-            )
+            results = self.downloader.download_batch_enhanced(accessions, output_folder, force=False)
 
         assert results["total"] == 3
         assert results["successful"] == 2
@@ -565,14 +515,11 @@ class TestDownloadBatchEnhanced:
         accessions = ["SRR001", "SRR002", "SRR003"]
         blacklist = {"SRR002"}
 
-        with patch.object(self.downloader, 'download_accession_enhanced') as mock_download:
+        with patch.object(self.downloader, "download_accession_enhanced") as mock_download:
             mock_download.return_value = (True, "Success", {"technology": "illumina"})
 
             results = self.downloader.download_batch_enhanced(
-                accessions,
-                output_folder,
-                force=False,
-                blacklist=blacklist
+                accessions, output_folder, force=False, blacklist=blacklist
             )
 
         assert results["total"] == 2  # SRR002 was blacklisted
@@ -583,15 +530,10 @@ class TestDownloadBatchEnhanced:
         output_folder = tmp_path / "downloads"
         accessions = ["SRR001", "SRR002", "SRR003"]
 
-        with patch.object(self.downloader, 'download_accession_enhanced') as mock_download:
+        with patch.object(self.downloader, "download_accession_enhanced") as mock_download:
             mock_download.return_value = (True, "Success", {"technology": "illumina"})
 
-            results = self.downloader.download_batch_enhanced(
-                accessions,
-                output_folder,
-                force=False,
-                max_downloads=2
-            )
+            results = self.downloader.download_batch_enhanced(accessions, output_folder, force=False, max_downloads=2)
 
         assert results["total"] == 2  # Limited to 2
         assert mock_download.call_count == 2
@@ -601,17 +543,13 @@ class TestDownloadBatchEnhanced:
         output_folder = tmp_path / "downloads"
         accessions = ["SRR001", "SRR002"]
 
-        with patch.object(self.downloader, 'download_accession_enhanced') as mock_download:
+        with patch.object(self.downloader, "download_accession_enhanced") as mock_download:
             mock_download.side_effect = [
                 (True, "Success", {"technology": "illumina"}),
                 Exception("Unexpected error"),
             ]
 
-            results = self.downloader.download_batch_enhanced(
-                accessions,
-                output_folder,
-                force=False
-            )
+            results = self.downloader.download_batch_enhanced(accessions, output_folder, force=False)
 
         assert results["total"] == 2
         assert results["successful"] == 1
@@ -622,6 +560,7 @@ class TestDownloadBatchEnhanced:
 # ============================================================================
 # TEST CLASS: Create Download Report
 # ============================================================================
+
 
 class TestCreateDownloadReport:
     """Test create_download_report function."""
@@ -670,6 +609,7 @@ class TestCreateDownloadReport:
 
         # Check contents
         import pandas as pd
+
         df = pd.read_csv(output_file)
         assert len(df) == 2
         assert "SRR001" in df["accession"].values
@@ -707,6 +647,7 @@ class TestCreateDownloadReport:
         assert output_file.exists()
 
         import pandas as pd
+
         df = pd.read_csv(output_file)
         assert "Failed" in df[df["accession"] == "SRR002"]["status"].values
 
@@ -723,6 +664,7 @@ class TestCreateDownloadReport:
 # ============================================================================
 # TEST CLASS: Build Download Command Edge Cases
 # ============================================================================
+
 
 class TestBuildDownloadCommandEdgeCases:
     """Test _build_download_command edge cases."""

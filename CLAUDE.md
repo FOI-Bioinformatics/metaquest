@@ -218,18 +218,6 @@ Before committing code:
 3. `make pipeline` integration test must pass
 4. No decrease in overall coverage percentage
 
-### Detailed Test Coverage Documentation
-For comprehensive test coverage metrics, methodology, and detailed module-by-module results, see:
-- `FINAL_TEST_COVERAGE_REPORT.md` - Complete test coverage report with 199 new tests
-- `TEST_SESSION_COMPLETE_SUMMARY.md` - Session summary with best practices and benchmarks
-
-## Legacy Code
-
-Note: The codebase contains some legacy files that are still in use:
-- `metaquest/cli/commands_legacy.py` - Legacy command implementations (still imported by current commands)
-
-These files should not be removed as they contain functionality still used by the current command system.
-
 ## Development Workflow & Implementation Priorities
 
 ### Recommended Development Approach

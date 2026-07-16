@@ -27,9 +27,7 @@ def sample_data():
     """Create sample test data."""
     np.random.seed(42)
     data = pd.DataFrame(
-        np.random.randn(10, 5),
-        index=[f"Sample_{i}" for i in range(10)],
-        columns=[f"Feature_{i}" for i in range(5)]
+        np.random.randn(10, 5), index=[f"Sample_{i}" for i in range(10)], columns=[f"Feature_{i}" for i in range(5)]
     )
     return data
 
@@ -37,105 +35,95 @@ def sample_data():
 @pytest.fixture
 def sample_metadata():
     """Create sample metadata."""
-    return pd.DataFrame({
-        'group': ['A'] * 5 + ['B'] * 5,
-        'value': np.random.randn(10),
-        'size_value': np.random.uniform(1, 10, 10),
-        'treatment': ['X', 'Y'] * 5
-    }, index=[f"Sample_{i}" for i in range(10)])
+    return pd.DataFrame(
+        {
+            "group": ["A"] * 5 + ["B"] * 5,
+            "value": np.random.randn(10),
+            "size_value": np.random.uniform(1, 10, 10),
+            "treatment": ["X", "Y"] * 5,
+        },
+        index=[f"Sample_{i}" for i in range(10)],
+    )
 
 
 @pytest.fixture
 def sample_alpha_diversity():
     """Create sample alpha diversity data."""
     np.random.seed(42)
-    return pd.DataFrame({
-        'shannon': np.random.uniform(1, 3, 10),
-        'simpson': np.random.uniform(0.5, 0.9, 10),
-        'observed_species': np.random.randint(10, 50, 10)
-    }, index=[f"Sample_{i}" for i in range(10)])
+    return pd.DataFrame(
+        {
+            "shannon": np.random.uniform(1, 3, 10),
+            "simpson": np.random.uniform(0.5, 0.9, 10),
+            "observed_species": np.random.randint(10, 50, 10),
+        },
+        index=[f"Sample_{i}" for i in range(10)],
+    )
 
 
 class TestInteractiveTSNE:
     """Test t-SNE plotting function."""
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_create_tsne_basic(self, mock_show, sample_data):
         """Test basic t-SNE plot creation."""
-        fig = create_interactive_tsne(
-            sample_data,
-            perplexity=5.0,  # Must be < n_samples (10)
-            show_plot=False
-        )
+        fig = create_interactive_tsne(sample_data, perplexity=5.0, show_plot=False)  # Must be < n_samples (10)
 
         assert fig is not None
-        assert hasattr(fig, 'data')
+        assert hasattr(fig, "data")
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_create_tsne_with_metadata(self, mock_show, sample_data, sample_metadata):
         """Test t-SNE with metadata coloring."""
         fig = create_interactive_tsne(
             sample_data,
             metadata=sample_metadata,
-            color_by='group',
+            color_by="group",
             title="Test t-SNE",
             perplexity=5.0,  # Must be < n_samples (10)
-            show_plot=False
+            show_plot=False,
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_create_tsne_with_numpy(self, mock_show, sample_data):
         """Test t-SNE with numpy array input."""
-        fig = create_interactive_tsne(
-            sample_data.values,
-            perplexity=5.0,  # Must be < n_samples (10)
-            show_plot=False
-        )
+        fig = create_interactive_tsne(sample_data.values, perplexity=5.0, show_plot=False)  # Must be < n_samples (10)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_create_tsne_custom_parameters(self, mock_show, sample_data):
         """Test t-SNE with custom perplexity and iterations."""
-        fig = create_interactive_tsne(
-            sample_data,
-            perplexity=5.0,
-            n_iter=500,
-            show_plot=False
-        )
+        fig = create_interactive_tsne(sample_data, perplexity=5.0, n_iter=500, show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_create_tsne_save_file(self, mock_show, sample_data, tmp_path):
         """Test t-SNE plot saving to file."""
         output_file = tmp_path / "test_tsne.html"
 
-        with patch('metaquest.visualization.interactive.go.Figure.write_html') as mock_write:
+        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
             create_interactive_tsne(
-                sample_data,
-                output_file=output_file,
-                perplexity=5.0,  # Must be < n_samples (10)
-                show_plot=False
+                sample_data, output_file=output_file, perplexity=5.0, show_plot=False  # Must be < n_samples (10)
             )
 
             mock_write.assert_called_once_with(str(output_file))
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_create_tsne_missing_metadata_column(self, mock_show, sample_data, sample_metadata):
         """Test t-SNE with missing metadata column."""
         fig = create_interactive_tsne(
             sample_data,
             metadata=sample_metadata,
-            color_by='nonexistent_column',
+            color_by="nonexistent_column",
             perplexity=5.0,  # Must be < n_samples (10)
-            show_plot=False
+            show_plot=False,
         )
 
         assert fig is not None
@@ -145,7 +133,7 @@ class TestInteractiveTSNE:
         """Test t-SNE error handling."""
         # Force an error by passing invalid data
         with pytest.raises(VisualizationError, match="Failed to create interactive t-SNE"):
-            with patch('metaquest.visualization.interactive.TSNE') as mock_tsne:
+            with patch("metaquest.visualization.interactive.TSNE") as mock_tsne:
                 mock_tsne.return_value.fit_transform.side_effect = ValueError("Test error")
                 create_interactive_tsne(sample_data, show_plot=False)
 
@@ -153,56 +141,42 @@ class TestInteractiveTSNE:
 class TestInteractivePCAExtended:
     """Extended tests for PCA plotting."""
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_pca_with_nan_size_values(self, mock_show, sample_data, sample_metadata):
         """Test PCA with NaN values in size_by column."""
         # Add NaN to size values
         metadata_with_nan = sample_metadata.copy()
-        metadata_with_nan.loc['Sample_0', 'size_value'] = np.nan
+        metadata_with_nan.loc["Sample_0", "size_value"] = np.nan
 
         fig = create_interactive_pca(
-            sample_data,
-            metadata=metadata_with_nan,
-            color_by='group',
-            size_by='size_value',
-            show_plot=False
+            sample_data, metadata=metadata_with_nan, color_by="group", size_by="size_value", show_plot=False
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_pca_with_missing_size_column(self, mock_show, sample_data, sample_metadata):
         """Test PCA with missing size_by column."""
         fig = create_interactive_pca(
-            sample_data,
-            metadata=sample_metadata,
-            size_by='nonexistent_column',
-            show_plot=False
+            sample_data, metadata=sample_metadata, size_by="nonexistent_column", show_plot=False
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_pca_2d_explicit(self, mock_show, sample_data):
         """Test PCA with explicit 2D components."""
-        fig = create_interactive_pca(
-            sample_data,
-            n_components=2,
-            show_plot=False
-        )
+        fig = create_interactive_pca(sample_data, n_components=2, show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_pca_show_plot_true(self, mock_show, sample_data):
         """Test PCA with show_plot=True."""
-        fig = create_interactive_pca(
-            sample_data,
-            show_plot=True
-        )
+        fig = create_interactive_pca(sample_data, show_plot=True)
 
         assert fig is not None
         mock_show.assert_called_once()
@@ -210,14 +184,14 @@ class TestInteractivePCAExtended:
     def test_pca_insufficient_features(self):
         """Test PCA with no features."""
         # Test with no features
-        data_no_features = pd.DataFrame(index=['A', 'B'])
+        data_no_features = pd.DataFrame(index=["A", "B"])
         with pytest.raises(VisualizationError, match="PCA requires at least 1 feature"):
             create_interactive_pca(data_no_features, show_plot=False)
 
     def test_pca_error_in_computation(self, sample_data):
         """Test PCA error handling during computation."""
         with pytest.raises(VisualizationError, match="Failed to create interactive PCA"):
-            with patch('metaquest.visualization.interactive.PCA') as mock_pca:
+            with patch("metaquest.visualization.interactive.PCA") as mock_pca:
                 mock_pca.return_value.fit_transform.side_effect = ValueError("PCA failed")
                 create_interactive_pca(sample_data, show_plot=False)
 
@@ -225,58 +199,46 @@ class TestInteractivePCAExtended:
 class TestInteractiveHeatmapExtended:
     """Extended tests for heatmap plotting."""
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_heatmap_with_numpy_input(self, mock_show):
         """Test heatmap with numpy array input."""
         data = np.random.randn(5, 4)
 
-        fig = create_interactive_heatmap(
-            data,
-            cluster_samples=False,
-            cluster_features=False,
-            show_plot=False
-        )
+        fig = create_interactive_heatmap(data, cluster_samples=False, cluster_features=False, show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_heatmap_save_file(self, mock_show, sample_data, tmp_path):
         """Test heatmap saving to file."""
         output_file = tmp_path / "test_heatmap.html"
 
-        with patch('metaquest.visualization.interactive.go.Figure.write_html') as mock_write:
-            create_interactive_heatmap(
-                sample_data,
-                output_file=output_file,
-                show_plot=False
-            )
+        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
+            create_interactive_heatmap(sample_data, output_file=output_file, show_plot=False)
 
             mock_write.assert_called_once_with(str(output_file))
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_heatmap_custom_clustering_parameters(self, mock_show, sample_data):
         """Test heatmap with custom clustering parameters."""
         fig = create_interactive_heatmap(
             sample_data,
             cluster_samples=True,
             cluster_features=True,
-            distance_metric='cityblock',
-            linkage_method='average',
+            distance_metric="cityblock",
+            linkage_method="average",
             title="Custom Heatmap",
-            show_plot=False
+            show_plot=False,
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_heatmap_show_plot_true(self, mock_show, sample_data):
         """Test heatmap with show_plot=True."""
-        fig = create_interactive_heatmap(
-            sample_data,
-            show_plot=True
-        )
+        fig = create_interactive_heatmap(sample_data, show_plot=True)
 
         assert fig is not None
         mock_show.assert_called_once()
@@ -284,7 +246,7 @@ class TestInteractiveHeatmapExtended:
     def test_heatmap_error_handling(self, sample_data):
         """Test heatmap error handling."""
         with pytest.raises(VisualizationError, match="Failed to create interactive heatmap"):
-            with patch('metaquest.visualization.interactive.linkage') as mock_linkage:
+            with patch("metaquest.visualization.interactive.linkage") as mock_linkage:
                 mock_linkage.side_effect = ValueError("Clustering failed")
                 create_interactive_heatmap(sample_data, cluster_samples=True, show_plot=False)
 
@@ -292,62 +254,58 @@ class TestInteractiveHeatmapExtended:
 class TestDiversityComparisonExtended:
     """Extended tests for diversity comparison plots."""
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_diversity_strip_plot(self, mock_show, sample_alpha_diversity, sample_metadata):
         """Test diversity comparison with strip plot."""
         fig = create_diversity_comparison_plot(
             sample_alpha_diversity,
             sample_metadata,
-            group_by='group',
-            diversity_metric='shannon',
-            plot_type='strip',
-            show_plot=False
+            group_by="group",
+            diversity_metric="shannon",
+            plot_type="strip",
+            show_plot=False,
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_diversity_save_file(self, mock_show, sample_alpha_diversity, sample_metadata, tmp_path):
         """Test diversity plot saving to file."""
         output_file = tmp_path / "test_diversity.html"
 
-        with patch('metaquest.visualization.interactive.go.Figure.write_html') as mock_write:
+        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
             create_diversity_comparison_plot(
                 sample_alpha_diversity,
                 sample_metadata,
-                group_by='group',
-                diversity_metric='shannon',
+                group_by="group",
+                diversity_metric="shannon",
                 output_file=output_file,
-                show_plot=False
+                show_plot=False,
             )
 
             mock_write.assert_called_once_with(str(output_file))
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_diversity_custom_title(self, mock_show, sample_alpha_diversity, sample_metadata):
         """Test diversity plot with custom title."""
         fig = create_diversity_comparison_plot(
             sample_alpha_diversity,
             sample_metadata,
-            group_by='group',
-            diversity_metric='simpson',
+            group_by="group",
+            diversity_metric="simpson",
             title="Custom Diversity Plot",
-            show_plot=False
+            show_plot=False,
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_diversity_show_plot_true(self, mock_show, sample_alpha_diversity, sample_metadata):
         """Test diversity plot with show_plot=True."""
         fig = create_diversity_comparison_plot(
-            sample_alpha_diversity,
-            sample_metadata,
-            group_by='group',
-            diversity_metric='shannon',
-            show_plot=True
+            sample_alpha_diversity, sample_metadata, group_by="group", diversity_metric="shannon", show_plot=True
         )
 
         assert fig is not None
@@ -356,115 +314,80 @@ class TestDiversityComparisonExtended:
     def test_diversity_error_handling(self, sample_alpha_diversity, sample_metadata):
         """Test diversity plot error handling."""
         with pytest.raises(VisualizationError, match="Failed to create diversity comparison plot"):
-            with patch('metaquest.visualization.interactive.px.box') as mock_box:
+            with patch("metaquest.visualization.interactive.px.box") as mock_box:
                 mock_box.side_effect = ValueError("Plotting failed")
                 create_diversity_comparison_plot(
                     sample_alpha_diversity,
                     sample_metadata,
-                    group_by='group',
-                    diversity_metric='shannon',
-                    show_plot=False
+                    group_by="group",
+                    diversity_metric="shannon",
+                    show_plot=False,
                 )
 
 
 class TestBetaDiversityPlot:
     """Test beta diversity plotting function."""
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_pca_method(self, mock_show, sample_data, sample_metadata):
         """Test beta diversity plot with PCA method."""
-        fig = create_beta_diversity_plot(
-            sample_data,
-            sample_metadata,
-            color_by='group',
-            method='PCA',
-            show_plot=False
-        )
+        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", method="PCA", show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_pcoa_method(self, mock_show, sample_data, sample_metadata):
         """Test beta diversity plot with PCoA method (falls back to PCA)."""
-        fig = create_beta_diversity_plot(
-            sample_data,
-            sample_metadata,
-            color_by='group',
-            method='PCoA',
-            show_plot=False
-        )
+        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", method="PCoA", show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_nmds_method(self, mock_show, sample_data, sample_metadata):
         """Test beta diversity plot with NMDS method (falls back to PCA)."""
-        fig = create_beta_diversity_plot(
-            sample_data,
-            sample_metadata,
-            color_by='group',
-            method='NMDS',
-            show_plot=False
-        )
+        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", method="NMDS", show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_custom_title(self, mock_show, sample_data, sample_metadata):
         """Test beta diversity plot with custom title."""
         fig = create_beta_diversity_plot(
-            sample_data,
-            sample_metadata,
-            color_by='group',
-            title="Custom Beta Diversity Plot",
-            show_plot=False
+            sample_data, sample_metadata, color_by="group", title="Custom Beta Diversity Plot", show_plot=False
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_save_file(self, mock_show, sample_data, sample_metadata, tmp_path):
         """Test beta diversity plot saving to file."""
         output_file = tmp_path / "test_beta_diversity.html"
 
-        with patch('metaquest.visualization.interactive.go.Figure.write_html') as mock_write:
+        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
             create_beta_diversity_plot(
-                sample_data,
-                sample_metadata,
-                color_by='group',
-                output_file=output_file,
-                show_plot=False
+                sample_data, sample_metadata, color_by="group", output_file=output_file, show_plot=False
             )
 
             mock_write.assert_called_once()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_different_distance_metric(self, mock_show, sample_data, sample_metadata):
         """Test beta diversity plot with different distance metric."""
         fig = create_beta_diversity_plot(
-            sample_data,
-            sample_metadata,
-            color_by='group',
-            distance_metric='euclidean',
-            show_plot=False
+            sample_data, sample_metadata, color_by="group", distance_metric="euclidean", show_plot=False
         )
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_beta_diversity_show_plot_true(self, mock_show, sample_data, sample_metadata):
         """Test beta diversity plot with show_plot=True."""
-        fig = create_beta_diversity_plot(
-            sample_data,
-            sample_metadata,
-            color_by='group',
-            show_plot=True
-        )
+        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", show_plot=True)
 
         assert fig is not None
         # PCA is called with show_plot=True, so show should be called
@@ -473,14 +396,9 @@ class TestBetaDiversityPlot:
     def test_beta_diversity_error_handling(self, sample_data, sample_metadata):
         """Test beta diversity plot error handling."""
         with pytest.raises(VisualizationError, match="Failed to create beta diversity plot"):
-            with patch('metaquest.visualization.interactive.create_interactive_pca') as mock_pca:
+            with patch("metaquest.visualization.interactive.create_interactive_pca") as mock_pca:
                 mock_pca.side_effect = VisualizationError("PCA failed")
-                create_beta_diversity_plot(
-                    sample_data,
-                    sample_metadata,
-                    color_by='group',
-                    show_plot=False
-                )
+                create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", show_plot=False)
 
 
 class TestEdgeCasesExtended:
@@ -488,45 +406,30 @@ class TestEdgeCasesExtended:
 
     def test_pca_single_feature(self):
         """Test PCA with single feature."""
-        data = pd.DataFrame({
-            'Feature_0': np.random.randn(5)
-        })
+        data = pd.DataFrame({"Feature_0": np.random.randn(5)})
 
         # Should work but only produce 1 component
-        with patch('metaquest.visualization.interactive.go.Figure.show'):
+        with patch("metaquest.visualization.interactive.go.Figure.show"):
             fig = create_interactive_pca(data, n_components=2, show_plot=False)
             assert fig is not None
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_heatmap_small_dataset(self, mock_show):
         """Test heatmap with very small dataset."""
-        small_data = pd.DataFrame(
-            [[1, 2], [3, 4]],
-            columns=['A', 'B']
-        )
+        small_data = pd.DataFrame([[1, 2], [3, 4]], columns=["A", "B"])
 
-        fig = create_interactive_heatmap(
-            small_data,
-            cluster_samples=True,
-            cluster_features=True,
-            show_plot=False
-        )
+        fig = create_interactive_heatmap(small_data, cluster_samples=True, cluster_features=True, show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch('metaquest.visualization.interactive.go.Figure.show')
+    @patch("metaquest.visualization.interactive.go.Figure.show")
     def test_pca_with_all_nan_size_values(self, mock_show, sample_data, sample_metadata):
         """Test PCA when all size values are NaN."""
         metadata_all_nan = sample_metadata.copy()
-        metadata_all_nan['size_value'] = np.nan
+        metadata_all_nan["size_value"] = np.nan
 
-        fig = create_interactive_pca(
-            sample_data,
-            metadata=metadata_all_nan,
-            size_by='size_value',
-            show_plot=False
-        )
+        fig = create_interactive_pca(sample_data, metadata=metadata_all_nan, size_by="size_value", show_plot=False)
 
         assert fig is not None
         mock_show.assert_not_called()

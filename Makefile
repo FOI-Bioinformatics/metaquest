@@ -22,18 +22,30 @@ test:
 	pytest tests/ --cov=metaquest
 
 lint:
-	flake8 metaquest
+	flake8 metaquest tests
 
 format:
-	black metaquest
+	black metaquest tests
 
 check:
 	@echo "Running format check..."
-	black --check --diff metaquest
+	black --check --diff metaquest tests
 	@echo "Running linting..."
-	flake8 metaquest
+	flake8 metaquest tests
 	@echo "Running type check..."
-	mypy --ignore-missing-imports metaquest
+	mypy metaquest
+	@echo "Guarding against the frozen plotly-latest CDN alias..."
+	@if grep -rn "cdn.plot.ly/plotly-latest" metaquest --include='*.py'; then \
+		echo "ERROR: use metaquest.utils.html.plotly_cdn_script() instead of the plotly-latest alias"; \
+		exit 1; \
+	fi
+	@echo "Checking cyclomatic complexity ceiling (fail on rank D or worse)..."
+	@output=$$(radon cc metaquest -n D -s); \
+	if [ -n "$$output" ]; then \
+		echo "$$output"; \
+		echo "ERROR: functions at complexity rank D or worse; refactor before merging"; \
+		exit 1; \
+	fi
 	@echo "All quality checks passed!"
 
 build:

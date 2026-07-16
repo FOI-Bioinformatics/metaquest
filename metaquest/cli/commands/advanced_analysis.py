@@ -93,6 +93,7 @@ class DiversityAnalysisCommand(BaseCommand):
             # Calculate beta diversity
             logger.info(f"Calculating beta diversity using {args.beta_metric}...")
             beta_div = calculate_beta_diversity(abundance_df, args.beta_metric)
+            assert isinstance(beta_div, pd.DataFrame)
 
             beta_output = output_dir / f"beta_diversity_{args.beta_metric}.csv"
             beta_div.to_csv(beta_output)

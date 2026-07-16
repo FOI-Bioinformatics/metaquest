@@ -13,7 +13,6 @@ from metaquest.data.gtdb import (
     search_taxon,
 )
 
-
 # --- Realistic mock data ---
 
 SPECIES_RESULT_LIST = [
@@ -134,9 +133,7 @@ class TestSearchSpecies:
     @patch("metaquest.data.gtdb.requests.get")
     def test_http_error(self, mock_get):
         mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
-            "500 Server Error"
-        )
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Server Error")
         mock_get.return_value = mock_response
 
         with pytest.raises(DataAccessError, match="GTDB API error"):

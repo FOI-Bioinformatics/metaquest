@@ -17,22 +17,16 @@ Run: pytest tests/test_sra_metadata_extended.py -v
 import pytest
 import json
 import requests
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, mock_open
-import tempfile
-from dataclasses import dataclass
+from unittest.mock import Mock, patch
 
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
     SRADatasetInfo,
-    detect_sequencing_technology,
-    calculate_read_statistics,
     create_download_preview,
     save_metadata_report,
     generate_statistics_report,
 )
 from metaquest.core.exceptions import DataAccessError
-
 
 # Mock XML responses for testing
 MOCK_SRA_XML = """<?xml version="1.0"?>
@@ -81,6 +75,7 @@ MOCK_SRA_XML = """<?xml version="1.0"?>
 # TEST CLASS: SRAMetadataClient - API Integration
 # ============================================================================
 
+
 class TestSRAMetadataClientAPI:
     """Test SRA metadata client API methods."""
 
@@ -97,7 +92,7 @@ class TestSRAMetadataClientAPI:
         """Test fetching metadata for single batch."""
         accessions = ["SRR001", "SRR002"]
 
-        with patch.object(self.client, '_fetch_batch_metadata') as mock_fetch:
+        with patch.object(self.client, "_fetch_batch_metadata") as mock_fetch:
             mock_fetch.return_value = {
                 "SRR001": Mock(spec=SRADatasetInfo),
                 "SRR002": Mock(spec=SRADatasetInfo),
@@ -115,10 +110,10 @@ class TestSRAMetadataClientAPI:
         # Create list that requires 2 batches (batch_size=200)
         accessions = [f"SRR{i:06d}" for i in range(250)]
 
-        with patch.object(self.client, '_fetch_batch_metadata') as mock_fetch:
+        with patch.object(self.client, "_fetch_batch_metadata") as mock_fetch:
             mock_fetch.return_value = {}
 
-            result = self.client.get_sra_metadata(accessions)
+            self.client.get_sra_metadata(accessions)
 
             # Should be called twice (200 + 50)
             assert mock_fetch.call_count == 2
@@ -127,7 +122,7 @@ class TestSRAMetadataClientAPI:
         """Test that batch failures don't stop processing."""
         accessions = [f"SRR{i:06d}" for i in range(250)]
 
-        with patch.object(self.client, '_fetch_batch_metadata') as mock_fetch:
+        with patch.object(self.client, "_fetch_batch_metadata") as mock_fetch:
             # First batch fails, second succeeds
             mock_fetch.side_effect = [
                 Exception("API Error"),
@@ -144,13 +139,9 @@ class TestSRAMetadataClientAPI:
         """Test successful batch metadata fetching."""
         accessions = ["SRR123456"]
 
-        mock_search_response = json.dumps({
-            "esearchresult": {
-                "idlist": ["123456"]
-            }
-        })
+        mock_search_response = json.dumps({"esearchresult": {"idlist": ["123456"]}})
 
-        with patch.object(self.client, '_make_request') as mock_request:
+        with patch.object(self.client, "_make_request") as mock_request:
             mock_request.side_effect = [
                 mock_search_response,
                 MOCK_SRA_XML,
@@ -165,13 +156,9 @@ class TestSRAMetadataClientAPI:
         """Test batch fetch when no results found."""
         accessions = ["NONEXISTENT"]
 
-        mock_search_response = json.dumps({
-            "esearchresult": {
-                "idlist": []
-            }
-        })
+        mock_search_response = json.dumps({"esearchresult": {"idlist": []}})
 
-        with patch.object(self.client, '_make_request') as mock_request:
+        with patch.object(self.client, "_make_request") as mock_request:
             mock_request.return_value = mock_search_response
 
             result = self.client._fetch_batch_metadata(accessions)
@@ -184,7 +171,7 @@ class TestSRAMetadataClientAPI:
 
         mock_search_response = json.dumps({"invalid": "response"})
 
-        with patch.object(self.client, '_make_request') as mock_request:
+        with patch.object(self.client, "_make_request") as mock_request:
             mock_request.return_value = mock_search_response
 
             result = self.client._fetch_batch_metadata(accessions)
@@ -195,6 +182,7 @@ class TestSRAMetadataClientAPI:
 # ============================================================================
 # TEST CLASS: XML Parsing
 # ============================================================================
+
 
 class TestSRAXMLParsing:
     """Test SRA XML parsing methods."""
@@ -249,6 +237,7 @@ class TestSRAXMLParsing:
     def test_extract_dataset_info_complete(self):
         """Test extracting complete dataset info."""
         import xml.etree.ElementTree as ET
+
         root = ET.fromstring(MOCK_SRA_XML)
         package = root.find(".//EXPERIMENT_PACKAGE")
 
@@ -266,6 +255,7 @@ class TestSRAXMLParsing:
     def test_extract_dataset_info_no_experiment(self):
         """Test extraction when EXPERIMENT is missing."""
         import xml.etree.ElementTree as ET
+
         xml_no_experiment = "<EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE>"
         package = ET.fromstring(xml_no_experiment)
 
@@ -304,6 +294,7 @@ class TestSRAXMLParsing:
         """
 
         import xml.etree.ElementTree as ET
+
         package = ET.fromstring(xml_single)
 
         result = self.client._extract_dataset_info(package)
@@ -318,6 +309,7 @@ class TestSRAXMLParsing:
 # ============================================================================
 # TEST CLASS: XML Helper Method
 # ============================================================================
+
 
 class TestGetTextHelper:
     """Test _get_text helper method."""
@@ -334,6 +326,7 @@ class TestGetTextHelper:
     def test_get_text_attribute(self):
         """Test extracting attribute."""
         import xml.etree.ElementTree as ET
+
         xml = '<root attr="value"/>'
         elem = ET.fromstring(xml)
 
@@ -343,6 +336,7 @@ class TestGetTextHelper:
     def test_get_text_nested_attribute(self):
         """Test extracting nested attribute."""
         import xml.etree.ElementTree as ET
+
         xml = '<root><child attr="nested_value"/></root>'
         elem = ET.fromstring(xml)
 
@@ -352,7 +346,8 @@ class TestGetTextHelper:
     def test_get_text_element_text(self):
         """Test extracting element text."""
         import xml.etree.ElementTree as ET
-        xml = '<root><child>text_value</child></root>'
+
+        xml = "<root><child>text_value</child></root>"
         elem = ET.fromstring(xml)
 
         result = self.client._get_text(elem, ".//child", "default")
@@ -361,7 +356,8 @@ class TestGetTextHelper:
     def test_get_text_missing_element(self):
         """Test get_text with missing element."""
         import xml.etree.ElementTree as ET
-        xml = '<root/>'
+
+        xml = "<root/>"
         elem = ET.fromstring(xml)
 
         result = self.client._get_text(elem, ".//missing", "default")
@@ -370,6 +366,7 @@ class TestGetTextHelper:
     def test_get_text_exception_handling(self):
         """Test exception handling in get_text."""
         import xml.etree.ElementTree as ET
+
         elem = ET.fromstring("<root/>")
 
         # Pass invalid xpath that might cause exception
@@ -380,6 +377,7 @@ class TestGetTextHelper:
 # ============================================================================
 # TEST CLASS: Download Preview
 # ============================================================================
+
 
 class TestCreateDownloadPreview:
     """Test create_download_preview function."""
@@ -429,10 +427,7 @@ class TestCreateDownloadPreview:
 
         mock_client.get_sra_metadata.return_value = mock_metadata
 
-        metadata, tech_counts, total_size_gb = create_download_preview(
-            ["SRR001", "SRR002"],
-            mock_client
-        )
+        metadata, tech_counts, total_size_gb = create_download_preview(["SRR001", "SRR002"], mock_client)
 
         assert len(metadata) == 2
         assert tech_counts["illumina"] == 1
@@ -443,6 +438,7 @@ class TestCreateDownloadPreview:
 # ============================================================================
 # TEST CLASS: Save Metadata Report
 # ============================================================================
+
 
 class TestSaveMetadataReport:
     """Test save_metadata_report function."""
@@ -478,6 +474,7 @@ class TestSaveMetadataReport:
 
         # Check contents
         import pandas as pd
+
         df = pd.read_csv(output_file)
         assert len(df) == 1
         assert "SRR001" in df["accession"].values
@@ -495,6 +492,7 @@ class TestSaveMetadataReport:
 # ============================================================================
 # TEST CLASS: Generate Statistics Report
 # ============================================================================
+
 
 class TestGenerateStatisticsReport:
     """Test generate_statistics_report function."""
@@ -557,6 +555,7 @@ class TestGenerateStatisticsReport:
 
         # Check contents
         import pandas as pd
+
         df = pd.read_csv(output_file)
         assert len(df) == 1
         assert "SRR001" in df["accession"].values
@@ -581,6 +580,7 @@ class TestGenerateStatisticsReport:
         generate_statistics_report(fastq_folder, output_file)
 
         import pandas as pd
+
         df = pd.read_csv(output_file)
         assert df.loc[0, "layout"] == "PAIRED"
 
@@ -608,6 +608,7 @@ class TestGenerateStatisticsReport:
 # TEST CLASS: API Request Error Handling
 # ============================================================================
 
+
 class TestAPIRequestErrorHandling:
     """Test API request error handling."""
 
@@ -615,13 +616,13 @@ class TestAPIRequestErrorHandling:
         """Test request with API key."""
         client = SRAMetadataClient("test@example.com", "api_key_123")
 
-        with patch('requests.get') as mock_get:
+        with patch("requests.get") as mock_get:
             mock_response = Mock()
             mock_response.text = "response"
             mock_response.raise_for_status = Mock()
             mock_get.return_value = mock_response
 
-            result = client._make_request("http://test.com", {"param": "value"})
+            client._make_request("http://test.com", {"param": "value"})
 
             # Verify API key was included
             call_args = mock_get.call_args
@@ -632,8 +633,8 @@ class TestAPIRequestErrorHandling:
         """Test rate limiting between requests."""
         client = SRAMetadataClient("test@example.com")
 
-        with patch('requests.get') as mock_get:
-            with patch('time.sleep') as mock_sleep:
+        with patch("requests.get") as mock_get:
+            with patch("time.sleep") as mock_sleep:
                 mock_response = Mock()
                 mock_response.text = "response"
                 mock_response.raise_for_status = Mock()
@@ -650,7 +651,7 @@ class TestAPIRequestErrorHandling:
         """Test handling of request exceptions."""
         client = SRAMetadataClient("test@example.com")
 
-        with patch('requests.get') as mock_get:
+        with patch("requests.get") as mock_get:
             # Need to raise requests.RequestException (not plain Exception) for code to catch it
             mock_get.side_effect = requests.RequestException("Network error")
 

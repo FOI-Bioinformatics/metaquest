@@ -236,9 +236,7 @@ def _add_metadata_summary_page(pdf, metadata_data):
         # Create table data
         table_data = []
         for col, count in top_columns.items():
-            table_data.append(
-                [col, count, f"{count / len(metadata_data) * 100:.1f}%"]
-            )
+            table_data.append([col, count, f"{count / len(metadata_data) * 100:.1f}%"])
 
         # Create table
         ax.table(
@@ -276,17 +274,13 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
                     top_genomes.append((col, len(top_samples)))
 
             top_genomes.sort(key=lambda x: x[1], reverse=True)
-            top_genome_cols = [
-                g[0] for g in top_genomes[: min(20, len(top_genomes))]
-            ]
+            top_genome_cols = [g[0] for g in top_genomes[: min(20, len(top_genomes))]]
 
             if len(top_genome_cols) > 1:
                 # Create heatmap of top genome correlations
                 correlation_matrix = summary_data[top_genome_cols].corr()
 
-                fig = plot_correlation_matrix(
-                    correlation_matrix, title="Genome Correlation Matrix"
-                )
+                fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
                 pdf.savefig(fig)
     except Exception as e:
         logger.warning(f"Error generating heatmap: {e}")
@@ -454,7 +448,7 @@ def _prepare_template_data(
 
     # Metadata statistics if available
     if metadata_data is not None:
-        metadata_stats = {
+        metadata_stats: dict = {
             "sample_count": len(metadata_data),
             "column_count": len(metadata_data.columns),
         }
@@ -504,6 +498,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
             threshold=0,
         )
         rank_plot_file = images_dir / "containment_rank.png"
+        assert fig is not None
         fig.savefig(rank_plot_file, dpi=300, bbox_inches="tight")
         plt.close(fig)
         plot_files["rank_plot"] = "images/containment_rank.png"
@@ -517,6 +512,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
             threshold=0,
         )
         hist_plot_file = images_dir / "containment_histogram.png"
+        assert fig is not None
         fig.savefig(hist_plot_file, dpi=300, bbox_inches="tight")
         plt.close(fig)
         plot_files["hist_plot"] = "images/containment_histogram.png"
@@ -526,6 +522,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
             try:
                 fig = plot_metadata_counts(counts_data, title="Top Categories", plot_type="bar")
                 counts_plot_file = images_dir / "metadata_counts.png"
+                assert fig is not None
                 fig.savefig(counts_plot_file, dpi=300, bbox_inches="tight")
                 plt.close(fig)
                 plot_files["counts_plot"] = "images/metadata_counts.png"
@@ -537,6 +534,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
                     plot_type="pie",
                 )
                 pie_plot_file = images_dir / "metadata_pie.png"
+                assert fig is not None
                 fig.savefig(pie_plot_file, dpi=300, bbox_inches="tight")
                 plt.close(fig)
                 plot_files["pie_plot"] = "images/metadata_pie.png"
@@ -564,6 +562,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
 
                     fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
                     heatmap_file = images_dir / "genome_correlation.png"
+                    assert fig is not None
                     fig.savefig(heatmap_file, dpi=300, bbox_inches="tight")
                     plt.close(fig)
                     plot_files["heatmap_plot"] = "images/genome_correlation.png"

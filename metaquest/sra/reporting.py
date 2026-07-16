@@ -40,6 +40,7 @@ from metaquest.sra.analytics import (
     ComparativeAnalysis,
     SRADatasetAnalyzer,
 )
+from metaquest.utils.html import plotly_cdn_script
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,7 @@ class SRAReportGenerator:
 
     def _create_download_plots(self, session: DownloadSession) -> Dict[str, str]:
         """Create interactive plots for download session."""
-        plots = {}
+        plots: dict = {}
 
         if not PLOTLY_AVAILABLE:
             return plots
@@ -330,7 +331,7 @@ class SRAReportGenerator:
 
     def _create_quality_plots(self, profiles: Dict[str, QualityProfile]) -> Dict[str, str]:
         """Create interactive plots for quality dashboard."""
-        plots = {}
+        plots: dict = {}
 
         if not PLOTLY_AVAILABLE:
             return plots
@@ -384,7 +385,7 @@ class SRAReportGenerator:
 
     def _create_comparative_plots(self, comparison: ComparativeAnalysis) -> Dict[str, str]:
         """Create interactive plots for comparative analysis."""
-        plots = {}
+        plots: dict = {}
 
         if not PLOTLY_AVAILABLE or not comparison.visualization_data:
             return plots
@@ -451,7 +452,7 @@ class SRAReportGenerator:
 <html>
 <head>
     <title>SRA Download Summary - {{ session.session_id }}</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    {{ plotly_cdn|safe }}
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #3498db; color: white;
@@ -535,7 +536,7 @@ class SRAReportGenerator:
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(**report_data)
+        return template.render(plotly_cdn=plotly_cdn_script(), **report_data)
 
     def _generate_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate HTML content for quality dashboard."""
@@ -547,7 +548,7 @@ class SRAReportGenerator:
 <html>
 <head>
     <title>{{ title }}</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    {{ plotly_cdn|safe }}
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #2ecc71; color: white;
@@ -627,7 +628,7 @@ class SRAReportGenerator:
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(**dashboard_data)
+        return template.render(plotly_cdn=plotly_cdn_script(), **dashboard_data)
 
     def _generate_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate HTML content for comparative analysis report."""
@@ -639,7 +640,7 @@ class SRAReportGenerator:
 <html>
 <head>
     <title>{{ title }}</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    {{ plotly_cdn|safe }}
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #9b59b6; color: white;
@@ -707,7 +708,7 @@ class SRAReportGenerator:
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(**report_data)
+        return template.render(plotly_cdn=plotly_cdn_script(), **report_data)
 
     def _generate_simple_download_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple HTML without Jinja2."""
@@ -715,7 +716,7 @@ class SRAReportGenerator:
         stats = report_data["summary_stats"]
 
         session_id = html_escape(str(session.session_id))
-        timestamp = html_escape(str(report_data['timestamp']))
+        timestamp = html_escape(str(report_data["timestamp"]))
 
         html = f"""
 <!DOCTYPE html>
@@ -761,8 +762,8 @@ class SRAReportGenerator:
 
     def _generate_simple_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate simple quality HTML without Jinja2."""
-        title = html_escape(str(dashboard_data['title']))
-        timestamp = html_escape(str(dashboard_data['timestamp']))
+        title = html_escape(str(dashboard_data["title"]))
+        timestamp = html_escape(str(dashboard_data["timestamp"]))
         return f"""
 <!DOCTYPE html>
 <html>
@@ -784,12 +785,14 @@ class SRAReportGenerator:
 
     def _generate_simple_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple comparative HTML without Jinja2."""
-        title = html_escape(str(report_data['title']))
-        timestamp = html_escape(str(report_data['timestamp']))
-        group_items = ''.join([
-            f"<li>{html_escape(str(name))}: {count} datasets</li>"
-            for name, count in report_data['group_counts'].items()
-        ])
+        title = html_escape(str(report_data["title"]))
+        timestamp = html_escape(str(report_data["timestamp"]))
+        group_items = "".join(
+            [
+                f"<li>{html_escape(str(name))}: {count} datasets</li>"
+                for name, count in report_data["group_counts"].items()
+            ]
+        )
         return f"""
 <!DOCTYPE html>
 <html>

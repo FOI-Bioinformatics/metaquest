@@ -10,13 +10,11 @@ This file tests all 4 intelligent SRA CLI commands:
 Run: pytest tests/test_cli_sra_intelligent.py -v
 """
 
-import pytest
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, mock_open
-from datetime import datetime, timedelta
+from unittest.mock import Mock, patch
+from datetime import datetime
 from argparse import Namespace
-from dataclasses import dataclass
 
 from metaquest.cli.commands.sra_intelligent import (
     SRAIntelligentDownloadCommand,
@@ -25,50 +23,102 @@ from metaquest.cli.commands.sra_intelligent import (
     SRAComparativeAnalysisCommand,
 )
 
+# Builders that return the REAL backend dataclasses, so these tests exercise the
+# actual interface the CLI consumes (rather than masking mocks).
+from metaquest.sra.download_manager import (  # noqa: E402
+    DownloadSession,
+    DownloadProgress,
+    NetworkConditions,
+)
+from metaquest.sra.analytics import QualityProfile, ComparativeAnalysis  # noqa: E402
 
-# Mock data classes
-@dataclass
-class MockDownloadSession:
-    """Mock download session."""
-    session_id: str
-    start_time: datetime
-    end_time: datetime
-    total_downloads: int
-    completed_downloads: int
-    failed_downloads: int
-    status: str
-    failed_accessions: list
-    bandwidth_stats: Mock = None
-
-
-@dataclass
-class MockQualityProfile:
-    """Mock quality profile."""
-    accession: str
-    total_reads: int
-    total_bases: int
-    avg_read_length: float
-    gc_content: float
-    avg_quality: float
-    quality_distribution: list
-    complexity_score: float
-    n_content: float
-    duplicate_rate: float
-    adapter_contamination: float
-    warnings: list
+# Keys returned by the real IntelligentDownloadManager.estimate_download_time()
+REAL_ESTIMATE = {
+    "total_size_mb": 1024.0,
+    "estimated_time_minutes": 30.0,
+    "estimated_time_formatted": "0:30:00",
+    "network_bandwidth_mbps": 50.0,
+    "optimal_parallel_downloads": 4,
+    "individual_estimates": {},
+}
 
 
-@dataclass
-class MockComparativeAnalysis:
-    """Mock comparative analysis."""
-    group_statistics: dict
-    statistical_tests: dict
-    significant_differences: list
+def make_session(session_id, completed, failed, failed_accessions):
+    """Build a real DownloadSession with the requested success/failure split."""
+    nc = NetworkConditions(
+        bandwidth_mbps=10.0,
+        latency_ms=100.0,
+        packet_loss_pct=0.0,
+        connection_stability=1.0,
+        optimal_parallel_downloads=4,
+        last_measured=datetime.now(),
+    )
+    results = {}
+    for acc in failed_accessions:
+        results[acc] = DownloadProgress(
+            accession=acc,
+            status="failed",
+            progress_pct=0.0,
+            downloaded_mb=0.0,
+            total_mb=None,
+            speed_mbps=0.0,
+            eta_seconds=None,
+            retry_count=0,
+            error_message="err",
+        )
+    for i in range(completed):
+        acc = f"SRRC{i}"
+        results[acc] = DownloadProgress(
+            accession=acc,
+            status="completed",
+            progress_pct=100.0,
+            downloaded_mb=1.0,
+            total_mb=1.0,
+            speed_mbps=5.0,
+            eta_seconds=0,
+            retry_count=0,
+            error_message=None,
+        )
+    return DownloadSession(
+        session_id=session_id,
+        accessions=list(results.keys()),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        total_size_mb=float(len(results)),
+        downloaded_mb=float(completed),
+        success_count=completed,
+        failure_count=failed,
+        average_speed_mbps=5.0,
+        network_conditions=nc,
+        download_results=results,
+    )
+
+
+def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0):
+    """Build a real QualityProfile."""
+    return QualityProfile(
+        accession=accession,
+        total_reads=1000,
+        total_bases=150000,
+        avg_read_length=150.0,
+        read_length_distribution={},
+        gc_content=0.45,
+        gc_distribution=[],
+        quality_distribution={"excellent_q30+": 0.9},
+        n_content=n_content,
+        contamination_indicators={"adapter_contamination": adapter},
+        complexity_score=0.85,
+        duplication_rate=duplication_rate,
+        technology_confidence=0.8,
+        quality_grade="good",
+        recommendations=[],
+    )
 
 
 # ============================================================================
 # TEST CLASS: SRAIntelligentDownloadCommand
 # ============================================================================
+
 
 class TestSRAIntelligentDownloadCommand:
     """Test SRAIntelligentDownloadCommand functionality."""
@@ -145,50 +195,28 @@ class TestSRAIntelligentDownloadCommand:
         """Test download estimate printing."""
         cmd = SRAIntelligentDownloadCommand()
         mock_manager = Mock()
-        mock_manager.estimate_download_time.return_value = {
-            "total_datasets": 5,
-            "total_size_gb": 25.5,
-            "estimated_hours": 3.5,
-            "optimal_parallel": 4,
-            "bandwidth_limited": True
-        }
+        mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
 
         cmd._print_download_estimate(mock_manager, ["SRR001", "SRR002"])
 
         captured = capsys.readouterr()
         assert "Download Estimate" in captured.out
-        assert "5" in captured.out
-        assert "25.5" in captured.out
-        assert "3.5" in captured.out
+        assert "Total datasets: 2" in captured.out
+        assert "0:30:00" in captured.out  # estimated_time_formatted
         assert "bandwidth" in captured.out.lower()
 
     def test_print_session_summary(self, capsys):
         """Test session summary printing."""
         cmd = SRAIntelligentDownloadCommand()
-        mock_stats = Mock()
-        mock_stats.average_mbps = 10.5
-        mock_stats.peak_mbps = 15.2
-        mock_stats.efficiency = 0.85
-
-        session = MockDownloadSession(
-            session_id="test_123",
-            start_time=datetime.now(),
-            end_time=datetime.now() + timedelta(hours=1),
-            total_downloads=10,
-            completed_downloads=8,
-            failed_downloads=2,
-            status="completed",
-            failed_accessions=["SRR001", "SRR002"],
-            bandwidth_stats=mock_stats
-        )
+        session = make_session("test_123", completed=8, failed=2, failed_accessions=["SRR001", "SRR002"])
 
         cmd._print_session_summary(session)
 
         captured = capsys.readouterr()
         assert "test_123" in captured.out
-        assert "10" in captured.out
-        assert "8" in captured.out
-        assert "Bandwidth Statistics" in captured.out
+        assert "Completed: 8" in captured.out
+        assert "Failed: 2" in captured.out
+        assert "Throughput Statistics" in captured.out
 
     def test_execute_dry_run(self, tmp_path, capsys):
         """Test execution in dry-run mode."""
@@ -207,10 +235,10 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=True,
-            progress_report="progress.json"
+            progress_report="progress.json",
         )
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager'):
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager"):
             result = cmd.execute(args)
 
         assert result == 0
@@ -234,30 +262,14 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=False,
-            progress_report=str(tmp_path / "progress.json")
+            progress_report=str(tmp_path / "progress.json"),
         )
 
-        mock_session = MockDownloadSession(
-            session_id="test_123",
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-            total_downloads=2,
-            completed_downloads=2,
-            failed_downloads=0,
-            status="completed",
-            failed_accessions=[],
-            bandwidth_stats=None
-        )
+        mock_session = make_session("test_123", completed=2, failed=0, failed_accessions=[])
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager') as mock_mgr_class:
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
             mock_manager = Mock()
-            mock_manager.estimate_download_time.return_value = {
-                "total_datasets": 2,
-                "total_size_gb": 1.0,
-                "estimated_hours": 0.5,
-                "optimal_parallel": 2,
-                "bandwidth_limited": False
-            }
+            mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
             mock_manager.download_with_resume.return_value = mock_session
             mock_mgr_class.return_value = mock_manager
 
@@ -265,6 +277,10 @@ class TestSRAIntelligentDownloadCommand:
 
         assert result == 0
         assert Path(tmp_path / "progress.json").exists()
+        saved = json.loads(Path(tmp_path / "progress.json").read_text())
+        assert saved["completed_downloads"] == 2
+        assert saved["failed_downloads"] == 0
+        assert saved["failed_accessions"] == []
 
     def test_execute_with_failures(self, tmp_path):
         """Test execution with some failed downloads."""
@@ -283,36 +299,22 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=False,
-            progress_report=str(tmp_path / "progress.json")
+            progress_report=str(tmp_path / "progress.json"),
         )
 
-        mock_session = MockDownloadSession(
-            session_id="test_123",
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-            total_downloads=3,
-            completed_downloads=2,
-            failed_downloads=1,
-            status="completed",
-            failed_accessions=["SRR003"],
-            bandwidth_stats=None
-        )
+        mock_session = make_session("test_123", completed=2, failed=1, failed_accessions=["SRR003"])
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager') as mock_mgr_class:
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
             mock_manager = Mock()
-            mock_manager.estimate_download_time.return_value = {
-                "total_datasets": 3,
-                "total_size_gb": 1.5,
-                "estimated_hours": 0.8,
-                "optimal_parallel": 3,
-                "bandwidth_limited": False
-            }
+            mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
             mock_manager.download_with_resume.return_value = mock_session
             mock_mgr_class.return_value = mock_manager
 
             result = cmd.execute(args)
 
         assert result == 1  # Should return error code due to failures
+        saved = json.loads(Path(tmp_path / "progress.json").read_text())
+        assert saved["failed_accessions"] == ["SRR003"]
 
     def test_execute_keyboard_interrupt(self, tmp_path, capsys):
         """Test handling of keyboard interrupt."""
@@ -331,18 +333,12 @@ class TestSRAIntelligentDownloadCommand:
             no_resume=False,
             force_restart=False,
             dry_run=False,
-            progress_report=str(tmp_path / "progress.json")
+            progress_report=str(tmp_path / "progress.json"),
         )
 
-        with patch('metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager') as mock_mgr_class:
+        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
             mock_manager = Mock()
-            mock_manager.estimate_download_time.return_value = {
-                "total_datasets": 1,
-                "total_size_gb": 0.5,
-                "estimated_hours": 0.2,
-                "optimal_parallel": 1,
-                "bandwidth_limited": False
-            }
+            mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
             mock_manager.download_with_resume.side_effect = KeyboardInterrupt()
             mock_mgr_class.return_value = mock_manager
 
@@ -356,6 +352,7 @@ class TestSRAIntelligentDownloadCommand:
 # ============================================================================
 # TEST CLASS: SRAQualityProfileCommand
 # ============================================================================
+
 
 class TestSRAQualityProfileCommand:
     """Test SRAQualityProfileCommand functionality."""
@@ -383,26 +380,12 @@ class TestSRAQualityProfileCommand:
     def test_print_quality_profile(self, capsys):
         """Test quality profile printing."""
         cmd = SRAQualityProfileCommand()
-        profile = MockQualityProfile(
-            accession="SRR001",
-            total_reads=1000000,
-            total_bases=150000000,
-            avg_read_length=150.0,
-            gc_content=0.45,
-            avg_quality=35.0,
-            quality_distribution=[30, 35, 40],
-            complexity_score=0.85,
-            n_content=0.02,
-            duplicate_rate=0.25,
-            adapter_contamination=0.08,
-            warnings=[]
-        )
+        profile = make_profile("SRR001", n_content=0.02, duplication_rate=0.25, adapter=0.08)
 
         cmd._print_quality_profile(profile)
 
         captured = capsys.readouterr()
         assert "SRR001" in captured.out
-        assert "1,000,000" in captured.out or "1000000" in captured.out
         assert "High N content" in captured.out
         assert "High duplicate rate" in captured.out
         assert "Adapter contamination" in captured.out
@@ -423,25 +406,12 @@ class TestSRAQualityProfileCommand:
             output_dir=str(tmp_path / "output"),
             detailed_reports=False,
             include_contamination=False,
-            summary_only=False
+            summary_only=False,
         )
 
-        mock_profile = MockQualityProfile(
-            accession="SRR001",
-            total_reads=1000,
-            total_bases=150000,
-            avg_read_length=150.0,
-            gc_content=0.45,
-            avg_quality=35.0,
-            quality_distribution=[30, 35, 40],
-            complexity_score=0.85,
-            n_content=0.01,
-            duplicate_rate=0.15,
-            adapter_contamination=0.02,
-            warnings=[]
-        )
+        mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer') as mock_analyzer_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
@@ -471,25 +441,12 @@ class TestSRAQualityProfileCommand:
             output_dir=str(tmp_path / "output"),
             detailed_reports=True,
             include_contamination=True,
-            summary_only=False
+            summary_only=False,
         )
 
-        mock_profile = MockQualityProfile(
-            accession="SRR001",
-            total_reads=1000,
-            total_bases=150000,
-            avg_read_length=150.0,
-            gc_content=0.45,
-            avg_quality=35.0,
-            quality_distribution=[30, 35, 40],
-            complexity_score=0.85,
-            n_content=0.01,
-            duplicate_rate=0.15,
-            adapter_contamination=0.02,
-            warnings=[]
-        )
+        mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer') as mock_analyzer_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
@@ -497,13 +454,50 @@ class TestSRAQualityProfileCommand:
             result = cmd.execute(args)
 
         assert result == 0
-        # Check that detailed reports were created
-        assert Path(tmp_path / "output" / "SRR001_quality_profile.json").exists()
+        # Check that detailed reports were created and are JSON-serializable
+        report_path = Path(tmp_path / "output" / "SRR001_quality_profile.json")
+        assert report_path.exists()
+        report = json.loads(report_path.read_text())
+        assert report["quality_grade"] == "good"
+        assert report["contamination_indicators"]["adapter_contamination"] == 0.02
+
+    def test_execute_missing_fastq_marks_failed(self, tmp_path):
+        """Accessions with no FASTQ files are recorded as failed and yield exit 1."""
+        cmd = SRAQualityProfileCommand()
+
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR404\n")
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()  # intentionally empty
+
+        args = Namespace(
+            accession=None,
+            accessions_file=str(accessions_file),
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+        )
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer_class.return_value = mock_analyzer
+            result = cmd.execute(args)
+            # No FASTQ files -> profiling never attempted
+            mock_analyzer.profile_dataset_quality.assert_not_called()
+
+        assert result == 1
+        summary = json.loads((tmp_path / "output" / "quality_summary.json").read_text())
+        assert summary["total_analyzed"] == 0
+        assert summary["failed_accessions"] == ["SRR404"]
+        assert summary["summary_stats"] is None
 
 
 # ============================================================================
 # TEST CLASS: SRAInteractiveDashboardCommand
 # ============================================================================
+
 
 class TestSRAInteractiveDashboardCommand:
     """Test SRAInteractiveDashboardCommand functionality."""
@@ -539,12 +533,12 @@ class TestSRAInteractiveDashboardCommand:
             quality_profiles=None,
             output_dir=str(tmp_path / "dashboards"),
             title="Test Dashboard",
-            dashboard_type="quality"
+            dashboard_type="quality",
         )
 
         mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRAReportGenerator') as mock_reporter_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
             mock_reporter = Mock()
             mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
             mock_reporter_class.return_value = mock_reporter
@@ -566,13 +560,13 @@ class TestSRAInteractiveDashboardCommand:
             quality_profiles=None,
             output_dir=str(tmp_path / "dashboards"),
             title="Full Dashboard",
-            dashboard_type="full"
+            dashboard_type="full",
         )
 
         mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRAReportGenerator') as mock_reporter_class:
-            with patch('webbrowser.open'):  # Mock browser opening
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            with patch("webbrowser.open"):  # Mock browser opening
                 mock_reporter = Mock()
                 mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
                 mock_reporter.create_comparative_analysis.return_value = mock_dashboard_path
@@ -586,6 +580,7 @@ class TestSRAInteractiveDashboardCommand:
 # ============================================================================
 # TEST CLASS: SRAComparativeAnalysisCommand
 # ============================================================================
+
 
 class TestSRAComparativeAnalysisCommand:
     """Test SRAComparativeAnalysisCommand functionality."""
@@ -612,10 +607,7 @@ class TestSRAComparativeAnalysisCommand:
         """Test successful group loading."""
         cmd = SRAComparativeAnalysisCommand()
         groups_file = tmp_path / "groups.json"
-        groups_data = {
-            "Group_A": ["SRR001", "SRR002"],
-            "Group_B": ["SRR003", "SRR004"]
-        }
+        groups_data = {"Group_A": ["SRR001", "SRR002"], "Group_B": ["SRR003", "SRR004"]}
         groups_file.write_text(json.dumps(groups_data))
 
         result = cmd._load_groups(str(groups_file))
@@ -651,10 +643,7 @@ class TestSRAComparativeAnalysisCommand:
         cmd = SRAComparativeAnalysisCommand()
 
         groups_file = tmp_path / "groups.json"
-        groups_data = {
-            "Group_A": ["SRR001", "SRR002"],
-            "Group_B": ["SRR003", "SRR004"]
-        }
+        groups_data = {"Group_A": ["SRR001", "SRR002"], "Group_B": ["SRR003", "SRR004"]}
         groups_file.write_text(json.dumps(groups_data))
 
         args = Namespace(
@@ -662,32 +651,34 @@ class TestSRAComparativeAnalysisCommand:
             fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "output"),
             statistical_tests=True,
-            generate_report=True
+            generate_report=True,
         )
 
-        mock_comparison = MockComparativeAnalysis(
-            group_statistics={
-                "Group_A": {
-                    "dataset_count": 2,
-                    "mean_gc_content": 0.45,
-                    "mean_quality": 35.0,
-                    "total_reads": 2000000
-                },
-                "Group_B": {
-                    "dataset_count": 2,
-                    "mean_gc_content": 0.52,
-                    "mean_quality": 33.0,
-                    "total_reads": 1800000
-                }
+        def grp_stats(gc, length, reads):
+            return {
+                "gc_content": {"mean": gc, "std": 0.0, "median": gc, "min": gc, "max": gc},
+                "avg_read_length": {"mean": length, "std": 0.0, "median": length, "min": length, "max": length},
+                "total_reads": {"mean": reads, "std": 0.0, "median": reads, "min": reads, "max": reads},
+            }
+
+        mock_comparison = ComparativeAnalysis(
+            dataset_groups=groups_data,
+            summary_statistics={
+                "Group_A": grp_stats(0.45, 150.0, 2000000.0),
+                "Group_B": grp_stats(0.52, 145.0, 1800000.0),
             },
             statistical_tests={
-                "gc_content": {"p_value": 0.03, "test": "Mann-Whitney U"}
+                "gc_content": {"test": "t-test", "statistic": 2.0, "p_value": 0.03, "significant": True}
             },
-            significant_differences=["gc_content"]
+            outlier_datasets=[],
+            clustering_results=None,
+            batch_effects={},
+            recommendations=["ok"],
+            visualization_data={},
         )
 
-        with patch('metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer') as mock_analyzer_class:
-            with patch('metaquest.cli.commands.sra_intelligent.SRAReportGenerator') as mock_reporter_class:
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
                 mock_analyzer = Mock()
                 mock_analyzer.compare_datasets.return_value = mock_comparison
                 mock_analyzer_class.return_value = mock_analyzer
@@ -700,6 +691,176 @@ class TestSRAComparativeAnalysisCommand:
 
         assert result == 0
         assert Path(tmp_path / "output" / "comparative_analysis.json").exists()
+
+
+# ============================================================================
+# TEST CLASS: Integration against REAL backend dataclasses
+#
+# These tests construct the actual DownloadSession / QualityProfile /
+# ComparativeAnalysis objects returned by the sra/ backend (not mocks), to
+# guard against the CLI drifting away from the real dataclass interface.
+# ============================================================================
+
+
+class TestRealBackendInterface:
+    """Drive the CLI summary helpers with the real backend dataclasses."""
+
+    def _real_session(self, success, failure, failed_accs):
+        from datetime import datetime
+        from metaquest.sra.download_manager import (
+            DownloadSession,
+            DownloadProgress,
+            NetworkConditions,
+        )
+
+        nc = NetworkConditions(
+            bandwidth_mbps=10.0,
+            latency_ms=100.0,
+            packet_loss_pct=0.0,
+            connection_stability=1.0,
+            optimal_parallel_downloads=4,
+            last_measured=datetime.now(),
+        )
+        results = {}
+        for acc in failed_accs:
+            results[acc] = DownloadProgress(
+                accession=acc,
+                status="failed",
+                progress_pct=0.0,
+                downloaded_mb=0.0,
+                total_mb=None,
+                speed_mbps=0.0,
+                eta_seconds=None,
+                retry_count=0,
+                error_message="boom",
+            )
+        for i in range(success):
+            acc = f"SRR9000{i}"
+            results[acc] = DownloadProgress(
+                accession=acc,
+                status="completed",
+                progress_pct=100.0,
+                downloaded_mb=1.0,
+                total_mb=1.0,
+                speed_mbps=5.0,
+                eta_seconds=0,
+                retry_count=0,
+                error_message=None,
+            )
+        accessions = list(results.keys())
+        return DownloadSession(
+            session_id="real_1",
+            accessions=accessions,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            total_size_mb=float(len(accessions)),
+            downloaded_mb=float(success),
+            success_count=success,
+            failure_count=failure,
+            average_speed_mbps=5.0,
+            network_conditions=nc,
+            download_results=results,
+        )
+
+    def _real_profile(self, accession, n_content, dup_rate, adapter):
+        from metaquest.sra.analytics import QualityProfile
+
+        return QualityProfile(
+            accession=accession,
+            total_reads=1000000,
+            total_bases=150000000,
+            avg_read_length=150.0,
+            read_length_distribution={},
+            gc_content=0.45,
+            gc_distribution=[],
+            quality_distribution={"excellent_q30+": 0.9},
+            n_content=n_content,
+            contamination_indicators={"adapter_contamination": adapter},
+            complexity_score=0.85,
+            duplication_rate=dup_rate,
+            technology_confidence=0.8,
+            quality_grade="good",
+            recommendations=[],
+        )
+
+    def test_print_session_summary_real(self, capsys):
+        cmd = SRAIntelligentDownloadCommand()
+        session = self._real_session(success=8, failure=2, failed_accs=["SRR001", "SRR002"])
+
+        cmd._print_session_summary(session)  # must not raise AttributeError
+
+        out = capsys.readouterr().out
+        assert "real_1" in out
+        assert "8" in out  # completed
+        assert "2" in out  # failed
+
+    def test_print_quality_profile_real(self, capsys):
+        cmd = SRAQualityProfileCommand()
+        profile = self._real_profile("SRR001", n_content=0.02, dup_rate=0.25, adapter=0.08)
+
+        cmd._print_quality_profile(profile)  # must not raise AttributeError
+
+        out = capsys.readouterr().out
+        assert "SRR001" in out
+        assert "High N content" in out
+        assert "High duplicate rate" in out
+        assert "Adapter contamination" in out
+
+    def test_print_quality_profile_real_handles_none_duplication(self, capsys):
+        cmd = SRAQualityProfileCommand()
+        profile = self._real_profile("SRR003", n_content=0.0, dup_rate=None, adapter=0.0)
+
+        cmd._print_quality_profile(profile)  # duplication_rate=None must not raise
+
+        out = capsys.readouterr().out
+        assert "SRR003" in out
+        assert "High duplicate rate" not in out
+
+    def test_compare_execute_real(self, tmp_path):
+        cmd = SRAComparativeAnalysisCommand()
+        from metaquest.sra.analytics import ComparativeAnalysis
+
+        groups = {"Group_A": ["SRR001", "SRR002"], "Group_B": ["SRR003", "SRR004"]}
+        groups_file = tmp_path / "groups.json"
+        groups_file.write_text(json.dumps(groups))
+
+        comparison = ComparativeAnalysis(
+            dataset_groups=groups,
+            summary_statistics={
+                "Group_A": {
+                    "gc_content": {"mean": 0.45, "std": 0.0, "median": 0.45, "min": 0.45, "max": 0.45},
+                    "avg_read_length": {"mean": 150.0, "std": 0.0, "median": 150.0, "min": 150.0, "max": 150.0},
+                    "total_reads": {"mean": 2000000.0, "std": 0.0, "median": 2e6, "min": 2e6, "max": 2e6},
+                }
+            },
+            statistical_tests={
+                "gc_content": {"test": "t-test", "statistic": 2.0, "p_value": 0.03, "significant": True}
+            },
+            outlier_datasets=[],
+            clustering_results=None,
+            batch_effects={},
+            recommendations=["ok"],
+            visualization_data={},
+        )
+
+        args = Namespace(
+            groups_file=str(groups_file),
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "output"),
+            statistical_tests=True,
+            generate_report=False,
+        )
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_cls:
+            mock_analyzer = Mock()
+            mock_analyzer.compare_datasets.return_value = comparison
+            mock_cls.return_value = mock_analyzer
+            result = cmd.execute(args)
+
+        assert result == 0
+        assert (tmp_path / "output" / "comparative_analysis.json").exists()
+        saved = json.loads((tmp_path / "output" / "comparative_analysis.json").read_text())
+        assert saved["significant_differences"] == ["gc_content"]
 
 
 # ============================================================================

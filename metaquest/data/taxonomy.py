@@ -33,7 +33,7 @@ class NCBITaxonomyClient:
         self.email = email
         self.api_key = api_key
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-        self.last_request_time = 0
+        self.last_request_time: float = 0
         self.request_delay = 1.0 / 3 if api_key else 1.0 / 10  # Rate limiting
 
     def _make_request(self, url: str, params: Dict[str, str]) -> str:
@@ -75,7 +75,7 @@ class NCBITaxonomyClient:
 
         # Parse XML response
         root = ET.fromstring(response)
-        tax_ids = [id_elem.text for id_elem in root.findall(".//Id")]
+        tax_ids = [id_elem.text for id_elem in root.findall(".//Id") if id_elem.text is not None]
 
         if not tax_ids:
             return []
@@ -106,9 +106,12 @@ class NCBITaxonomyClient:
         results = []
 
         for taxon in root.findall("./Taxon"):
-            tax_id = taxon.find("TaxId").text if taxon.find("TaxId") is not None else ""
-            sci_name = taxon.find("ScientificName").text if taxon.find("ScientificName") is not None else ""
-            rank = taxon.find("Rank").text if taxon.find("Rank") is not None else ""
+            tid = taxon.find("TaxId")
+            tax_id = (tid.text or "") if tid is not None else ""
+            sname = taxon.find("ScientificName")
+            sci_name = (sname.text or "") if sname is not None else ""
+            rk = taxon.find("Rank")
+            rank = (rk.text or "") if rk is not None else ""
 
             # Get lineage
             lineage = []
@@ -339,7 +342,7 @@ def create_taxonomic_summary(
         summary_data = []
 
         for sample_name in abundance_data.index:
-            sample_summary = {}
+            sample_summary: dict = {}
 
             for species, abundance in abundance_data.loc[sample_name].items():
                 if abundance < min_abundance:

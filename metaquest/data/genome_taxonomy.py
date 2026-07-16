@@ -66,61 +66,59 @@ def parse_gtdb_taxonomy_string(gtdb_string: str, genome_id: str) -> TaxonomyInfo
     return info
 
 
+def _taxonomy_from_record(record: dict, accession: str) -> Optional[TaxonomyInfo]:
+    """Build a TaxonomyInfo from a GTDB record dict, or None if it has no taxonomy."""
+    gtdb_taxonomy = record.get("gtdb_taxonomy") or record.get("gtdbTaxonomy") or record.get("taxonomy") or ""
+    if not gtdb_taxonomy:
+        return None
+
+    info = parse_gtdb_taxonomy_string(gtdb_taxonomy, accession)
+    info.organism = record.get("organism_name") or record.get("organismName")
+    info.tax_id = str(record.get("ncbi_taxid") or record.get("taxId") or "") or None
+    return info
+
+
+def _extract_search_rows(data) -> list:
+    """Normalize a GTDB search response into a list of record dicts.
+
+    The endpoint may return a bare list, a dict under a ``rows`` key, or a
+    dict under a ``results`` key.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("rows") or data.get("results") or []
+    return []
+
+
 def _lookup_genome_taxonomy_gtdb(accession: str) -> Optional[TaxonomyInfo]:
-    """Query the GTDB API for a single genome's taxonomy."""
-    # Try the genome detail endpoint first
-    url = f"{GTDB_API_BASE}/genome/{requests.utils.quote(accession)}"
-    logger.debug("Querying GTDB genome endpoint: %s", url)
+    """Query the GTDB API for a single genome's taxonomy.
+
+    Tries the genome detail endpoint first, then falls back to the search
+    endpoint. Returns None when no taxonomy can be resolved.
+    """
+    quoted = requests.utils.quote(accession)
+    genome_url = f"{GTDB_API_BASE}/genome/{quoted}"
+    search_url = f"{GTDB_API_BASE}/search/gtdb"
+    logger.debug("Querying GTDB genome endpoint: %s", genome_url)
 
     try:
-        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response = requests.get(genome_url, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
-            data = response.json()
-            gtdb_taxonomy = (
-                data.get("gtdb_taxonomy")
-                or data.get("gtdbTaxonomy")
-                or data.get("taxonomy")
-                or ""
-            )
-            if gtdb_taxonomy:
-                info = parse_gtdb_taxonomy_string(gtdb_taxonomy, accession)
-                info.organism = data.get("organism_name") or data.get("organismName")
-                info.tax_id = str(data.get("ncbi_taxid") or data.get("taxId") or "")
-                if info.tax_id == "":
-                    info.tax_id = None
+            info = _taxonomy_from_record(response.json(), accession)
+            if info:
                 return info
 
         # Fallback: search endpoint
-        search_url = f"{GTDB_API_BASE}/search/gtdb"
         params = {"search": accession, "page": 1, "itemsPerPage": 1}
         response = requests.get(search_url, params=params, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
-            data = response.json()
-            rows = data.get("rows") or data if isinstance(data, list) else []
-            if isinstance(data, dict) and not rows:
-                rows = data.get("results", [])
-            if rows and len(rows) > 0:
-                record = rows[0]
-                gtdb_taxonomy = (
-                    record.get("gtdb_taxonomy")
-                    or record.get("gtdbTaxonomy")
-                    or record.get("taxonomy")
-                    or ""
-                )
-                if gtdb_taxonomy:
-                    info = parse_gtdb_taxonomy_string(gtdb_taxonomy, accession)
-                    info.organism = record.get("organism_name") or record.get("organismName")
-                    info.tax_id = str(
-                        record.get("ncbi_taxid") or record.get("taxId") or ""
-                    )
-                    if info.tax_id == "":
-                        info.tax_id = None
-                    return info
+            rows = _extract_search_rows(response.json())
+            if rows:
+                return _taxonomy_from_record(rows[0], accession)
 
     except requests.exceptions.RequestException as e:
-        raise DataAccessError(
-            f"GTDB API error looking up genome '{accession}': {e}"
-        )
+        raise DataAccessError(f"GTDB API error looking up genome '{accession}': {e}")
 
     return None
 
@@ -152,9 +150,7 @@ def load_taxonomy_cache(cache_file: Path) -> Dict[str, TaxonomyInfo]:
     return cache
 
 
-def save_taxonomy_cache(
-    taxonomy: Dict[str, TaxonomyInfo], cache_file: Path
-) -> None:
+def save_taxonomy_cache(taxonomy: Dict[str, TaxonomyInfo], cache_file: Path) -> None:
     """Save a genome-to-taxonomy mapping to a TSV file."""
     with open(cache_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_CACHE_COLUMNS, delimiter="\t")
@@ -203,14 +199,10 @@ def enrich_genomes_with_taxonomy(
                 if info:
                     taxonomy[accession] = info
                 else:
-                    logger.warning(
-                        "No taxonomy found for genome '%s'", accession
-                    )
+                    logger.warning("No taxonomy found for genome '%s'", accession)
                     taxonomy[accession] = TaxonomyInfo(genome_id=accession)
             except DataAccessError:
-                logger.warning(
-                    "Failed to retrieve taxonomy for '%s'", accession
-                )
+                logger.warning("Failed to retrieve taxonomy for '%s'", accession)
                 taxonomy[accession] = TaxonomyInfo(genome_id=accession)
 
         if cache_file:
@@ -293,7 +285,5 @@ def summarize_by_taxonomy(
         return pd.DataFrame()
 
     grouped = df.groupby(["sample", level])["containment"].max().reset_index()
-    pivot = grouped.pivot_table(
-        index="sample", columns=level, values="containment", fill_value=0.0
-    )
+    pivot = grouped.pivot_table(index="sample", columns=level, values="containment", fill_value=0.0)
     return pivot

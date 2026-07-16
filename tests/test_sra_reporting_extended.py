@@ -12,9 +12,7 @@ Run: pytest tests/test_sra_reporting_extended.py -v
 """
 
 import pytest
-from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from dataclasses import dataclass
 from typing import Dict, List, Any
 
@@ -25,6 +23,7 @@ from metaquest.sra.reporting import SRAReportGenerator
 @dataclass
 class MockQualityProfile:
     """Mock quality profile for testing."""
+
     total_reads: int
     total_bases: int
     avg_read_length: float
@@ -43,6 +42,7 @@ class MockQualityProfile:
 @dataclass
 class MockAnomalyReport:
     """Mock anomaly report."""
+
     anomalous_datasets: List[str]
     explanations: Dict[str, str]
 
@@ -50,6 +50,7 @@ class MockAnomalyReport:
 @dataclass
 class MockStatisticalTest:
     """Mock statistical test result."""
+
     test: str
     p_value: float
     significant: bool
@@ -58,6 +59,7 @@ class MockStatisticalTest:
 @dataclass
 class MockComparativeAnalysis:
     """Mock comparative analysis results."""
+
     statistical_tests: Dict[str, MockStatisticalTest]
     visualization_data: Dict[str, Any]
     recommendations: List[str]
@@ -83,7 +85,7 @@ def mock_quality_profiles():
             complexity_score=0.90,
             n_content=0.01,
             contamination_indicators={"adapter_contamination": 0.02},
-            warnings=[]
+            warnings=[],
         ),
         "SRR002": MockQualityProfile(
             total_reads=800000,
@@ -94,7 +96,7 @@ def mock_quality_profiles():
             complexity_score=0.85,
             n_content=0.02,
             contamination_indicators={"adapter_contamination": 0.03},
-            warnings=[]
+            warnings=[],
         ),
         "SRR003": MockQualityProfile(
             total_reads=500000,
@@ -105,7 +107,7 @@ def mock_quality_profiles():
             complexity_score=0.75,
             n_content=0.05,
             contamination_indicators={"adapter_contamination": 0.08},
-            warnings=["High adapter contamination"]
+            warnings=["High adapter contamination"],
         ),
     }
 
@@ -114,8 +116,7 @@ def mock_quality_profiles():
 def mock_anomaly_report():
     """Create mock anomaly report."""
     return MockAnomalyReport(
-        anomalous_datasets=["SRR003"],
-        explanations={"SRR003": "High adapter contamination and low complexity"}
+        anomalous_datasets=["SRR003"], explanations={"SRR003": "High adapter contamination and low complexity"}
     )
 
 
@@ -124,29 +125,45 @@ def mock_comparative_analysis():
     """Create mock comparative analysis."""
     return MockComparativeAnalysis(
         statistical_tests={
-            "gc_content": MockStatisticalTest(
-                test="Mann-Whitney U",
-                p_value=0.045,
-                significant=True
-            ),
-            "read_length": MockStatisticalTest(
-                test="T-test",
-                p_value=0.32,
-                significant=False
-            )
+            "gc_content": MockStatisticalTest(test="Mann-Whitney U", p_value=0.045, significant=True),
+            "read_length": MockStatisticalTest(test="T-test", p_value=0.32, significant=False),
         },
         visualization_data={
             "boxplot_data": [
-                {"group": "Group A", "avg_read_length": 150, "gc_content": 0.45, "total_reads": 1000000, "complexity_score": 0.85},
-                {"group": "Group A", "avg_read_length": 148, "gc_content": 0.46, "total_reads": 1100000, "complexity_score": 0.87},
-                {"group": "Group B", "avg_read_length": 151, "gc_content": 0.52, "total_reads": 900000, "complexity_score": 0.82},
-                {"group": "Group B", "avg_read_length": 149, "gc_content": 0.53, "total_reads": 950000, "complexity_score": 0.83},
+                {
+                    "group": "Group A",
+                    "avg_read_length": 150,
+                    "gc_content": 0.45,
+                    "total_reads": 1000000,
+                    "complexity_score": 0.85,
+                },
+                {
+                    "group": "Group A",
+                    "avg_read_length": 148,
+                    "gc_content": 0.46,
+                    "total_reads": 1100000,
+                    "complexity_score": 0.87,
+                },
+                {
+                    "group": "Group B",
+                    "avg_read_length": 151,
+                    "gc_content": 0.52,
+                    "total_reads": 900000,
+                    "complexity_score": 0.82,
+                },
+                {
+                    "group": "Group B",
+                    "avg_read_length": 149,
+                    "gc_content": 0.53,
+                    "total_reads": 950000,
+                    "complexity_score": 0.83,
+                },
             ]
         },
         recommendations=[
             "Group A shows significantly different GC content",
-            "Consider separate preprocessing pipelines for each group"
-        ]
+            "Consider separate preprocessing pipelines for each group",
+        ],
     )
 
 
@@ -161,13 +178,12 @@ class TestQualityDashboardGeneration:
         def profile_side_effect(accession, *args, **kwargs):
             return mock_quality_profiles[accession]
 
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=profile_side_effect):
-            with patch.object(generator.analyzer, 'detect_dataset_anomalies', return_value=mock_anomaly_report):
-                with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-                    with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=profile_side_effect):
+            with patch.object(generator.analyzer, "detect_dataset_anomalies", return_value=mock_anomaly_report):
+                with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                    with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
                         result_path = generator.generate_quality_dashboard(
-                            accessions=["SRR001", "SRR002", "SRR003"],
-                            title="Test Quality Dashboard"
+                            accessions=["SRR001", "SRR002", "SRR003"], title="Test Quality Dashboard"
                         )
 
         # Verify dashboard was created
@@ -186,18 +202,17 @@ class TestQualityDashboardGeneration:
         def profile_side_effect(accession, *args, **kwargs):
             return mock_quality_profiles[accession]
 
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=profile_side_effect):
-            with patch.object(generator.analyzer, 'detect_dataset_anomalies', return_value=mock_anomaly_report):
-                with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-                    with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', True):
-                        with patch('metaquest.sra.reporting.Environment') as mock_env:
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=profile_side_effect):
+            with patch.object(generator.analyzer, "detect_dataset_anomalies", return_value=mock_anomaly_report):
+                with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                    with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
+                        with patch("metaquest.sra.reporting.Environment") as mock_env:
                             mock_template = Mock()
                             mock_template.render.return_value = "<html><h1>Quality Dashboard</h1></html>"
                             mock_env.return_value.from_string.return_value = mock_template
 
                             result_path = generator.generate_quality_dashboard(
-                                accessions=["SRR001", "SRR002"],
-                                title="Jinja2 Dashboard"
+                                accessions=["SRR001", "SRR002"], title="Jinja2 Dashboard"
                             )
 
         assert result_path.exists()
@@ -214,15 +229,14 @@ class TestQualityDashboardGeneration:
         def profile_side_effect(accession, *args, **kwargs):
             return mock_quality_profiles[accession]
 
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=profile_side_effect):
-            with patch.object(generator.analyzer, 'detect_dataset_anomalies', return_value=mock_anomaly_report):
-                with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
-                    with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
-                        with patch('metaquest.sra.reporting.go.Figure'):
-                            with patch('metaquest.sra.reporting.pyo.plot', return_value="<div>Plot</div>"):
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=profile_side_effect):
+            with patch.object(generator.analyzer, "detect_dataset_anomalies", return_value=mock_anomaly_report):
+                with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
+                    with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
+                        with patch("metaquest.sra.reporting.go.Figure"):
+                            with patch("metaquest.sra.reporting.pyo.plot", return_value="<div>Plot</div>"):
                                 result_path = generator.generate_quality_dashboard(
-                                    accessions=["SRR001", "SRR002"],
-                                    title="Dashboard with Plots"
+                                    accessions=["SRR001", "SRR002"], title="Dashboard with Plots"
                                 )
 
         assert result_path.exists()
@@ -241,14 +255,13 @@ class TestQualityDashboardGeneration:
 
         mock_anomaly = MockAnomalyReport(anomalous_datasets=[], explanations={})
 
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=profile_side_effect):
-            with patch.object(generator.analyzer, 'detect_dataset_anomalies', return_value=mock_anomaly):
-                with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-                    with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=profile_side_effect):
+            with patch.object(generator.analyzer, "detect_dataset_anomalies", return_value=mock_anomaly):
+                with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                    with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
                         # Should succeed with partial data
                         result_path = generator.generate_quality_dashboard(
-                            accessions=["SRR001", "SRR002", "SRR003"],
-                            title="Partial Dashboard"
+                            accessions=["SRR001", "SRR002", "SRR003"], title="Partial Dashboard"
                         )
 
         assert result_path.exists()
@@ -257,12 +270,9 @@ class TestQualityDashboardGeneration:
         """Test quality dashboard when all profiles fail."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch.object(generator.analyzer, 'profile_dataset_quality', side_effect=Exception("API Error")):
+        with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=Exception("API Error")):
             with pytest.raises(ValueError, match="No datasets could be profiled"):
-                generator.generate_quality_dashboard(
-                    accessions=["SRR001", "SRR002"],
-                    title="Failed Dashboard"
-                )
+                generator.generate_quality_dashboard(accessions=["SRR001", "SRR002"], title="Failed Dashboard")
 
 
 class TestComparativeAnalysisReports:
@@ -272,17 +282,13 @@ class TestComparativeAnalysisReports:
         """Test successful comparative analysis report generation."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        groups = {
-            "Group A": ["SRR001", "SRR002"],
-            "Group B": ["SRR003", "SRR004"]
-        }
+        groups = {"Group A": ["SRR001", "SRR002"], "Group B": ["SRR003", "SRR004"]}
 
-        with patch.object(generator.analyzer, 'compare_datasets', return_value=mock_comparative_analysis):
-            with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-                with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
+        with patch.object(generator.analyzer, "compare_datasets", return_value=mock_comparative_analysis):
+            with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
                     result_path = generator.create_comparative_analysis(
-                        groups=groups,
-                        title="Test Comparative Analysis"
+                        groups=groups, title="Test Comparative Analysis"
                     )
 
         # Verify report was created
@@ -299,22 +305,18 @@ class TestComparativeAnalysisReports:
         """Test comparative analysis with Jinja2 templating."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        groups = {
-            "Treatment": ["SRR001"],
-            "Control": ["SRR002"]
-        }
+        groups = {"Treatment": ["SRR001"], "Control": ["SRR002"]}
 
-        with patch.object(generator.analyzer, 'compare_datasets', return_value=mock_comparative_analysis):
-            with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-                with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', True):
-                    with patch('metaquest.sra.reporting.Environment') as mock_env:
+        with patch.object(generator.analyzer, "compare_datasets", return_value=mock_comparative_analysis):
+            with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
+                    with patch("metaquest.sra.reporting.Environment") as mock_env:
                         mock_template = Mock()
                         mock_template.render.return_value = "<html><h1>Comparative Analysis</h1></html>"
                         mock_env.return_value.from_string.return_value = mock_template
 
                         result_path = generator.create_comparative_analysis(
-                            groups=groups,
-                            title="Jinja2 Comparative Analysis"
+                            groups=groups, title="Jinja2 Comparative Analysis"
                         )
 
         assert result_path.exists()
@@ -324,19 +326,15 @@ class TestComparativeAnalysisReports:
         """Test comparative analysis with Plotly plots."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        groups = {
-            "Group A": ["SRR001", "SRR002"],
-            "Group B": ["SRR003", "SRR004"]
-        }
+        groups = {"Group A": ["SRR001", "SRR002"], "Group B": ["SRR003", "SRR004"]}
 
-        with patch.object(generator.analyzer, 'compare_datasets', return_value=mock_comparative_analysis):
-            with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
-                with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', False):
-                    with patch('metaquest.sra.reporting.go.Figure'):
-                        with patch('metaquest.sra.reporting.pyo.plot', return_value="<div>Boxplot</div>"):
+        with patch.object(generator.analyzer, "compare_datasets", return_value=mock_comparative_analysis):
+            with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
+                with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
+                    with patch("metaquest.sra.reporting.go.Figure"):
+                        with patch("metaquest.sra.reporting.pyo.plot", return_value="<div>Boxplot</div>"):
                             result_path = generator.create_comparative_analysis(
-                                groups=groups,
-                                title="Analysis with Plots"
+                                groups=groups, title="Analysis with Plots"
                             )
 
         assert result_path.exists()
@@ -349,9 +347,9 @@ class TestQualityPlotCreation:
         """Test quality plot creation with Plotly available."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
-            with patch('metaquest.sra.reporting.go.Figure') as mock_fig_class:
-                with patch('metaquest.sra.reporting.pyo.plot', return_value="<div>Plot HTML</div>") as mock_plot:
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
+            with patch("metaquest.sra.reporting.go.Figure") as mock_fig_class:
+                with patch("metaquest.sra.reporting.pyo.plot", return_value="<div>Plot HTML</div>") as mock_plot:
                     mock_figure = Mock()
                     mock_fig_class.return_value = mock_figure
 
@@ -371,7 +369,7 @@ class TestQualityPlotCreation:
         """Test quality plot creation without Plotly."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
             plots = generator._create_quality_plots(mock_quality_profiles)
 
         # Should return empty dict
@@ -381,9 +379,9 @@ class TestQualityPlotCreation:
         """Test quality plot creation with empty profiles."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
-            with patch('metaquest.sra.reporting.go.Figure'):
-                with patch('metaquest.sra.reporting.pyo.plot', return_value="<div>Plot</div>"):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
+            with patch("metaquest.sra.reporting.go.Figure"):
+                with patch("metaquest.sra.reporting.pyo.plot", return_value="<div>Plot</div>"):
                     plots = generator._create_quality_plots({})
 
         # Should still return dict (may be empty or have default plots)
@@ -397,9 +395,9 @@ class TestComparativePlotCreation:
         """Test comparative plot creation with valid data."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
-            with patch('metaquest.sra.reporting.go.Figure') as mock_fig_class:
-                with patch('metaquest.sra.reporting.pyo.plot', return_value="<div>Boxplot</div>"):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
+            with patch("metaquest.sra.reporting.go.Figure") as mock_fig_class:
+                with patch("metaquest.sra.reporting.pyo.plot", return_value="<div>Boxplot</div>"):
                     mock_figure = Mock()
                     mock_fig_class.return_value = mock_figure
 
@@ -414,7 +412,7 @@ class TestComparativePlotCreation:
         """Test comparative plot creation without Plotly."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
             plots = generator._create_comparative_plots(mock_comparative_analysis)
 
         assert plots == {}
@@ -423,13 +421,9 @@ class TestComparativePlotCreation:
         """Test comparative plot creation with no visualization data."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        empty_analysis = MockComparativeAnalysis(
-            statistical_tests={},
-            visualization_data={},
-            recommendations=[]
-        )
+        empty_analysis = MockComparativeAnalysis(statistical_tests={}, visualization_data={}, recommendations=[])
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', True):
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", True):
             plots = generator._create_comparative_plots(empty_analysis)
 
         # Should return empty dict when no data available
@@ -443,7 +437,6 @@ class TestJinja2TemplateRendering:
         """Test download HTML generation with plots in template data."""
         generator = SRAReportGenerator(tmp_output_dir)
 
-        from datetime import datetime, timedelta
         from dataclasses import dataclass
 
         @dataclass
@@ -460,10 +453,7 @@ class TestJinja2TemplateRendering:
             retry_count: int = 0
 
         mock_session = MockSession(
-            session_id="test123",
-            download_results={
-                "SRR001": MockResult("completed", 500.0, 100.0, 10.0)
-            }
+            session_id="test123", download_results={"SRR001": MockResult("completed", 500.0, 100.0, 10.0)}
         )
 
         report_data = {
@@ -473,16 +463,16 @@ class TestJinja2TemplateRendering:
                 "total_accessions": 1,
                 "success_rate": 1.0,
                 "total_size_mb": 500.0,
-                "average_speed_mbps": 10.0
+                "average_speed_mbps": 10.0,
             },
             "plots": {
                 "success_rate": "<div>Success Rate Plot</div>",
-                "speed_distribution": "<div>Speed Distribution</div>"
-            }
+                "speed_distribution": "<div>Speed Distribution</div>",
+            },
         }
 
-        with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', True):
-            with patch('metaquest.sra.reporting.Environment') as mock_env:
+        with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
+            with patch("metaquest.sra.reporting.Environment") as mock_env:
                 mock_template = Mock()
                 mock_template.render.return_value = "<html>Test</html>"
                 mock_env.return_value.from_string.return_value = mock_template
@@ -504,17 +494,16 @@ class TestJinja2TemplateRendering:
                 "total_reads": 5000000,
                 "average_gc_content": 0.45,
                 "high_contamination_count": 1,
-                "quality_grade_distribution": {"excellent": 2, "good": 1}
+                "quality_grade_distribution": {"excellent": 2, "good": 1},
             },
             "anomaly_report": MockAnomalyReport(
-                anomalous_datasets=["SRR003"],
-                explanations={"SRR003": "High contamination"}
+                anomalous_datasets=["SRR003"], explanations={"SRR003": "High contamination"}
             ),
-            "plots": {}
+            "plots": {},
         }
 
-        with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', True):
-            with patch('metaquest.sra.reporting.Environment') as mock_env:
+        with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
+            with patch("metaquest.sra.reporting.Environment") as mock_env:
                 mock_template = Mock()
                 mock_template.render.return_value = "<html>Dashboard with Anomalies</html>"
                 mock_env.return_value.from_string.return_value = mock_template
@@ -533,18 +522,16 @@ class TestJinja2TemplateRendering:
             "timestamp": "2025-01-01 12:00:00",
             "group_counts": {"Group A": 10, "Group B": 15},
             "comparison": MockComparativeAnalysis(
-                statistical_tests={
-                    "gc_content": MockStatisticalTest("Mann-Whitney U", 0.03, True)
-                },
+                statistical_tests={"gc_content": MockStatisticalTest("Mann-Whitney U", 0.03, True)},
                 visualization_data={},
-                recommendations=["Use different pipelines"]
+                recommendations=["Use different pipelines"],
             ),
-            "plots": {}
+            "plots": {},
         }
 
-        with patch('metaquest.sra.reporting.PLOTLY_AVAILABLE', False):
-            with patch('metaquest.sra.reporting.JINJA2_AVAILABLE', True):
-                with patch('metaquest.sra.reporting.Environment') as mock_env:
+        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+            with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
+                with patch("metaquest.sra.reporting.Environment") as mock_env:
                     mock_template = Mock()
                     mock_template.render.return_value = "<html>Statistical Results</html>"
                     mock_env.return_value.from_string.return_value = mock_template

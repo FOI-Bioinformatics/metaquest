@@ -16,6 +16,7 @@ import pandas as pd
 
 from metaquest.core.models import TaxonomyInfo
 from metaquest.core.utils import get_genome_columns
+from metaquest.utils.html import plotly_cdn_script, TABLE_SCRIPT
 
 try:
     import plotly.express as px
@@ -140,12 +141,7 @@ def _build_summary_data(
     families = long_df.loc[long_df["family"] != "Unknown", "family"].unique()
     genera = long_df.loc[long_df["genus"] != "Unknown", "genus"].unique()
 
-    top_families = (
-        long_df.groupby("family")["sample"]
-        .nunique()
-        .sort_values(ascending=False)
-        .head(5)
-    )
+    top_families = long_df.groupby("family")["sample"].nunique().sort_values(ascending=False).head(5)
 
     return {
         "total_samples": samples_with_containment,
@@ -154,9 +150,7 @@ def _build_summary_data(
         "num_genera": len(genera),
         "containment_min": float(long_df["containment"].min()),
         "containment_max": float(long_df["containment"].max()),
-        "top_families": [
-            {"name": name, "count": int(count)} for name, count in top_families.items()
-        ],
+        "top_families": [{"name": name, "count": int(count)} for name, count in top_families.items()],
     }
 
 
@@ -181,9 +175,7 @@ def _build_sunburst(long_df: pd.DataFrame) -> str:
 
 def _build_heatmap(long_df: pd.DataFrame) -> str:
     """Build sample-by-taxon heatmap. Returns Plotly HTML fragment."""
-    pivot = long_df.pivot_table(
-        index="sample", columns="family", values="containment", aggfunc="max", fill_value=0
-    )
+    pivot = long_df.pivot_table(index="sample", columns="family", values="containment", aggfunc="max", fill_value=0)
     if pivot.empty:
         return ""
     fig = px.imshow(
@@ -244,7 +236,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <title>{{ title }}</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    {{ plotly_cdn|safe }}
     <style>
         * { box-sizing: border-box; }
         body {
@@ -409,61 +401,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
         {% endif %}
     </div>
 
-    <script>
-    function filterTable() {
-        var input = document.getElementById("searchInput").value.toUpperCase();
-        var table = document.getElementById("resultsTable");
-        var tr = table.getElementsByTagName("tr");
-        for (var i = 1; i < tr.length; i++) {
-            var cells = tr[i].getElementsByTagName("td");
-            var match = false;
-            for (var j = 0; j < cells.length; j++) {
-                if (cells[j].textContent.toUpperCase().indexOf(input) > -1) {
-                    match = true; break;
-                }
-            }
-            tr[i].style.display = match ? "" : "none";
-        }
-    }
-
-    function sortTable(col) {
-        var table = document.getElementById("resultsTable");
-        var rows = Array.from(table.tBodies[0].rows);
-        var asc = table.getAttribute("data-sort-col") == col
-                  && table.getAttribute("data-sort-dir") != "asc";
-        rows.sort(function(a, b) {
-            var va = a.cells[col].textContent;
-            var vb = b.cells[col].textContent;
-            var na = parseFloat(va), nb = parseFloat(vb);
-            if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
-            return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-        });
-        rows.forEach(function(r) { table.tBodies[0].appendChild(r); });
-        table.setAttribute("data-sort-col", col);
-        table.setAttribute("data-sort-dir", asc ? "asc" : "desc");
-    }
-
-    function exportCSV() {
-        var table = document.getElementById("resultsTable");
-        var rows = table.querySelectorAll("tr");
-        var csv = [];
-        rows.forEach(function(row) {
-            if (row.style.display === "none") return;
-            var cols = row.querySelectorAll("td, th");
-            var line = [];
-            cols.forEach(function(col) {
-                var val = col.textContent.replace(/"/g, '""');
-                line.push('"' + val + '"');
-            });
-            csv.push(line.join(","));
-        });
-        var blob = new Blob([csv.join("\\n")], {type: "text/csv"});
-        var a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "containment_results.csv";
-        a.click();
-    }
-    </script>
+    {{ table_script|safe }}
 </body>
 </html>"""
 
@@ -480,6 +418,8 @@ def _assemble_html(title, summary, sunburst_html, heatmap_html, table_rows, box_
             table_rows=table_rows,
             box_html=box_html,
             bar_html=bar_html,
+            plotly_cdn=plotly_cdn_script(),
+            table_script=TABLE_SCRIPT,
         )
     return _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_html, box_html, bar_html)
 
@@ -515,7 +455,7 @@ def _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_htm
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>{safe_title}</title>
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+{plotly_cdn_script()}
 <style>
 body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; background: #fafafa; }}
 .header {{ background: #2c3e50; color: #ecf0f1; padding: 24px 32px; }}
@@ -554,54 +494,5 @@ table.results td {{ padding: 8px 12px; border-bottom: 1px solid #eee; }}
 </tr></thead><tbody>{table_rows}</tbody></table></div>
 {dist_section}
 </div>
-<script>
-function filterTable() {{
-    var input = document.getElementById("searchInput").value.toUpperCase();
-    var table = document.getElementById("resultsTable");
-    var tr = table.getElementsByTagName("tr");
-    for (var i = 1; i < tr.length; i++) {{
-        var cells = tr[i].getElementsByTagName("td");
-        var match = false;
-        for (var j = 0; j < cells.length; j++) {{
-            if (cells[j].textContent.toUpperCase().indexOf(input) > -1) {{
-                match = true; break;
-            }}
-        }}
-        tr[i].style.display = match ? "" : "none";
-    }}
-}}
-function sortTable(col) {{
-    var table = document.getElementById("resultsTable");
-    var rows = Array.from(table.tBodies[0].rows);
-    var asc = table.getAttribute("data-sort-col") == col && table.getAttribute("data-sort-dir") != "asc";
-    rows.sort(function(a, b) {{
-        var va = a.cells[col].textContent, vb = b.cells[col].textContent;
-        var na = parseFloat(va), nb = parseFloat(vb);
-        if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
-        return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-    }});
-    rows.forEach(function(r) {{ table.tBodies[0].appendChild(r); }});
-    table.setAttribute("data-sort-col", col);
-    table.setAttribute("data-sort-dir", asc ? "asc" : "desc");
-}}
-function exportCSV() {{
-    var table = document.getElementById("resultsTable");
-    var rows = table.querySelectorAll("tr");
-    var csv = [];
-    rows.forEach(function(row) {{
-        if (row.style.display === "none") return;
-        var cols = row.querySelectorAll("td, th");
-        var line = [];
-        cols.forEach(function(col) {{
-            var val = col.textContent.replace(/"/g, '""');
-            line.push('"' + val + '"');
-        }});
-        csv.push(line.join(","));
-    }});
-    var blob = new Blob([csv.join("\\n")], {{type: "text/csv"}});
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "containment_results.csv";
-    a.click();
-}}
-</script></body></html>"""
+{TABLE_SCRIPT}
+</body></html>"""

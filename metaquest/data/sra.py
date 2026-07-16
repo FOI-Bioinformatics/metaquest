@@ -12,11 +12,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.exceptions import DataAccessError, SecurityError
+from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_rmtree(path: Path) -> None:
+    """Remove a directory tree if present, logging on failure instead of raising."""
+    try:
+        if path.exists():
+            shutil.rmtree(path)
+    except Exception as e:
+        logger.warning(f"Could not remove directory {path}: {e}")
 
 
 def _read_blacklist_files(blacklist_files):
@@ -29,7 +38,7 @@ def _read_blacklist_files(blacklist_files):
     Returns:
         Set of blacklisted accessions
     """
-    blacklisted_accessions = set()
+    blacklisted_accessions: set = set()
 
     if not blacklist_files:
         return blacklisted_accessions
@@ -186,16 +195,9 @@ def download_accession(
         logger.info(f"Skipping {accession}, FASTQ files already exist")
         return True, "already exists"
 
-    # Create a temporary folder for download
+    # Create a fresh temporary folder for download
     temp_path = Path(output_folder) / f"{accession}_temp"
-    if temp_path.exists():
-        # Clean up any existing temporary folder
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as e:
-            logger.warning(f"Could not remove existing temp directory {temp_path}: {e}")
-
-    # Create the temporary folder
+    _safe_rmtree(temp_path)
     temp_path.mkdir(parents=True, exist_ok=True)
 
     temp_folder_path = None
@@ -227,35 +229,23 @@ def download_accession(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
+        _safe_rmtree(temp_path)
         return False, f"Download failed: {e.stderr}"
 
     except SecurityError as e:
         logger.error(f"Security error downloading {accession}: {e}")
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
+        _safe_rmtree(temp_path)
         return False, f"Security error: {e}"
 
     except Exception as e:
         logger.error(f"Error downloading {accession}: {e}")
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
+        _safe_rmtree(temp_path)
         return False, f"Download failed: {str(e)}"
 
     finally:
         # Clean up auto-created temp directory (from tempfile.mkdtemp)
-        if temp_folder_path and not temp_folder and temp_folder_path.exists():
-            try:
-                shutil.rmtree(temp_folder_path)
-            except Exception as cleanup_err:
-                logger.warning(f"Failed to clean up temp folder {temp_folder_path}: {cleanup_err}")
+        if temp_folder_path and not temp_folder:
+            _safe_rmtree(temp_folder_path)
 
 
 def _check_existing_downloads(
@@ -433,6 +423,27 @@ def _handle_download_failure(fastq_path, failed_accessions):
     )
 
 
+def _execute_parallel_downloads(
+    accessions, fastq_path, num_threads, max_workers, force, temp_folder, download_results, failed_accessions
+):
+    """Download accessions concurrently and tally results. Returns (successful, failed)."""
+    futures_results: list = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(download_accession, acc, fastq_path, num_threads, force, temp_folder): acc
+            for acc in accessions
+        }
+        for future in as_completed(futures):
+            acc = futures[future]
+            try:
+                futures_results.append((acc, future.result()))
+            except Exception as e:
+                logger.error(f"Download failed for {acc}: {e}")
+                futures_results.append((acc, None))
+
+    return _process_download_results(futures_results, accessions, download_results, failed_accessions)
+
+
 def download_sra(
     fastq_folder: Union[str, Path],
     accessions_file: Union[str, Path],
@@ -516,35 +527,18 @@ def download_sra(
             accessions_to_download = accessions_to_download[:max_downloads]
 
         # Download accessions in parallel
-        successful_count = 0
-        failed_count = 0
-        failed_accessions = []
-        download_results = {}
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit download jobs
-            futures = {
-                executor.submit(download_accession, acc, fastq_path, num_threads, force, temp_folder): acc
-                for acc in accessions_to_download
-            }
-
-            # Process results as they complete
-            futures_results = []
-            for future in as_completed(futures):
-                acc = futures[future]
-                try:
-                    result = future.result()
-                    futures_results.append((acc, result))
-                except Exception as e:
-                    logger.error(f"Download failed for {acc}: {e}")
-                    futures_results.append((acc, None))
-
-            successful_count, failed_count = _process_download_results(
-                futures_results,
-                accessions_to_download,
-                download_results,
-                failed_accessions,
-            )
+        failed_accessions: list = []
+        download_results: dict = {}
+        successful_count, failed_count = _execute_parallel_downloads(
+            accessions_to_download,
+            fastq_path,
+            num_threads,
+            max_workers,
+            force,
+            temp_folder,
+            download_results,
+            failed_accessions,
+        )
 
         # Retry failed downloads if requested
         if max_retries > 0 and failed_accessions:
@@ -620,70 +614,31 @@ def assemble_datasets(args):
     """
     Assemble datasets from FASTQ files.
 
+    De-novo assembly is not yet implemented. This function validates the input
+    location and then raises ProcessingError, rather than silently producing an
+    empty result and writing a misleading success file.
+
     Args:
         args: Command-line arguments with fastq_folder/data_files and output_file
 
-    Returns:
-        List of dataset information dictionaries
-
     Raises:
-        DataAccessError: If the assembly fails
+        DataAccessError: If the input FASTQ folder does not exist
+        ProcessingError: Always, because assembly is not implemented
     """
-    try:
-        # Determine source folder - prefer fastq_folder (tests) over data_files (CLI)
-        if hasattr(args, 'fastq_folder') and args.fastq_folder:
-            fastq_folder = Path(args.fastq_folder)
-        elif hasattr(args, 'data_files') and args.data_files:
-            # For CLI, assume first data_files entry is the folder
-            fastq_folder = Path(args.data_files[0]).parent if args.data_files else Path("fastq")
-        else:
-            fastq_folder = Path("fastq")
+    # Determine source folder - prefer fastq_folder (tests) over data_files (CLI)
+    if hasattr(args, "fastq_folder") and args.fastq_folder:
+        fastq_folder = Path(args.fastq_folder)
+    elif hasattr(args, "data_files") and args.data_files:
+        # For CLI, assume the first data_files entry lives in the source folder
+        fastq_folder = Path(args.data_files[0]).parent
+    else:
+        fastq_folder = Path("fastq")
 
-        if not fastq_folder.exists():
-            raise DataAccessError(f"Fastq folder {fastq_folder} does not exist")
+    if not fastq_folder.exists():
+        raise DataAccessError(f"Fastq folder {fastq_folder} does not exist")
 
-        # Find FASTQ files (both .fastq and .fastq.gz)
-        fastq_patterns = ["*.fastq", "*.fastq.gz"]
-        all_files = []
-        for pattern in fastq_patterns:
-            all_files.extend(fastq_folder.glob(pattern))
-
-        # Identify Illumina and Nanopore files
-        illumina_files = []
-        nanopore_files = []
-        for fastq_file in all_files:
-            if "R1" in fastq_file.name or "R2" in fastq_file.name:
-                illumina_files.append(fastq_file)
-            else:
-                nanopore_files.append(fastq_file)
-
-        logger.info(f"Found {len(illumina_files)} Illumina files and {len(nanopore_files)} Nanopore files")
-
-        if len(illumina_files) == 0 and len(nanopore_files) == 0:
-            logger.warning(f"No FASTQ files found in {fastq_folder}")
-            results = []
-        else:
-            results = []
-
-            # Process Illumina datasets (mock for testing)
-            read_pairs = _find_paired_reads(illumina_files)
-            for r1_file, r2_file in read_pairs:
-                # For testing, don't actually run assembly
-                pass
-
-            # Process Nanopore datasets (mock for testing)
-            for fastq_file in nanopore_files:
-                # For testing, don't actually run assembly
-                pass
-
-        # Write output file if specified
-        if hasattr(args, 'output_file') and args.output_file:
-            import json
-            output_path = Path(args.output_file)
-            with open(output_path, 'w') as f:
-                json.dump(results, f, indent=2)
-
-        return results
-
-    except Exception as e:
-        raise DataAccessError(f"Error assembling datasets: {e}")
+    raise ProcessingError(
+        "Dataset assembly is not implemented. Run a dedicated assembler "
+        "(e.g. megahit for Illumina or flye for long reads) on the downloaded "
+        "FASTQ files instead."
+    )

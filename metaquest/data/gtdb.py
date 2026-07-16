@@ -1,7 +1,7 @@
 """GTDB API client for genome taxonomy database queries."""
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 
@@ -63,9 +63,25 @@ def search_taxon(taxon_name: str, limit: int = 100) -> List[Dict]:
     return []
 
 
-def get_accessions_for_species(
-    species_name: str, representative_only: bool = True
-) -> List[str]:
+def _record_accession(record: Dict) -> Optional[str]:
+    """Pull the assembly accession from a GTDB record under any of its key spellings."""
+    return record.get("accession") or record.get("gid") or record.get("ncbi_accession")
+
+
+def _is_representative(record: Dict) -> bool:
+    """Whether a GTDB record is flagged as a representative genome."""
+    return bool(record.get("isRep") or record.get("is_representative", False))
+
+
+def _keep_accession(record: Dict, representative_only: bool) -> Optional[str]:
+    """Return the record's accession if it should be kept under the rep filter, else None."""
+    accession = _record_accession(record)
+    if accession and (not representative_only or _is_representative(record)):
+        return accession
+    return None
+
+
+def get_accessions_for_species(species_name: str, representative_only: bool = True) -> List[str]:
     """Get assembly accessions (GCF_*/GCA_*) for a species.
 
     If representative_only is True, return only the representative genome.
@@ -74,55 +90,38 @@ def get_accessions_for_species(
     if not results:
         return []
 
-    accessions = []
-    for record in results:
-        accession = record.get("accession") or record.get("gid") or record.get("ncbi_accession")
-        is_rep = record.get("isRep") or record.get("is_representative", False)
+    accessions = [acc for record in results if (acc := _keep_accession(record, representative_only))]
 
-        if accession:
-            if representative_only and not is_rep:
-                continue
-            accessions.append(accession)
-
-    # If representative_only but none flagged as representative, return first
-    if representative_only and not accessions and results:
-        first = results[0]
-        accession = first.get("accession") or first.get("gid") or first.get("ncbi_accession")
-        if accession:
-            accessions.append(accession)
+    # If representative_only but none flagged as representative, return the first accession
+    if representative_only and not accessions:
+        first = _record_accession(results[0])
+        if first:
+            accessions.append(first)
 
     return accessions
 
 
-def get_accessions_for_genus(
-    genus_name: str, representative_only: bool = True
-) -> List[str]:
+def get_accessions_for_genus(genus_name: str, representative_only: bool = True) -> List[str]:
     """Get representative accessions for all species in a genus."""
     taxon_results = search_taxon(genus_name)
     if not taxon_results:
         return []
 
-    accessions = []
+    accessions: List[str] = []
     seen_species = set()
-
     for record in taxon_results:
         species = record.get("species") or record.get("name", "")
         if species in seen_species:
             continue
         seen_species.add(species)
-
-        accession = record.get("accession") or record.get("gid") or record.get("ncbi_accession")
-        is_rep = record.get("isRep") or record.get("is_representative", False)
-
+        accession = _keep_accession(record, representative_only)
         if accession:
-            if representative_only and not is_rep:
-                continue
             accessions.append(accession)
 
     # If representative_only yielded nothing, collect all unique accessions
     if representative_only and not accessions:
         for record in taxon_results:
-            accession = record.get("accession") or record.get("gid") or record.get("ncbi_accession")
+            accession = _record_accession(record)
             if accession and accession not in accessions:
                 accessions.append(accession)
 

@@ -9,7 +9,7 @@ import logging
 import numpy as np
 import pandas as pd
 from sklearn.metrics import pairwise_distances
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 from metaquest.core.exceptions import ProcessingError
 
@@ -132,7 +132,7 @@ def perform_permanova(
     metadata: pd.DataFrame,
     formula: str,
     n_permutations: int = 999,
-) -> Dict[str, float]:
+) -> Dict[str, Dict[str, Any]]:
     """
     Perform PERMANOVA (Permutational Multivariate Analysis of Variance).
 

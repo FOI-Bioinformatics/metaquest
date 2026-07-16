@@ -23,6 +23,23 @@ from metaquest.sra import (
 logger = logging.getLogger(__name__)
 
 
+def _read_accession_file(filename: str, warn_if_empty: bool = False) -> List[str]:
+    """Read non-empty, stripped accession lines from a file.
+
+    A missing file prints a message and returns []. When ``warn_if_empty`` is
+    set, an existing-but-empty file also prints a "No accessions found" message.
+    """
+    try:
+        with open(filename, "r") as f:
+            accessions = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        print(f"Accessions file not found: {filename}")
+        return []
+    if warn_if_empty and not accessions:
+        print(f"No accessions found in {filename}")
+    return accessions
+
+
 class SRAIntelligentDownloadCommand(BaseCommand):
     """Command for intelligent SRA downloading with resume capability."""
 
@@ -92,17 +109,8 @@ class SRAIntelligentDownloadCommand(BaseCommand):
         )
 
     def _read_accessions(self, filename: str) -> List[str]:
-        """Read accessions from file."""
-        try:
-            with open(filename, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-            if not accessions:
-                print(f"No accessions found in {filename}")
-                return []
-            return accessions
-        except FileNotFoundError:
-            print(f"Accessions file not found: {filename}")
-            return []
+        """Read accessions from file, warning if the file is empty."""
+        return _read_accession_file(filename, warn_if_empty=True)
 
     def _print_download_estimate(self, manager: IntelligentDownloadManager, accessions: List[str]):
         """Print download time estimates."""
@@ -110,12 +118,11 @@ class SRAIntelligentDownloadCommand(BaseCommand):
             estimate = manager.estimate_download_time(accessions)
             print("\nDownload Estimate:")
             print("=================")
-            print(f"Total datasets: {estimate['total_datasets']}")
-            print(f"Total size: {estimate['total_size_gb']:.2f} GB")
-            print(f"Estimated time: {estimate['estimated_hours']:.1f} hours")
-            print(f"Optimal parallelization: {estimate['optimal_parallel']}")
-            if estimate["bandwidth_limited"]:
-                print("⚠️  Bandwidth may be limiting factor")
+            print(f"Total datasets: {len(accessions)}")
+            print(f"Total size: {estimate['total_size_mb'] / 1024:.2f} GB")
+            print(f"Estimated time: {estimate['estimated_time_formatted']}")
+            print(f"Network bandwidth: {estimate['network_bandwidth_mbps']:.1f} Mbps")
+            print(f"Optimal parallelization: {estimate['optimal_parallel_downloads']}")
         except Exception as e:
             logger.warning(f"Could not generate estimate: {e}")
 
@@ -125,22 +132,19 @@ class SRAIntelligentDownloadCommand(BaseCommand):
         print("========================")
         print(f"Session ID: {session.session_id}")
         print(f"Started: {session.start_time}")
-        print(f"Total datasets: {session.total_downloads}")
-        print(f"Completed: {session.completed_downloads}")
-        print(f"Failed: {session.failed_downloads}")
-        print(f"Status: {session.status}")
+        print(f"Total datasets: {len(session.accessions)}")
+        print(f"Completed: {session.success_count}")
+        print(f"Failed: {session.failure_count}")
 
         if session.end_time:
-            print(f"Completed: {session.end_time}")
+            print(f"Finished: {session.end_time}")
             duration = session.end_time - session.start_time
             print(f"Duration: {duration}")
 
-        if session.bandwidth_stats:
-            stats = session.bandwidth_stats
-            print("\nBandwidth Statistics:")
-            print(f"  Average: {stats.average_mbps:.1f} Mbps")
-            print(f"  Peak: {stats.peak_mbps:.1f} Mbps")
-            print(f"  Efficiency: {stats.efficiency:.1%}")
+        if session.network_conditions:
+            print("\nThroughput Statistics:")
+            print(f"  Measured bandwidth: {session.network_conditions.bandwidth_mbps:.1f} Mbps")
+            print(f"  Average speed: {session.average_speed_mbps:.1f} MB/min")
 
     def execute(self, args):
         try:
@@ -180,6 +184,7 @@ class SRAIntelligentDownloadCommand(BaseCommand):
             self._print_session_summary(session)
 
             # Save progress report
+            failed_accessions = [acc for acc, result in session.download_results.items() if result.status == "failed"]
             progress_file = Path(args.progress_report)
             with open(progress_file, "w") as progress_f:
                 json.dump(
@@ -187,19 +192,13 @@ class SRAIntelligentDownloadCommand(BaseCommand):
                         "session_id": session.session_id,
                         "start_time": session.start_time.isoformat(),
                         "end_time": session.end_time.isoformat() if session.end_time else None,
-                        "total_downloads": session.total_downloads,
-                        "completed_downloads": session.completed_downloads,
-                        "failed_downloads": session.failed_downloads,
-                        "status": session.status,
-                        "failed_accessions": session.failed_accessions,
-                        "bandwidth_stats": (
-                            {
-                                "average_mbps": session.bandwidth_stats.average_mbps,
-                                "peak_mbps": session.bandwidth_stats.peak_mbps,
-                                "efficiency": session.bandwidth_stats.efficiency,
-                            }
-                            if session.bandwidth_stats
-                            else None
+                        "total_datasets": len(session.accessions),
+                        "completed_downloads": session.success_count,
+                        "failed_downloads": session.failure_count,
+                        "failed_accessions": failed_accessions,
+                        "average_speed_mbps": session.average_speed_mbps,
+                        "network_bandwidth_mbps": (
+                            session.network_conditions.bandwidth_mbps if session.network_conditions else None
                         ),
                     },
                     progress_f,
@@ -208,8 +207,8 @@ class SRAIntelligentDownloadCommand(BaseCommand):
 
             print(f"\nProgress report saved to: {progress_file}")
 
-            if session.failed_downloads > 0:
-                print(f"\n⚠️  {session.failed_downloads} downloads failed")
+            if session.failure_count > 0:
+                print(f"\n⚠️  {session.failure_count} downloads failed")
                 return 1
 
             print("\n✅ All downloads completed successfully!")
@@ -273,13 +272,7 @@ class SRAQualityProfileCommand(BaseCommand):
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
-        try:
-            with open(filename, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-            return accessions
-        except FileNotFoundError:
-            print(f"Accessions file not found: {filename}")
-            return []
+        return _read_accession_file(filename)
 
     def _print_quality_profile(self, profile: QualityProfile):
         """Print quality profile summary."""
@@ -289,118 +282,136 @@ class SRAQualityProfileCommand(BaseCommand):
         print(f"Total bases: {profile.total_bases:,}")
         print(f"Average read length: {profile.avg_read_length:.1f}")
         print(f"GC content: {profile.gc_content:.1%}")
-        print(f"Average quality score: {profile.avg_quality:.1f}")
+        print(f"Quality grade: {profile.quality_grade}")
         print(f"Sequence complexity: {profile.complexity_score:.3f}")
 
         if profile.n_content > 0.01:  # > 1%
             print(f"⚠️  High N content: {profile.n_content:.1%}")
 
-        if profile.duplicate_rate > 0.20:  # > 20%
-            print(f"⚠️  High duplicate rate: {profile.duplicate_rate:.1%}")
+        if profile.duplication_rate is not None and profile.duplication_rate > 0.20:  # > 20%
+            print(f"⚠️  High duplicate rate: {profile.duplication_rate:.1%}")
 
-        if profile.adapter_contamination > 0.05:  # > 5%
-            print(f"⚠️  Adapter contamination: {profile.adapter_contamination:.1%}")
+        adapter_contamination = profile.contamination_indicators.get("adapter_contamination", 0)
+        if adapter_contamination > 0.05:  # > 5%
+            print(f"⚠️  Adapter contamination: {adapter_contamination:.1%}")
+
+    def _resolve_accessions(self, args) -> List[str]:
+        """Return the accessions to profile (single or batch), or [] if none."""
+        if args.accession:
+            print(f"Profiling single accession: {args.accession}")
+            return [args.accession]
+        accessions = self._read_accessions(args.accessions_file)
+        if accessions:
+            print(f"Profiling {len(accessions)} accessions...")
+        return accessions
+
+    def _write_detailed_report(self, profile: QualityProfile, output_dir: Path) -> None:
+        """Write a per-accession quality profile as JSON."""
+        profile_file = output_dir / f"{profile.accession}_quality_profile.json"
+        with open(profile_file, "w") as profile_f:
+            json.dump(
+                {
+                    "accession": profile.accession,
+                    "total_reads": profile.total_reads,
+                    "total_bases": profile.total_bases,
+                    "avg_read_length": profile.avg_read_length,
+                    "gc_content": profile.gc_content,
+                    "quality_grade": profile.quality_grade,
+                    "quality_distribution": profile.quality_distribution,
+                    "complexity_score": profile.complexity_score,
+                    "n_content": profile.n_content,
+                    "duplication_rate": profile.duplication_rate,
+                    "contamination_indicators": profile.contamination_indicators,
+                    "recommendations": profile.recommendations,
+                },
+                profile_f,
+                indent=2,
+            )
+        print(f"  Detailed report saved: {profile_file}")
+
+    def _profile_accession(self, analyzer, args, accession: str, output_dir: Path):
+        """Profile a single accession; return its QualityProfile or None if unavailable."""
+        fastq_dir = Path(args.fastq_dir)
+        accession_files = list(fastq_dir.glob(f"**/{accession}*.fastq*"))
+        if not accession_files:
+            print(f"⚠️  No FASTQ files found for {accession}")
+            return None
+
+        profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_files[0]))
+        if not args.summary_only:
+            self._print_quality_profile(profile)
+        if args.detailed_reports:
+            self._write_detailed_report(profile, output_dir)
+        return profile
+
+    @staticmethod
+    def _summary_stats(profiles):
+        """Aggregate read/base/GC stats across profiles, or None when empty."""
+        if not profiles:
+            return None
+        return {
+            "total_reads": sum(p.total_reads for p in profiles),
+            "total_bases": sum(p.total_bases for p in profiles),
+            "avg_gc_content": sum(p.gc_content for p in profiles) / len(profiles),
+        }
+
+    @staticmethod
+    def _quality_flag_counts(profiles) -> dict:
+        """Count datasets tripping each quality flag (high N, duplicates, contamination)."""
+        return {
+            "high_n_content": len([p for p in profiles if p.n_content > 0.01]),
+            "high_duplicates": len(
+                [p for p in profiles if p.duplication_rate is not None and p.duplication_rate > 0.20]
+            ),
+            "contaminated": len(
+                [p for p in profiles if p.contamination_indicators.get("adapter_contamination", 0) > 0.05]
+            ),
+        }
+
+    def _print_summary_stats(self, profiles, stats) -> None:
+        """Print aggregate statistics and quality-flag counts for a batch."""
+        print(f"\nSummary Statistics ({len(profiles)} datasets):")
+        print("=" * 50)
+        print(f"Total reads across all datasets: {stats['total_reads']:,}")
+        print(f"Total bases across all datasets: {stats['total_bases']:,}")
+        print(f"Average GC content: {stats['avg_gc_content']:.1%}")
+
+        flags = self._quality_flag_counts(profiles)
+        if flags["high_n_content"]:
+            print(f"⚠️  {flags['high_n_content']} datasets with high N content")
+        if flags["high_duplicates"]:
+            print(f"⚠️  {flags['high_duplicates']} datasets with high duplicate rates")
+        if flags["contaminated"]:
+            print(f"⚠️  {flags['contaminated']} datasets with adapter contamination")
 
     def execute(self, args):
         try:
-            # Setup
             output_dir = Path(args.output_dir)
             output_dir.mkdir(exist_ok=True)
-
             analyzer = SRADatasetAnalyzer()
 
-            if args.accession:
-                # Single accession mode
-                accessions = [args.accession]
-                print(f"Profiling single accession: {args.accession}")
-            else:
-                # Batch mode
-                accessions = self._read_accessions(args.accessions_file)
-                if not accessions:
-                    return 1
-                print(f"Profiling {len(accessions)} accessions...")
+            accessions = self._resolve_accessions(args)
+            if not accessions:
+                return 1
 
             profiles = []
             failed_accessions = []
-
             for i, accession in enumerate(accessions, 1):
                 print(f"[{i}/{len(accessions)}] Analyzing {accession}...")
-
                 try:
-                    # Find FASTQ files for this accession
-                    fastq_dir = Path(args.fastq_dir)
-                    accession_files = list(fastq_dir.glob(f"**/{accession}*.fastq*"))
-
-                    if not accession_files:
-                        print(f"⚠️  No FASTQ files found for {accession}")
-                        failed_accessions.append(accession)
-                        continue
-
-                    # Profile the dataset
-                    profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_files[0]))
-
-                    profiles.append(profile)
-
-                    if not args.summary_only:
-                        self._print_quality_profile(profile)
-
-                    # Save detailed report if requested
-                    if args.detailed_reports:
-                        profile_file = output_dir / f"{accession}_quality_profile.json"
-                        with open(profile_file, "w") as profile_f:
-                            json.dump(
-                                {
-                                    "accession": profile.accession,
-                                    "total_reads": profile.total_reads,
-                                    "total_bases": profile.total_bases,
-                                    "avg_read_length": profile.avg_read_length,
-                                    "gc_content": profile.gc_content,
-                                    "avg_quality": profile.avg_quality,
-                                    "quality_distribution": profile.quality_distribution,
-                                    "complexity_score": profile.complexity_score,
-                                    "n_content": profile.n_content,
-                                    "duplicate_rate": profile.duplicate_rate,
-                                    "adapter_contamination": profile.adapter_contamination,
-                                    "warnings": profile.warnings,
-                                },
-                                profile_f,
-                                indent=2,
-                            )
-                        print(f"  Detailed report saved: {profile_file}")
-
+                    profile = self._profile_accession(analyzer, args, accession, output_dir)
                 except Exception as e:
                     logger.warning(f"Failed to profile {accession}: {e}")
+                    profile = None
+                if profile is None:
                     failed_accessions.append(accession)
-                    continue
+                else:
+                    profiles.append(profile)
 
-            # Generate summary statistics
-            if profiles:
-                print(f"\nSummary Statistics ({len(profiles)} datasets):")
-                print("=" * 50)
+            stats = self._summary_stats(profiles)
+            if stats:
+                self._print_summary_stats(profiles, stats)
 
-                total_reads = sum(p.total_reads for p in profiles)
-                total_bases = sum(p.total_bases for p in profiles)
-                avg_gc = sum(p.gc_content for p in profiles) / len(profiles)
-                avg_quality = sum(p.avg_quality for p in profiles) / len(profiles)
-
-                print(f"Total reads across all datasets: {total_reads:,}")
-                print(f"Total bases across all datasets: {total_bases:,}")
-                print(f"Average GC content: {avg_gc:.1%}")
-                print(f"Average quality score: {avg_quality:.1f}")
-
-                # Quality flags
-                high_n_content = len([p for p in profiles if p.n_content > 0.01])
-                high_duplicates = len([p for p in profiles if p.duplicate_rate > 0.20])
-                contaminated = len([p for p in profiles if p.adapter_contamination > 0.05])
-
-                if high_n_content:
-                    print(f"⚠️  {high_n_content} datasets with high N content")
-                if high_duplicates:
-                    print(f"⚠️  {high_duplicates} datasets with high duplicate rates")
-                if contaminated:
-                    print(f"⚠️  {contaminated} datasets with adapter contamination")
-
-            # Save batch summary
             summary_file = output_dir / "quality_summary.json"
             with open(summary_file, "w") as summary_f:
                 json.dump(
@@ -408,16 +419,7 @@ class SRAQualityProfileCommand(BaseCommand):
                         "total_analyzed": len(profiles),
                         "total_failed": len(failed_accessions),
                         "failed_accessions": failed_accessions,
-                        "summary_stats": (
-                            {
-                                "total_reads": total_reads,
-                                "total_bases": total_bases,
-                                "avg_gc_content": avg_gc,
-                                "avg_quality_score": avg_quality,
-                            }
-                            if profiles
-                            else None
-                        ),
+                        "summary_stats": stats,
                     },
                     summary_f,
                     indent=2,
@@ -481,13 +483,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
-        try:
-            with open(filename, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
-            return accessions
-        except FileNotFoundError:
-            print(f"Accessions file not found: {filename}")
-            return []
+        return _read_accession_file(filename)
 
     def execute(self, args):
         try:
@@ -641,12 +637,18 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             print("\nComparative Analysis Results:")
             print("=" * 40)
 
-            for group_name, stats in comparison.group_statistics.items():
+            for group_name, col_stats in comparison.summary_statistics.items():
                 print(f"\n{group_name}:")
-                print(f"  Datasets: {stats['dataset_count']}")
-                print(f"  Avg GC content: {stats['mean_gc_content']:.1%}")
-                print(f"  Avg quality: {stats['mean_quality']:.1f}")
-                print(f"  Total reads: {stats['total_reads']:,}")
+                print(f"  Datasets: {len(groups.get(group_name, []))}")
+                gc_stats = col_stats.get("gc_content")
+                if gc_stats:
+                    print(f"  Avg GC content: {gc_stats['mean']:.1%}")
+                length_stats = col_stats.get("avg_read_length")
+                if length_stats:
+                    print(f"  Avg read length: {length_stats['mean']:.1f}")
+                reads_stats = col_stats.get("total_reads")
+                if reads_stats:
+                    print(f"  Mean total reads: {reads_stats['mean']:,.0f}")
 
             # Statistical tests results
             if args.statistical_tests and comparison.statistical_tests:
@@ -658,14 +660,18 @@ class SRAComparativeAnalysisCommand(BaseCommand):
                     print(f"{test_name}: p={p_value:.4f} {'*' if significant else ''}")
 
             # Save detailed results
+            significant_differences = [
+                col for col, test in comparison.statistical_tests.items() if test.get("significant")
+            ]
             results_file = output_dir / "comparative_analysis.json"
             with open(results_file, "w") as results_f:
                 json.dump(
                     {
                         "groups": groups,
-                        "group_statistics": comparison.group_statistics,
+                        "summary_statistics": comparison.summary_statistics,
                         "statistical_tests": comparison.statistical_tests,
-                        "significant_differences": comparison.significant_differences,
+                        "significant_differences": significant_differences,
+                        "outlier_datasets": comparison.outlier_datasets,
                     },
                     results_f,
                     indent=2,

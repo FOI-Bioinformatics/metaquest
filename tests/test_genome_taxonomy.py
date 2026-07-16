@@ -8,12 +8,17 @@ Run: pytest tests/test_genome_taxonomy.py -v
 
 import pytest
 import pandas as pd
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
+import requests
 
 from metaquest.core.models import TaxonomyInfo
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.genome_taxonomy import (
     parse_gtdb_taxonomy_string,
+    _lookup_genome_taxonomy_gtdb,
+    _taxonomy_from_record,
+    _extract_search_rows,
     enrich_genomes_with_taxonomy,
     load_taxonomy_cache,
     save_taxonomy_cache,
@@ -22,18 +27,15 @@ from metaquest.data.genome_taxonomy import (
     summarize_by_taxonomy,
 )
 
-
 # ============================================================================
 # parse_gtdb_taxonomy_string
 # ============================================================================
 
+
 class TestParseGtdbTaxonomyString:
 
     def test_valid_full_string(self):
-        s = (
-            "d__Bacteria;p__Firmicutes;c__Bacilli;"
-            "o__Bacillales;f__Bacillaceae;g__Bacillus;s__Bacillus subtilis"
-        )
+        s = "d__Bacteria;p__Firmicutes;c__Bacilli;" "o__Bacillales;f__Bacillaceae;g__Bacillus;s__Bacillus subtilis"
         info = parse_gtdb_taxonomy_string(s, "GCF_000009045.1")
         assert info.genome_id == "GCF_000009045.1"
         assert info.phylum == "Firmicutes"
@@ -74,13 +76,12 @@ class TestParseGtdbTaxonomyString:
 # enrich_genomes_with_taxonomy (mocked API)
 # ============================================================================
 
+
 class TestEnrichGenomesWithTaxonomy:
 
     @patch("metaquest.data.genome_taxonomy._lookup_genome_taxonomy_gtdb")
     def test_basic_enrichment(self, mock_lookup):
-        mock_lookup.return_value = TaxonomyInfo(
-            genome_id="GCF_001", family="Bacillaceae", genus="Bacillus"
-        )
+        mock_lookup.return_value = TaxonomyInfo(genome_id="GCF_001", family="Bacillaceae", genus="Bacillus")
         result = enrich_genomes_with_taxonomy(["GCF_001"])
         assert "GCF_001" in result
         assert result["GCF_001"].family == "Bacillaceae"
@@ -113,6 +114,7 @@ class TestEnrichGenomesWithTaxonomy:
 # ============================================================================
 # load_taxonomy_cache / save_taxonomy_cache
 # ============================================================================
+
 
 class TestTaxonomyCache:
 
@@ -150,6 +152,7 @@ class TestTaxonomyCache:
 # annotate_containment_with_taxonomy
 # ============================================================================
 
+
 class TestAnnotateContainment:
 
     def _make_df(self):
@@ -175,6 +178,7 @@ class TestAnnotateContainment:
 # ============================================================================
 # filter_by_taxonomy
 # ============================================================================
+
 
 class TestFilterByTaxonomy:
 
@@ -218,6 +222,7 @@ class TestFilterByTaxonomy:
 # summarize_by_taxonomy
 # ============================================================================
 
+
 class TestSummarizeByTaxonomy:
 
     @pytest.fixture()
@@ -260,3 +265,149 @@ class TestSummarizeByTaxonomy:
         )
         result = summarize_by_taxonomy(df, level="family")
         assert result.empty
+
+
+# ============================================================================
+# _lookup_genome_taxonomy_gtdb (mocked requests)
+# ============================================================================
+
+_GTDB_STRING = "d__Bacteria;p__Firmicutes;c__Bacilli;" "o__Bacillales;f__Bacillaceae;g__Bacillus;s__Bacillus subtilis"
+
+
+def _resp(status_code, json_data):
+    r = MagicMock()
+    r.status_code = status_code
+    r.json.return_value = json_data
+    return r
+
+
+class TestLookupGenomeTaxonomyGtdb:
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_genome_endpoint_success(self, mock_get):
+        mock_get.return_value = _resp(
+            200,
+            {"gtdb_taxonomy": _GTDB_STRING, "organism_name": "Bacillus subtilis", "ncbi_taxid": 1423},
+        )
+        info = _lookup_genome_taxonomy_gtdb("GCF_000009045.1")
+        assert info is not None
+        assert info.species == "Bacillus subtilis"
+        assert info.family == "Bacillaceae"
+        assert info.organism == "Bacillus subtilis"
+        assert info.tax_id == "1423"
+        # genome endpoint hit returns immediately — no fallback call
+        assert mock_get.call_count == 1
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_genome_endpoint_empty_taxid_becomes_none(self, mock_get):
+        mock_get.return_value = _resp(200, {"gtdb_taxonomy": _GTDB_STRING})
+        info = _lookup_genome_taxonomy_gtdb("GCF_001")
+        assert info is not None
+        assert info.tax_id is None
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_falls_back_to_search_endpoint(self, mock_get):
+        # Genome endpoint misses (404), search endpoint returns a result dict.
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, {"results": [{"gtdb_taxonomy": _GTDB_STRING, "ncbi_taxid": 1423}]}),
+        ]
+        info = _lookup_genome_taxonomy_gtdb("GCF_002")
+        assert info is not None
+        assert info.genus == "Bacillus"
+        assert info.tax_id == "1423"
+        assert mock_get.call_count == 2
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_search_results_key_fallback(self, mock_get):
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, {"results": [{"taxonomy": _GTDB_STRING}]}),
+        ]
+        info = _lookup_genome_taxonomy_gtdb("GCF_003")
+        assert info is not None
+        assert info.species == "Bacillus subtilis"
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_no_taxonomy_returns_none(self, mock_get):
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, {"rows": []}),
+        ]
+        assert _lookup_genome_taxonomy_gtdb("GCF_004") is None
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_request_exception_raises_dataaccesserror(self, mock_get):
+        mock_get.side_effect = requests.exceptions.ConnectionError("boom")
+        with pytest.raises(DataAccessError, match="GTDB API error"):
+            _lookup_genome_taxonomy_gtdb("GCF_005")
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_search_endpoint_bare_list(self, mock_get):
+        # GTDB search may return a bare JSON list of records.
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, [{"gtdb_taxonomy": _GTDB_STRING, "ncbi_taxid": 1423}]),
+        ]
+        info = _lookup_genome_taxonomy_gtdb("GCF_006")
+        assert info is not None
+        assert info.genus == "Bacillus"
+        assert info.tax_id == "1423"
+
+    @patch("metaquest.data.genome_taxonomy.requests.get")
+    def test_search_endpoint_rows_key(self, mock_get):
+        # GTDB search may wrap records under a "rows" key.
+        mock_get.side_effect = [
+            _resp(404, {}),
+            _resp(200, {"rows": [{"gtdb_taxonomy": _GTDB_STRING}]}),
+        ]
+        info = _lookup_genome_taxonomy_gtdb("GCF_007")
+        assert info is not None
+        assert info.species == "Bacillus subtilis"
+
+
+class TestSearchResponseHelpers:
+
+    def test_taxonomy_from_record_with_taxonomy(self):
+        info = _taxonomy_from_record({"gtdb_taxonomy": _GTDB_STRING, "ncbi_taxid": 1423}, "GCF_X")
+        assert info is not None
+        assert info.species == "Bacillus subtilis"
+        assert info.tax_id == "1423"
+
+    def test_taxonomy_from_record_without_taxonomy_returns_none(self):
+        assert _taxonomy_from_record({"organism_name": "Foo"}, "GCF_X") is None
+
+    def test_extract_rows_from_list(self):
+        assert _extract_search_rows([{"a": 1}]) == [{"a": 1}]
+
+    def test_extract_rows_from_rows_key(self):
+        assert _extract_search_rows({"rows": [{"a": 1}]}) == [{"a": 1}]
+
+    def test_extract_rows_from_results_key(self):
+        assert _extract_search_rows({"results": [{"b": 2}]}) == [{"b": 2}]
+
+    def test_extract_rows_empty_dict(self):
+        assert _extract_search_rows({}) == []
+
+    def test_extract_rows_unexpected_type(self):
+        assert _extract_search_rows("nonsense") == []
+
+
+class TestCacheAndEnrichEdges:
+
+    def test_load_cache_skips_rows_with_empty_genome_id(self, tmp_path):
+        cache_file = tmp_path / "cache.tsv"
+        header = "genome_id\tspecies\tgenus\tfamily\torder\tclass_name\tphylum\torganism\ttax_id\n"
+        cache_file.write_text(header + "\tSp\t\t\t\t\t\t\t\n" + "GCF_OK\tSp2\t\t\t\t\t\t\t\n")
+        cache = load_taxonomy_cache(cache_file)
+        assert list(cache.keys()) == ["GCF_OK"]
+
+    @patch("metaquest.data.genome_taxonomy._lookup_genome_taxonomy_gtdb")
+    def test_enrich_saves_cache_when_file_given(self, mock_lookup, tmp_path):
+        mock_lookup.return_value = TaxonomyInfo(genome_id="GCF_NEW", family="Bacillaceae")
+        cache_file = tmp_path / "out_cache.tsv"
+        result = enrich_genomes_with_taxonomy(["GCF_NEW"], cache_file=cache_file)
+        assert result["GCF_NEW"].family == "Bacillaceae"
+        # missing genomes + cache_file => cache is written back
+        assert cache_file.exists()
+        assert "GCF_NEW" in cache_file.read_text()

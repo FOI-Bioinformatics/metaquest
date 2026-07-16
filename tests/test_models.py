@@ -13,9 +13,7 @@ from metaquest.core.models import (
 def test_containment_model():
     """Test the Containment data model."""
     # Create a basic containment object
-    containment = Containment(
-        accession="SRR123456", value=0.95, genome_id="GCF_123456.1"
-    )
+    containment = Containment(accession="SRR123456", value=0.95, genome_id="GCF_123456.1")
 
     assert containment.accession == "SRR123456"
     assert containment.value == 0.95

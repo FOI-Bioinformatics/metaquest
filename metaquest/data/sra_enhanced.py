@@ -83,7 +83,7 @@ class EnhancedSRADownloader:
             Tuple of (success, message, metadata_dict)
         """
         output_path = Path(output_folder) / accession
-        metadata = {}
+        metadata: Dict[str, Any] = {}
 
         try:
             # Get metadata for this accession
@@ -327,7 +327,7 @@ class EnhancedSRADownloader:
         logger.info(f"Starting enhanced download of {len(accessions)} datasets")
 
         # Track results
-        results = {
+        results: Dict[str, Any] = {
             "total": len(accessions),
             "successful": 0,
             "failed": 0,

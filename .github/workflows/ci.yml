@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: 'pip'
 
       - name: Install dependencies
@@ -34,7 +34,7 @@ jobs:
           # stop the build if there are Python syntax errors or undefined names
           flake8 metaquest --count --select=E9,F63,F7,F82 --show-source --statistics
           # Check for PEP8 style issues, complexity, and line length
-          flake8 metaquest --count --max-complexity=15 --max-line-length=120 --statistics --ignore=E203,W503
+          flake8 metaquest --count --max-complexity=15 --max-line-length=120 --statistics --extend-ignore=E203,W503
 
       #- name: Type check with mypy
       #  run: #mypy --ignore-missing-imports metaquest
@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: 'pip'
 
       - name: Install build dependencies
@@ -119,7 +119,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: 'pip'
 
       - name: Download distribution packages

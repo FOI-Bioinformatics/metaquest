@@ -33,14 +33,10 @@ def _validate_genome_accession(accession: str) -> str:
         DataAccessError: If the accession format is invalid.
     """
     if not accession.startswith(GENOME_ACCESSION_PREFIXES):
-        raise DataAccessError(
-            f"Invalid genome accession prefix: {accession}. "
-            f"Expected GCF_ or GCA_ prefix."
-        )
+        raise DataAccessError(f"Invalid genome accession prefix: {accession}. " f"Expected GCF_ or GCA_ prefix.")
     if not re.match(GENOME_ACCESSION_PATTERN, accession):
         raise DataAccessError(
-            f"Invalid genome accession format: {accession}. "
-            f"Expected format: GCF_000000000.0 or GCA_000000000.0"
+            f"Invalid genome accession format: {accession}. " f"Expected format: GCF_000000000.0 or GCA_000000000.0"
         )
     return accession
 
@@ -97,9 +93,7 @@ def download_genomes(
     if assembly_level:
         args.extend(["--assembly-level", assembly_level])
 
-    logger.info(
-        f"Downloading {len(accessions)} genome(s) from NCBI datasets"
-    )
+    logger.info(f"Downloading {len(accessions)} genome(s) from NCBI datasets")
 
     try:
         SecureSubprocess.run_secure("datasets", args)
@@ -107,9 +101,7 @@ def download_genomes(
         raise DataAccessError(f"Failed to download genomes: {e}")
 
     if not zip_path.exists():
-        raise DataAccessError(
-            "Download completed but zip file was not created."
-        )
+        raise DataAccessError("Download completed but zip file was not created.")
 
     logger.info(f"Downloaded genomes to {zip_path}")
     return zip_path
@@ -135,16 +127,12 @@ def download_from_file(
     """
     accession_file = Path(accession_file)
     if not accession_file.exists():
-        raise DataAccessError(
-            f"Accession file not found: {accession_file}"
-        )
+        raise DataAccessError(f"Accession file not found: {accession_file}")
 
     # Validate accessions in the file
     accessions = read_accession_file(accession_file)
     if not accessions:
-        raise DataAccessError(
-            f"No valid accessions found in {accession_file}"
-        )
+        raise DataAccessError(f"No valid accessions found in {accession_file}")
     for acc in accessions:
         _validate_genome_accession(acc)
 
@@ -154,15 +142,18 @@ def download_from_file(
     zip_path = output_dir / "ncbi_dataset.zip"
 
     args = [
-        "download", "genome", "accession",
-        "--inputfile", str(accession_file),
-        "--include", include,
-        "--filename", str(zip_path),
+        "download",
+        "genome",
+        "accession",
+        "--inputfile",
+        str(accession_file),
+        "--include",
+        include,
+        "--filename",
+        str(zip_path),
     ]
 
-    logger.info(
-        f"Downloading genomes from accession file {accession_file}"
-    )
+    logger.info(f"Downloading genomes from accession file {accession_file}")
 
     try:
         SecureSubprocess.run_secure("datasets", args)
@@ -170,9 +161,7 @@ def download_from_file(
         raise DataAccessError(f"Failed to download genomes from file: {e}")
 
     if not zip_path.exists():
-        raise DataAccessError(
-            "Download completed but zip file was not created."
-        )
+        raise DataAccessError("Download completed but zip file was not created.")
 
     logger.info(f"Downloaded genomes to {zip_path}")
     return zip_path
@@ -220,9 +209,7 @@ def extract_and_organize(
         # Find FASTA files in the extracted data
         data_dir = extract_dir / "ncbi_dataset" / "data"
         if not data_dir.exists():
-            raise DataAccessError(
-                "Unexpected zip structure: ncbi_dataset/data/ not found."
-            )
+            raise DataAccessError("Unexpected zip structure: ncbi_dataset/data/ not found.")
 
         for accession_dir in data_dir.iterdir():
             if not accession_dir.is_dir():
@@ -233,14 +220,9 @@ def extract_and_organize(
                 continue
 
             # Find FASTA files (.fna or .fasta)
-            fasta_files = (
-                list(accession_dir.glob("*.fna"))
-                + list(accession_dir.glob("*.fasta"))
-            )
+            fasta_files = list(accession_dir.glob("*.fna")) + list(accession_dir.glob("*.fasta"))
             if not fasta_files:
-                logger.warning(
-                    f"No FASTA files found for {accession}"
-                )
+                logger.warning(f"No FASTA files found for {accession}")
                 continue
 
             # Use the first (typically only) FASTA file
@@ -261,9 +243,7 @@ def extract_and_organize(
         if extract_dir.exists():
             shutil.rmtree(extract_dir, ignore_errors=True)
 
-    logger.info(
-        f"Extracted and organized {len(genome_paths)} genome(s)"
-    )
+    logger.info(f"Extracted and organized {len(genome_paths)} genome(s)")
     return genome_paths
 
 
@@ -330,8 +310,5 @@ def create_genome_manifest(
     except Exception as e:
         raise DataAccessError(f"Error writing genome manifest: {e}")
 
-    logger.info(
-        f"Created genome manifest with {len(genome_paths)} entries: "
-        f"{manifest_file}"
-    )
+    logger.info(f"Created genome manifest with {len(genome_paths)} entries: " f"{manifest_file}")
     return manifest_file

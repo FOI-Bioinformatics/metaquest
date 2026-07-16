@@ -5,8 +5,7 @@ Tests for metaquest.data.metadata module.
 import pytest
 import pandas as pd
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, mock_open
-from collections import defaultdict
+from unittest.mock import patch, MagicMock
 import xml.etree.ElementTree as ET
 
 from metaquest.core.exceptions import DataAccessError, ValidationError
@@ -30,11 +29,11 @@ class TestGetUniqueAccessions:
         """Test extracting unique accessions from branchwater format."""
         matches_dir = tmp_path / "matches"
         matches_dir.mkdir()
-        
+
         # Create test CSV with branchwater format
         csv_content = "acc,containment,organism\nSRR123,0.85,E. coli\nSRR456,0.92,S. aureus\nSRR123,0.75,E. coli"
         (matches_dir / "genome1.csv").write_text(csv_content)
-        
+
         result = _get_unique_accessions(matches_dir, threshold=0.8)
         assert result == {"SRR123", "SRR456"}
 
@@ -42,11 +41,11 @@ class TestGetUniqueAccessions:
         """Test extracting unique accessions from SRA format."""
         matches_dir = tmp_path / "matches"
         matches_dir.mkdir()
-        
+
         # Create test CSV with SRA format
         csv_content = "SRA accession,containment,species\nSRR789,0.88,B. subtilis\nSRR101,0.95,P. aeruginosa"
         (matches_dir / "genome2.csv").write_text(csv_content)
-        
+
         result = _get_unique_accessions(matches_dir, threshold=0.9)
         assert result == {"SRR101"}
 
@@ -54,10 +53,10 @@ class TestGetUniqueAccessions:
         """Test threshold filtering works correctly."""
         matches_dir = tmp_path / "matches"
         matches_dir.mkdir()
-        
+
         csv_content = "acc,containment,organism\nSRR123,0.85,E. coli\nSRR456,0.75,S. aureus\nSRR789,0.95,B. subtilis"
         (matches_dir / "genome1.csv").write_text(csv_content)
-        
+
         result = _get_unique_accessions(matches_dir, threshold=0.8)
         assert result == {"SRR123", "SRR789"}
 
@@ -65,10 +64,10 @@ class TestGetUniqueAccessions:
         """Test handling when no CSV files are found."""
         matches_dir = tmp_path / "matches"
         matches_dir.mkdir()
-        
-        with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("metaquest.data.metadata.logger") as mock_logger:
             result = _get_unique_accessions(matches_dir, threshold=0.0)
-        
+
         assert result == set()
         mock_logger.warning.assert_called_once()
 
@@ -76,14 +75,14 @@ class TestGetUniqueAccessions:
         """Test handling unknown file format."""
         matches_dir = tmp_path / "matches"
         matches_dir.mkdir()
-        
+
         # Create CSV with unknown format
         csv_content = "unknown_col,other_col\nvalue1,value2"
         (matches_dir / "unknown.csv").write_text(csv_content)
-        
-        with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("metaquest.data.metadata.logger") as mock_logger:
             result = _get_unique_accessions(matches_dir, threshold=0.0)
-        
+
         assert result == set()
         mock_logger.warning.assert_called()
 
@@ -91,14 +90,14 @@ class TestGetUniqueAccessions:
         """Test handling CSV read errors."""
         matches_dir = tmp_path / "matches"
         matches_dir.mkdir()
-        
+
         # Create malformed CSV
         (matches_dir / "malformed.csv").write_text("invalid,csv\ncontent")
-        
-        with patch('pandas.read_csv', side_effect=Exception("Read error")):
-            with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("pandas.read_csv", side_effect=Exception("Read error")):
+            with patch("metaquest.data.metadata.logger") as mock_logger:
                 result = _get_unique_accessions(matches_dir, threshold=0.0)
-        
+
         assert result == set()
         mock_logger.warning.assert_called()
 
@@ -110,17 +109,17 @@ class TestDownloadSingleMetadata:
         """Test successful metadata download."""
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
-        
+
         mock_response = b"<?xml version='1.0'?><root>test metadata</root>"  # Return bytes
-        
-        with patch('metaquest.data.metadata.Entrez.efetch') as mock_efetch:
+
+        with patch("metaquest.data.metadata.Entrez.efetch") as mock_efetch:
             mock_handle = MagicMock()
             mock_handle.read.return_value = mock_response
             mock_efetch.return_value = mock_handle
-            
-            with patch('time.sleep'):  # Speed up test
+
+            with patch("time.sleep"):  # Speed up test
                 success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
-        
+
         assert success is True
         assert isinstance(result, Path)
         assert result.name == "SRR123_metadata.xml"
@@ -130,11 +129,11 @@ class TestDownloadSingleMetadata:
         """Test handling HTTP errors with retry."""
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
-        
-        with patch('metaquest.data.metadata.Entrez.efetch', side_effect=Exception("HTTP 500")):
-            with patch('time.sleep'):  # Speed up test
+
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=Exception("HTTP 500")):
+            with patch("time.sleep"):  # Speed up test
                 success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
-        
+
         assert success is False
         assert "Failed after 3 retries" in result
 
@@ -142,18 +141,18 @@ class TestDownloadSingleMetadata:
         """Test successful download after one retry."""
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
-        
+
         mock_response = b"<?xml version='1.0'?><root>test metadata</root>"  # Return bytes
-        
-        with patch('metaquest.data.metadata.Entrez.efetch') as mock_efetch:
+
+        with patch("metaquest.data.metadata.Entrez.efetch") as mock_efetch:
             # First call fails, second succeeds
             mock_handle = MagicMock()
             mock_handle.read.return_value = mock_response
             mock_efetch.side_effect = [Exception("Network error"), mock_handle]
-            
-            with patch('time.sleep'):  # Speed up test
+
+            with patch("time.sleep"):  # Speed up test
                 success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
-        
+
         assert success is True
         assert isinstance(result, Path)
 
@@ -166,16 +165,16 @@ class TestDownloadMetadata:
         matches_dir = tmp_path / "matches"
         metadata_dir = tmp_path / "metadata"
         matches_dir.mkdir()
-        
+
         # Create test match file
         csv_content = "acc,containment,organism\nSRR123,0.95,E. coli"
         (matches_dir / "genome1.csv").write_text(csv_content)
-        
-        with patch('metaquest.data.metadata._download_accessions_metadata') as mock_download:
+
+        with patch("metaquest.data.metadata._download_accessions_metadata") as mock_download:
             mock_download.return_value = {"SRR123": metadata_dir / "SRR123_metadata.xml"}
-            
+
             result = download_metadata("test@example.com", matches_dir, metadata_dir, threshold=0.9)
-        
+
         assert isinstance(result, dict)
         mock_download.assert_called_once()
 
@@ -184,13 +183,13 @@ class TestDownloadMetadata:
         matches_dir = tmp_path / "matches"
         metadata_dir = tmp_path / "metadata"
         matches_dir.mkdir()
-        
+
         csv_content = "acc,containment,organism\nSRR123,0.95,E. coli"
         (matches_dir / "genome1.csv").write_text(csv_content)
-        
-        with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("metaquest.data.metadata.logger") as mock_logger:
             result = download_metadata("test@example.com", matches_dir, metadata_dir, dry_run=True)
-        
+
         assert result == {}
         mock_logger.info.assert_called_with("Dry run, not downloading metadata")
 
@@ -200,18 +199,18 @@ class TestDownloadMetadata:
         metadata_dir = tmp_path / "metadata"
         matches_dir.mkdir()
         metadata_dir.mkdir()
-        
+
         # Create existing metadata file
         (metadata_dir / "SRR123_metadata.xml").write_text("existing")
-        
+
         csv_content = "acc,containment,organism\nSRR123,0.95,E. coli\nSRR456,0.85,S. aureus"
         (matches_dir / "genome1.csv").write_text(csv_content)
-        
-        with patch('metaquest.data.metadata._download_accessions_metadata') as mock_download:
+
+        with patch("metaquest.data.metadata._download_accessions_metadata") as mock_download:
             mock_download.return_value = {"SRR456": metadata_dir / "SRR456_metadata.xml"}
-            
+
             download_metadata("test@example.com", matches_dir, metadata_dir)
-        
+
         # Should only download SRR456, not SRR123
         download_args = mock_download.call_args[0]
         accessions_to_download = download_args[0]
@@ -220,7 +219,7 @@ class TestDownloadMetadata:
 
     def test_download_metadata_validation_error(self, tmp_path):
         """Test handling validation errors."""
-        with patch('metaquest.data.metadata.validate_folder', side_effect=ValidationError("Invalid folder")):
+        with patch("metaquest.data.metadata.validate_folder", side_effect=ValidationError("Invalid folder")):
             with pytest.raises(DataAccessError):
                 download_metadata("test@example.com", "invalid", tmp_path)
 
@@ -232,17 +231,17 @@ class TestDownloadAccessionsMetadata:
         """Test successful accessions download."""
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
-        
+
         accessions = ["SRR123", "SRR456"]
-        
-        with patch('metaquest.data.metadata._download_single_metadata') as mock_download:
+
+        with patch("metaquest.data.metadata._download_single_metadata") as mock_download:
             mock_download.side_effect = [
                 (True, metadata_path / "SRR123_metadata.xml"),
-                (True, metadata_path / "SRR456_metadata.xml")
+                (True, metadata_path / "SRR456_metadata.xml"),
             ]
-            
+
             result = _download_accessions_metadata(accessions, metadata_path, "test@example.com", 2)
-        
+
         assert len(result) == 2
         assert "SRR123" in result
         assert "SRR456" in result
@@ -251,18 +250,15 @@ class TestDownloadAccessionsMetadata:
         """Test handling partial download failures."""
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
-        
+
         accessions = ["SRR123", "SRR456"]
-        
-        with patch('metaquest.data.metadata._download_single_metadata') as mock_download:
-            mock_download.side_effect = [
-                (True, metadata_path / "SRR123_metadata.xml"),
-                (False, "Download failed")
-            ]
-            
-            with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("metaquest.data.metadata._download_single_metadata") as mock_download:
+            mock_download.side_effect = [(True, metadata_path / "SRR123_metadata.xml"), (False, "Download failed")]
+
+            with patch("metaquest.data.metadata.logger") as mock_logger:
                 result = _download_accessions_metadata(accessions, metadata_path, "test@example.com", 2)
-        
+
         assert len(result) == 1
         assert "SRR123" in result
         assert "SRR456" not in result
@@ -304,11 +300,11 @@ class TestExtractMetadataFields:
                 </RUN_SET>
             </EXPERIMENT_PACKAGE>
         </EXPERIMENT_PACKAGE_SET>"""
-        
+
         tree = ET.fromstring(xml_content)
-        
+
         result = _extract_metadata_fields(tree, "test.xml")
-        
+
         assert result["Run_ID"] == "SRR123"
         assert result["Sample_ID"] == "SAMN123"
         assert result["Experiment_Title"] == "Test experiment"
@@ -323,11 +319,11 @@ class TestExtractMetadataFields:
             <EXPERIMENT_PACKAGE>
             </EXPERIMENT_PACKAGE>
         </EXPERIMENT_PACKAGE_SET>"""
-        
+
         tree = ET.fromstring(xml_content)
-        
+
         result = _extract_metadata_fields(tree, "test.xml")
-        
+
         # Should have None values for missing elements
         assert result["Run_ID"] is None
         assert result["Sample_ID"] is None
@@ -366,11 +362,11 @@ class TestExtractMetadataFields:
                 </RUN_SET>
             </EXPERIMENT_PACKAGE>
         </EXPERIMENT_PACKAGE_SET>"""
-        
+
         tree = ET.fromstring(xml_content)
-        
+
         result = _extract_metadata_fields(tree, "test.xml")
-        
+
         assert result["Run_ID"] == "SRR456"
         assert result["Sample_ID"] == "SAMN456"
         assert result["Experiment_Library_Strategy"] == "WGS"
@@ -399,25 +395,25 @@ class TestExtractSampleAttributes:
                 </SAMPLE_ATTRIBUTE>
             </SAMPLE_ATTRIBUTES>
         </root>"""
-        
+
         tree = ET.fromstring(xml_content)
         # Pre-populate unique_attributes since the function only extracts existing attributes
         unique_attributes = {"organism", "isolation_source"}
-        
+
         result = _extract_sample_attributes(tree, unique_attributes)
-        
+
         assert result["organism"] == "Escherichia coli"
         assert result["isolation_source"] == "clinical isolate"
 
     def test_extract_sample_attributes_no_attributes(self):
         """Test when no sample attributes are present."""
         xml_content = """<?xml version="1.0"?><root></root>"""
-        
+
         tree = ET.fromstring(xml_content)
         unique_attributes = set()
-        
+
         result = _extract_sample_attributes(tree, unique_attributes)
-        
+
         assert result == {}
         assert len(unique_attributes) == 0
 
@@ -435,12 +431,12 @@ class TestExtractSampleAttributes:
                 </SAMPLE_ATTRIBUTE>
             </SAMPLE_ATTRIBUTES>
         </root>"""
-        
+
         tree = ET.fromstring(xml_content)
         unique_attributes = set()
-        
+
         result = _extract_sample_attributes(tree, unique_attributes)
-        
+
         # Empty values should not be included
         assert "organism" not in result
         assert "missing_value" not in result
@@ -454,7 +450,7 @@ class TestParseMetadata:
         metadata_dir = tmp_path / "metadata"
         metadata_dir.mkdir()
         output_file = tmp_path / "parsed_metadata.tsv"
-        
+
         # Create test XML files
         xml_content = """<?xml version="1.0"?>
         <EXPERIMENT_PACKAGE_SET>
@@ -473,11 +469,11 @@ class TestParseMetadata:
                 </RUN_SET>
             </EXPERIMENT_PACKAGE>
         </EXPERIMENT_PACKAGE_SET>"""
-        
+
         (metadata_dir / "SRR123_metadata.xml").write_text(xml_content)
-        
+
         result = parse_metadata(metadata_dir, output_file)
-        
+
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 1
         assert result.iloc[0]["Run_ID"] == "SRR123"
@@ -489,10 +485,10 @@ class TestParseMetadata:
         metadata_dir = tmp_path / "metadata"
         metadata_dir.mkdir()
         output_file = tmp_path / "parsed_metadata.tsv"
-        
-        with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("metaquest.data.metadata.logger") as mock_logger:
             result = parse_metadata(metadata_dir, output_file)
-        
+
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
         mock_logger.warning.assert_called()
@@ -502,13 +498,13 @@ class TestParseMetadata:
         metadata_dir = tmp_path / "metadata"
         metadata_dir.mkdir()
         output_file = tmp_path / "parsed_metadata.tsv"
-        
+
         # Create invalid XML
         (metadata_dir / "SRR123_metadata.xml").write_text("invalid xml content")
-        
-        with patch('metaquest.data.metadata.logger') as mock_logger:
+
+        with patch("metaquest.data.metadata.logger") as mock_logger:
             result = parse_metadata(metadata_dir, output_file)
-        
+
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
         mock_logger.error.assert_called()
@@ -526,7 +522,7 @@ class TestGetUniqueSampleAttributes:
         """Test successful unique attributes extraction."""
         metadata_dir = tmp_path / "metadata"
         metadata_dir.mkdir()
-        
+
         xml_content = """<?xml version="1.0"?>
         <root>
             <SAMPLE_ATTRIBUTES>
@@ -540,11 +536,11 @@ class TestGetUniqueSampleAttributes:
                 </SAMPLE_ATTRIBUTE>
             </SAMPLE_ATTRIBUTES>
         </root>"""
-        
+
         (metadata_dir / "SRR123_metadata.xml").write_text(xml_content)
-        
+
         result = get_unique_sample_attributes(metadata_dir)
-        
+
         assert isinstance(result, list)
         assert "organism" in result
         assert "isolation_source" in result
@@ -553,9 +549,9 @@ class TestGetUniqueSampleAttributes:
         """Test when no XML files are found."""
         metadata_dir = tmp_path / "metadata"
         metadata_dir.mkdir()
-        
+
         result = get_unique_sample_attributes(metadata_dir)
-        
+
         assert result == []
 
 
@@ -566,17 +562,19 @@ class TestCheckMetadataAttributes:
         """Test successful metadata attributes checking."""
         input_file = tmp_path / "metadata.tsv"
         output_file = tmp_path / "attributes.txt"
-        
+
         # Create test metadata file
-        df = pd.DataFrame({
-            "Run_ID": ["SRR123", "SRR456"],
-            "organism": ["E. coli", "S. aureus"],
-            "isolation_source": ["clinical", "environmental"]
-        })
+        df = pd.DataFrame(
+            {
+                "Run_ID": ["SRR123", "SRR456"],
+                "organism": ["E. coli", "S. aureus"],
+                "isolation_source": ["clinical", "environmental"],
+            }
+        )
         df.to_csv(input_file, sep="\t", index=False)
-        
+
         result = check_metadata_attributes(input_file, output_file)
-        
+
         assert isinstance(result, dict)
         assert "organism" in result
         assert "isolation_source" in result
@@ -588,12 +586,12 @@ class TestCheckMetadataAttributes:
         """Test handling empty metadata file."""
         input_file = tmp_path / "empty.tsv"
         output_file = tmp_path / "attributes.txt"
-        
+
         # Create file with just headers
         input_file.write_text("Run_ID\tSample_ID\n")
-        
+
         result = check_metadata_attributes(input_file, output_file)
-        
+
         assert isinstance(result, dict)
         assert len(result) == 0
 
