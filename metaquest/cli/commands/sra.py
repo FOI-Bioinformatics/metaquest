@@ -99,9 +99,7 @@ class DownloadSraCommand(BaseCommand):
 
     def _report_failed_downloads(self, args: argparse.Namespace, stats: dict) -> None:
         """Warn about failures and write the failed accessions to a retry file."""
-        self.logger.warning(
-            "Some downloads failed. Use --force to retry or --max-retries to enable automatic retry."
-        )
+        self.logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable automatic retry.")
         if not stats.get("failed_accessions"):
             return
         failed_file = Path(args.fastq_folder) / "failed_accessions.txt"

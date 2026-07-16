@@ -494,9 +494,7 @@ def _add_containment_plot_files(summary_data, images_dir, plot_files):
         ("histogram", "Containment Histogram", "containment_histogram.png", "hist_plot"),
     )
     for plot_type, title, filename, key in plots:
-        fig = plot_containment(
-            summary_data, column="max_containment", title=title, plot_type=plot_type, threshold=0
-        )
+        fig = plot_containment(summary_data, column="max_containment", title=title, plot_type=plot_type, threshold=0)
         rel = _save_report_fig(fig, images_dir, filename)
         if rel:
             plot_files[key] = rel
