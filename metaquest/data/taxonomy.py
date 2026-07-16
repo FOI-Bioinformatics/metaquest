@@ -83,6 +83,35 @@ class NCBITaxonomyClient:
         # Get details for found IDs
         return self.get_taxonomy_details(tax_ids[:5])  # Limit to first 5 results
 
+    @staticmethod
+    def _element_text(parent, tag: str) -> str:
+        """Return the text of a child element, or '' when missing."""
+        el = parent.find(tag)
+        return (el.text or "") if el is not None else ""
+
+    @staticmethod
+    def _parse_lineage(taxon) -> str:
+        """Build a 'rank:name;...' lineage string from a <Taxon>'s LineageEx."""
+        lineage = []
+        lineage_elem = taxon.find(".//LineageEx")
+        if lineage_elem is not None:
+            for taxon_elem in lineage_elem.findall("Taxon"):
+                name = taxon_elem.find("ScientificName")
+                rank_elem = taxon_elem.find("Rank")
+                if name is not None and rank_elem is not None:
+                    lineage.append(f"{rank_elem.text}:{name.text}")
+        return ";".join(lineage)
+
+    @classmethod
+    def _parse_taxon_element(cls, taxon) -> Dict[str, str]:
+        """Parse a single <Taxon> element into a taxonomy detail dict."""
+        return {
+            "tax_id": cls._element_text(taxon, "TaxId"),
+            "scientific_name": cls._element_text(taxon, "ScientificName"),
+            "rank": cls._element_text(taxon, "Rank"),
+            "lineage": cls._parse_lineage(taxon),
+        }
+
     def get_taxonomy_details(self, tax_ids: List[str]) -> List[Dict[str, str]]:
         """
         Get detailed taxonomy information for given taxonomy IDs.
@@ -101,38 +130,8 @@ class NCBITaxonomyClient:
 
         response = self._make_request(fetch_url, params)
 
-        # Parse XML response
         root = ET.fromstring(response)
-        results = []
-
-        for taxon in root.findall("./Taxon"):
-            tid = taxon.find("TaxId")
-            tax_id = (tid.text or "") if tid is not None else ""
-            sname = taxon.find("ScientificName")
-            sci_name = (sname.text or "") if sname is not None else ""
-            rk = taxon.find("Rank")
-            rank = (rk.text or "") if rk is not None else ""
-
-            # Get lineage
-            lineage = []
-            lineage_elem = taxon.find(".//LineageEx")
-            if lineage_elem is not None:
-                for taxon_elem in lineage_elem.findall("Taxon"):
-                    name = taxon_elem.find("ScientificName")
-                    rank_elem = taxon_elem.find("Rank")
-                    if name is not None and rank_elem is not None:
-                        lineage.append(f"{rank_elem.text}:{name.text}")
-
-            results.append(
-                {
-                    "tax_id": tax_id,
-                    "scientific_name": sci_name,
-                    "rank": rank,
-                    "lineage": ";".join(lineage) if lineage else "",
-                }
-            )
-
-        return results
+        return [self._parse_taxon_element(taxon) for taxon in root.findall("./Taxon")]
 
     def validate_species_name(self, species_name: str) -> Dict[str, Union[str, bool]]:
         """
@@ -304,6 +303,33 @@ def validate_taxonomic_assignments(
         raise ProcessingError(f"Failed to validate taxonomic assignments: {e}")
 
 
+def _build_taxonomy_lineage_map(taxonomy_data: pd.DataFrame) -> Dict[str, Dict[str, str]]:
+    """Map original_name -> {rank: name} for valid taxonomy rows that carry a lineage."""
+    taxonomy_dict: Dict[str, Dict[str, str]] = {}
+    for _, row in taxonomy_data.iterrows():
+        if not (row["is_valid"] and row["lineage"]):
+            continue
+        lineage_dict = {}
+        for part in row["lineage"].split(";"):
+            if ":" in part:
+                rank, name = part.split(":", 1)
+                lineage_dict[rank.lower()] = name
+        taxonomy_dict[row["original_name"]] = lineage_dict
+    return taxonomy_dict
+
+
+def _summarize_sample_taxonomy(sample_abundances, taxonomy_dict, level, min_abundance) -> Dict[str, float]:
+    """Aggregate one sample's abundances by taxon at `level`, bucketing unknowns."""
+    sample_summary: Dict[str, float] = {}
+    for species, abundance in sample_abundances.items():
+        if abundance < min_abundance:
+            continue
+        lineage = taxonomy_dict.get(species, {})
+        taxon_name = lineage.get(level, f"Unclassified_{level}")
+        sample_summary[taxon_name] = sample_summary.get(taxon_name, 0) + abundance
+    return sample_summary
+
+
 def create_taxonomic_summary(
     abundance_data: pd.DataFrame,
     taxonomy_data: pd.DataFrame,
@@ -323,52 +349,14 @@ def create_taxonomic_summary(
         Sample x Taxon summary matrix
     """
     try:
-        # Parse taxonomic lineages
-        taxonomy_dict = {}
-        for _, row in taxonomy_data.iterrows():
-            if row["is_valid"] and row["lineage"]:
-                lineage_parts = row["lineage"].split(";")
-                lineage_dict = {}
+        taxonomy_dict = _build_taxonomy_lineage_map(taxonomy_data)
 
-                for part in lineage_parts:
-                    if ":" in part:
-                        rank, name = part.split(":", 1)
-                        lineage_dict[rank.lower()] = name
+        summary_data = [
+            _summarize_sample_taxonomy(abundance_data.loc[sample_name], taxonomy_dict, level, min_abundance)
+            for sample_name in abundance_data.index
+        ]
 
-                # Map by original_name (which should match abundance data columns)
-                taxonomy_dict[row["original_name"]] = lineage_dict
-
-        # Create summary matrix
-        summary_data = []
-
-        for sample_name in abundance_data.index:
-            sample_summary: dict = {}
-
-            for species, abundance in abundance_data.loc[sample_name].items():
-                if abundance < min_abundance:
-                    continue
-
-                # Get taxonomic assignment
-                if species in taxonomy_dict and level in taxonomy_dict[species]:
-                    taxon_name = taxonomy_dict[species][level]
-
-                    if taxon_name in sample_summary:
-                        sample_summary[taxon_name] += abundance
-                    else:
-                        sample_summary[taxon_name] = abundance
-                else:
-                    # Unclassified
-                    unclassified = f"Unclassified_{level}"
-                    if unclassified in sample_summary:
-                        sample_summary[unclassified] += abundance
-                    else:
-                        sample_summary[unclassified] = abundance
-
-            summary_data.append(sample_summary)
-
-        # Convert to DataFrame
-        summary_df = pd.DataFrame(summary_data, index=abundance_data.index)
-        summary_df = summary_df.fillna(0)
+        summary_df = pd.DataFrame(summary_data, index=abundance_data.index).fillna(0)
 
         logger.info(f"Created taxonomic summary at {level} level: {summary_df.shape}")
         return summary_df
