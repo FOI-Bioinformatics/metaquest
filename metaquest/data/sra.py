@@ -19,6 +19,15 @@ from metaquest.utils.security import SecureSubprocess
 logger = logging.getLogger(__name__)
 
 
+def _safe_rmtree(path: Path) -> None:
+    """Remove a directory tree if present, logging on failure instead of raising."""
+    try:
+        if path.exists():
+            shutil.rmtree(path)
+    except Exception as e:
+        logger.warning(f"Could not remove directory {path}: {e}")
+
+
 def _read_blacklist_files(blacklist_files):
     """
     Read accessions from blacklist files.
@@ -186,16 +195,9 @@ def download_accession(
         logger.info(f"Skipping {accession}, FASTQ files already exist")
         return True, "already exists"
 
-    # Create a temporary folder for download
+    # Create a fresh temporary folder for download
     temp_path = Path(output_folder) / f"{accession}_temp"
-    if temp_path.exists():
-        # Clean up any existing temporary folder
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as e:
-            logger.warning(f"Could not remove existing temp directory {temp_path}: {e}")
-
-    # Create the temporary folder
+    _safe_rmtree(temp_path)
     temp_path.mkdir(parents=True, exist_ok=True)
 
     temp_folder_path = None
@@ -227,35 +229,23 @@ def download_accession(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
+        _safe_rmtree(temp_path)
         return False, f"Download failed: {e.stderr}"
 
     except SecurityError as e:
         logger.error(f"Security error downloading {accession}: {e}")
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
+        _safe_rmtree(temp_path)
         return False, f"Security error: {e}"
 
     except Exception as e:
         logger.error(f"Error downloading {accession}: {e}")
-        try:
-            shutil.rmtree(temp_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to clean up temp directory {temp_path}: {cleanup_err}")
+        _safe_rmtree(temp_path)
         return False, f"Download failed: {str(e)}"
 
     finally:
         # Clean up auto-created temp directory (from tempfile.mkdtemp)
-        if temp_folder_path and not temp_folder and temp_folder_path.exists():
-            try:
-                shutil.rmtree(temp_folder_path)
-            except Exception as cleanup_err:
-                logger.warning(f"Failed to clean up temp folder {temp_folder_path}: {cleanup_err}")
+        if temp_folder_path and not temp_folder:
+            _safe_rmtree(temp_folder_path)
 
 
 def _check_existing_downloads(
