@@ -176,7 +176,18 @@ class SequenceQualityAnalyzer:
             },
             "complexity_metrics": self._analyze_sequence_complexity(sequences),
             "contamination_indicators": self._detect_contamination_indicators(sequences),
+            "duplication_rate": self._calculate_duplication_rate(sequences),
         }
+
+    def _calculate_duplication_rate(self, sequences: List[str]) -> float:
+        """Fraction of sampled reads that are exact duplicates of another read.
+
+        Computed over the sampled sequences as ``1 - unique / total``; 0.0 when
+        every read is distinct and rising toward 1.0 as duplicates dominate.
+        """
+        if not sequences:
+            return 0.0
+        return 1.0 - len(set(sequences)) / len(sequences)
 
     def _calculate_gc_content(self, sequence: str) -> float:
         """Calculate GC content of sequence."""
@@ -383,7 +394,7 @@ class SRADatasetAnalyzer:
             n_content=quality_metrics.get("n_content_stats", {}).get("mean", 0),
             contamination_indicators=contamination,
             complexity_score=complexity_metrics.get("complexity_score", 0),
-            duplication_rate=None,  # Would need additional analysis
+            duplication_rate=quality_metrics.get("duplication_rate"),
             technology_confidence=self._estimate_technology_confidence(metadata),
             quality_grade=quality_grade,
             recommendations=recommendations,

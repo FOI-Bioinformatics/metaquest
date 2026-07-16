@@ -152,6 +152,30 @@ class TestSequenceQualityAnalyzer:
             with pytest.raises(DataAccessError, match="Failed to analyze FASTQ file"):
                 self.analyzer.analyze_fastq_quality("test.fastq")
 
+    def test_calculate_duplication_rate(self):
+        """Duplication rate is 1 - unique/total over the sampled reads."""
+        assert self.analyzer._calculate_duplication_rate([]) == 0.0
+        assert self.analyzer._calculate_duplication_rate(["A", "C", "G", "T"]) == 0.0
+        assert self.analyzer._calculate_duplication_rate(["A", "A", "C", "G"]) == 0.25
+        assert self.analyzer._calculate_duplication_rate(["A", "A", "A", "A"]) == 0.75
+
+    @patch("metaquest.sra.analytics.SeqIO")
+    @patch("builtins.open", new_callable=mock_open, read_data="")
+    def test_analyze_fastq_quality_reports_duplication(self, mock_file, mock_seqio):
+        """analyze_fastq_quality includes a real duplication_rate for duplicate reads."""
+        rec = Mock()
+        rec.seq = "ATGCATGCAT"
+        rec.letter_annotations = {"phred_quality": [30] * 10}
+        dup = Mock()
+        dup.seq = "ATGCATGCAT"  # identical to rec
+        dup.letter_annotations = {"phred_quality": [30] * 10}
+        mock_seqio.parse.return_value = [rec, dup]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100)
+
+        assert result["duplication_rate"] == 0.5  # one of two reads is a duplicate
+
 
 class TestSRADatasetAnalyzer:
     """Test main SRA dataset analyzer functionality."""
@@ -272,6 +296,7 @@ class TestSRADatasetAnalyzer:
             "n_content_stats": {"mean": 0.01},
             "complexity_metrics": {"complexity_score": 0.7},
             "contamination_indicators": {"adapter_contamination": 0.02},
+            "duplication_rate": 0.3,
         }
 
         with patch.object(self.analyzer, "_locate_fastq_file", return_value=Path("test.fastq")):
@@ -284,6 +309,7 @@ class TestSRADatasetAnalyzer:
         assert profile.avg_read_length == 150
         assert profile.gc_content == 0.45
         assert profile.complexity_score == 0.7
+        assert profile.duplication_rate == 0.3
         assert profile.quality_grade in ["excellent", "good", "fair", "poor"]
         assert len(profile.recommendations) > 0
 
