@@ -437,6 +437,45 @@ class TestArgumentParsing:
             assert "SRR000001" in call_args
 
 
+class TestDefensiveGuards:
+    """Cover the defensive error branches that normal inputs cannot reach."""
+
+    def test_allowlisted_executable_with_path_separator_rejected(self):
+        """An allowlisted name containing a path separator is still rejected."""
+        # The real allowlist holds only clean names, so patch it to reach the
+        # path-traversal guard in validate_executable.
+        with patch.object(SecureSubprocess, "ALLOWED_EXECUTABLES", {"bad/exe"}):
+            with pytest.raises(SecurityError, match="Invalid executable path"):
+                SecureSubprocess.validate_executable("bad/exe")
+
+    def test_accession_with_non_ascii_digits_rejected(self):
+        """Unicode digits pass str.isdigit() but must fail the ASCII pattern."""
+        # "SRR" + superscript digits: validate_accession() accepts it (isdigit()
+        # is True) but the SRA_ACCESSION_PATTERN [0-9]+ check rejects it.
+        accession = "SRR¹²³"
+        with pytest.raises(SecurityError, match="invalid characters"):
+            SecureSubprocess.validate_accession_for_subprocess(accession)
+
+    def test_path_with_parent_traversal_and_tilde_rejected(self):
+        """A '..' segment plus a literal '~' component is rejected when creation is off."""
+        with pytest.raises(SecurityError, match="Unsafe path component"):
+            SecureSubprocess.validate_path("foo/../~", allow_creation=False)
+
+    def test_run_secure_wraps_unexpected_subprocess_error(self):
+        """A non-CalledProcessError from subprocess.run becomes a SecurityError."""
+        with patch("subprocess.run", side_effect=ValueError("boom")):
+            with pytest.raises(SecurityError, match="Subprocess execution failed"):
+                SecureSubprocess.run_secure("datasets", ["--version"])
+
+    def test_fasterq_dump_flag_value_at_index_one_validated_as_accession(self):
+        """For fasterq-dump, a flag value at args index 1 goes through accession validation."""
+        with patch("subprocess.run", return_value=Mock(returncode=0)) as mock_run:
+            SecureSubprocess.run_secure("fasterq-dump", ["--threads", "SRR000001"])
+
+        # The value is accepted and passed through unchanged.
+        assert mock_run.call_args[0][0] == ["fasterq-dump", "--threads", "SRR000001"]
+
+
 # ============================================================================
 # SUCCESS METRICS:
 #
