@@ -5,6 +5,38 @@ from unittest.mock import patch
 from metaquest.utils import html
 
 
+class TestReportCss:
+    """Tests for the shared design-system stylesheet."""
+
+    def test_defines_the_shared_component_vocabulary(self):
+        for token in ("--paper-bg", "--seq-fill", ".mq-header", ".mq-stat", ".mq-panel", ".mq-table", ".mq-heatbar"):
+            assert token in html.REPORT_CSS
+
+    def test_supports_light_and_dark_and_a11y(self):
+        assert "prefers-color-scheme: dark" in html.REPORT_CSS
+        assert "prefers-reduced-motion" in html.REPORT_CSS
+        assert ":focus-visible" in html.REPORT_CSS
+
+    def test_uses_no_remote_resources(self):
+        # The reports are offline; the stylesheet must not fetch anything.
+        assert "http://" not in html.REPORT_CSS and "https://" not in html.REPORT_CSS
+
+
+class TestPlotlyLayout:
+    """Tests for the shared Plotly styling helper."""
+
+    def test_returns_transparent_themed_layout(self):
+        layout = html.plotly_layout()
+        assert layout["paper_bgcolor"] == "rgba(0,0,0,0)"
+        assert layout["plot_bgcolor"] == "rgba(0,0,0,0)"
+        assert layout["colorway"] == html.CATEGORICAL_COLORS
+
+    def test_overrides_win(self):
+        layout = html.plotly_layout(height=360, showlegend=False)
+        assert layout["height"] == 360
+        assert layout["showlegend"] is False
+
+
 class TestPlotlyJsScript:
     """Tests for the inline Plotly script tag."""
 

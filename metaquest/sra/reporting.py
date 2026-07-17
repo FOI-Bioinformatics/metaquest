@@ -40,7 +40,11 @@ from metaquest.sra.analytics import (
     ComparativeAnalysis,
     SRADatasetAnalyzer,
 )
-from metaquest.utils.html import plotly_js_script
+from metaquest.utils.html import CATEGORICAL_COLORS, REPORT_CSS, plotly_js_script, plotly_layout
+
+# Quality-grade colours drawn from the validated categorical palette (ordinal:
+# excellent -> poor).
+_GRADE_COLORS = {"excellent": "#008300", "good": "#2a78d6", "fair": "#eda100", "poor": "#e34948"}
 
 logger = logging.getLogger(__name__)
 
@@ -274,28 +278,17 @@ class SRAReportGenerator:
         if not PLOTLY_AVAILABLE:
             return plots
 
-        # Success rate pie chart
-        success_count = sum(1 for r in session.download_results.values() if r.status == "completed")
-        fail_count = len(session.download_results) - success_count
-
-        fig_success = go.Figure(
-            data=[
-                go.Pie(
-                    labels=["Successful", "Failed"],
-                    values=[success_count, fail_count],
-                    marker_colors=["#2ecc71", "#e74c3c"],
-                )
-            ]
-        )
-        fig_success.update_layout(title="Download Success Rate")
-        plots["success_rate"] = pyo.plot(fig_success, output_type="div", include_plotlyjs=False)
+        # The overall success rate is already carried by the summary stat card and
+        # the per-row green/red status in the results table, so it is not repeated
+        # as a chart here.
 
         # Download speeds histogram
         speeds = [r.speed_mbps for r in session.download_results.values() if r.speed_mbps > 0]
         if speeds:
             fig_speeds = go.Figure(data=[go.Histogram(x=speeds, nbinsx=20)])
+            fig_speeds.update_layout(**plotly_layout())
             fig_speeds.update_layout(
-                title="Download Speed Distribution", xaxis_title="Speed (MB/s)", yaxis_title="Count"
+                title_text="Download speed distribution", xaxis_title="Speed (MB/s)", yaxis_title="Count"
             )
             plots["speed_distribution"] = pyo.plot(fig_speeds, output_type="div", include_plotlyjs=False)
 
@@ -322,8 +315,11 @@ class SRAReportGenerator:
                     )
                 ]
             )
+            fig_scatter.update_layout(**plotly_layout())
             fig_scatter.update_layout(
-                title="File Size vs Download Time", xaxis_title="File Size (MB)", yaxis_title="Download Time (seconds)"
+                title_text="File size vs download time",
+                xaxis_title="File size (MB)",
+                yaxis_title="Download time (seconds)",
             )
             plots["size_vs_time"] = pyo.plot(fig_scatter, output_type="div", include_plotlyjs=False)
 
@@ -345,17 +341,19 @@ class SRAReportGenerator:
                 go.Bar(
                     x=grade_counts.index,
                     y=grade_counts.values,
-                    marker_color=["#2ecc71", "#3498db", "#f39c12", "#e74c3c"],
+                    marker_color=[_GRADE_COLORS.get(str(g), CATEGORICAL_COLORS[0]) for g in grade_counts.index],
                 )
             ]
         )
-        fig_grades.update_layout(title="Quality Grade Distribution")
+        fig_grades.update_layout(**plotly_layout())
+        fig_grades.update_layout(title_text="Quality grade distribution")
         plots["quality_grades"] = pyo.plot(fig_grades, output_type="div", include_plotlyjs=False)
 
         # GC content distribution
         gc_contents = [p.gc_content for p in profiles.values()]
         fig_gc = go.Figure(data=[go.Histogram(x=gc_contents, nbinsx=25)])
-        fig_gc.update_layout(title="GC Content Distribution", xaxis_title="GC Content", yaxis_title="Count")
+        fig_gc.update_layout(**plotly_layout())
+        fig_gc.update_layout(title_text="GC content distribution", xaxis_title="GC content", yaxis_title="Count")
         plots["gc_distribution"] = pyo.plot(fig_gc, output_type="div", include_plotlyjs=False)
 
         # Read length vs complexity scatter
@@ -374,10 +372,11 @@ class SRAReportGenerator:
                 )
             ]
         )
+        fig_complexity.update_layout(**plotly_layout())
         fig_complexity.update_layout(
-            title="Read Length vs Sequence Complexity",
-            xaxis_title="Average Read Length (bp)",
-            yaxis_title="Complexity Score",
+            title_text="Read length vs sequence complexity",
+            xaxis_title="Average read length (bp)",
+            yaxis_title="Complexity score",
         )
         plots["complexity_scatter"] = pyo.plot(fig_complexity, output_type="div", include_plotlyjs=False)
 
@@ -404,8 +403,10 @@ class SRAReportGenerator:
                         group_data = df[df["group"] == group][col]
                         fig_box.add_trace(go.Box(y=group_data, name=group, boxpoints="outliers"))
 
+                    fig_box.update_layout(**plotly_layout())
                     fig_box.update_layout(
-                        title=f"{col.replace('_', ' ').title()} by Group", yaxis_title=col.replace("_", " ").title()
+                        title_text=f"{col.replace('_', ' ').title()} by group",
+                        yaxis_title=col.replace("_", " ").title(),
                     )
                     plots[f"{col}_boxplot"] = pyo.plot(fig_box, output_type="div", include_plotlyjs=False)
 
@@ -451,92 +452,76 @@ class SRAReportGenerator:
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SRA Download Summary - {{ session.session_id }}</title>
     {{ plotly_js|safe }}
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #3498db; color: white;
-            padding: 20px; border-radius: 5px; }
-        .summary-grid { display: grid; gap: 20px; margin: 20px 0;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
-        .summary-card { background-color: #f8f9fa; padding: 15px;
-            border-radius: 5px; border-left: 4px solid #3498db; }
-        .plot-container { margin: 20px 0; border: 1px solid #ddd;
-            border-radius: 5px; }
-        .results-table { width: 100%; border-collapse: collapse;
-            margin: 20px 0; }
-        .results-table th, .results-table td {
-            border: 1px solid #ddd; padding: 8px; text-align: left; }
-        .results-table th { background-color: #f2f2f2; }
-        .status-completed { color: #27ae60; font-weight: bold; }
-        .status-failed { color: #e74c3c; font-weight: bold; }
-    </style>
+    <style>{{ report_css|safe }}</style>
 </head>
 <body>
-    <div class="header">
-        <h1>SRA Download Summary</h1>
-        <p>Session: {{ session.session_id }} | Generated: {{ timestamp }}</p>
-    </div>
+    <header class="mq-header"><div class="mq-wrap">
+        <p class="mq-eyebrow">MetaQuest &middot; SRA download</p>
+        <h1 class="mq-title">Download summary</h1>
+        <p class="mq-readout"><span>session <b>{{ session.session_id }}</b></span>
+        <span>generated <b>{{ timestamp }}</b></span></p>
+    </div></header>
+    <main class="mq-wrap">
+        <section class="mq-stats" aria-label="Download summary">
+            <div class="mq-stat"><p class="k">Total downloads</p>
+                <div class="v">{{ summary_stats.total_accessions }}</div></div>
+            <div class="mq-stat"><p class="k">Success rate</p>
+                <div class="v">{{ "%.1f"|format(summary_stats.success_rate * 100) }}%</div></div>
+            <div class="mq-stat"><p class="k">Total size</p>
+                <div class="v">{{ "%.1f"|format(summary_stats.total_size_mb / 1024) }}<span
+                    style="font-size:0.9rem"> GB</span></div></div>
+            <div class="mq-stat"><p class="k">Average speed</p>
+                <div class="v">{{ "%.1f"|format(summary_stats.average_speed_mbps) }}<span
+                    style="font-size:0.9rem"> MB/min</span></div></div>
+        </section>
 
-    <div class="summary-grid">
-        <div class="summary-card">
-            <h3>Total Downloads</h3>
-            <p style="font-size: 2em; margin: 0;">{{ summary_stats.total_accessions }}</p>
-        </div>
-        <div class="summary-card">
-            <h3>Success Rate</h3>
-            <p style="font-size: 2em; margin: 0;">{{ "%.1f"|format(summary_stats.success_rate * 100) }}%</p>
-        </div>
-        <div class="summary-card">
-            <h3>Total Size</h3>
-            <p style="font-size: 2em; margin: 0;">{{ "%.1f"|format(summary_stats.total_size_mb / 1024) }} GB</p>
-        </div>
-        <div class="summary-card">
-            <h3>Average Speed</h3>
-            <p style="font-size: 2em; margin: 0;">{{ "%.1f"|format(summary_stats.average_speed_mbps) }} MB/min</p>
-        </div>
-    </div>
-
-    {% if plots %}
-    <h2>Download Analytics</h2>
-    {% for plot_name, plot_html in plots.items() %}
-    <div class="plot-container">
-        {{ plot_html|safe }}
-    </div>
-    {% endfor %}
-    {% endif %}
-
-    <h2>Download Results</h2>
-    <table class="results-table">
-        <thead>
-            <tr>
-                <th>Accession</th>
-                <th>Status</th>
-                <th>Size (MB)</th>
-                <th>Progress</th>
-                <th>Speed (MB/s)</th>
-                <th>Retries</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for accession, result in session.download_results.items() %}
-            <tr>
-                <td>{{ accession }}</td>
-                <td class="status-{{ result.status }}">{{ result.status.title() }}</td>
-                <td>{{ "%.1f"|format(result.downloaded_mb) }}</td>
-                <td>{{ "%.1f"|format(result.progress_pct) }}%</td>
-                <td>{{ "%.2f"|format(result.speed_mbps) }}</td>
-                <td>{{ result.retry_count }}</td>
-            </tr>
+        {% if plots %}
+        <section class="mq-section">
+            <h2>Download analytics</h2>
+            <div class="mq-grid">
+            {% for plot_name, plot_html in plots.items() %}
+                <div class="mq-panel">{{ plot_html|safe }}</div>
             {% endfor %}
-        </tbody>
-    </table>
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="mq-section">
+            <h2>Download results</h2>
+            <div class="mq-table-wrap">
+                <table class="mq-table">
+                    <thead><tr>
+                        <th>Accession</th><th>Status</th><th>Size (MB)</th>
+                        <th>Progress</th><th>Speed (MB/s)</th><th>Retries</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for accession, result in session.download_results.items() %}
+                        <tr>
+                            <td>{{ accession }}</td>
+                            <td class="{{ 'mq-ok' if result.status == 'completed' else 'mq-bad' }}">{{
+                                result.status.title() }}</td>
+                            <td class="mq-num">{{ "%.1f"|format(result.downloaded_mb) }}</td>
+                            <td class="mq-num">{{ "%.1f"|format(result.progress_pct) }}%</td>
+                            <td class="mq-num">{{ "%.2f"|format(result.speed_mbps) }}</td>
+                            <td class="mq-num">{{ result.retry_count }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        <footer class="mq-footer">Generated by MetaQuest</footer>
+    </main>
 </body>
 </html>
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_js=plotly_js_script(), **report_data)
+        return template.render(plotly_js=plotly_js_script(), report_css=REPORT_CSS, **report_data)
 
     def _generate_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate HTML content for quality dashboard."""
@@ -547,88 +532,65 @@ class SRAReportGenerator:
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
     {{ plotly_js|safe }}
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #2ecc71; color: white;
-            padding: 20px; border-radius: 5px; }
-        .summary-grid { display: grid; gap: 20px; margin: 20px 0;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
-        .summary-card { background-color: #f8f9fa; padding: 15px;
-            border-radius: 5px; border-left: 4px solid #2ecc71; }
-        .plot-container { margin: 20px 0; border: 1px solid #ddd;
-            border-radius: 5px; }
-        .anomaly-section { background-color: #fff3cd; padding: 15px;
-            border: 1px solid #ffeaa7; border-radius: 5px;
-            margin: 20px 0; }
-        .recommendations { background-color: #d4edda; padding: 15px;
-            border: 1px solid #c3e6cb; border-radius: 5px;
-            margin: 20px 0; }
-    </style>
+    <style>{{ report_css|safe }}</style>
 </head>
 <body>
-    <div class="header">
-        <h1>{{ title }}</h1>
-        <p>Generated: {{ timestamp }} | Total Datasets: {{ total_datasets }}</p>
-    </div>
+    <header class="mq-header"><div class="mq-wrap">
+        <p class="mq-eyebrow">MetaQuest &middot; SRA quality</p>
+        <h1 class="mq-title">{{ title }}</h1>
+        <p class="mq-readout"><span>generated <b>{{ timestamp }}</b></span>
+        <span><b>{{ total_datasets }}</b> datasets</span></p>
+    </div></header>
+    <main class="mq-wrap">
+        <section class="mq-stats" aria-label="Quality summary">
+            <div class="mq-stat"><p class="k">Total reads</p>
+                <div class="v">{{ "{:,.0f}".format(summary_stats.total_reads) }}</div></div>
+            <div class="mq-stat"><p class="k">Average GC content</p>
+                <div class="v">{{ "%.1f"|format(summary_stats.average_gc_content * 100) }}%</div></div>
+            <div class="mq-stat"><p class="k">High quality</p>
+                <div class="v">{{ summary_stats.quality_grade_distribution.get('excellent', 0)
+                    + summary_stats.quality_grade_distribution.get('good', 0) }}</div></div>
+            <div class="mq-stat"><p class="k">Contamination issues</p>
+                <div class="v">{{ summary_stats.high_contamination_count }}</div></div>
+        </section>
 
-    <div class="summary-grid">
-        <div class="summary-card">
-            <h3>Total Reads</h3>
-            <p style="font-size: 1.5em; margin: 0;">
-                {{ "{:,.0f}".format(summary_stats.total_reads) }}</p>
+        {% if anomaly_report.anomalous_datasets %}
+        <div class="mq-note warn">
+            <h3>Anomalies detected</h3>
+            <p><b>{{ anomaly_report.anomalous_datasets|length }}</b> datasets flagged for review:</p>
+            <ul>
+                {% for dataset in anomaly_report.anomalous_datasets[:10] %}
+                <li><b>{{ dataset }}</b>: {{ anomaly_report.explanations.get(dataset, 'Multiple issues') }}</li>
+                {% endfor %}
+                {% if anomaly_report.anomalous_datasets|length > 10 %}
+                <li>&hellip; and {{ anomaly_report.anomalous_datasets|length - 10 }} more</li>
+                {% endif %}
+            </ul>
         </div>
-        <div class="summary-card">
-            <h3>Average GC Content</h3>
-            <p style="font-size: 1.5em; margin: 0;">
-                {{ "%.1f"|format(summary_stats.average_gc_content * 100) }}%</p>
-        </div>
-        <div class="summary-card">
-            <h3>High Quality</h3>
-            <p style="font-size: 1.5em; margin: 0;">
-                {{ summary_stats.quality_grade_distribution.get('excellent', 0)
-                + summary_stats.quality_grade_distribution.get('good', 0) }}</p>
-        </div>
-        <div class="summary-card">
-            <h3>Contamination Issues</h3>
-            <p style="font-size: 1.5em; margin: 0;">
-                {{ summary_stats.high_contamination_count }}</p>
-        </div>
-    </div>
+        {% endif %}
 
-    {% if anomaly_report.anomalous_datasets %}
-    <div class="anomaly-section">
-        <h3>Anomalies Detected</h3>
-        <p><strong>{{ anomaly_report.anomalous_datasets|length }}</strong>
-            datasets flagged for review:</p>
-        <ul>
-            {% for dataset in anomaly_report.anomalous_datasets[:10] %}
-            <li><strong>{{ dataset }}</strong>:
-                {{ anomaly_report.explanations.get(dataset, 'Multiple issues') }}</li>
+        {% if plots %}
+        <section class="mq-section">
+            <h2>Quality metrics</h2>
+            <div class="mq-grid">
+            {% for plot_name, plot_html in plots.items() %}
+                <div class="mq-panel">{{ plot_html|safe }}</div>
             {% endfor %}
-            {% if anomaly_report.anomalous_datasets|length > 10 %}
-            <li>... and {{ anomaly_report.anomalous_datasets|length - 10 }} more</li>
-            {% endif %}
-        </ul>
-    </div>
-    {% endif %}
-
-    {% if plots %}
-    <h2>Quality Metrics</h2>
-    {% for plot_name, plot_html in plots.items() %}
-    <div class="plot-container">
-        {{ plot_html|safe }}
-    </div>
-    {% endfor %}
-    {% endif %}
-
+            </div>
+        </section>
+        {% endif %}
+        <footer class="mq-footer">Generated by MetaQuest</footer>
+    </main>
 </body>
 </html>
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_js=plotly_js_script(), **dashboard_data)
+        return template.render(plotly_js=plotly_js_script(), report_css=REPORT_CSS, **dashboard_data)
 
     def _generate_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate HTML content for comparative analysis report."""
@@ -639,172 +601,145 @@ class SRAReportGenerator:
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
     {{ plotly_js|safe }}
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #9b59b6; color: white;
-            padding: 20px; border-radius: 5px; }
-        .group-grid { display: grid; gap: 20px; margin: 20px 0;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
-        .group-card { background-color: #f8f9fa; padding: 15px;
-            border-radius: 5px; border-left: 4px solid #9b59b6; }
-        .plot-container { margin: 20px 0; border: 1px solid #ddd;
-            border-radius: 5px; }
-        .significant { background-color: #fff3cd; padding: 10px;
-            border-radius: 5px; margin: 10px 0; }
-    </style>
+    <style>{{ report_css|safe }}</style>
 </head>
 <body>
-    <div class="header">
-        <h1>{{ title }}</h1>
-        <p>Generated: {{ timestamp }}</p>
-    </div>
-
-    <h2>Group Summary</h2>
-    <div class="group-grid">
-        {% for group_name, count in group_counts.items() %}
-        <div class="group-card">
-            <h3>{{ group_name }}</h3>
-            <p style="font-size: 1.5em; margin: 0;">{{ count }} datasets</p>
-        </div>
-        {% endfor %}
-    </div>
-
-    {% if comparison.statistical_tests %}
-    <h2>Statistical Tests</h2>
-    {% for test_name, test_result in comparison.statistical_tests.items() %}
-    <div class="{% if test_result.significant %}significant{% endif %}">
-        <h4>{{ test_name.replace('_', ' ').title() }}</h4>
-        <p><strong>Test:</strong> {{ test_result.test }}</p>
-        <p><strong>P-value:</strong> {{ "%.4f"|format(test_result.p_value) }}</p>
-        <p><strong>Significant:</strong> {{ "Yes" if test_result.significant else "No" }}</p>
-    </div>
-    {% endfor %}
-    {% endif %}
-
-    {% if plots %}
-    <h2>Comparative Visualizations</h2>
-    {% for plot_name, plot_html in plots.items() %}
-    <div class="plot-container">
-        {{ plot_html|safe }}
-    </div>
-    {% endfor %}
-    {% endif %}
-
-    {% if comparison.recommendations %}
-    <div class="recommendations">
-        <h3>Recommendations</h3>
-        <ul>
-            {% for rec in comparison.recommendations %}
-            <li>{{ rec }}</li>
+    <header class="mq-header"><div class="mq-wrap">
+        <p class="mq-eyebrow">MetaQuest &middot; SRA comparison</p>
+        <h1 class="mq-title">{{ title }}</h1>
+        <p class="mq-readout"><span>generated <b>{{ timestamp }}</b></span></p>
+    </div></header>
+    <main class="mq-wrap">
+        <section class="mq-stats" aria-label="Group summary">
+            {% for group_name, count in group_counts.items() %}
+            <div class="mq-stat"><p class="k">{{ group_name }}</p>
+                <div class="v">{{ count }}<span style="font-size:0.9rem"> datasets</span></div></div>
             {% endfor %}
-        </ul>
-    </div>
-    {% endif %}
+        </section>
 
+        {% if comparison.statistical_tests %}
+        <section class="mq-section">
+            <h2>Statistical tests</h2>
+            {% for test_name, test_result in comparison.statistical_tests.items() %}
+            <div class="mq-note{% if test_result.significant %} warn{% endif %}">
+                <h3>{{ test_name.replace('_', ' ').title() }}</h3>
+                <p>{{ test_result.test }} &middot; p-value
+                    <b>{{ "%.4f"|format(test_result.p_value) }}</b> &middot;
+                    {{ "significant" if test_result.significant else "not significant" }}</p>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {% if plots %}
+        <section class="mq-section">
+            <h2>Comparative visualizations</h2>
+            <div class="mq-grid">
+            {% for plot_name, plot_html in plots.items() %}
+                <div class="mq-panel">{{ plot_html|safe }}</div>
+            {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if comparison.recommendations %}
+        <div class="mq-note">
+            <h3>Recommendations</h3>
+            <ul>
+                {% for rec in comparison.recommendations %}<li>{{ rec }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        <footer class="mq-footer">Generated by MetaQuest</footer>
+    </main>
 </body>
 </html>
         """
 
         template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_js=plotly_js_script(), **report_data)
+        return template.render(plotly_js=plotly_js_script(), report_css=REPORT_CSS, **report_data)
+
+    @staticmethod
+    def _simple_shell(eyebrow: str, title: str, readout: str, body: str) -> str:
+        """Wrap fallback (no-Jinja) content in the shared report shell."""
+        return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title><style>{REPORT_CSS}</style></head><body>
+<header class="mq-header"><div class="mq-wrap">
+<p class="mq-eyebrow">{eyebrow}</p>
+<h1 class="mq-title">{title}</h1>
+<p class="mq-readout">{readout}</p></div></header>
+<main class="mq-wrap">{body}
+<footer class="mq-footer">Generated by MetaQuest</footer>
+</main></body></html>"""
 
     def _generate_simple_download_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple HTML without Jinja2."""
         session = report_data["session"]
         stats = report_data["summary_stats"]
-
         session_id = html_escape(str(session.session_id))
         timestamp = html_escape(str(report_data["timestamp"]))
 
-        html = f"""
-<!DOCTYPE html>
-<html>
-<head><title>SRA Download Summary</title></head>
-<body>
-    <h1>SRA Download Summary</h1>
-    <p>Session: {session_id}</p>
-    <p>Generated: {timestamp}</p>
-
-    <h2>Summary</h2>
-    <ul>
-        <li>Total Downloads: {stats['total_accessions']}</li>
-        <li>Success Rate: {stats['success_rate']*100:.1f}%</li>
-        <li>Total Size: {stats['total_size_mb']/1024:.1f} GB</li>
-        <li>Average Speed: {stats['average_speed_mbps']:.1f} MB/min</li>
-    </ul>
-
-    <h2>Results</h2>
-    <table border="1">
-        <tr><th>Accession</th><th>Status</th><th>Size (MB)</th><th>Progress</th></tr>
-        """
-
+        rows = ""
         for accession, result in session.download_results.items():
-            acc_escaped = html_escape(str(accession))
-            status_escaped = html_escape(str(result.status))
-            html += f"""
-        <tr>
-            <td>{acc_escaped}</td>
-            <td>{status_escaped}</td>
-            <td>{result.downloaded_mb:.1f}</td>
-            <td>{result.progress_pct:.1f}%</td>
-        </tr>
-            """
+            cls = "mq-ok" if str(result.status) == "completed" else "mq-bad"
+            rows += (
+                f"<tr><td>{html_escape(str(accession))}</td>"
+                f'<td class="{cls}">{html_escape(str(result.status).title())}</td>'
+                f'<td class="mq-num">{result.downloaded_mb:.1f}</td>'
+                f'<td class="mq-num">{result.progress_pct:.1f}%</td></tr>'
+            )
 
-        html += """
-    </table>
-</body>
-</html>
-        """
+        body = f"""
+<section class="mq-stats" aria-label="Download summary">
+<div class="mq-stat"><p class="k">Total downloads</p><div class="v">{stats['total_accessions']}</div></div>
+<div class="mq-stat"><p class="k">Success rate</p><div class="v">{stats['success_rate'] * 100:.1f}%</div></div>
+<div class="mq-stat"><p class="k">Total size</p><div class="v">{stats['total_size_mb'] / 1024:.1f}\
+<span style="font-size:0.9rem"> GB</span></div></div>
+<div class="mq-stat"><p class="k">Average speed</p><div class="v">{stats['average_speed_mbps']:.1f}\
+<span style="font-size:0.9rem"> MB/min</span></div></div>
+</section>
+<section class="mq-section"><h2>Download results</h2>
+<div class="mq-table-wrap"><table class="mq-table">
+<thead><tr><th>Accession</th><th>Status</th><th>Size (MB)</th><th>Progress</th></tr></thead>
+<tbody>{rows}</tbody></table></div></section>"""
 
-        return html
+        readout = f"<span>session <b>{session_id}</b></span> <span>generated <b>{timestamp}</b></span>"
+        return self._simple_shell("MetaQuest &middot; SRA download", "Download summary", readout, body)
 
     def _generate_simple_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate simple quality HTML without Jinja2."""
         title = html_escape(str(dashboard_data["title"]))
         timestamp = html_escape(str(dashboard_data["timestamp"]))
-        return f"""
-<!DOCTYPE html>
-<html>
-<head><title>{title}</title></head>
-<body>
-    <h1>{title}</h1>
-    <p>Generated: {timestamp}</p>
-    <p>Total Datasets: {dashboard_data['total_datasets']}</p>
+        s = dashboard_data["summary_stats"]
 
-    <h2>Summary Statistics</h2>
-    <ul>
-        <li>Total Reads: {dashboard_data['summary_stats']['total_reads']:,}</li>
-        <li>Average GC Content: {dashboard_data['summary_stats']['average_gc_content']*100:.1f}%</li>
-        <li>High Contamination Count: {dashboard_data['summary_stats']['high_contamination_count']}</li>
-    </ul>
-</body>
-</html>
-        """
+        body = f"""
+<section class="mq-stats" aria-label="Quality summary">
+<div class="mq-stat"><p class="k">Total reads</p><div class="v">{s['total_reads']:,}</div></div>
+<div class="mq-stat"><p class="k">Average GC content</p>
+<div class="v">{s['average_gc_content'] * 100:.1f}%</div></div>
+<div class="mq-stat"><p class="k">High contamination</p><div class="v">{s['high_contamination_count']}</div></div>
+</section>"""
+
+        readout = (
+            f"<span>generated <b>{timestamp}</b></span> <span><b>{dashboard_data['total_datasets']}</b> datasets</span>"
+        )
+        return self._simple_shell("MetaQuest &middot; SRA quality", title, readout, body)
 
     def _generate_simple_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate simple comparative HTML without Jinja2."""
         title = html_escape(str(report_data["title"]))
         timestamp = html_escape(str(report_data["timestamp"]))
-        group_items = "".join(
-            [
-                f"<li>{html_escape(str(name))}: {count} datasets</li>"
-                for name, count in report_data["group_counts"].items()
-            ]
+        cards = "".join(
+            f'<div class="mq-stat"><p class="k">{html_escape(str(name))}</p>'
+            f'<div class="v">{count}<span style="font-size:0.9rem"> datasets</span></div></div>'
+            for name, count in report_data["group_counts"].items()
         )
-        return f"""
-<!DOCTYPE html>
-<html>
-<head><title>{title}</title></head>
-<body>
-    <h1>{title}</h1>
-    <p>Generated: {timestamp}</p>
-
-    <h2>Group Sizes</h2>
-    <ul>
-        {group_items}
-    </ul>
-</body>
-</html>
-        """
+        body = f'<section class="mq-stats" aria-label="Group summary">{cards}</section>'
+        readout = f"<span>generated <b>{timestamp}</b></span>"
+        return self._simple_shell("MetaQuest &middot; SRA comparison", title, readout, body)

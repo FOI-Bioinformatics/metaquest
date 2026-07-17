@@ -55,8 +55,9 @@ class TestGenerateContainmentExplorer:
         generate_containment_explorer(containment_df, taxonomy, output_file=out)
         html = out.read_text()
         assert "resultsTable" in html
-        assert "Taxonomy Sunburst" in html
-        assert "Heatmap" in html
+        assert "Taxonomy overview" in html
+        assert "plotly-graph-div" in html  # charts rendered
+        assert "mq-heatbar" in html  # containment heat-bar cells
         assert "SRR001" in html
         assert "filterTable" in html
 
