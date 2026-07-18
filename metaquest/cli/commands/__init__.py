@@ -16,6 +16,7 @@ from .metadata import (
 from .samples import SingleSampleCommand
 from .sra import DownloadSraCommand, AssembleDatasetsCommand
 from .status import StatusCommand
+from .read_extraction import ExtractTargetReadsCommand
 from .test_data import DownloadTestGenomeCommand
 from .genome import GenomeSearchCommand, GenomeDownloadCommand, GenomePrepareCommand
 from .explore import (
@@ -38,6 +39,7 @@ __all__ = [
     "DownloadSraCommand",
     "AssembleDatasetsCommand",
     "StatusCommand",
+    "ExtractTargetReadsCommand",
     "DownloadTestGenomeCommand",
     "GenomeSearchCommand",
     "GenomeDownloadCommand",

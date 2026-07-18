@@ -46,6 +46,7 @@ class TestRegisterAllCommands:
             "download_sra",
             "assemble_datasets",
             "status",
+            "extract_target_reads",
             "sra_info",
             "sra_download",
             "sra_stats",

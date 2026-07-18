@@ -77,6 +77,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
         "safe_params": {
             "-1",
             "-2",
+            "-r",
             "-o",
             "--num-cpu-threads",
             "--memory",
@@ -121,6 +122,34 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "--no-progressbar",
         },
         "description": "NCBI datasets CLI for genome downloads",
+    },
+    "minimap2": {
+        "safe_params": {
+            "-a",
+            "-x",
+            "-t",
+            "-o",
+            "--secondary",
+            "--version",
+        },
+        "description": "Read-to-reference aligner (targeted read extraction)",
+    },
+    "samtools": {
+        "safe_params": {
+            "view",
+            "fastq",
+            "-b",
+            "-F",
+            "-f",
+            "-o",
+            "-0",
+            "-1",
+            "-2",
+            "-s",
+            "-@",
+            "--version",
+        },
+        "description": "SAM/BAM utilities (filter and export mapped reads)",
     },
 }
 

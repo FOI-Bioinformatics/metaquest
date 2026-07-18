@@ -618,15 +618,20 @@ def _find_paired_reads(illumina_files):
     """
     read_pairs = []
 
+    # Accept both the "R1/R2" convention and fasterq-dump's "_1/_2" split-files output.
+    r1_markers = ("R1", "_1")
     for fastq_file in illumina_files:
-        if "R1" in fastq_file.name:
-            # Find paired read file
-            r2_file = fastq_file.with_name(fastq_file.name.replace("R1", "R2"))
+        marker = next((m for m in r1_markers if m in fastq_file.name), None)
+        if marker is None:
+            continue
 
-            if r2_file.exists():
-                read_pairs.append((fastq_file, r2_file))
-            else:
-                logger.warning(f"Could not find paired read file for {fastq_file}")
+        mate_marker = marker.replace("1", "2")
+        r2_file = fastq_file.with_name(fastq_file.name.replace(marker, mate_marker))
+
+        if r2_file.exists():
+            read_pairs.append((fastq_file, r2_file))
+        else:
+            logger.warning(f"Could not find paired read file for {fastq_file}")
 
     return read_pairs
 

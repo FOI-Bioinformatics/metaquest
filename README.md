@@ -146,6 +146,27 @@ re-download or `--dry-run` to report present-vs-missing without downloading:
 metaquest genome_download --accessions GCF_000006945.2 --dry-run
 ```
 
+### 11. Targeted Read Extraction Before Assembly
+
+To assemble only the reads relevant to a target genome (a small, targeted assembly rather than a
+whole-metagenome assembly), use `extract_target_reads`. For every sample whose containment for the
+target genome meets the threshold, it maps the reads with minimap2 and keeps the mapped reads with
+samtools, writing them to `targeted/<ACC>/`:
+
+```bash
+metaquest extract_target_reads \
+  --parsed-containment parsed_containment.txt \
+  --genome-id GCF_000006945.2 \
+  --genome-fasta genomes/GCF_000006945.2.fna \
+  --fastq-folder fastq --output-folder targeted \
+  --threshold 0.5 --preset sr
+```
+
+Use `--dry-run` to list the qualifying samples without running any tool, `--preset` to match the read
+type (`sr` for Illumina, `map-ont`/`map-pb`/`map-hifi` for long reads), and `--assemble` to run
+megahit on each sample's extracted reads. This step requires `minimap2`, `samtools`, and (for
+`--assemble`) `megahit` to be installed and on the PATH.
+
 ## Advanced SRA Operations
 
 ### Which SRA download command should I use?
