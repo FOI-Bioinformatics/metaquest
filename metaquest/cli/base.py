@@ -7,7 +7,7 @@ This module provides the foundation for a modular command architecture.
 import argparse
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 class BaseCommand(ABC):
@@ -28,6 +28,11 @@ class BaseCommand(ABC):
     def help(self) -> str:
         """Return the help text for this command."""
         pass
+
+    @property
+    def aliases(self) -> List[str]:
+        """Return alternate names this command also responds to (default: none)."""
+        return []
 
     @abstractmethod
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
@@ -69,7 +74,7 @@ class CommandRegistry:
         subparsers.required = True
 
         for command in self._commands.values():
-            subparser = subparsers.add_parser(command.name, help=command.help)
+            subparser = subparsers.add_parser(command.name, help=command.help, aliases=command.aliases)
             command.configure_parser(subparser)
             subparser.set_defaults(func=command.execute)
 

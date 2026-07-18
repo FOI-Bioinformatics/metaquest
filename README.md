@@ -62,6 +62,11 @@ You can extract basic metadata directly from Branchwater CSV files without downl
 metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater/files --metadata-folder metadata
 ```
 
+> Note: a few Branchwater columns are renamed to canonical names in the output — in
+> particular `organism` becomes `Sample_Scientific_Name`. Use the output column names
+> (e.g. `--metadata-column Sample_Scientific_Name`) in later `count_metadata` /
+> `single_sample` steps.
+
 ### 4. Summarizing Results
 
 After processing the Branchwater files, you can summarize the results:
@@ -123,6 +128,18 @@ metaquest single_sample --summary-file parsed_containment.txt --metadata-file pa
 ```
 
 ## Advanced SRA Operations
+
+### Which SRA download command should I use?
+
+MetaQuest ships three ways to download SRA reads; pick one:
+
+- `download_sra` — basic, dependable parallel `fasterq-dump`. Start here.
+- `sra_download` — adds sequencing-technology detection and a richer download report.
+- `sra-download-intelligent` (alias `sra_download_intelligent`) — adds accession-level
+  resume (skips accessions already present) and download-order optimization.
+
+All three skip accessions whose FASTQ files already exist unless `--force` is given.
+(The four `sra-*` commands also accept snake_case names, e.g. `sra_dashboard`.)
 
 ### Intelligent SRA Downloading
 

@@ -38,6 +38,7 @@ class TestRegisterAllCommands:
             "parse_containment",
             "download_metadata",
             "parse_metadata",
+            "check_metadata_attributes",
             "count_metadata",
             "single_sample",
             "plot_containment",
@@ -56,6 +57,27 @@ class TestRegisterAllCommands:
 
         for expected_cmd in expected_commands:
             assert expected_cmd in command_names
+
+    @staticmethod
+    def _subcommand_choices(parser):
+        """Return the set of accepted subcommand names (including aliases)."""
+        action = next(a for a in parser._subparsers._group_actions if getattr(a, "choices", None))
+        return set(action.choices)
+
+    def test_snake_case_aliases_resolve(self):
+        """The kebab-case intelligent commands also accept snake_case names."""
+        choices = self._subcommand_choices(create_parser())
+        for kebab, snake in (
+            ("sra-download-intelligent", "sra_download_intelligent"),
+            ("sra-profile-quality", "sra_profile_quality"),
+            ("sra-dashboard", "sra_dashboard"),
+            ("sra-compare", "sra_compare"),
+        ):
+            assert kebab in choices and snake in choices
+
+    def test_check_metadata_attributes_is_registered(self):
+        """check_metadata_attributes is a real command (README step 7)."""
+        assert "check_metadata_attributes" in self._subcommand_choices(create_parser())
 
     def test_register_all_commands_idempotent(self):
         """Test that registering commands multiple times doesn't cause issues."""

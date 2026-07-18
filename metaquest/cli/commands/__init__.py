@@ -9,6 +9,7 @@ from .containment import ParseContainmentCommand, PlotContainmentCommand
 from .metadata import (
     DownloadMetadataCommand,
     ParseMetadataCommand,
+    CheckMetadataAttributesCommand,
     CountMetadataCommand,
     PlotMetadataCountsCommand,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "PlotContainmentCommand",
     "DownloadMetadataCommand",
     "ParseMetadataCommand",
+    "CheckMetadataAttributesCommand",
     "CountMetadataCommand",
     "PlotMetadataCountsCommand",
     "SingleSampleCommand",

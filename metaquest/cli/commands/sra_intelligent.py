@@ -49,6 +49,10 @@ class SRAIntelligentDownloadCommand(BaseCommand):
         return "sra-download-intelligent"
 
     @property
+    def aliases(self) -> List[str]:
+        return ["sra_download_intelligent"]
+
+    @property
     def help(self) -> str:
         return "Download SRA datasets with intelligent resume capability and optimization"
 
@@ -230,6 +234,10 @@ class SRAQualityProfileCommand(BaseCommand):
     @property
     def name(self) -> str:
         return "sra-profile-quality"
+
+    @property
+    def aliases(self) -> List[str]:
+        return ["sra_profile_quality"]
 
     @property
     def help(self) -> str:
@@ -448,6 +456,10 @@ class SRAInteractiveDashboardCommand(BaseCommand):
         return "sra-dashboard"
 
     @property
+    def aliases(self) -> List[str]:
+        return ["sra_dashboard"]
+
+    @property
     def help(self) -> str:
         return "Generate interactive HTML dashboards for SRA analysis"
 
@@ -564,6 +576,10 @@ class SRAComparativeAnalysisCommand(BaseCommand):
     @property
     def name(self) -> str:
         return "sra-compare"
+
+    @property
+    def aliases(self) -> List[str]:
+        return ["sra_compare"]
 
     @property
     def help(self) -> str:
