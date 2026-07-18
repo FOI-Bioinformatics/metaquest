@@ -7,6 +7,7 @@ import argparse
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.metadata import (
+    check_metadata_attributes,
     download_metadata,
     parse_metadata,
 )
@@ -89,6 +90,38 @@ class ParseMetadataCommand(BaseCommand):
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error parsing metadata: {e}")
+            return 1
+
+
+class CheckMetadataAttributesCommand(BaseCommand):
+    """Command for counting how often each sample-attribute column is populated."""
+
+    @property
+    def name(self) -> str:
+        return "check_metadata_attributes"
+
+    @property
+    def help(self) -> str:
+        return "Count how often each metadata attribute is populated"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--file-path",
+            default="metadata_table.txt",
+            help="Path to the parsed metadata table",
+        )
+        parser.add_argument(
+            "--output-file",
+            default="metadata_attribute_counts.txt",
+            help="Path to save the attribute counts",
+        )
+
+    def execute(self, args: argparse.Namespace) -> int:
+        try:
+            check_metadata_attributes(args.file_path, args.output_file)
+            return 0
+        except MetaQuestError as e:
+            self.logger.error(f"Error checking metadata attributes: {e}")
             return 1
 
 
