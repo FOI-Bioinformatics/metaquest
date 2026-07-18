@@ -28,6 +28,17 @@ def _safe_rmtree(path: Path) -> None:
         logger.warning(f"Could not remove directory {path}: {e}")
 
 
+def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
+    """Return True if the per-accession directory holds at least one FASTQ file.
+
+    This is the single source of truth for "this accession is already
+    downloaded" used across the download and status paths (a per-accession
+    subdirectory containing any ``*.fastq*`` file).
+    """
+    acc_path = Path(acc_dir)
+    return acc_path.is_dir() and any(acc_path.glob("*.fastq*"))
+
+
 def _read_blacklist_files(blacklist_files):
     """
     Read accessions from blacklist files.
@@ -119,8 +130,7 @@ def _check_existing_download(output_path, force):
         return False
 
     if not force and output_path.exists():
-        fastq_files = list(output_path.glob("*.fastq*"))
-        if fastq_files:
+        if accession_has_fastq(output_path):
             return True
 
         # Found empty directory, will redownload
@@ -278,14 +288,8 @@ def _check_existing_downloads(
             blacklisted.append(acc)
             continue
 
-        acc_path = fastq_path / acc
-        if not force and acc_path.exists():
-            fastq_files = list(acc_path.glob("*.fastq*"))
-            if fastq_files:
-                already_downloaded.append(acc)
-            else:
-                # Folder exists but no FASTQ files, needs download
-                to_download.append(acc)
+        if not force and accession_has_fastq(fastq_path / acc):
+            already_downloaded.append(acc)
         else:
             to_download.append(acc)
 
