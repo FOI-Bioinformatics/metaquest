@@ -7,7 +7,7 @@ from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.genome_download import download_genomes, extract_and_organize
+from metaquest.data.genome_download import download_genomes, extract_and_organize, partition_present_genomes
 from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
@@ -136,6 +136,16 @@ class GenomeDownloadCommand(BaseCommand):
             default=None,
             help="Filter by assembly level",
         )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Re-download genomes even if their FASTA already exists",
+        )
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Report which genomes are already present vs would be downloaded, without downloading",
+        )
 
     def _collect_accessions(self, args: argparse.Namespace) -> list:
         """Collect accessions from all input sources."""
@@ -177,10 +187,21 @@ class GenomeDownloadCommand(BaseCommand):
             output_dir = Path(args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            self.logger.info("Downloading %d genome(s) to %s", len(accessions), output_dir)
+            present, missing = partition_present_genomes(accessions, output_dir)
+            to_download = accessions if args.force else missing
 
+            if present and not args.force:
+                self.logger.info("%d genome(s) already present, skipping", len(present))
+            if args.dry_run:
+                self.logger.info("Dry run: %d already present, %d would be downloaded", len(present), len(to_download))
+                return 0
+            if not to_download:
+                self.logger.info("All %d genome(s) already present", len(accessions))
+                return 0
+
+            self.logger.info("Downloading %d genome(s) to %s", len(to_download), output_dir)
             zip_path = download_genomes(
-                accessions,
+                to_download,
                 output_dir,
                 assembly_level=args.assembly_level,
             )

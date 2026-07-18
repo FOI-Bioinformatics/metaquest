@@ -127,6 +127,25 @@ To analyze a single sample from the summary, you can use the `single_sample` com
 metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column Sample_Scientific_Name --threshold 0.95
 ```
 
+### 10. Checking What Is Already Available Locally
+
+Before downloading, use `status` to see which reads, metadata, and genomes are already present
+so nothing is fetched twice. Given a wanted list it also reports what is still missing:
+
+```bash
+metaquest status --accessions-file accessions.txt --list-missing
+metaquest status --parsed-containment parsed_containment.txt --json
+```
+
+The command reconciles against the standard layout (`fastq/<ACC>/`, `metadata/<ACC>_metadata.xml`,
+`genomes/<GCF>.fna`); override the locations with `--fastq-folder`, `--metadata-folder`, and
+`--genomes-folder`. Genome downloads skip accessions whose FASTA already exists; pass `--force` to
+re-download or `--dry-run` to report present-vs-missing without downloading:
+
+```bash
+metaquest genome_download --accessions GCF_000006945.2 --dry-run
+```
+
 ## Advanced SRA Operations
 
 ### Which SRA download command should I use?

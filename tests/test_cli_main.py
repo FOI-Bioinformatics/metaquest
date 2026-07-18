@@ -45,6 +45,7 @@ class TestRegisterAllCommands:
             "plot_metadata_counts",
             "download_sra",
             "assemble_datasets",
+            "status",
             "sra_info",
             "sra_download",
             "sra_stats",

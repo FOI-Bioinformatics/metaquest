@@ -11,7 +11,7 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from metaquest.core.constants import GENOME_ACCESSION_PATTERN, GENOME_ACCESSION_PREFIXES
 from metaquest.core.exceptions import DataAccessError
@@ -39,6 +39,20 @@ def _validate_genome_accession(accession: str) -> str:
             f"Invalid genome accession format: {accession}. " f"Expected format: GCF_000000000.0 or GCA_000000000.0"
         )
     return accession
+
+
+def genome_fasta_path(accession: str, output_dir: Path) -> Path:
+    """Return the organized FASTA path an accession is extracted to."""
+    return Path(output_dir) / f"{accession}.fna"
+
+
+def partition_present_genomes(accessions: List[str], output_dir: Path) -> Tuple[List[str], List[str]]:
+    """Split accessions into (already present on disk, missing) by their .fna file."""
+    present: List[str] = []
+    missing: List[str] = []
+    for acc in accessions:
+        (present if genome_fasta_path(acc, output_dir).exists() else missing).append(acc)
+    return present, missing
 
 
 def check_datasets_available() -> bool:

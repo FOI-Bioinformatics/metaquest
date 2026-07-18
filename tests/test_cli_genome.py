@@ -200,6 +200,8 @@ class TestGenomeDownloadCommand:
             output_dir="genomes/",
             representative_only=True,
             assembly_level=None,
+            force=False,
+            dry_run=False,
         )
         result = cmd.execute(args)
         assert result == 1
@@ -219,6 +221,8 @@ class TestGenomeDownloadCommand:
                 output_dir=tmpdir,
                 representative_only=True,
                 assembly_level=None,
+                force=False,
+                dry_run=False,
             )
             result = cmd.execute(args)
             assert result == 0
@@ -242,6 +246,8 @@ class TestGenomeDownloadCommand:
                 output_dir=tmpdir,
                 representative_only=True,
                 assembly_level=None,
+                force=False,
+                dry_run=False,
             )
             result = cmd.execute(args)
             assert result == 0
@@ -263,6 +269,8 @@ class TestGenomeDownloadCommand:
                 output_dir=tmpdir,
                 representative_only=True,
                 assembly_level=None,
+                force=False,
+                dry_run=False,
             )
             result = cmd.execute(args)
             assert result == 0
@@ -278,6 +286,8 @@ class TestGenomeDownloadCommand:
             output_dir="genomes/",
             representative_only=True,
             assembly_level=None,
+            force=False,
+            dry_run=False,
         )
         result = cmd.execute(args)
         assert result == 1
@@ -295,9 +305,77 @@ class TestGenomeDownloadCommand:
                 output_dir=tmpdir,
                 representative_only=True,
                 assembly_level=None,
+                force=False,
+                dry_run=False,
             )
             result = cmd.execute(args)
             assert result == 1
+
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_execute_skips_present_genome(self, mock_download, mock_extract):
+        cmd = GenomeDownloadCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "GCF_000006945.2.fna").write_text(">seq\nACGT\n")
+            args = argparse.Namespace(
+                accessions=["GCF_000006945.2"],
+                accession_file=None,
+                species=None,
+                genus=None,
+                output_dir=tmpdir,
+                representative_only=True,
+                assembly_level=None,
+                force=False,
+                dry_run=False,
+            )
+            result = cmd.execute(args)
+            assert result == 0
+            mock_download.assert_not_called()
+            mock_extract.assert_not_called()
+
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_execute_force_redownloads_present_genome(self, mock_download, mock_extract):
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {"GCF_000006945.2": Path("genomes/GCF_000006945.2.fna")}
+        cmd = GenomeDownloadCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "GCF_000006945.2.fna").write_text(">seq\nACGT\n")
+            args = argparse.Namespace(
+                accessions=["GCF_000006945.2"],
+                accession_file=None,
+                species=None,
+                genus=None,
+                output_dir=tmpdir,
+                representative_only=True,
+                assembly_level=None,
+                force=True,
+                dry_run=False,
+            )
+            result = cmd.execute(args)
+            assert result == 0
+            mock_download.assert_called_once()
+
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_execute_dry_run_downloads_nothing(self, mock_download, mock_extract):
+        cmd = GenomeDownloadCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "GCF_000006945.2.fna").write_text(">seq\nACGT\n")
+            args = argparse.Namespace(
+                accessions=["GCF_000006945.2", "GCF_000007545.1"],
+                accession_file=None,
+                species=None,
+                genus=None,
+                output_dir=tmpdir,
+                representative_only=True,
+                assembly_level=None,
+                force=False,
+                dry_run=True,
+            )
+            result = cmd.execute(args)
+            assert result == 0
+            mock_download.assert_not_called()
 
 
 class TestGenomePrepareCommand:
