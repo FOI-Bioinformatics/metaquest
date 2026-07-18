@@ -30,6 +30,7 @@ from metaquest.cli.commands import (
     DownloadSraCommand,
     AssembleDatasetsCommand,
     StatusCommand,
+    ExtractTargetReadsCommand,
     DownloadTestGenomeCommand,
     GenomeSearchCommand,
     GenomeDownloadCommand,
@@ -75,6 +76,7 @@ def register_all_commands() -> None:
         DownloadSraCommand(),
         AssembleDatasetsCommand(),
         StatusCommand(),
+        ExtractTargetReadsCommand(),
         # Enhanced SRA commands
         SRAInfoCommand(),
         SRADownloadEnhancedCommand(),
