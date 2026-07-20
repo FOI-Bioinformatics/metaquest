@@ -9,6 +9,7 @@ from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     assemble_extracted_reads,
     extract_target_reads,
+    resolve_assembly_threads,
 )
 
 
@@ -43,6 +44,12 @@ class ExtractTargetReadsCommand(BaseCommand):
         parser.add_argument(
             "--assemble", action="store_true", help="Assemble each sample's extracted reads with megahit"
         )
+        parser.add_argument(
+            "--assembly-threads",
+            type=int,
+            default=None,
+            help="Threads for the megahit assembly (defaults to 1 on macOS, --threads elsewhere)",
+        )
         parser.add_argument("--min-contig-len", type=int, default=None, help="megahit minimum contig length")
         parser.add_argument(
             "--dry-run", action="store_true", help="List the qualifying samples without running any tool"
@@ -71,11 +78,17 @@ class ExtractTargetReadsCommand(BaseCommand):
             self.logger.info("Extracted reads for %d sample(s)", len(results))
 
             if args.assemble:
+                asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
+                if args.assembly_threads is None and asm_threads < args.threads:
+                    self.logger.info(
+                        "Running megahit single-threaded on macOS (its parallel sort is unstable here); "
+                        "override with --assembly-threads"
+                    )
                 for accession, reads in results.items():
                     if not reads:
                         continue
                     out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
-                    assemble_extracted_reads(reads, out_dir, threads=args.threads, min_contig_len=args.min_contig_len)
+                    assemble_extracted_reads(reads, out_dir, threads=asm_threads, min_contig_len=args.min_contig_len)
                 self.logger.info("Assembled %d sample(s)", len(results))
 
             return 0

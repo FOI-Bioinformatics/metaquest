@@ -11,6 +11,7 @@ to filter and export the mapped reads. External tools run through
 """
 
 import logging
+import platform
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -170,6 +171,28 @@ def extract_target_reads(
         logger.info("Extracted mapped reads for %s -> %s", accession, ", ".join(str(p) for p in written))
 
     return results
+
+
+def resolve_assembly_threads(requested: Optional[int], fallback: int) -> int:
+    """Pick the megahit thread count, defaulting to single-thread on macOS.
+
+    megahit 1.2.9's multithreaded k-mer sorting step segfaults on recent macOS
+    (the prebuilt binary predates the current runtime), so when the user has not
+    asked for a specific value we cap the assembly at one thread on Darwin.
+    minimap2/samtools are unaffected and keep using ``fallback`` threads.
+
+    Args:
+        requested: An explicit thread count from the user, or None for the default.
+        fallback: The thread count to use when no override is given (non-macOS).
+
+    Returns:
+        The number of threads to run megahit with.
+    """
+    if requested is not None:
+        return requested
+    if platform.system() == "Darwin":
+        return 1
+    return fallback
 
 
 def assemble_extracted_reads(
