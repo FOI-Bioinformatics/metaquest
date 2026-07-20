@@ -167,6 +167,10 @@ type (`sr` for Illumina, `map-ont`/`map-pb`/`map-hifi` for long reads), and `--a
 megahit on each sample's extracted reads. This step requires `minimap2`, `samtools`, and (for
 `--assemble`) `megahit` to be installed and on the PATH.
 
+On macOS the assembly defaults to a single thread, because megahit 1.2.9's parallel k-mer sorting step
+is unstable on recent macOS releases (mapping with minimap2/samtools still uses `--threads`). Override
+the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
+
 ## Advanced SRA Operations
 
 ### Which SRA download command should I use?

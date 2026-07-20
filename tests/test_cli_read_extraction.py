@@ -19,6 +19,7 @@ def _args(**kwargs):
         preset="sr",
         threads=4,
         assemble=False,
+        assembly_threads=None,
         min_contig_len=None,
         dry_run=False,
     )
@@ -96,6 +97,51 @@ class TestExtractTargetReadsCommand:
         assert rc == 0
         tools = [c.args[0] for c in mock_run.call_args_list]
         assert "megahit" in tools
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_assembly_single_thread_on_macos(self, mock_run, monkeypatch):
+        monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Darwin")
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    threads=4,
+                    assemble=True,
+                )
+            )
+        assert rc == 0
+        megahit_call = next(c for c in mock_run.call_args_list if c.args[0] == "megahit")
+        args = megahit_call.args[1]
+        assert args[args.index("--num-cpu-threads") + 1] == "1"
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_assembly_threads_override_on_macos(self, mock_run, monkeypatch):
+        monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Darwin")
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    threads=4,
+                    assemble=True,
+                    assembly_threads=6,
+                )
+            )
+        assert rc == 0
+        megahit_call = next(c for c in mock_run.call_args_list if c.args[0] == "megahit")
+        args = megahit_call.args[1]
+        assert args[args.index("--num-cpu-threads") + 1] == "6"
 
     def test_execute_missing_genome_column_returns_1(self):
         cmd = ExtractTargetReadsCommand()

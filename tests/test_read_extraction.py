@@ -11,6 +11,7 @@ from metaquest.core.exceptions import DataAccessError, ProcessingError
 from metaquest.data.read_extraction import (
     assemble_extracted_reads,
     extract_target_reads,
+    resolve_assembly_threads,
     select_samples_for_genome,
 )
 
@@ -142,3 +143,17 @@ class TestAssembleExtractedReads:
     def test_bad_read_count_raises(self):
         with pytest.raises(ProcessingError):
             assemble_extracted_reads([], "asm")
+
+
+class TestResolveAssemblyThreads:
+    def test_explicit_request_wins(self, monkeypatch):
+        monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Darwin")
+        assert resolve_assembly_threads(8, 4) == 8
+
+    def test_macos_defaults_to_single_thread(self, monkeypatch):
+        monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Darwin")
+        assert resolve_assembly_threads(None, 4) == 1
+
+    def test_non_macos_uses_fallback(self, monkeypatch):
+        monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Linux")
+        assert resolve_assembly_threads(None, 4) == 4
