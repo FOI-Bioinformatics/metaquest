@@ -340,13 +340,12 @@ class SRAQualityProfileCommand(BaseCommand):
 
     def _profile_accession(self, analyzer, args, accession: str, output_dir: Path):
         """Profile a single accession; return its QualityProfile or None if unavailable."""
-        fastq_dir = Path(args.fastq_dir)
-        accession_files = list(fastq_dir.glob(f"**/{accession}*.fastq*"))
-        if not accession_files:
+        accession_file = analyzer.find_fastq(accession)
+        if accession_file is None:
             print(f"⚠️  No FASTQ files found for {accession}")
             return None
 
-        profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_files[0]))
+        profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_file))
         if not args.summary_only:
             self._print_quality_profile(profile)
         if args.detailed_reports:
@@ -397,7 +396,7 @@ class SRAQualityProfileCommand(BaseCommand):
         try:
             output_dir = Path(args.output_dir)
             output_dir.mkdir(exist_ok=True)
-            analyzer = SRADatasetAnalyzer()
+            analyzer = SRADatasetAnalyzer(fastq_dir=args.fastq_dir)
 
             accessions = self._resolve_accessions(args)
             if not accessions:

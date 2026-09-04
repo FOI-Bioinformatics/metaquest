@@ -32,6 +32,7 @@ from metaquest.sra.download_manager import (  # noqa: E402
     NetworkConditions,
 )
 from metaquest.sra.analytics import QualityProfile, ComparativeAnalysis  # noqa: E402
+from metaquest.sra.analytics import SRADatasetAnalyzer as RealSRADatasetAnalyzer  # noqa: E402
 
 # Keys returned by the real IntelligentDownloadManager.estimate_download_time()
 REAL_ESTIMATE = {
@@ -483,6 +484,7 @@ class TestSRAQualityProfileCommand:
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.return_value = None
             mock_analyzer_class.return_value = mock_analyzer
             result = cmd.execute(args)
             # No FASTQ files -> profiling never attempted
@@ -493,6 +495,58 @@ class TestSRAQualityProfileCommand:
         assert summary["total_analyzed"] == 0
         assert summary["failed_accessions"] == ["SRR404"]
         assert summary["summary_stats"] is None
+
+    def test_execute_locates_fastq_via_find_fastq_avoiding_prefix_collision(self, tmp_path):
+        """SRR1 and SRR10 must not collide: each accession profiles its own FASTQ file.
+
+        The old glob("**/{accession}*.fastq*") matched "SRR1" against SRR10's
+        directory too (since "SRR10..." starts with "SRR1"), and did not sort its
+        matches. The fix routes accession lookup through the analyzer's own
+        find_fastq(), which uses exact accession boundaries and a sorted result.
+        """
+        cmd = SRAQualityProfileCommand()
+
+        fastq_dir = tmp_path / "fastq"
+        (fastq_dir / "SRR10").mkdir(parents=True)
+        (fastq_dir / "SRR10" / "SRR10_1.fastq").write_text("x")
+        (fastq_dir / "SRR10" / "SRR10_2.fastq").write_text("x")
+        (fastq_dir / "SRR1_1.fastq").write_text("x")
+
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR10\nSRR1\n")
+
+        args = Namespace(
+            accession=None,
+            accessions_file=str(accessions_file),
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=True,
+        )
+
+        mock_profile = make_profile("SRR", n_content=0.01, duplication_rate=0.15, adapter=0.02)
+        original_find_fastq = RealSRADatasetAnalyzer.find_fastq
+
+        with patch(
+            "metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer.find_fastq",
+            autospec=True,
+            side_effect=lambda self, accession: original_find_fastq(self, accession),
+        ) as mock_find_fastq:
+            with patch(
+                "metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer.profile_dataset_quality",
+                return_value=mock_profile,
+            ) as mock_profile_call:
+                result = cmd.execute(args)
+
+        assert result == 0
+        # The command must locate FASTQ files through the analyzer's own find_fastq,
+        # not a hand-rolled glob, so the SRR1/SRR10 collision it already guards
+        # against is not reintroduced here.
+        assert mock_find_fastq.call_count == 2
+        called_paths = {call.args[0]: call.kwargs["fastq_path"] for call in mock_profile_call.call_args_list}
+        assert called_paths["SRR10"] == str(fastq_dir / "SRR10" / "SRR10_1.fastq")
+        assert called_paths["SRR1"] == str(fastq_dir / "SRR1_1.fastq")
 
 
 # ============================================================================
