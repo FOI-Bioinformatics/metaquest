@@ -468,3 +468,34 @@ class TestLiveApiShapes:
 
         with pytest.raises(DataAccessError, match="All 3 species lookups"):
             get_accessions_for_genus("Wolbachia")
+
+    @patch("metaquest.data.gtdb.search_species")
+    @patch("metaquest.data.gtdb.search_taxon")
+    def test_genus_fanout_excludes_other_genera(self, mock_taxon, mock_species):
+        """GTDB /taxon/search is a name-contains search; only the target genus's
+        species should be resolved, not every genus whose species name contains it."""
+        mock_taxon.return_value = [
+            {"name": "s__Bacillus subtilis"},
+            {"name": "s__Paenibacillus larvae"},
+            {"name": "s__Lactobacillus casei"},
+        ]
+        mock_species.return_value = [{"accession": "GCF_000009045.1", "gtdb_species_rep": True}]
+
+        accessions = get_accessions_for_genus("Bacillus")
+
+        assert accessions == ["GCF_000009045.1"]
+        mock_species.assert_called_once_with("Bacillus subtilis")
+
+    @patch("metaquest.data.gtdb.search_species")
+    @patch("metaquest.data.gtdb.search_taxon")
+    def test_genus_dedupes_accessions_shared_across_species(self, mock_taxon, mock_species):
+        """Two species resolving to the same accession should yield it only once."""
+        mock_taxon.return_value = [
+            {"name": "s__Bacillus subtilis"},
+            {"name": "s__Bacillus subtilis_A"},
+        ]
+        mock_species.return_value = [{"accession": "GCF_000009045.1", "gtdb_species_rep": True}]
+
+        accessions = get_accessions_for_genus("Bacillus")
+
+        assert accessions == ["GCF_000009045.1"]

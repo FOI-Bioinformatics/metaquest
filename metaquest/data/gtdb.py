@@ -118,6 +118,8 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
     seen_species = set()
     attempted = 0
     failed = 0
+    skipped_other_genus = 0
+    genus_prefix = f"{genus_name} "
     for record in taxon_results:
         name = str(record.get("species") or record.get("name", ""))
         if name in seen_species:
@@ -126,18 +128,33 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
 
         if name.startswith("s__") and _record_accession(record) is None:
             species_name = name[3:]
+            if not species_name.startswith(genus_prefix):
+                # /taxon/search is a name-contains search, so a genus query also
+                # matches species of other genera (e.g. "Bacillus" also matches
+                # "Paenibacillus larvae"); keep only this genus's own species.
+                skipped_other_genus += 1
+                continue
             logger.debug("Resolving species %s for genus %s", species_name, genus_name)
             attempted += 1
             try:
-                accessions.extend(get_accessions_for_species(species_name, representative_only))
+                for accession in get_accessions_for_species(species_name, representative_only):
+                    if accession not in accessions:
+                        accessions.append(accession)
             except DataAccessError as e:
                 failed += 1
                 logger.warning("Skipping species %s: %s", species_name, e)
             continue
 
         accession = _keep_accession(record, representative_only)
-        if accession:
+        if accession and accession not in accessions:
             accessions.append(accession)
+
+    if skipped_other_genus:
+        logger.info(
+            "Skipped %d taxon match(es) outside genus '%s'",
+            skipped_other_genus,
+            genus_name,
+        )
 
     if attempted and failed == attempted:
         raise DataAccessError(f"All {attempted} species lookups for genus '{genus_name}' failed")
