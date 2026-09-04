@@ -39,6 +39,7 @@ from metaquest.cli.commands import (
     ExploreContainmentCommand,
     FindByTaxonomyCommand,
 )
+from metaquest.cli.commands.select import SelectDatasetsCommand
 from metaquest.cli.commands.advanced_analysis import (
     DiversityAnalysisCommand,
     InteractivePlotCommand,
@@ -77,6 +78,7 @@ def register_all_commands() -> None:
         AssembleDatasetsCommand(),
         StatusCommand(),
         ExtractTargetReadsCommand(),
+        SelectDatasetsCommand(),
         # Enhanced SRA commands
         SRAInfoCommand(),
         SRADownloadEnhancedCommand(),
