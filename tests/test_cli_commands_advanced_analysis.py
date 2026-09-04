@@ -162,6 +162,58 @@ class TestDiversityAnalysisCommand:
         result = command.execute(args)
         assert result == 1
 
+    def test_execute_permanova_with_text_metadata_column(self, tmp_path):
+        """Regression test: a text metadata column must survive the metadata load.
+
+        read_matrix drops non-numeric columns, which previously made
+        --permanova-formula fail with a KeyError because the group column
+        (e.g. "treatment") was stripped from the metadata before PERMANOVA ran.
+        The metadata load must use read_table instead, which keeps all columns.
+        Uses real (unmocked) file I/O and diversity/PERMANOVA functions.
+        """
+        abundance_file = tmp_path / "abundance.txt"
+        abundance_file.write_text(
+            "\tsp1\tsp2\tsp3\n"
+            "SRR1\t10\t5\t2\n"
+            "SRR2\t12\t4\t3\n"
+            "SRR3\t9\t6\t1\n"
+            "SRR4\t2\t8\t12\n"
+            "SRR5\t3\t7\t10\n"
+            "SRR6\t1\t9\t13\n"
+        )
+
+        metadata_file = tmp_path / "metadata.txt"
+        metadata_file.write_text(
+            "Run_ID\ttreatment\n"
+            "SRR1\tcontrol\n"
+            "SRR2\tcontrol\n"
+            "SRR3\tcontrol\n"
+            "SRR4\ttreated\n"
+            "SRR5\ttreated\n"
+            "SRR6\ttreated\n"
+        )
+
+        output_dir = tmp_path / "diversity_results"
+
+        command = DiversityAnalysisCommand()
+        args = argparse.Namespace(
+            abundance_file=str(abundance_file),
+            metadata_file=str(metadata_file),
+            output_dir=str(output_dir),
+            alpha_metrics=["shannon"],
+            beta_metric="bray_curtis",
+            permanova_formula="treatment",
+        )
+
+        result = command.execute(args)
+
+        assert result == 0
+        assert (output_dir / "alpha_diversity.csv").exists()
+        assert (output_dir / "beta_diversity_bray_curtis.csv").exists()
+        assert (output_dir / "permanova_results.txt").exists()
+        permanova_text = (output_dir / "permanova_results.txt").read_text()
+        assert "Variable: treatment" in permanova_text
+
 
 class TestInteractivePlotCommand:
     """Test InteractivePlotCommand."""
@@ -217,13 +269,15 @@ class TestInteractivePlotCommand:
         assert args.title == "My Plot"
         assert args.no_show is True
 
+    @patch("metaquest.cli.commands.advanced_analysis.read_table")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.create_interactive_pca")
-    def test_execute_pca_plot(self, mock_create_pca, mock_read_matrix):
+    def test_execute_pca_plot(self, mock_create_pca, mock_read_matrix, mock_read_table):
         """Test PCA plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
         mock_metadata_df = pd.DataFrame({"treatment": ["A", "B"]})
-        mock_read_matrix.side_effect = [mock_data_df, mock_metadata_df]
+        mock_read_matrix.return_value = mock_data_df
+        mock_read_table.return_value = mock_metadata_df
 
         command = InteractivePlotCommand()
         args = argparse.Namespace(
@@ -276,16 +330,18 @@ class TestInteractivePlotCommand:
             mock_data_df, sample_metadata=None, title="Interactive Heatmap", output_file=None, show_plot=True
         )
 
+    @patch("metaquest.cli.commands.advanced_analysis.read_table")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.calculate_alpha_diversity")
     @patch("metaquest.cli.commands.advanced_analysis.create_diversity_comparison_plot")
-    def test_execute_diversity_plot(self, mock_create_diversity, mock_calc_alpha, mock_read_matrix):
+    def test_execute_diversity_plot(self, mock_create_diversity, mock_calc_alpha, mock_read_matrix, mock_read_table):
         """Test diversity plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
         mock_metadata_df = pd.DataFrame({"treatment": ["A", "B"]})
         mock_alpha_div = pd.DataFrame({"shannon": [1.5, 2.0]})
 
-        mock_read_matrix.side_effect = [mock_data_df, mock_metadata_df]
+        mock_read_matrix.return_value = mock_data_df
+        mock_read_table.return_value = mock_metadata_df
         mock_calc_alpha.return_value = mock_alpha_div
 
         command = InteractivePlotCommand()

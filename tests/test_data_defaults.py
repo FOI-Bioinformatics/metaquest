@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.defaults import read_matrix, resolve_metadata_table
+from metaquest.data.defaults import read_matrix, read_table, resolve_metadata_table
 
 
 class TestResolveMetadataTable:
@@ -50,3 +50,21 @@ class TestReadMatrix:
         f.write_text(",sp1,sp2\nS1,1,2\n")
         df = read_matrix(f)
         assert df.loc["S1", "sp2"] == 2
+
+
+class TestReadTable:
+    def test_keeps_text_columns(self, tmp_path):
+        f = tmp_path / "metadata_table.txt"
+        f.write_text("Run_ID\ttreatment\tabundance\nSRR1\tcontrol\t1.5\nSRR2\ttreated\t2.5\n")
+        df = read_table(f)
+        assert list(df.columns) == ["treatment", "abundance"]
+        assert list(df.index) == ["SRR1", "SRR2"]
+        assert df.loc["SRR1", "treatment"] == "control"
+
+    def test_csv(self, tmp_path):
+        f = tmp_path / "metadata.csv"
+        f.write_text("Run_ID,treatment,abundance\nSRR1,control,1.5\nSRR2,treated,2.5\n")
+        df = read_table(f)
+        assert list(df.columns) == ["treatment", "abundance"]
+        assert list(df.index) == ["SRR1", "SRR2"]
+        assert df.loc["SRR2", "treatment"] == "treated"

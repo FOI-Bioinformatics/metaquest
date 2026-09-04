@@ -10,7 +10,7 @@ from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.defaults import read_matrix
+from metaquest.data.defaults import read_matrix, read_table
 from metaquest.processing.diversity import (
     calculate_alpha_diversity,
     calculate_beta_diversity,
@@ -77,7 +77,7 @@ class DiversityAnalysisCommand(BaseCommand):
             metadata_df = None
             if args.metadata_file:
                 logger.info("Loading metadata...")
-                metadata_df = read_matrix(args.metadata_file)
+                metadata_df = read_table(args.metadata_file)
 
             # Create output directory
             output_dir = Path(args.output_dir)
@@ -160,7 +160,7 @@ class InteractivePlotCommand(BaseCommand):
             metadata_df = None
             if args.metadata_file:
                 logger.info("Loading metadata...")
-                metadata_df = read_matrix(args.metadata_file)
+                metadata_df = read_table(args.metadata_file)
 
             # Create plot based on type
             show_plot = not args.no_show
