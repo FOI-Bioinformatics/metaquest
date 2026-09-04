@@ -82,6 +82,24 @@ def select_samples_for_genome(containment: pd.DataFrame, genome_id: str, thresho
     return [str(acc) for acc in containment.index[values >= threshold]]
 
 
+def selected_samples(parsed_containment: Union[str, Path], genome_id: str, threshold: float) -> List[str]:
+    """Return the sample accessions that meet containment >= threshold for a genome.
+
+    Reads the parsed containment table and delegates to ``select_samples_for_genome``.
+    Exposed so a caller (the CLI) can learn which samples were selected without
+    duplicating that logic, or re-running the full extraction.
+
+    Raises:
+        DataAccessError: If the table is missing.
+        ProcessingError: If the genome column is absent from the table.
+    """
+    table_path = Path(parsed_containment)
+    if not table_path.exists():
+        raise DataAccessError(f"Parsed containment table not found: {table_path}")
+    containment = pd.read_csv(table_path, sep="\t", index_col=0)
+    return select_samples_for_genome(containment, genome_id, threshold)
+
+
 def _sample_reads(fastq_folder: Path, accession: str) -> List[Path]:
     """Return the FASTQ files for one accession, sorted (R1 before R2)."""
     acc_dir = fastq_folder / accession

@@ -66,21 +66,59 @@ class TestExtractTargetReadsCommand:
         assert mock_run.called
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_execute_returns_1_when_no_sample_yields_reads(self, mock_run):
+    def test_execute_returns_1_when_no_sample_yields_reads(self, mock_run, caplog):
         mock_run.side_effect = _fake_tools({"mapped": 0})
         cmd = ExtractTargetReadsCommand()
         with tempfile.TemporaryDirectory() as tmp:
             root, table, genome = _tree(tmp)
-            rc = cmd.execute(
-                _args(
-                    parsed_containment=str(table),
-                    genome_fasta=str(genome),
-                    fastq_folder=str(root / "fastq"),
-                    output_folder=str(root / "targeted"),
-                    threshold=0.5,
+            with caplog.at_level("ERROR"):
+                rc = cmd.execute(
+                    _args(
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                    )
                 )
-            )
         assert rc == 1
+        assert "No reads mapped to GCF_1" in caplog.text
+
+    def test_execute_returns_1_when_no_sample_meets_threshold(self, caplog):
+        """threshold above every sample's containment -> nothing selected."""
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            with caplog.at_level("ERROR"):
+                rc = cmd.execute(
+                    _args(
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=2.0,
+                    )
+                )
+        assert rc == 1
+        assert "No sample meets containment >= 2.0 for GCF_1" in caplog.text
+
+    def test_execute_returns_1_when_no_fastq_for_selected_samples(self, caplog):
+        """A sample is selected but --fastq-folder does not contain its reads."""
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            with caplog.at_level("ERROR"):
+                rc = cmd.execute(
+                    _args(
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "no-such-fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                    )
+                )
+        assert rc == 1
+        assert "No FASTQ files found for the 1 selected sample(s) under" in caplog.text
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_dry_run(self, mock_run):

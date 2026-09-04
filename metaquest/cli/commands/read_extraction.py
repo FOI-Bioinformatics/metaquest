@@ -10,6 +10,7 @@ from metaquest.data.read_extraction import (
     assemble_extracted_reads,
     extract_target_reads,
     resolve_assembly_threads,
+    selected_samples,
 )
 
 
@@ -77,10 +78,20 @@ class ExtractTargetReadsCommand(BaseCommand):
 
             with_reads = {acc: files for acc, files in results.items() if files}
             self.logger.info("Extracted reads for %d of %d sample(s)", len(with_reads), len(results))
-            if results and not with_reads:
-                self.logger.error(
-                    "No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id
-                )
+            if not with_reads:
+                selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
+                if not selected:
+                    self.logger.error("No sample meets containment >= %s for %s", args.threshold, args.genome_id)
+                elif not results:
+                    self.logger.error(
+                        "No FASTQ files found for the %d selected sample(s) under %s",
+                        len(selected),
+                        args.fastq_folder,
+                    )
+                else:
+                    self.logger.error(
+                        "No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id
+                    )
                 return 1
 
             if args.assemble:
