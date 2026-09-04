@@ -53,3 +53,14 @@ def test_metadata_column_without_value_raises(tables):
     cont, meta = tables
     with pytest.raises(ProcessingError, match="metadata_value"):
         select_accessions(cont, metadata_file=meta, metadata_column="Sample_Scientific_Name")
+
+
+def test_metadata_join_ignores_whitespace_in_run_ids(tmp_path):
+    cont = tmp_path / "parsed_containment.txt"
+    cont.write_text("\tGCF_A\tmax_containment\n" "SRR1 \t0.95\t0.95\n" "SRR2\t0.80\t0.80\n")
+    meta = tmp_path / "branchwater_metadata.txt"
+    meta.write_text("Run_ID\tgeo_loc_name_country_calc\n" " SRR1\tFrance\n" "SRR2\tFrance\n")
+    result = select_accessions(
+        cont, threshold=0.0, metadata_file=meta, metadata_column="geo_loc_name_country_calc", metadata_value="france"
+    )
+    assert result == ["SRR1", "SRR2"]

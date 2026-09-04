@@ -51,7 +51,7 @@ def select_accessions(
 
     values = pd.to_numeric(containment[column], errors="coerce").fillna(0.0)
     selected = values[values >= threshold].sort_values(ascending=False)
-    accessions = [str(acc) for acc in selected.index]
+    accessions = [str(acc).strip() for acc in selected.index]
     logger.info("%d accession(s) meet %s >= %.3f", len(accessions), column, threshold)
 
     if metadata_column and metadata_value:
@@ -67,7 +67,9 @@ def select_accessions(
                 f"{', '.join(str(c) for c in metadata.columns)}"
             )
         wanted = metadata_value.strip().lower()
-        matching = {str(idx) for idx, val in metadata[metadata_column].items() if str(val).strip().lower() == wanted}
+        matching = {
+            str(idx).strip() for idx, val in metadata[metadata_column].items() if str(val).strip().lower() == wanted
+        }
         accessions = [acc for acc in accessions if acc in matching]
         logger.info("%d accession(s) remain after %s == %r", len(accessions), metadata_column, metadata_value)
 
