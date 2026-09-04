@@ -137,9 +137,9 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
             logger.debug("Resolving species %s for genus %s", species_name, genus_name)
             attempted += 1
             try:
-                for accession in get_accessions_for_species(species_name, representative_only):
-                    if accession not in accessions:
-                        accessions.append(accession)
+                for species_accession in get_accessions_for_species(species_name, representative_only):
+                    if species_accession not in accessions:
+                        accessions.append(species_accession)
             except DataAccessError as e:
                 failed += 1
                 logger.warning("Skipping species %s: %s", species_name, e)
