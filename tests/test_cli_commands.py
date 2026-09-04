@@ -493,7 +493,7 @@ class TestSingleSampleCommand:
         assert args.summary_column == "test_genome"
         assert args.metadata_column == "organism"
         assert args.summary_file == "parsed_containment.txt"
-        assert args.metadata_file == "metadata_table.txt"
+        assert args.metadata_file is None
         assert args.threshold == 0.1
         assert args.top_n == 100
 
@@ -525,10 +525,12 @@ class TestSingleSampleCommand:
         assert args.threshold == 0.5
         assert args.top_n == 50
 
+    @patch("metaquest.cli.commands.samples.resolve_metadata_table")
     @patch("metaquest.cli.commands.samples.count_single_sample")
-    def test_execute(self, mock_command):
+    def test_execute(self, mock_command, mock_resolve):
         """Test command execution."""
         mock_command.return_value = {"organism1": 5, "organism2": 3}
+        mock_resolve.return_value = Path("metadata.txt")
         command = SingleSampleCommand()
 
         args = argparse.Namespace(
@@ -542,6 +544,7 @@ class TestSingleSampleCommand:
 
         result = command.execute(args)
         assert result == 0
+        mock_resolve.assert_called_once_with("metadata.txt")
         mock_command.assert_called_once_with(
             summary_file="summary.txt",
             metadata_file="metadata.txt",
@@ -656,7 +659,7 @@ class TestCountMetadataCommand:
         args = parser.parse_args(["--metadata-column", "organism"])
         assert args.metadata_column == "organism"
         assert args.summary_file == "parsed_containment.txt"
-        assert args.metadata_file == "metadata_table.txt"
+        assert args.metadata_file is None
         assert args.threshold == 0.5
         assert args.output_file == "metadata_counts.txt"
         assert args.stat_file is None
@@ -687,10 +690,12 @@ class TestCountMetadataCommand:
         assert args.output_file == "custom_counts.txt"
         assert args.stat_file == "statistics.txt"
 
+    @patch("metaquest.cli.commands.metadata.resolve_metadata_table")
     @patch("metaquest.cli.commands.metadata.count_metadata")
-    def test_execute(self, mock_command):
+    def test_execute(self, mock_command, mock_resolve):
         """Test command execution."""
         mock_command.return_value = None
+        mock_resolve.return_value = Path("metadata.txt")
         command = CountMetadataCommand()
 
         args = argparse.Namespace(
@@ -704,6 +709,7 @@ class TestCountMetadataCommand:
 
         result = command.execute(args)
         assert result == 0
+        mock_resolve.assert_called_once_with("metadata.txt")
         mock_command.assert_called_once_with(
             summary_file="summary.txt",
             metadata_file="metadata.txt",

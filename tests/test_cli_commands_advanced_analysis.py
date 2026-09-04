@@ -72,12 +72,12 @@ class TestDiversityAnalysisCommand:
     @patch("metaquest.cli.commands.advanced_analysis.calculate_alpha_diversity")
     @patch("metaquest.cli.commands.advanced_analysis.calculate_beta_diversity")
     @patch("metaquest.cli.commands.advanced_analysis.Path.mkdir")
-    @patch("pandas.read_csv")
-    def test_execute_success_basic(self, mock_read_csv, mock_mkdir, mock_beta_div, mock_alpha_div):
+    @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
+    def test_execute_success_basic(self, mock_read_matrix, mock_mkdir, mock_beta_div, mock_alpha_div):
         """Test successful execution without PERMANOVA."""
         # Setup mocks
         mock_abundance_df = pd.DataFrame({"sample1": [1, 2], "sample2": [3, 4]})
-        mock_read_csv.return_value = mock_abundance_df
+        mock_read_matrix.return_value = mock_abundance_df
 
         mock_alpha_result = pd.DataFrame({"shannon": [1.5, 2.0]})
         mock_alpha_div.return_value = mock_alpha_result
@@ -217,13 +217,13 @@ class TestInteractivePlotCommand:
         assert args.title == "My Plot"
         assert args.no_show is True
 
-    @patch("pandas.read_csv")
+    @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.create_interactive_pca")
-    def test_execute_pca_plot(self, mock_create_pca, mock_read_csv):
+    def test_execute_pca_plot(self, mock_create_pca, mock_read_matrix):
         """Test PCA plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
         mock_metadata_df = pd.DataFrame({"treatment": ["A", "B"]})
-        mock_read_csv.side_effect = [mock_data_df, mock_metadata_df]
+        mock_read_matrix.side_effect = [mock_data_df, mock_metadata_df]
 
         command = InteractivePlotCommand()
         args = argparse.Namespace(
@@ -250,12 +250,12 @@ class TestInteractivePlotCommand:
             show_plot=False,
         )
 
-    @patch("pandas.read_csv")
+    @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.create_interactive_heatmap")
-    def test_execute_heatmap_plot(self, mock_create_heatmap, mock_read_csv):
+    def test_execute_heatmap_plot(self, mock_create_heatmap, mock_read_matrix):
         """Test heatmap plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
-        mock_read_csv.return_value = mock_data_df
+        mock_read_matrix.return_value = mock_data_df
 
         command = InteractivePlotCommand()
         args = argparse.Namespace(
@@ -276,16 +276,16 @@ class TestInteractivePlotCommand:
             mock_data_df, sample_metadata=None, title="Interactive Heatmap", output_file=None, show_plot=True
         )
 
-    @patch("pandas.read_csv")
+    @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.calculate_alpha_diversity")
     @patch("metaquest.cli.commands.advanced_analysis.create_diversity_comparison_plot")
-    def test_execute_diversity_plot(self, mock_create_diversity, mock_calc_alpha, mock_read_csv):
+    def test_execute_diversity_plot(self, mock_create_diversity, mock_calc_alpha, mock_read_matrix):
         """Test diversity plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
         mock_metadata_df = pd.DataFrame({"treatment": ["A", "B"]})
         mock_alpha_div = pd.DataFrame({"shannon": [1.5, 2.0]})
 
-        mock_read_csv.side_effect = [mock_data_df, mock_metadata_df]
+        mock_read_matrix.side_effect = [mock_data_df, mock_metadata_df]
         mock_calc_alpha.return_value = mock_alpha_div
 
         command = InteractivePlotCommand()
@@ -549,12 +549,14 @@ class TestTaxonomicSummaryCommand:
         assert args.min_abundance == 0.01
 
     @patch("pandas.read_csv")
+    @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.analyze_taxonomic_composition")
-    def test_execute_success(self, mock_analyze, mock_read_csv):
+    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_csv):
         """Test successful execution."""
         mock_abundance_df = pd.DataFrame({"sample1": [10, 20], "sample2": [15, 25]})
         mock_taxonomy_df = pd.DataFrame({"species": ["Species1", "Species2"], "phylum": ["Phylum1", "Phylum2"]})
-        mock_read_csv.side_effect = [mock_abundance_df, mock_taxonomy_df]
+        mock_read_matrix.return_value = mock_abundance_df
+        mock_read_csv.return_value = mock_taxonomy_df
 
         mock_summaries = {
             "phylum": pd.DataFrame({"Phylum1": [10, 15], "Phylum2": [20, 25]}),

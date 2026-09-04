@@ -10,6 +10,7 @@ from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.defaults import read_matrix
 from metaquest.processing.diversity import (
     calculate_alpha_diversity,
     calculate_beta_diversity,
@@ -71,12 +72,12 @@ class DiversityAnalysisCommand(BaseCommand):
 
             # Load data
             logger.info("Loading abundance data...")
-            abundance_df = pd.read_csv(args.abundance_file, index_col=0)
+            abundance_df = read_matrix(args.abundance_file)
 
             metadata_df = None
             if args.metadata_file:
                 logger.info("Loading metadata...")
-                metadata_df = pd.read_csv(args.metadata_file, index_col=0)
+                metadata_df = read_matrix(args.metadata_file)
 
             # Create output directory
             output_dir = Path(args.output_dir)
@@ -152,16 +153,14 @@ class InteractivePlotCommand(BaseCommand):
 
     def execute(self, args):
         try:
-            import pandas as pd
-
             # Load data
             logger.info("Loading data...")
-            data_df = pd.read_csv(args.data_file, index_col=0)
+            data_df = read_matrix(args.data_file)
 
             metadata_df = None
             if args.metadata_file:
                 logger.info("Loading metadata...")
-                metadata_df = pd.read_csv(args.metadata_file, index_col=0)
+                metadata_df = read_matrix(args.metadata_file)
 
             # Create plot based on type
             show_plot = not args.no_show
@@ -351,7 +350,7 @@ class TaxonomicSummaryCommand(BaseCommand):
 
             # Load data
             logger.info("Loading abundance data...")
-            abundance_df = pd.read_csv(args.abundance_file, index_col=0)
+            abundance_df = read_matrix(args.abundance_file)
 
             logger.info("Loading taxonomy data...")
             taxonomy_df = pd.read_csv(args.taxonomy_file)

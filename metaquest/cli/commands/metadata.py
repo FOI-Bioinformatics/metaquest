@@ -6,6 +6,7 @@ import argparse
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.metadata import (
     check_metadata_attributes,
     download_metadata,
@@ -107,8 +108,8 @@ class CheckMetadataAttributesCommand(BaseCommand):
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--file-path",
-            default="metadata_table.txt",
-            help="Path to the parsed metadata table",
+            default=None,
+            help="Parsed metadata table (default: metadata_table.txt, else metadata/branchwater_metadata.txt)",
         )
         parser.add_argument(
             "--output-file",
@@ -118,7 +119,7 @@ class CheckMetadataAttributesCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
-            check_metadata_attributes(args.file_path, args.output_file)
+            check_metadata_attributes(str(resolve_metadata_table(args.file_path)), args.output_file)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error checking metadata attributes: {e}")
@@ -144,8 +145,8 @@ class CountMetadataCommand(BaseCommand):
         )
         parser.add_argument(
             "--metadata-file",
-            default="metadata_table.txt",
-            help="Path to the metadata file",
+            default=None,
+            help="Parsed metadata table (default: metadata_table.txt, else metadata/branchwater_metadata.txt)",
         )
         parser.add_argument(
             "--metadata-column",
@@ -169,7 +170,7 @@ class CountMetadataCommand(BaseCommand):
         try:
             count_metadata(
                 summary_file=args.summary_file,
-                metadata_file=args.metadata_file,
+                metadata_file=str(resolve_metadata_table(args.metadata_file)),
                 metadata_column=args.metadata_column,
                 threshold=args.threshold,
                 output_file=args.output_file,

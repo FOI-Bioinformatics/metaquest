@@ -6,6 +6,7 @@ import argparse
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.defaults import resolve_metadata_table
 from metaquest.processing.containment import count_single_sample
 
 
@@ -28,8 +29,8 @@ class SingleSampleCommand(BaseCommand):
         )
         parser.add_argument(
             "--metadata-file",
-            default="metadata_table.txt",
-            help="Path to the metadata file",
+            default=None,
+            help="Parsed metadata table (default: metadata_table.txt, else metadata/branchwater_metadata.txt)",
         )
         parser.add_argument(
             "--summary-column",
@@ -53,7 +54,7 @@ class SingleSampleCommand(BaseCommand):
         try:
             count_dict = count_single_sample(
                 summary_file=args.summary_file,
-                metadata_file=args.metadata_file,
+                metadata_file=str(resolve_metadata_table(args.metadata_file)),
                 summary_column=args.summary_column,
                 metadata_column=args.metadata_column,
                 threshold=args.threshold,
