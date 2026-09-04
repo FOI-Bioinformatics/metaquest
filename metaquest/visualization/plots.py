@@ -212,17 +212,35 @@ def plot_containment(
         raise VisualizationError(f"Error plotting containment: {e}")
 
 
+def _looks_numeric(value: object) -> bool:
+    try:
+        float(str(value))
+    except ValueError:
+        return False
+    return True
+
+
 def _load_counts_df(file_path: Union[str, Path, pd.DataFrame], limit: int) -> pd.DataFrame:
-    """Load a [category, count] table, name its columns, and keep the top `limit` rows."""
+    """Load a counts table as [category, count] and keep the top `limit` rows.
+
+    Two file shapes are accepted: the header-less ``<category>\\t<count>`` statistics
+    file, and the ``count_metadata`` table whose first row is a header and whose
+    remaining columns hold per-genome counts, which are summed per category.
+    """
     if isinstance(file_path, pd.DataFrame):
         df = file_path.copy()
+        if df.shape[1] < 2:
+            raise VisualizationError("File must have at least two columns (category and count)")
+        df.columns = ["category", "count"] + [f"col{i + 3}" for i in range(df.shape[1] - 2)]
     else:
-        df = pd.read_csv(file_path, sep="\t", header=None)
+        raw = pd.read_csv(file_path, sep="\t", header=None, dtype=str)
+        if raw.shape[1] < 2:
+            raise VisualizationError("File must have at least two columns (category and count)")
+        if not _looks_numeric(raw.iat[0, 1]):
+            raw = raw.iloc[1:].reset_index(drop=True)
+        counts = raw.iloc[:, 1:].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+        df = pd.DataFrame({"category": raw.iloc[:, 0].astype(str), "count": counts})
 
-    if df.shape[1] < 2:
-        raise VisualizationError("File must have at least two columns (category and count)")
-
-    df.columns = ["category", "count"] + [f"col{i + 3}" for i in range(df.shape[1] - 2)]
     return df.sort_values(by="count", ascending=False).head(limit)
 
 
@@ -304,6 +322,9 @@ def plot_metadata_counts(
         # Create plot based on plot_type
         if plot_type == "bar":
             plugin = visualizer_registry.get("bar")
+            bar_output = None
+            if save_format and not isinstance(file_path, pd.DataFrame):
+                bar_output = f"{Path(file_path).stem}_bar.{save_format}"
             fig = plugin.create_plot(  # type: ignore[attr-defined]
                 data=df,
                 x_column="category",
@@ -311,7 +332,8 @@ def plot_metadata_counts(
                 title=title,
                 colors=colors,
                 horizontal=True,
-                output_format=save_format if save_format else None,
+                output_file=bar_output,
+                output_format=save_format or "png",
             )
         elif plot_type == "pie":
             fig = _metadata_pie_chart(df, colors, title)

@@ -471,8 +471,13 @@ class TestPlotMetadataCounts:
         data_passed = call_args.kwargs["data"]  # Data should be passed as keyword argument
         assert len(data_passed) == 3
 
-    def test_plot_metadata_counts_missing_columns(self, tmp_path):
-        """Test error when data contains non-numeric counts."""
+    def test_plot_metadata_counts_non_numeric_counts(self, tmp_path):
+        """Non-numeric count values no longer crash matplotlib.
+
+        The loader cannot tell a genuine header row from an all-bad-data file, so it
+        treats the first row as a header and coerces the remaining non-numeric values
+        to 0 rather than raising.
+        """
         test_file = tmp_path / "metadata_counts.tsv"
         test_data = pd.DataFrame(
             {
@@ -482,8 +487,13 @@ class TestPlotMetadataCounts:
         )
         test_data.to_csv(test_file, sep="\t", index=False, header=False)
 
-        with pytest.raises(VisualizationError, match="no numeric data to plot"):
-            plot_metadata_counts(file_path=str(test_file), plot_type="bar")
+        mock_plugin = Mock()
+        mock_plugin.create_plot.return_value = Mock()
+
+        with patch("metaquest.plugins.base.visualizer_registry.get", return_value=mock_plugin):
+            result = plot_metadata_counts(file_path=str(test_file), plot_type="bar")
+
+        assert result is not None
 
     def test_plot_metadata_counts_plugin_not_found(self, tmp_path):
         """Test error when chart plugin not found."""
@@ -708,6 +718,33 @@ class TestPlotsIntegration:
 
         with pytest.raises(VisualizationError):
             plot_containment(str(invalid_file), "nonexistent_column")
+
+
+class TestCountsLoader:
+    def test_header_row_and_genome_columns_are_summed(self, tmp_path):
+        from metaquest.visualization.plots import _load_counts_df
+
+        f = tmp_path / "metadata_counts.txt"
+        f.write_text("Sample_Scientific_Name\tGCF_A\tGCF_B\nmetagenome\t3\t0\nfood metagenome\t0\t2\n")
+        df = _load_counts_df(f, limit=20)
+        assert list(df["category"]) == ["metagenome", "food metagenome"]
+        assert list(df["count"]) == [3, 2]
+
+    def test_headerless_two_columns(self, tmp_path):
+        from metaquest.visualization.plots import _load_counts_df
+
+        f = tmp_path / "stats.txt"
+        f.write_text("GCF_B\t7\nGCF_A\t9\n")
+        df = _load_counts_df(f, limit=20)
+        assert list(df["category"]) == ["GCF_A", "GCF_B"]
+        assert list(df["count"]) == [9, 7]
+
+    def test_bar_plot_saves_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "counts.txt"
+        f.write_text("a\t3\nb\t1\n")
+        plot_metadata_counts(file_path=str(f), plot_type="bar", save_format="png")
+        assert (tmp_path / "counts_bar.png").exists()
 
 
 if __name__ == "__main__":

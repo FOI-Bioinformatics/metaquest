@@ -193,7 +193,7 @@ class PlotMetadataCountsCommand(BaseCommand):
         return "Plot metadata counts"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--file-path", required=True, help="Path to the metadata counts file")
+        parser.add_argument("--file-path", required=True, help="Counts table from count_metadata (or its _stats file)")
         parser.add_argument("--title", default=None, help="Title for the plot")
         parser.add_argument(
             "--plot-type",
