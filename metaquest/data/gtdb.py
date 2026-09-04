@@ -103,6 +103,30 @@ def get_accessions_for_species(species_name: str, representative_only: bool = Tr
     return accessions
 
 
+def _append_unique(accessions: List[str], accession: Optional[str]) -> None:
+    """Append an accession to the list if present and not already there."""
+    if accession and accession not in accessions:
+        accessions.append(accession)
+
+
+def _resolve_genus_species(
+    species_name: str, genus_name: str, representative_only: bool, accessions: List[str]
+) -> bool:
+    """Fan out to the species endpoint for one taxon match.
+
+    Appends any resolved accessions to ``accessions`` and returns whether the
+    lookup succeeded (False after logging a warning on failure).
+    """
+    logger.debug("Resolving species %s for genus %s", species_name, genus_name)
+    try:
+        for species_accession in get_accessions_for_species(species_name, representative_only):
+            _append_unique(accessions, species_accession)
+        return True
+    except DataAccessError as e:
+        logger.warning("Skipping species %s: %s", species_name, e)
+        return False
+
+
 def get_accessions_for_genus(genus_name: str, representative_only: bool = True) -> List[str]:
     """Get representative accessions for all species in a genus.
 
@@ -134,20 +158,12 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
                 # "Paenibacillus larvae"); keep only this genus's own species.
                 skipped_other_genus += 1
                 continue
-            logger.debug("Resolving species %s for genus %s", species_name, genus_name)
             attempted += 1
-            try:
-                for species_accession in get_accessions_for_species(species_name, representative_only):
-                    if species_accession not in accessions:
-                        accessions.append(species_accession)
-            except DataAccessError as e:
+            if not _resolve_genus_species(species_name, genus_name, representative_only, accessions):
                 failed += 1
-                logger.warning("Skipping species %s: %s", species_name, e)
             continue
 
-        accession = _keep_accession(record, representative_only)
-        if accession and accession not in accessions:
-            accessions.append(accession)
+        _append_unique(accessions, _keep_accession(record, representative_only))
 
     if skipped_other_genus:
         logger.info(
@@ -161,8 +177,6 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
 
     if representative_only and not accessions:
         for record in taxon_results:
-            accession = _record_accession(record)
-            if accession and accession not in accessions:
-                accessions.append(accession)
+            _append_unique(accessions, _record_accession(record))
 
     return accessions
