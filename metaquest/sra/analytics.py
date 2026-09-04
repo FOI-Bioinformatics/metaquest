@@ -648,11 +648,14 @@ class SRADatasetAnalyzer:
         Downloads live in ``<folder>/<accession>/<accession>_1.fastq`` (fasterq-dump
         layout); flat ``<folder>/<accession>.fastq.gz`` files are accepted too. When no
         folder was given, ``fastq`` and then ``sra_downloads`` in the working directory
-        are searched. R1 sorts before R2.
+        are searched. R1 sorts before R2. The flat-layout patterns require an exact
+        accession match (or an underscore right after it, e.g. ``_1``/``_2``) so an
+        accession that is a string prefix of another (``SRR1`` vs ``SRR10``) cannot match
+        the wrong sample's files.
         """
         roots = [self.fastq_dir] if self.fastq_dir else [Path("fastq"), Path("sra_downloads")]
         for root in roots:
-            for pattern in (f"{accession}/{accession}*.fastq*", f"{accession}*.fastq*"):
+            for pattern in (f"{accession}/{accession}*.fastq*", f"{accession}.fastq*", f"{accession}_*.fastq*"):
                 matches = sorted(p for p in root.glob(pattern) if p.is_file())
                 if matches:
                     return matches[0]

@@ -215,6 +215,15 @@ class TestSRADatasetAnalyzer:
     def test_find_fastq_missing_returns_none(self, tmp_path):
         assert SRADatasetAnalyzer(fastq_dir=tmp_path).find_fastq("NONE") is None
 
+    def test_find_fastq_ignores_prefix_collisions(self, tmp_path):
+        other = tmp_path / "SRR10_1.fastq"
+        other.write_text("")
+        (tmp_path / "SRR10").mkdir()
+        (tmp_path / "SRR10" / "SRR10_1.fastq").write_text("")
+        analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path)
+        assert analyzer.find_fastq("SRR1") is None
+        assert analyzer.find_fastq("SRR10") == tmp_path / "SRR10" / "SRR10_1.fastq"
+
     def test_calculate_quality_grade(self):
         """Test quality grade calculation."""
         # Excellent quality
