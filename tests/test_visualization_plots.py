@@ -471,12 +471,12 @@ class TestPlotMetadataCounts:
         data_passed = call_args.kwargs["data"]  # Data should be passed as keyword argument
         assert len(data_passed) == 3
 
-    def test_plot_metadata_counts_non_numeric_counts(self, tmp_path):
-        """Non-numeric count values no longer crash matplotlib.
+    def test_plot_metadata_counts_missing_columns(self, tmp_path):
+        """Test error when data contains no numeric counts at all.
 
-        The loader cannot tell a genuine header row from an all-bad-data file, so it
-        treats the first row as a header and coerces the remaining non-numeric values
-        to 0 rather than raising.
+        Every count cell is non-numeric text, so after the header-detection
+        heuristic strips the first row there are still no numeric values left;
+        this must raise rather than silently plotting fabricated zero counts.
         """
         test_file = tmp_path / "metadata_counts.tsv"
         test_data = pd.DataFrame(
@@ -487,13 +487,8 @@ class TestPlotMetadataCounts:
         )
         test_data.to_csv(test_file, sep="\t", index=False, header=False)
 
-        mock_plugin = Mock()
-        mock_plugin.create_plot.return_value = Mock()
-
-        with patch("metaquest.plugins.base.visualizer_registry.get", return_value=mock_plugin):
-            result = plot_metadata_counts(file_path=str(test_file), plot_type="bar")
-
-        assert result is not None
+        with pytest.raises(VisualizationError, match="No numeric count values"):
+            plot_metadata_counts(file_path=str(test_file), plot_type="bar")
 
     def test_plot_metadata_counts_plugin_not_found(self, tmp_path):
         """Test error when chart plugin not found."""

@@ -238,7 +238,10 @@ def _load_counts_df(file_path: Union[str, Path, pd.DataFrame], limit: int) -> pd
             raise VisualizationError("File must have at least two columns (category and count)")
         if not _looks_numeric(raw.iat[0, 1]):
             raw = raw.iloc[1:].reset_index(drop=True)
-        counts = raw.iloc[:, 1:].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+        numeric = raw.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+        if numeric.notna().to_numpy().sum() == 0:
+            raise VisualizationError(f"No numeric count values found in {file_path}")
+        counts = numeric.fillna(0).sum(axis=1)
         df = pd.DataFrame({"category": raw.iloc[:, 0].astype(str), "count": counts})
 
     return df.sort_values(by="count", ascending=False).head(limit)
