@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -42,6 +43,24 @@ class SecureSubprocess:
 
     # Get safe parameters from constants
     SAFE_PARAMETERS = {tool: config["safe_params"] for tool, config in ALLOWED_BIOINFORMATICS_TOOLS.items()}
+
+    # Directories registered at runtime from user-supplied output or temp folders.
+    _extra_roots: List[Path] = []
+
+    @classmethod
+    def allowed_roots(cls) -> List[Path]:
+        """Directories under which validated paths may fall."""
+        roots = [Path.cwd(), Path.home(), Path("/tmp"), Path(tempfile.gettempdir())]
+        roots.extend(cls._extra_roots)
+        return [root.resolve() for root in roots]
+
+    @classmethod
+    def add_allowed_root(cls, path: Union[str, Path]) -> Path:
+        """Permit paths under a directory the user chose on the command line."""
+        resolved = Path(path).resolve()
+        if resolved not in cls._extra_roots:
+            cls._extra_roots.append(resolved)
+        return resolved
 
     @staticmethod
     def validate_executable(executable: str) -> str:
@@ -96,36 +115,24 @@ class SecureSubprocess:
 
         return param
 
-    @staticmethod
-    def validate_path(path: Union[str, Path], allow_creation: bool = True) -> Path:
+    @classmethod
+    def validate_path(cls, path: Union[str, Path], allow_creation: bool = True) -> Path:
         """
-        Validate and sanitize file/directory path.
+        Validate and sanitize a file or directory path.
 
-        Args:
-            path: The path to validate
-            allow_creation: Whether to allow creation of non-existent paths
-
-        Returns:
-            Validated Path object
+        A path is accepted when it lies under the working directory, the home
+        directory, the system temp directory, or a root registered with
+        ``add_allowed_root``. Parent-directory segments are rejected when the
+        caller does not create the path.
 
         Raises:
-            SecurityError: If path is unsafe
+            SecurityError: If the path is unsafe
         """
         path_obj = Path(path).resolve()
 
-        # Check for directory traversal attempts
-        try:
-            path_obj.relative_to(Path.cwd())
-        except ValueError:
-            # Allow absolute paths within certain directories
-            allowed_roots = [Path.cwd(), Path.home(), Path("/tmp")]
-            if not any(str(path_obj).startswith(str(root)) for root in allowed_roots):
-                raise SecurityError(f"Path outside allowed directories: {path}")
+        if not any(path_obj == root or root in path_obj.parents for root in cls.allowed_roots()):
+            raise SecurityError(f"Path outside allowed directories: {path}")
 
-        # Reject parent-directory traversal. Path.resolve() above collapses
-        # ".." segments, so the original path is inspected here. Only enforced
-        # when not creating: callers that create output/temp directories pass
-        # allow_creation=True and legitimately supply new paths.
         if not allow_creation and ".." in Path(path).parts:
             raise SecurityError(f"Unsafe path component in: {path}")
 

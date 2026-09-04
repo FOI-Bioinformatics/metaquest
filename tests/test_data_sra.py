@@ -324,6 +324,19 @@ class TestDownloadAccession:
         assert cmd[1:4] == ["--threads", "4", "--progress"]
         assert cmd[4] == "SRR2517620"
 
+    def test_download_accession_registers_output_and_temp_roots(self, tmp_path, monkeypatch):
+        from metaquest.utils.security import SecureSubprocess
+
+        SecureSubprocess._extra_roots.clear()
+        monkeypatch.chdir(tmp_path)
+        with patch("metaquest.utils.security.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
+                download_accession("SRR2517620", tmp_path / "fastq", temp_folder=tmp_path / "scratch")
+        assert (tmp_path / "fastq").resolve() in SecureSubprocess._extra_roots
+        assert (tmp_path / "scratch").resolve() in SecureSubprocess._extra_roots
+        SecureSubprocess._extra_roots.clear()
+
 
 class TestCheckExistingDownloads:
     """Test _check_existing_downloads function."""

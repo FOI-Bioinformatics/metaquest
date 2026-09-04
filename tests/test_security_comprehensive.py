@@ -491,6 +491,55 @@ class TestFasterqDumpCommandContract:
         assert cmd == ["fasterq-dump", "--split-files", "SRR000001"]
 
 
+class TestAllowedRoots:
+    """validate_path accepts system temp dirs and roots registered from user-supplied folders."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_roots(self):
+        SecureSubprocess._extra_roots.clear()
+        yield
+        SecureSubprocess._extra_roots.clear()
+
+    def test_system_tempdir_is_allowed(self):
+        import shutil
+        import tempfile
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            target = temp_dir / "reads"
+            assert SecureSubprocess.validate_path(target) == target.resolve()
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_registered_root_permits_external_folder(self, tmp_path, monkeypatch):
+        work = tmp_path / "work"
+        work.mkdir()
+        external = tmp_path / "external"
+        external.mkdir()
+        monkeypatch.setattr(
+            SecureSubprocess, "allowed_roots", classmethod(lambda cls: [work.resolve()] + list(cls._extra_roots))
+        )
+        with pytest.raises(SecurityError, match="outside allowed directories"):
+            SecureSubprocess.validate_path(external / "out.sam")
+
+        SecureSubprocess.add_allowed_root(external)
+        assert SecureSubprocess.validate_path(external / "out.sam") == (external / "out.sam").resolve()
+
+    def test_root_prefix_collision_rejected(self, tmp_path, monkeypatch):
+        root = tmp_path / "data"
+        root.mkdir()
+        sibling = tmp_path / "data2"
+        sibling.mkdir()
+        monkeypatch.setattr(SecureSubprocess, "allowed_roots", classmethod(lambda cls: [root.resolve()]))
+        with pytest.raises(SecurityError, match="outside allowed directories"):
+            SecureSubprocess.validate_path(sibling / "x.txt")
+
+    def test_add_allowed_root_is_idempotent(self, tmp_path):
+        SecureSubprocess.add_allowed_root(tmp_path)
+        SecureSubprocess.add_allowed_root(tmp_path)
+        assert SecureSubprocess._extra_roots.count(tmp_path.resolve()) == 1
+
+
 # ============================================================================
 # SUCCESS METRICS:
 #

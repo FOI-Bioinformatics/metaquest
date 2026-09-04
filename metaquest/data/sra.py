@@ -101,6 +101,7 @@ def _prepare_temp_folder(temp_folder):
             return None
         else:
             logger.info(f"Using temp folder: {temp_path_obj.absolute()}")
+            SecureSubprocess.add_allowed_root(temp_path_obj)
             return temp_path_obj
     except Exception as e:
         logger.warning(f"Could not create or access temp folder {temp_folder}: {e}, " "using default temp location")
@@ -199,6 +200,7 @@ def download_accession(
         Tuple of (success, message)
     """
     output_path = Path(output_folder) / accession
+    SecureSubprocess.add_allowed_root(Path(output_folder))
 
     # Check if already downloaded
     if _check_existing_download(output_path, force):

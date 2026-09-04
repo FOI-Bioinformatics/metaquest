@@ -157,6 +157,7 @@ def extract_target_reads(
 
     results: Dict[str, List[Path]] = {}
     output_root = Path(output_folder)
+    SecureSubprocess.add_allowed_root(output_root)
 
     for accession in samples:
         reads = _sample_reads(fastq_root, accession)
@@ -219,6 +220,7 @@ def assemble_extracted_reads(
         ProcessingError: If the number of reads is unsupported.
     """
     out_dir = Path(output_dir)
+    SecureSubprocess.add_allowed_root(out_dir.parent)
     args: List[str] = []
     if len(reads) == 2:
         args += ["-1", str(reads[0]), "-2", str(reads[1])]

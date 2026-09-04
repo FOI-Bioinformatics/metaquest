@@ -83,6 +83,7 @@ class EnhancedSRADownloader:
             Tuple of (success, message, metadata_dict)
         """
         output_path = Path(output_folder) / accession
+        SecureSubprocess.add_allowed_root(Path(output_folder))
         metadata: Dict[str, Any] = {}
 
         try:
