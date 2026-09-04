@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 from html import escape as html_escape
 from pathlib import Path
-from typing import Dict, List, Union, Any
+from typing import Dict, List, Optional, Union, Any
 
 import pandas as pd
 import numpy as np
@@ -52,10 +52,10 @@ logger = logging.getLogger(__name__)
 class SRAReportGenerator:
     """Generate comprehensive reports for SRA download and analysis sessions."""
 
-    def __init__(self, output_dir: Union[str, Path]):
+    def __init__(self, output_dir: Union[str, Path], fastq_dir: Optional[Union[str, Path]] = None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.analyzer = SRADatasetAnalyzer()
+        self.analyzer = SRADatasetAnalyzer(fastq_dir=fastq_dir)
 
     def create_download_summary(self, session: DownloadSession, include_plots: bool = True) -> Path:
         """

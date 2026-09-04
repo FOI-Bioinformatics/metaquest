@@ -336,8 +336,9 @@ def _actions_for_anomalies(tripped_types: set) -> List[str]:
 class SRADatasetAnalyzer:
     """Main analyzer for comprehensive SRA dataset analysis."""
 
-    def __init__(self):
+    def __init__(self, fastq_dir: Optional[Union[str, Path]] = None):
         self.quality_analyzer = SequenceQualityAnalyzer()
+        self.fastq_dir = Path(fastq_dir) if fastq_dir else None
 
     def profile_dataset_quality(
         self, accession: str, fastq_path: Optional[Union[str, Path]] = None, metadata: Optional[SRADatasetInfo] = None
@@ -357,7 +358,7 @@ class SRADatasetAnalyzer:
 
         # Locate FASTQ file if not provided
         if fastq_path is None:
-            fastq_path = self._locate_fastq_file(accession)
+            fastq_path = self.find_fastq(accession)
 
         if fastq_path and Path(fastq_path).exists():
             # Analyze FASTQ file
@@ -641,21 +642,20 @@ class SRADatasetAnalyzer:
             estimated_processing_time=processing_time,
         )
 
-    def _locate_fastq_file(self, accession: str) -> Optional[Path]:
-        """Attempt to locate FASTQ file for accession."""
-        # Common locations to check
-        possible_paths = [
-            Path(f"{accession}.fastq"),
-            Path(f"{accession}.fastq.gz"),
-            Path(f"downloads/{accession}.fastq.gz"),
-            Path(f"data/{accession}.fastq.gz"),
-            Path(f"fastq/{accession}.fastq.gz"),
-        ]
+    def find_fastq(self, accession: str) -> Optional[Path]:
+        """Locate one FASTQ file for an accession under the configured download folder.
 
-        for path in possible_paths:
-            if path.exists():
-                return path
-
+        Downloads live in ``<folder>/<accession>/<accession>_1.fastq`` (fasterq-dump
+        layout); flat ``<folder>/<accession>.fastq.gz`` files are accepted too. When no
+        folder was given, ``fastq`` and then ``sra_downloads`` in the working directory
+        are searched. R1 sorts before R2.
+        """
+        roots = [self.fastq_dir] if self.fastq_dir else [Path("fastq"), Path("sra_downloads")]
+        for root in roots:
+            for pattern in (f"{accession}/{accession}*.fastq*", f"{accession}*.fastq*"):
+                matches = sorted(p for p in root.glob(pattern) if p.is_file())
+                if matches:
+                    return matches[0]
         return None
 
     def _calculate_quality_grade(self, quality_stats: Dict, contamination: Dict, complexity: Dict) -> str:

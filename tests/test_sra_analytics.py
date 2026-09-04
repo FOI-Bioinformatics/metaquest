@@ -189,27 +189,31 @@ class TestSRADatasetAnalyzer:
         assert hasattr(self.analyzer, "quality_analyzer")
         assert isinstance(self.analyzer.quality_analyzer, SequenceQualityAnalyzer)
 
-    def test_locate_fastq_file(self):
-        """Test FASTQ file location."""
-        with patch("pathlib.Path.exists") as mock_exists:
-            # Mock first path exists, others don't
-            call_count = 0
+    def test_find_fastq_in_per_accession_folder(self, tmp_path):
+        acc_dir = tmp_path / "fastq" / "SRR123456"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR123456_2.fastq").write_text("")
+        r1 = acc_dir / "SRR123456_1.fastq"
+        r1.write_text("")
+        analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path / "fastq")
+        assert analyzer.find_fastq("SRR123456") == r1
 
-            def exists_side_effect():
-                nonlocal call_count
-                call_count += 1
-                return call_count == 1  # True only for first call
+    def test_find_fastq_flat_layout(self, tmp_path):
+        flat = tmp_path / "fastq" / "SRR123456.fastq.gz"
+        flat.parent.mkdir(parents=True)
+        flat.write_text("")
+        analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path / "fastq")
+        assert analyzer.find_fastq("SRR123456") == flat
 
-            mock_exists.side_effect = exists_side_effect
+    def test_find_fastq_defaults_to_fastq_folder_in_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r1 = tmp_path / "fastq" / "SRR1" / "SRR1_1.fastq"
+        r1.parent.mkdir(parents=True)
+        r1.write_text("")
+        assert SRADatasetAnalyzer().find_fastq("SRR1") == Path("fastq/SRR1/SRR1_1.fastq")
 
-            result = self.analyzer._locate_fastq_file("SRR123456")
-            assert result == Path("SRR123456.fastq")
-
-    def test_locate_fastq_file_not_found(self):
-        """Test FASTQ file location when file doesn't exist."""
-        with patch("pathlib.Path.exists", return_value=False):
-            result = self.analyzer._locate_fastq_file("NONEXISTENT")
-            assert result is None
+    def test_find_fastq_missing_returns_none(self, tmp_path):
+        assert SRADatasetAnalyzer(fastq_dir=tmp_path).find_fastq("NONE") is None
 
     def test_calculate_quality_grade(self):
         """Test quality grade calculation."""
@@ -299,7 +303,7 @@ class TestSRADatasetAnalyzer:
             "duplication_rate": 0.3,
         }
 
-        with patch.object(self.analyzer, "_locate_fastq_file", return_value=Path("test.fastq")):
+        with patch.object(self.analyzer, "find_fastq", return_value=Path("test.fastq")):
             with patch("pathlib.Path.exists", return_value=True):
                 profile = self.analyzer.profile_dataset_quality("SRR123456")
 

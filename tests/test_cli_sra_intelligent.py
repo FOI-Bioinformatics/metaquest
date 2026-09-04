@@ -10,6 +10,7 @@ This file tests all 4 intelligent SRA CLI commands:
 Run: pytest tests/test_cli_sra_intelligent.py -v
 """
 
+import argparse
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -531,6 +532,7 @@ class TestSRAInteractiveDashboardCommand:
             accessions_file=str(accessions_file),
             download_session=None,
             quality_profiles=None,
+            fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dashboards"),
             title="Test Dashboard",
             dashboard_type="quality",
@@ -559,6 +561,7 @@ class TestSRAInteractiveDashboardCommand:
             accessions_file=str(accessions_file),
             download_session=None,
             quality_profiles=None,
+            fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dashboards"),
             title="Test Dashboard",
             dashboard_type="quality",
@@ -589,6 +592,7 @@ class TestSRAInteractiveDashboardCommand:
             accessions_file=str(accessions_file),
             download_session=None,
             quality_profiles=None,
+            fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dashboards"),
             title="Full Dashboard",
             dashboard_type="full",
@@ -893,6 +897,44 @@ class TestRealBackendInterface:
         assert (tmp_path / "output" / "comparative_analysis.json").exists()
         saved = json.loads((tmp_path / "output" / "comparative_analysis.json").read_text())
         assert saved["significant_differences"] == ["gc_content"]
+
+
+# ============================================================================
+# TEST CLASS: Honest exit codes without real FASTQ data
+# ============================================================================
+
+
+class TestHonestExits:
+    def test_compare_returns_1_without_fastq(self, tmp_path):
+        from metaquest.cli.commands.sra_intelligent import SRAComparativeAnalysisCommand
+
+        groups = tmp_path / "groups.json"
+        groups.write_text('{"a": ["SRR000001"], "b": ["SRR000002"]}')
+        args = argparse.Namespace(
+            groups_file=str(groups),
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "out"),
+            statistical_tests=False,
+            generate_report=False,
+        )
+        assert SRAComparativeAnalysisCommand().execute(args) == 1
+
+    def test_dashboard_returns_1_without_fastq(self, tmp_path):
+        from metaquest.cli.commands.sra_intelligent import SRAInteractiveDashboardCommand
+
+        acc_file = tmp_path / "acc.txt"
+        acc_file.write_text("SRR000001\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc_file),
+            download_session=None,
+            quality_profiles=None,
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "dash"),
+            title="t",
+            dashboard_type="quality",
+            no_open=True,
+        )
+        assert SRAInteractiveDashboardCommand().execute(args) == 1
 
 
 # ============================================================================

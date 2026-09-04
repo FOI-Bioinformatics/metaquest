@@ -64,7 +64,7 @@ class SRAIntelligentDownloadCommand(BaseCommand):
         )
         parser.add_argument(
             "--output-dir",
-            default="sra_downloads",
+            default="fastq",
             help="Directory for downloaded files",
         )
         parser.add_argument(
@@ -251,7 +251,7 @@ class SRAQualityProfileCommand(BaseCommand):
         )
         parser.add_argument(
             "--fastq-dir",
-            default="sra_downloads",
+            default="fastq",
             help="Directory containing downloaded FASTQ files",
         )
         parser.add_argument(
@@ -477,6 +477,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
             "--quality-profiles",
             help="Directory containing quality profile JSONs",
         )
+        parser.add_argument("--fastq-dir", default="fastq", help="Directory containing downloaded FASTQ files")
         parser.add_argument(
             "--output-dir",
             default="sra_dashboards",
@@ -513,7 +514,15 @@ class SRAInteractiveDashboardCommand(BaseCommand):
             if not accessions:
                 return 1
 
-            reporter = SRAReportGenerator(output_dir=str(output_dir))
+            reporter = SRAReportGenerator(output_dir=str(output_dir), fastq_dir=args.fastq_dir)
+            missing = [acc for acc in accessions if reporter.analyzer.find_fastq(acc) is None]
+            if len(missing) == len(accessions):
+                logger.error(
+                    "No FASTQ files found for any of %d accession(s) under %s", len(accessions), args.fastq_dir
+                )
+                return 1
+            if missing:
+                logger.warning("FASTQ missing for %d accession(s), e.g. %s", len(missing), ", ".join(missing[:5]))
 
             print(f"Generating {args.dashboard_type} dashboard for {len(accessions)} accessions...")
 
@@ -593,7 +602,7 @@ class SRAComparativeAnalysisCommand(BaseCommand):
         )
         parser.add_argument(
             "--fastq-dir",
-            default="sra_downloads",
+            default="fastq",
             help="Directory containing downloaded FASTQ files",
         )
         parser.add_argument(
@@ -694,8 +703,21 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             output_dir = Path(args.output_dir)
             output_dir.mkdir(exist_ok=True)
 
+            analyzer = SRADatasetAnalyzer(fastq_dir=args.fastq_dir)
+            all_accessions = [acc for accs in groups.values() for acc in accs]
+            missing = [acc for acc in all_accessions if analyzer.find_fastq(acc) is None]
+            if len(missing) == len(all_accessions):
+                logger.error(
+                    "No FASTQ files found for any of %d accession(s) under %s; nothing to compare",
+                    len(all_accessions),
+                    args.fastq_dir,
+                )
+                return 1
+            if missing:
+                logger.warning("FASTQ missing for %d accession(s), e.g. %s", len(missing), ", ".join(missing[:5]))
+
             print("\nPerforming comparative analysis...")
-            comparison = SRADatasetAnalyzer().compare_datasets(groups)
+            comparison = analyzer.compare_datasets(groups)
 
             self._print_group_summaries(groups, comparison)
             if args.statistical_tests:
@@ -706,7 +728,7 @@ class SRAComparativeAnalysisCommand(BaseCommand):
 
             # Generate HTML report
             if args.generate_report:
-                reporter = SRAReportGenerator(output_dir=str(output_dir))
+                reporter = SRAReportGenerator(output_dir=str(output_dir), fastq_dir=args.fastq_dir)
                 report_path = reporter.create_comparative_analysis(groups, title="SRA Comparative Analysis Report")
                 print(f"Interactive report generated: {report_path}")
 
