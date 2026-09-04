@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
+from helpers_extraction import _fake_tools
 
 
 def _args(**kwargs):
@@ -48,6 +49,7 @@ class TestExtractTargetReadsCommand:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_extracts(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
         cmd = ExtractTargetReadsCommand()
         with tempfile.TemporaryDirectory() as tmp:
             root, table, genome = _tree(tmp)
@@ -62,6 +64,23 @@ class TestExtractTargetReadsCommand:
             )
         assert rc == 0
         assert mock_run.called
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_returns_1_when_no_sample_yields_reads(self, mock_run):
+        mock_run.side_effect = _fake_tools({"mapped": 0})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                )
+            )
+        assert rc == 1
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_dry_run(self, mock_run):
@@ -81,6 +100,7 @@ class TestExtractTargetReadsCommand:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_with_assembly(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
         cmd = ExtractTargetReadsCommand()
         with tempfile.TemporaryDirectory() as tmp:
             root, table, genome = _tree(tmp)
@@ -100,6 +120,7 @@ class TestExtractTargetReadsCommand:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_assembly_single_thread_on_macos(self, mock_run, monkeypatch):
+        mock_run.side_effect = _fake_tools({})
         monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Darwin")
         cmd = ExtractTargetReadsCommand()
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,6 +143,7 @@ class TestExtractTargetReadsCommand:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_assembly_threads_override_on_macos(self, mock_run, monkeypatch):
+        mock_run.side_effect = _fake_tools({})
         monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Darwin")
         cmd = ExtractTargetReadsCommand()
         with tempfile.TemporaryDirectory() as tmp:

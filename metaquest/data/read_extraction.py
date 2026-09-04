@@ -10,8 +10,10 @@ to filter and export the mapped reads. External tools run through
 ``SecureSubprocess.run_secure`` and must be present on the system.
 """
 
+import gzip
 import logging
 import platform
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -30,6 +32,34 @@ MINIMAP2_PRESETS = {
     "map-pb": "map-pb",  # PacBio CLR
     "map-hifi": "map-hifi",  # PacBio HiFi
 }
+
+# minimap2 prints this when the two mate files differ in length; it then maps single-end.
+UNEQUAL_MATES_MARKER = "different number of records"
+
+
+@dataclass
+class ExtractionResult:
+    """Outcome of mapping one sample against the target genome."""
+
+    files: List[Path]
+    mapped_records: int
+    unequal_mates: bool = False
+
+
+def _count_bam_records(bam_path: Path) -> int:
+    """Number of records in a BAM file, via ``samtools view -c``."""
+    result = SecureSubprocess.run_secure("samtools", ["view", "-c", str(bam_path)])
+    text = (result.stdout or "").strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _fastq_is_empty(path: Path) -> bool:
+    """True when the file is missing or has no records (gzip or plain)."""
+    if not path.exists():
+        return True
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as handle:
+        return handle.readline() == ""
 
 
 def select_samples_for_genome(containment: pd.DataFrame, genome_id: str, threshold: float) -> List[str]:
@@ -68,11 +98,12 @@ def _map_and_extract(
     genome_id: str,
     preset: str,
     threads: int,
-) -> List[Path]:
+) -> ExtractionResult:
     """Map one sample's reads to the target genome and write the mapped reads.
 
-    Returns the list of FASTQ files written (two for paired input, one otherwise).
-    Intermediate SAM/BAM files are removed on success.
+    Returns the FASTQ files written (two for paired input, one otherwise, none when
+    nothing mapped) together with the mapped-record count. Intermediate SAM/BAM
+    files are removed.
     """
     ensure_directory(out_dir)
     sam_path = out_dir / f"{genome_id}.sam"
@@ -81,32 +112,55 @@ def _map_and_extract(
     # 1. Align reads to the reference (SAM output).
     minimap_args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(genome_fasta)]
     minimap_args.extend(str(r) for r in reads)
-    SecureSubprocess.run_secure("minimap2", minimap_args)
+    aligned = SecureSubprocess.run_secure("minimap2", minimap_args)
+    unequal = UNEQUAL_MATES_MARKER in (aligned.stderr or "")
+    if unequal:
+        logger.warning(
+            "%s: the mate files have different read counts, so minimap2 mapped them as single-end reads; "
+            "re-download with fasterq-dump (which keeps mates in step) for paired extraction",
+            accession,
+        )
 
-    # 2. Keep only mapped records (-F 4 drops the unmapped flag).
+    # 2. Keep only mapped records (-F 4 drops the unmapped flag) and count them.
     SecureSubprocess.run_secure(
         "samtools", ["view", "-b", "-F", "4", "-@", str(threads), "-o", str(bam_path), str(sam_path)]
     )
+    mapped = _count_bam_records(bam_path)
+    if mapped == 0:
+        logger.warning("No reads from %s mapped to %s; nothing written", accession, genome_id)
+        for tmp in (sam_path, bam_path):
+            tmp.unlink(missing_ok=True)
+        return ExtractionResult([], 0, unequal)
 
-    # 3. Export mapped reads back to FASTQ.
+    # 3. Export mapped reads back to FASTQ. Reads without a mate flag (single-end
+    #    mapping, or a fallback after unequal mates) go to the -0 file.
     if len(reads) >= 2:
         out1 = out_dir / f"{genome_id}_1.fastq.gz"
         out2 = out_dir / f"{genome_id}_2.fastq.gz"
         singles = out_dir / f"{genome_id}_s.fastq.gz"
+        orphans = out_dir / f"{genome_id}_0.fastq.gz"
         SecureSubprocess.run_secure(
-            "samtools", ["fastq", "-1", str(out1), "-2", str(out2), "-s", str(singles), str(bam_path)]
+            "samtools",
+            ["fastq", "-1", str(out1), "-2", str(out2), "-s", str(singles), "-0", str(orphans), str(bam_path)],
         )
-        written = [out1, out2]
+        for path in (out1, out2, singles, orphans):
+            if _fastq_is_empty(path):
+                path.unlink(missing_ok=True)
+        if out1.exists() and out2.exists():
+            written = [out1, out2]
+        elif orphans.exists():
+            written = [orphans]
+        else:
+            written = [singles] if singles.exists() else []
     else:
         out0 = out_dir / f"{genome_id}.fastq.gz"
         SecureSubprocess.run_secure("samtools", ["fastq", "-0", str(out0), str(bam_path)])
-        written = [out0]
+        written = [] if _fastq_is_empty(out0) else [out0]
 
-    # Remove intermediates; the reduced FASTQ set is the deliverable.
     for tmp in (sam_path, bam_path):
         tmp.unlink(missing_ok=True)
 
-    return written
+    return ExtractionResult(written, mapped, unequal)
 
 
 def extract_target_reads(
@@ -167,9 +221,15 @@ def extract_target_reads(
         if dry_run:
             results[accession] = []
             continue
-        written = _map_and_extract(accession, reads, genome_path, output_root / accession, genome_id, preset, threads)
-        results[accession] = written
-        logger.info("Extracted mapped reads for %s -> %s", accession, ", ".join(str(p) for p in written))
+        outcome = _map_and_extract(accession, reads, genome_path, output_root / accession, genome_id, preset, threads)
+        results[accession] = outcome.files
+        if outcome.files:
+            logger.info(
+                "Extracted %d mapped records for %s -> %s",
+                outcome.mapped_records,
+                accession,
+                ", ".join(str(p) for p in outcome.files),
+            )
 
     return results
 

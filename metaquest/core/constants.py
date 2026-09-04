@@ -141,6 +141,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "-b",
             "-F",
             "-f",
+            "-c",
             "-o",
             "-0",
             "-1",

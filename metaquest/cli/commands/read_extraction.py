@@ -75,7 +75,13 @@ class ExtractTargetReadsCommand(BaseCommand):
                     self.logger.info("  %s", accession)
                 return 0
 
-            self.logger.info("Extracted reads for %d sample(s)", len(results))
+            with_reads = {acc: files for acc, files in results.items() if files}
+            self.logger.info("Extracted reads for %d of %d sample(s)", len(with_reads), len(results))
+            if results and not with_reads:
+                self.logger.error(
+                    "No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id
+                )
+                return 1
 
             if args.assemble:
                 asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
@@ -84,12 +90,10 @@ class ExtractTargetReadsCommand(BaseCommand):
                         "Running megahit single-threaded on macOS (its parallel sort is unstable here); "
                         "override with --assembly-threads"
                     )
-                for accession, reads in results.items():
-                    if not reads:
-                        continue
+                for accession, reads in with_reads.items():
                     out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
                     assemble_extracted_reads(reads, out_dir, threads=asm_threads, min_contig_len=args.min_contig_len)
-                self.logger.info("Assembled %d sample(s)", len(results))
+                self.logger.info("Assembled %d sample(s)", len(with_reads))
 
             return 0
         except MetaQuestError as e:
