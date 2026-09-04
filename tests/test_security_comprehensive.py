@@ -467,13 +467,28 @@ class TestDefensiveGuards:
             with pytest.raises(SecurityError, match="Subprocess execution failed"):
                 SecureSubprocess.run_secure("datasets", ["--version"])
 
-    def test_fasterq_dump_flag_value_at_index_one_validated_as_accession(self):
-        """For fasterq-dump, a flag value at args index 1 goes through accession validation."""
-        with patch("subprocess.run", return_value=Mock(returncode=0)) as mock_run:
-            SecureSubprocess.run_secure("fasterq-dump", ["--threads", "SRR000001"])
 
-        # The value is accepted and passed through unchanged.
-        assert mock_run.call_args[0][0] == ["fasterq-dump", "--threads", "SRR000001"]
+class TestFasterqDumpCommandContract:
+    """The exact argument list metaquest.data.sra builds must pass validation unchanged."""
+
+    def test_real_download_argument_order_is_accepted(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        args = ["--threads", "4", "--progress", "SRR2517620", "-O", "out/SRR2517620_temp"]
+        cmd = SecureSubprocess._build_validated_command("fasterq-dump", args)
+        expected_out = str((tmp_path / "out" / "SRR2517620_temp").resolve())
+        assert cmd == ["fasterq-dump", "--threads", "4", "--progress", "SRR2517620", "-O", expected_out]
+
+    def test_non_numeric_thread_count_rejected(self):
+        with pytest.raises(SecurityError, match="Invalid integer value for --threads"):
+            SecureSubprocess._build_validated_command("fasterq-dump", ["--threads", "four", "SRR000001"])
+
+    def test_bad_accession_after_boolean_flag_rejected(self):
+        with pytest.raises(SecurityError, match="Invalid SRA accession format"):
+            SecureSubprocess._build_validated_command("fasterq-dump", ["--progress", "not-an-accession"])
+
+    def test_split_files_does_not_swallow_accession(self):
+        cmd = SecureSubprocess._build_validated_command("fasterq-dump", ["--split-files", "SRR000001"])
+        assert cmd == ["fasterq-dump", "--split-files", "SRR000001"]
 
 
 # ============================================================================

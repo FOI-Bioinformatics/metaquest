@@ -309,6 +309,21 @@ class TestDownloadAccession:
         assert "--threads" in args
         assert "8" in args
 
+    def test_download_accession_command_passes_validation(self, tmp_path, monkeypatch):
+        """The command download_accession builds must survive SecureSubprocess validation unmocked."""
+        monkeypatch.chdir(tmp_path)
+        with patch("metaquest.utils.security.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
+                success, message = download_accession(
+                    "SRR2517620", tmp_path / "fastq", num_threads=4, temp_folder=tmp_path / "tmp"
+                )
+        assert success is True, message
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "fasterq-dump"
+        assert cmd[1:4] == ["--threads", "4", "--progress"]
+        assert cmd[4] == "SRR2517620"
+
 
 class TestCheckExistingDownloads:
     """Test _check_existing_downloads function."""

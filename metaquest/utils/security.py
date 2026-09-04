@@ -23,6 +23,16 @@ from metaquest.core.constants import (
 
 logger = logging.getLogger(__name__)
 
+# fasterq-dump flags that never take a value; any other allowlisted fasterq-dump
+# flag consumes the following token as its value.
+FASTERQ_DUMP_BOOLEAN_FLAGS = frozenset(
+    {"--progress", "--split-files", "--split-3", "--skip-technical", "--include-technical", "--force", "--gzip"}
+)
+# fasterq-dump flags whose value must be a non-negative integer.
+FASTERQ_DUMP_INTEGER_FLAGS = frozenset({"--threads", "-e"})
+# Flags (any tool) whose value is a filesystem path and must pass validate_path.
+PATH_VALUE_FLAGS = frozenset({"-O", "-o", "--out-dir", "--temp", "-1", "-2"})
+
 
 class SecureSubprocess:
     """Secure subprocess wrapper with validation and sanitization."""
@@ -158,26 +168,23 @@ class SecureSubprocess:
         while i < len(args):
             arg = args[i]
 
-            # If it's a parameter flag, validate it
             if arg.startswith("-"):
                 cls.validate_parameter(executable, arg)
                 cmd.append(arg)
 
-                # If this parameter takes a value, validate the value too
-                if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                takes_value = not (executable == "fasterq-dump" and arg in FASTERQ_DUMP_BOOLEAN_FLAGS)
+                if takes_value and i + 1 < len(args) and not args[i + 1].startswith("-"):
                     i += 1
                     value = args[i]
-
-                    # Special validation for path arguments
-                    if arg in ["-O", "-o", "--out-dir", "--temp", "-1", "-2"]:
+                    if arg in PATH_VALUE_FLAGS:
                         value = str(cls.validate_path(value))
-                    elif executable == "fasterq-dump" and i == 1:  # SRA accession
-                        value = cls.validate_accession_for_subprocess(value)
-
+                    elif executable == "fasterq-dump" and arg in FASTERQ_DUMP_INTEGER_FLAGS:
+                        if not value.isdigit():
+                            raise SecurityError(f"Invalid integer value for {arg}: {value}")
                     cmd.append(value)
             else:
-                # Standalone argument (like SRA accession)
-                if executable == "fasterq-dump" and not arg.startswith("-"):
+                # Positional argument: for fasterq-dump this is the SRA accession.
+                if executable == "fasterq-dump":
                     arg = cls.validate_accession_for_subprocess(arg)
                 cmd.append(arg)
 
