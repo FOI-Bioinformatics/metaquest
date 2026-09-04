@@ -386,3 +386,49 @@ class TestGetAccessionsForGenus:
         result = get_accessions_for_genus("Escherichia", representative_only=True)
 
         assert len(result) == 2
+
+
+TAXON_MATCHES_RESPONSE = {
+    "matches": ["g__Wolbachia", "s__Wolbachia massiliensis", "s__Wolbachia pipientis", "s__Wolbachia pipientis_A"]
+}
+
+SPECIES_GENOMES_RESPONSE = {
+    "name": "Wolbachia pipientis",
+    "genomes": [
+        {"accession": "GCA_000174095.1", "gtdb_species_rep": False, "ncbi_org_name": "Wolbachia sp."},
+        {"accession": "GCA_021378375.1", "gtdb_species_rep": True, "ncbi_org_name": "Wolbachia pipientis"},
+    ],
+}
+
+
+class TestLiveApiShapes:
+    @patch("metaquest.data.gtdb.requests.get")
+    def test_search_taxon_matches_shape(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = TAXON_MATCHES_RESPONSE
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        result = search_taxon("Wolbachia")
+
+        assert [r["name"] for r in result] == TAXON_MATCHES_RESPONSE["matches"]
+
+    @patch("metaquest.data.gtdb.search_species")
+    def test_species_rep_key_recognised(self, mock_search):
+        mock_search.return_value = SPECIES_GENOMES_RESPONSE["genomes"]
+
+        assert get_accessions_for_species("Wolbachia pipientis") == ["GCA_021378375.1"]
+
+    @patch("metaquest.data.gtdb.search_species")
+    @patch("metaquest.data.gtdb.search_taxon")
+    def test_genus_fans_out_to_species(self, mock_taxon, mock_species):
+        mock_taxon.return_value = [{"name": n} for n in TAXON_MATCHES_RESPONSE["matches"]]
+        mock_species.side_effect = lambda name: [
+            {"accession": f"GCA_{abs(hash(name)) % 10**9:09d}.1", "gtdb_species_rep": True}
+        ]
+
+        accessions = get_accessions_for_genus("Wolbachia")
+
+        assert len(accessions) == 3
+        assert mock_species.call_args_list[0][0][0] == "Wolbachia massiliensis"
+        assert all(acc.startswith("GCA_") for acc in accessions)

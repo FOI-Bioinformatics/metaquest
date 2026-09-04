@@ -58,6 +58,8 @@ def search_taxon(taxon_name: str, limit: int = 100) -> List[Dict]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
+        if "matches" in data:
+            return [{"name": str(name)} for name in data["matches"]]
         return data.get("results", [data])
 
     return []
@@ -69,8 +71,8 @@ def _record_accession(record: Dict) -> Optional[str]:
 
 
 def _is_representative(record: Dict) -> bool:
-    """Whether a GTDB record is flagged as a representative genome."""
-    return bool(record.get("isRep") or record.get("is_representative", False))
+    """Whether a GTDB record is flagged as a representative genome (any key spelling)."""
+    return bool(record.get("isRep") or record.get("is_representative") or record.get("gtdb_species_rep"))
 
 
 def _keep_accession(record: Dict, representative_only: bool) -> Optional[str]:
@@ -102,7 +104,12 @@ def get_accessions_for_species(species_name: str, representative_only: bool = Tr
 
 
 def get_accessions_for_genus(genus_name: str, representative_only: bool = True) -> List[str]:
-    """Get representative accessions for all species in a genus."""
+    """Get representative accessions for all species in a genus.
+
+    The live taxon endpoint returns taxon names only; each ``s__`` species name is
+    resolved through the species endpoint. Older record-shaped responses (with an
+    accession per record) are still handled.
+    """
     taxon_results = search_taxon(genus_name)
     if not taxon_results:
         return []
@@ -110,15 +117,21 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
     accessions: List[str] = []
     seen_species = set()
     for record in taxon_results:
-        species = record.get("species") or record.get("name", "")
-        if species in seen_species:
+        name = str(record.get("species") or record.get("name", ""))
+        if name in seen_species:
             continue
-        seen_species.add(species)
+        seen_species.add(name)
+
+        if name.startswith("s__") and _record_accession(record) is None:
+            species_name = name[3:]
+            logger.debug("Resolving species %s for genus %s", species_name, genus_name)
+            accessions.extend(get_accessions_for_species(species_name, representative_only))
+            continue
+
         accession = _keep_accession(record, representative_only)
         if accession:
             accessions.append(accession)
 
-    # If representative_only yielded nothing, collect all unique accessions
     if representative_only and not accessions:
         for record in taxon_results:
             accession = _record_accession(record)
