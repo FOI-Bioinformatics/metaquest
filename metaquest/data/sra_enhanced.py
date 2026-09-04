@@ -209,6 +209,7 @@ class EnhancedSRADownloader:
         if self.temp_folder:
             temp_folder_path = Path(self.temp_folder)
             if temp_folder_path.exists() and os.access(temp_folder_path, os.W_OK):
+                SecureSubprocess.add_allowed_root(temp_folder_path)
                 args.extend(["--temp", str(temp_folder_path.absolute())])
 
         return args

@@ -690,6 +690,38 @@ class TestBuildDownloadCommandEdgeCases:
         assert "SRR001" in args
         assert "--include-technical" in args
 
+    def test_download_registers_external_temp_folder_as_allowed_root(self, tmp_path, monkeypatch):
+        """An HPC-style --temp-folder outside cwd/home/tempdir must not be rejected."""
+        from metaquest.utils.security import SecureSubprocess
+
+        work = tmp_path / "work"
+        work.mkdir()
+        temp_folder = tmp_path / "scratch"
+        temp_folder.mkdir()
+
+        SecureSubprocess._extra_roots.clear()
+        monkeypatch.setattr(
+            SecureSubprocess,
+            "allowed_roots",
+            classmethod(lambda cls: [work.resolve()] + list(cls._extra_roots)),
+        )
+
+        downloader = EnhancedSRADownloader("test@example.com", temp_folder=temp_folder)
+        output_path = work / "SRR001"
+
+        try:
+            with patch("metaquest.utils.security.subprocess.run") as mock_run:
+                mock_run.return_value = subprocess.CompletedProcess(
+                    args=["fasterq-dump"], returncode=0, stdout="", stderr=""
+                )
+                with patch.object(downloader, "_handle_download_output", return_value=(True, "Downloaded 1 files")):
+                    success, message = downloader._download_with_optimizations("SRR001", output_path, "illumina")
+
+            assert success is True, message
+            assert temp_folder.resolve() in SecureSubprocess._extra_roots
+        finally:
+            SecureSubprocess._extra_roots.clear()
+
 
 # ============================================================================
 # SUCCESS METRICS:
