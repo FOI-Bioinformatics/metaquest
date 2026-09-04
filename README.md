@@ -10,7 +10,7 @@
 - **Interactive Visualizations**: Create dynamic plots (PCA, heatmaps, diversity comparisons)
 - **Taxonomic Validation**: Validate species names against NCBI taxonomy database
 - **Plugin Architecture**: Extensible format handlers and visualization plugins
-- **Robust Implementation**: Type hints, comprehensive testing (995 tests, 88%+ coverage), numerical stability
+- **Robust Implementation**: Type hints, comprehensive testing (1280 tests, 92% coverage), numerical stability
 
 ## Installation
 
@@ -51,7 +51,7 @@ Map plots need the optional extra: `pip install 'metaquest[maps]'`.
 ### Development Commands
 ```bash
 make help           # Show all available commands
-make test          # Run tests with coverage (995 tests passing, 88%+ coverage)
+make test          # Run tests with coverage (1280 tests passing, 92% coverage)
 make lint          # Run code quality checks
 make check         # Full quality validation
 make clean         # Clean build artifacts
@@ -141,9 +141,8 @@ metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.
 
 This writes `metadata_counts.txt` (one row per value, one column per genome) and `metadata_counts_stats.txt`.
 
-### 9. Genome Count
-
-This step helps in understanding the distribution of genomes across different datasets:
+To instead see the distribution of genomes across datasets grouped by a metadata attribute, pass
+`--summary-file` and `--metadata-file` explicitly:
 
 ```bash
 metaquest count_metadata --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95 --output-file genome_counts.txt
@@ -151,7 +150,7 @@ metaquest count_metadata --summary-file parsed_containment.txt --metadata-file p
 
 *Example output:* genome_counts.txt
 
-### 10. Single Sample Analysis
+### 9. Single Sample Analysis
 
 To analyze a single sample from the summary, you can use the `single_sample` command:
 
@@ -159,7 +158,7 @@ To analyze a single sample from the summary, you can use the `single_sample` com
 metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column <genome column from parsed_containment.txt> --metadata-column Sample_Scientific_Name --threshold 0.95
 ```
 
-### 11. Checking What Is Already Available Locally
+### 10. Checking What Is Already Available Locally
 
 Before downloading, use `status` to see which reads, metadata, and genomes are already present
 so nothing is fetched twice. Given a wanted list it also reports what is still missing:
@@ -178,7 +177,7 @@ re-download or `--dry-run` to report present-vs-missing without downloading:
 metaquest genome_download --accessions GCF_000006945.2 --dry-run
 ```
 
-### 12. Targeted Read Extraction Before Assembly
+### 11. Targeted Read Extraction Before Assembly
 
 To assemble only the reads relevant to a target genome (a small, targeted assembly rather than a
 whole-metagenome assembly), use `extract_target_reads`. For every sample whose containment for the
@@ -346,7 +345,7 @@ Visualize the distribution of metadata attributes:
 metaquest plot_metadata_counts --file-path metadata_counts.txt --plot-type bar --save-format png
 ```
 
-The bar chart is written next to the input as metadata_counts_bar.png.
+The bar chart is written in the current working directory as metadata_counts_bar.png.
 
 Available plot types: bar, pie, radar
 
@@ -471,7 +470,7 @@ make help
 ```
 
 ### Testing Structure
-- **Comprehensive Test Suite**: 995 tests covering CLI, data processing, visualization, and advanced SRA features
+- **Comprehensive Test Suite**: 1280 tests covering CLI, data processing, visualization, and advanced SRA features
   - Unit tests: 170+ tests per critical module with extended test files
   - Integration tests: 12 end-to-end workflow tests (`tests/test_integration_simple.py`)
   - Performance tests: 25 benchmarked tests (`tests/test_performance_simple.py`)
