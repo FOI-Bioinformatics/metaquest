@@ -275,8 +275,8 @@ class TestHandleDownloadOutput:
 
         with patch.object(self.downloader, "_rename_files_by_technology") as mock_rename:
             mock_rename.return_value = {
-                temp_path / "SRR001_1.fastq": output_path / "SRR001_R1.fastq.gz",
-                temp_path / "SRR001_2.fastq": output_path / "SRR001_R2.fastq.gz",
+                temp_path / "SRR001_1.fastq": output_path / "SRR001_R1.fastq",
+                temp_path / "SRR001_2.fastq": output_path / "SRR001_R2.fastq",
             }
 
             with patch("shutil.move"):
@@ -329,8 +329,8 @@ class TestFileRenamingEdgeCases:
 
         assert len(renamed) == 4
         # Should be numbered R1, R2, R3, R4
-        assert str(renamed[files[0]]).endswith("_R1.fastq.gz")
-        assert str(renamed[files[3]]).endswith("_R4.fastq.gz")
+        assert str(renamed[files[0]]).endswith("_R1.fastq")
+        assert str(renamed[files[3]]).endswith("_R4.fastq")
 
     def test_rename_illumina_single_file(self, tmp_path):
         """Test renaming single Illumina file."""
@@ -342,7 +342,7 @@ class TestFileRenamingEdgeCases:
         renamed = self.downloader._rename_files_by_technology([file1], "illumina", output_path)
 
         assert len(renamed) == 1
-        assert str(renamed[file1]).endswith("_R1.fastq.gz")
+        assert str(renamed[file1]).endswith("_R1.fastq")
 
     def test_rename_nanopore_multiple_files(self, tmp_path):
         """Test renaming multiple Nanopore files."""

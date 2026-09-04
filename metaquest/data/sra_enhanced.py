@@ -25,6 +25,11 @@ from metaquest.utils.security import SecureSubprocess
 logger = logging.getLogger(__name__)
 
 
+def _fastq_suffix(path: Path) -> str:
+    """Suffix to keep on a renamed read file; fasterq-dump writes plain FASTQ."""
+    return ".fastq.gz" if path.name.endswith(".gz") else ".fastq"
+
+
 class EnhancedSRADownloader:
     """Enhanced SRA downloader with technology detection and robust error handling."""
 
@@ -247,15 +252,15 @@ class EnhancedSRADownloader:
 
             if len(fastq_files) == 2:
                 # Paired-end
-                renamed_files[fastq_files[0]] = output_path / f"{accession}_R1.fastq.gz"
-                renamed_files[fastq_files[1]] = output_path / f"{accession}_R2.fastq.gz"
+                renamed_files[fastq_files[0]] = output_path / f"{accession}_R1{_fastq_suffix(fastq_files[0])}"
+                renamed_files[fastq_files[1]] = output_path / f"{accession}_R2{_fastq_suffix(fastq_files[1])}"
             elif len(fastq_files) == 1:
                 # Single-end
-                renamed_files[fastq_files[0]] = output_path / f"{accession}_R1.fastq.gz"
+                renamed_files[fastq_files[0]] = output_path / f"{accession}_R1{_fastq_suffix(fastq_files[0])}"
             else:
                 # Multiple files - handle as numbered
                 for i, file in enumerate(fastq_files, 1):
-                    renamed_files[file] = output_path / f"{accession}_R{i}.fastq.gz"
+                    renamed_files[file] = output_path / f"{accession}_R{i}{_fastq_suffix(file)}"
 
         elif technology in ["nanopore", "pacbio"]:
             # Long reads - typically single file

@@ -292,8 +292,35 @@ class TestEnhancedSRADownloader:
             renamed = self.downloader._rename_files_by_technology([file1, file2], "illumina", output_path)
 
             assert len(renamed) == 2
-            assert str(renamed[file1]).endswith("_R1.fastq.gz")
-            assert str(renamed[file2]).endswith("_R2.fastq.gz")
+            assert str(renamed[file1]).endswith("_R1.fastq")
+            assert str(renamed[file2]).endswith("_R2.fastq")
+
+    def test_illumina_rename_keeps_uncompressed_suffix(self):
+        """Test that uncompressed FASTQ input keeps uncompressed suffix."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            output_path = temp_path / "SRR001"
+            file1 = temp_path / "SRR001_1.fastq"
+            file2 = temp_path / "SRR001_2.fastq"
+            file1.touch()
+            file2.touch()
+
+            renamed = self.downloader._rename_files_by_technology([file1, file2], "illumina", output_path)
+
+            assert renamed[file1] == output_path / "SRR001_R1.fastq"
+            assert renamed[file2] == output_path / "SRR001_R2.fastq"
+
+    def test_illumina_rename_keeps_gz_suffix(self):
+        """Test that gzipped FASTQ input keeps gzipped suffix."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            output_path = temp_path / "SRR001"
+            file1 = temp_path / "SRR001_1.fastq.gz"
+            file1.touch()
+
+            renamed = self.downloader._rename_files_by_technology([file1], "illumina", output_path)
+
+            assert renamed[file1] == output_path / "SRR001_R1.fastq.gz"
 
     def test_rename_files_nanopore(self):
         """Test file renaming for Nanopore."""
