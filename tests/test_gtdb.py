@@ -1,5 +1,6 @@
 """Tests for the GTDB API client module."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -432,3 +433,38 @@ class TestLiveApiShapes:
         assert len(accessions) == 3
         assert mock_species.call_args_list[0][0][0] == "Wolbachia massiliensis"
         assert all(acc.startswith("GCA_") for acc in accessions)
+
+    @patch("metaquest.data.gtdb.search_species")
+    @patch("metaquest.data.gtdb.search_taxon")
+    def test_genus_skips_failing_species(self, mock_taxon, mock_species, caplog):
+        mock_taxon.return_value = [
+            {"name": "s__Wolbachia massiliensis"},
+            {"name": "s__Wolbachia pipientis"},
+            {"name": "s__Wolbachia pipientis_A"},
+        ]
+
+        def side_effect(name):
+            if name == "Wolbachia pipientis":
+                raise DataAccessError("boom")
+            return [{"accession": f"GCA_{abs(hash(name)) % 10**9:09d}.1", "gtdb_species_rep": True}]
+
+        mock_species.side_effect = side_effect
+
+        with caplog.at_level(logging.WARNING):
+            accessions = get_accessions_for_genus("Wolbachia")
+
+        assert len(accessions) == 2
+        assert "Skipping species" in caplog.text
+
+    @patch("metaquest.data.gtdb.search_species")
+    @patch("metaquest.data.gtdb.search_taxon")
+    def test_genus_raises_when_every_species_fails(self, mock_taxon, mock_species):
+        mock_taxon.return_value = [
+            {"name": "s__Wolbachia massiliensis"},
+            {"name": "s__Wolbachia pipientis"},
+            {"name": "s__Wolbachia pipientis_A"},
+        ]
+        mock_species.side_effect = DataAccessError("boom")
+
+        with pytest.raises(DataAccessError, match="All 3 species lookups"):
+            get_accessions_for_genus("Wolbachia")

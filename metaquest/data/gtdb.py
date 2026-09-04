@@ -116,6 +116,8 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
 
     accessions: List[str] = []
     seen_species = set()
+    attempted = 0
+    failed = 0
     for record in taxon_results:
         name = str(record.get("species") or record.get("name", ""))
         if name in seen_species:
@@ -125,12 +127,20 @@ def get_accessions_for_genus(genus_name: str, representative_only: bool = True) 
         if name.startswith("s__") and _record_accession(record) is None:
             species_name = name[3:]
             logger.debug("Resolving species %s for genus %s", species_name, genus_name)
-            accessions.extend(get_accessions_for_species(species_name, representative_only))
+            attempted += 1
+            try:
+                accessions.extend(get_accessions_for_species(species_name, representative_only))
+            except DataAccessError as e:
+                failed += 1
+                logger.warning("Skipping species %s: %s", species_name, e)
             continue
 
         accession = _keep_accession(record, representative_only)
         if accession:
             accessions.append(accession)
+
+    if attempted and failed == attempted:
+        raise DataAccessError(f"All {attempted} species lookups for genus '{genus_name}' failed")
 
     if representative_only and not accessions:
         for record in taxon_results:
