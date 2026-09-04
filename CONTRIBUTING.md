@@ -68,6 +68,13 @@ Thank you for your interest in contributing to MetaQuest! This document provides
 - Ensure both unit tests and integration tests pass
 - The `local_test.sh` script provides end-to-end testing
 
+### Network smoke test
+
+`make test-network` downloads one 425-spot SRA run (SRR2517620) with fasterq-dump and
+checks the files MetaQuest writes. It needs `fasterq-dump` on the PATH and internet
+access, so it is excluded from `make test`. Run it before releasing any change to
+`metaquest/data/sra.py` or `metaquest/utils/security.py`.
+
 ## Submitting Changes
 
 1. **Create a feature branch**: `git checkout -b feature/your-feature-name`

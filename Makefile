@@ -21,6 +21,9 @@ install:
 test:
 	pytest tests/ --cov=metaquest
 
+test-network:
+	pytest tests/test_network_smoke.py -m network -x -v
+
 lint:
 	flake8 metaquest tests
 
