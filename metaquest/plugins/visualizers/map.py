@@ -25,7 +25,7 @@ try:
 except ImportError:
     CARTOPY_AVAILABLE = False
     GeoAxes = None
-    logger.warning("Cartopy not available. Map visualization will be limited.")
+    logger.debug("Cartopy not available; map visualization is disabled")
 
 
 def _validate_cartopy_availability():
@@ -37,7 +37,7 @@ def _validate_cartopy_availability():
     """
     if not CARTOPY_AVAILABLE:
         raise VisualizationError(
-            "Cartopy library is required for map visualization. " "Please install with 'pip install cartopy'"
+            "Cartopy is required for map visualization. Install it with: pip install 'metaquest[maps]'"
         )
 
 

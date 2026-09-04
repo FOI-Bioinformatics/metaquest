@@ -686,7 +686,7 @@ class TestMapVisualizerPlugin:
     def test_cartopy_unavailable_error(self):
         """Test error when cartopy is unavailable."""
         with patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="Cartopy library is required"):
+            with pytest.raises(VisualizationError, match="Cartopy is required"):
                 MapVisualizerPlugin.create_plot(data=self.test_data, lat_lon_column="lat_lon")
 
     @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
@@ -913,3 +913,11 @@ SRR789012,0.85,Salmonella enterica
         all_plugins = registry.list()
         assert "branchwater" in all_plugins
         assert "bar" in all_plugins
+
+
+def test_missing_cartopy_message_names_the_extra():
+    from metaquest.plugins.visualizers import map as map_module
+
+    with patch.object(map_module, "CARTOPY_AVAILABLE", False):
+        with pytest.raises(VisualizationError, match=r"pip install 'metaquest\[maps\]'"):
+            map_module._validate_cartopy_availability()
