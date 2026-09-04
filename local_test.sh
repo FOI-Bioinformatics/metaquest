@@ -1,64 +1,58 @@
 #!/bin/bash
-# local_test.sh
+# local_test.sh: end-to-end CLI walkthrough on the bundled Branchwater sample.
+# Runs in build/local_test so tracked files under test_data/ are never rewritten.
+set -euo pipefail
 
-# Create test directories
-mkdir -p test_data/branchwater
-mkdir -p test_data/processed
-mkdir -p test_data/metadata
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+WORK="$ROOT/build/local_test"
+rm -rf "$WORK"
+mkdir -p "$WORK/branchwater" "$WORK/genomes"
+cp "$ROOT/test_data/branchwater/salmonella_subset.csv" "$WORK/branchwater/"
+if [ -f "$ROOT/test_data/GCF_000008985.1.fasta" ]; then
+    cp "$ROOT/test_data/GCF_000008985.1.fasta" "$WORK/genomes/GCF_000008985.1.fna"
+fi
+cd "$WORK"
 
-# Create sample Branchwater data
-echo "acc,containment,cANI,biosample,bioproject,assay_type,collection_date_sam,geo_loc_name_country_calc,organism,lat_lon" > test_data/branchwater/example.csv
-echo "SRR12345678,0.95,0.98,SAMN12345678,PRJNA123456,AMPLICON,2019-05-01,USA,Francisella adeliensis,35.7N 100.2W" >> test_data/branchwater/example.csv
-echo "SRR87654321,0.92,0.96,SAMN87654321,PRJNA123456,AMPLICON,2019-06-15,USA,Francisella adeliensis,36.1N 99.8W" >> test_data/branchwater/example.csv
+check() { if [ -e "$1" ]; then echo "ok   $1"; else echo "FAIL $1 missing"; exit 1; fi; }
 
-# Test core functionality
-echo "Testing download_test_genome..."
-metaquest download_test_genome --output-folder test_data
+echo "use_branchwater"
+metaquest use_branchwater --branchwater-folder branchwater --matches-folder matches
+check matches/salmonella_subset.csv
 
-echo "Testing use_branchwater..."
-metaquest use_branchwater --branchwater-folder test_data/branchwater --matches-folder test_data/processed
+echo "parse_containment"
+metaquest parse_containment --matches-folder matches --parsed-containment-file parsed_containment.txt \
+    --summary-containment-file summary_containment.txt --step-size 0.1
+check parsed_containment.txt
+check summary_containment.txt
 
-echo "Testing extract_branchwater_metadata..."
-metaquest extract_branchwater_metadata --branchwater-folder test_data/branchwater --metadata-folder test_data/metadata
+echo "extract_branchwater_metadata"
+metaquest extract_branchwater_metadata --branchwater-folder branchwater --metadata-folder metadata
+check metadata/branchwater_metadata.txt
 
-echo "Testing parse_containment..."
-metaquest parse_containment --matches-folder test_data/processed --parsed-containment-file test_data/parsed_containment.txt --summary-containment-file test_data/summary_containment.txt
+echo "count_metadata (metadata table resolved from metadata/branchwater_metadata.txt)"
+metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.9 --output-file metadata_counts.txt
+check metadata_counts.txt
 
-# Verify outputs
-echo "Verifying outputs..."
-if [ -f test_data/GCF_000008985.1.fasta ]; then
-    echo "✓ Test genome downloaded successfully"
-else
-    echo "✗ Test genome download failed"
-    exit 1
+echo "plot_metadata_counts"
+metaquest plot_metadata_counts --file-path metadata_counts.txt --plot-type bar --save-format png
+check metadata_counts_bar.png
+
+echo "plot_containment"
+metaquest plot_containment --file-path parsed_containment.txt --column max_containment --plot-type rank --save-format png
+check parsed_containment.txt_rank_max_containment.png
+
+echo "select_datasets"
+metaquest select_datasets --threshold 0.95 --output accessions.txt
+check accessions.txt
+test "$(wc -l < accessions.txt)" -gt 0
+
+echo "status"
+metaquest status --parsed-containment parsed_containment.txt --list-missing
+
+if [ -f genomes/GCF_000008985.1.fna ]; then
+    echo "extract_target_reads --dry-run"
+    metaquest extract_target_reads --parsed-containment parsed_containment.txt --genome-id salmonella_subset \
+        --genome-fasta genomes/GCF_000008985.1.fna --threshold 0.95 --dry-run
 fi
 
-if [ -f test_data/processed/example.csv ]; then
-    echo "✓ Branchwater file processed successfully"
-else
-    echo "✗ Branchwater file processing failed"
-    exit 1
-fi
-
-if [ -f test_data/metadata/branchwater_metadata.txt ]; then
-    echo "✓ Metadata extracted successfully"
-else
-    echo "✗ Metadata extraction failed"
-    exit 1
-fi
-
-if [ -f test_data/parsed_containment.txt ]; then
-    echo "✓ Containment parsed successfully"
-else
-    echo "✗ Containment parsing failed"
-    exit 1
-fi
-
-if [ -f test_data/summary_containment.txt ]; then
-    echo "✓ Summary created successfully"
-else
-    echo "✗ Summary creation failed"
-    exit 1
-fi
-
-echo "All tests passed!"
+echo "All steps passed (outputs in $WORK)"

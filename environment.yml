@@ -1,0 +1,15 @@
+name: metaquest
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.12
+  - pip
+  - sra-tools>=3.0
+  - ncbi-datasets-cli
+  - minimap2
+  - samtools
+  - megahit
+  - sourmash
+  - pip:
+      - -e .

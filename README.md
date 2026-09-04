@@ -28,6 +28,26 @@ pip install -r requirements.txt
 pip install .
 ```
 
+### External tools
+
+Download and assembly steps call command-line tools that are not Python packages:
+
+| Tool | Used by |
+|---|---|
+| `fasterq-dump` (sra-tools) | `download_sra`, `sra_download`, `sra-download-intelligent` |
+| `datasets` (ncbi-datasets-cli) | `genome_download`, `genome_prepare`, `download_test_genome` |
+| `minimap2`, `samtools` | `extract_target_reads` |
+| `megahit` | `extract_target_reads --assemble` |
+
+`environment.yml` installs all of them together with MetaQuest:
+
+```bash
+conda env create -f environment.yml
+conda activate metaquest
+```
+
+Map plots need the optional extra: `pip install 'metaquest[maps]'`.
+
 ### Development Commands
 ```bash
 make help           # Show all available commands
@@ -75,9 +95,9 @@ After processing the Branchwater files, you can summarize the results:
 metaquest parse_containment --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt --step-size 0.05 --file-format branchwater
 ```
 
-*Example output:* summary.txt and containment.txt
+*Example output:* parsed_containment.txt (samples x genomes) and summary_containment.txt (counts per containment step).
 
-### 5. Downloading Metadata from NCBI (Alternative to Step 3)
+### 5. Downloading Metadata from NCBI (richer alternative to step 3)
 
 For more comprehensive metadata, you can download it from NCBI:
 
@@ -109,7 +129,19 @@ metaquest check_metadata_attributes --file-path parsed_metadata.txt --output-fil
 
 *Example output:* parsed_metadata_overview.txt
 
-### 8. Genome Count
+### 8. Counting metadata values
+
+`count_metadata`, `single_sample` and `check_metadata_attributes` use `metadata_table.txt` from
+`parse_metadata` when it exists and otherwise fall back to `metadata/branchwater_metadata.txt` from
+step 3, so either metadata route works with the defaults:
+
+```bash
+metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.9 --output-file metadata_counts.txt
+```
+
+This writes `metadata_counts.txt` (one row per value, one column per genome) and `metadata_counts_stats.txt`.
+
+### 9. Genome Count
 
 This step helps in understanding the distribution of genomes across different datasets:
 
@@ -119,15 +151,15 @@ metaquest count_metadata --summary-file parsed_containment.txt --metadata-file p
 
 *Example output:* genome_counts.txt
 
-### 9. Single Sample Analysis
+### 10. Single Sample Analysis
 
 To analyze a single sample from the summary, you can use the `single_sample` command:
 
 ```bash
-metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column GCF_000008985.1 --metadata-column Sample_Scientific_Name --threshold 0.95
+metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column <genome column from parsed_containment.txt> --metadata-column Sample_Scientific_Name --threshold 0.95
 ```
 
-### 10. Checking What Is Already Available Locally
+### 11. Checking What Is Already Available Locally
 
 Before downloading, use `status` to see which reads, metadata, and genomes are already present
 so nothing is fetched twice. Given a wanted list it also reports what is still missing:
@@ -146,7 +178,7 @@ re-download or `--dry-run` to report present-vs-missing without downloading:
 metaquest genome_download --accessions GCF_000006945.2 --dry-run
 ```
 
-### 11. Targeted Read Extraction Before Assembly
+### 12. Targeted Read Extraction Before Assembly
 
 To assemble only the reads relevant to a target genome (a small, targeted assembly rather than a
 whole-metagenome assembly), use `extract_target_reads`. For every sample whose containment for the
@@ -173,6 +205,18 @@ the assembly thread count explicitly with `--assembly-threads` if your megahit b
 
 ## Advanced SRA Operations
 
+### Choosing which datasets to download
+
+```bash
+metaquest select_datasets --threshold 0.9 --output accessions.txt
+metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
+    --metadata-column geo_loc_name_country_calc --metadata-value France --output accessions.txt
+```
+
+`accessions.txt` is the input for `download_sra`, `sra_download` and `sra-download-intelligent`.
+All three write `fastq/<accession>/<accession>_1.fastq` (and `_2` for paired runs), which is the layout
+`status`, `sra_stats`, `sra-profile-quality`, `sra-dashboard` and `extract_target_reads` read.
+
 ### Which SRA download command should I use?
 
 MetaQuest ships three ways to download SRA reads; pick one:
@@ -193,7 +237,7 @@ Download SRA datasets with intelligent resume capability and bandwidth optimizat
 # Intelligent download with resume capability
 metaquest sra-download-intelligent \
     --accessions-file accessions.txt \
-    --output-dir sra_downloads \
+    --output-dir fastq \
     --max-parallel-downloads 4 \
     --max-bandwidth-mbps 100 \
     --resume
@@ -212,14 +256,14 @@ Generate comprehensive quality profiles for downloaded SRA datasets:
 # Profile multiple datasets with detailed reports
 metaquest sra-profile-quality \
     --accessions-file accessions.txt \
-    --fastq-dir sra_downloads \
+    --fastq-dir fastq \
     --output-dir quality_profiles \
     --detailed-reports
 
 # Profile single dataset
 metaquest sra-profile-quality \
     --accession SRR123456 \
-    --fastq-dir sra_downloads \
+    --fastq-dir fastq \
     --include-contamination
 ```
 
@@ -249,7 +293,7 @@ Perform statistical comparisons between SRA dataset groups:
 # Compare treatment vs control groups
 metaquest sra-compare \
     --groups-file comparison_groups.json \
-    --fastq-dir sra_downloads \
+    --fastq-dir fastq \
     --statistical-tests \
     --generate-report
 ```
@@ -299,8 +343,10 @@ Available plot types: rank, histogram, box, violin
 Visualize the distribution of metadata attributes:
 
 ```bash
-metaquest plot_metadata_counts --file-path counts_Sample_Scientific_Name.txt --plot-type bar --save-format png
+metaquest plot_metadata_counts --file-path metadata_counts.txt --plot-type bar --save-format png
 ```
+
+The bar chart is written next to the input as metadata_counts_bar.png.
 
 Available plot types: bar, pie, radar
 

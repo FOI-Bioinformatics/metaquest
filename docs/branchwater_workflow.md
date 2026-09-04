@@ -44,30 +44,15 @@ metaquest parse_metadata --metadata-folder metadata --metadata-table-file parsed
 
 ## Advanced Filtering and Thresholds
 
-### Containment Threshold Optimization
-Experiment with different containment thresholds based on your research questions:
+### Containment steps
+
+`parse_containment` does not filter; it records every sample and summarizes how many samples exceed
+each containment step. Choose the step size for the summary and apply thresholds downstream:
 
 ```bash
-# Conservative analysis (high specificity)
-metaquest parse_containment --matches-folder matches --threshold 0.95 --step-size 0.01
-
-# Exploratory analysis (higher sensitivity)  
-metaquest parse_containment --matches-folder matches --threshold 0.85 --step-size 0.05
-```
-
-### Large Dataset Optimization
-
-For processing many genome files efficiently:
-
-```bash
-# Use dry-run to estimate processing time
-metaquest download_metadata --matches-folder matches --dry-run --email your@email.com
-
-# Process in batches to manage memory usage
-metaquest parse_containment --matches-folder matches --batch-size 1000
-
-# Parallel processing for large datasets
-metaquest use_branchwater --branchwater-folder large_dataset --max-workers 8
+metaquest parse_containment --matches-folder matches --step-size 0.05
+metaquest select_datasets --threshold 0.9 --output accessions.txt
+metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.9
 ```
 
 ## Troubleshooting Common Issues
@@ -80,14 +65,6 @@ If you encounter format errors, verify your CSV structure:
 head -1 your_branchwater_file.csv
 
 # Expected format: acc,containment,organism,[additional_columns]
-```
-
-### Memory Management
-For large datasets, consider using streaming processing:
-
-```bash
-# Enable streaming mode for large files
-metaquest parse_containment --streaming --chunk-size 10000
 ```
 
 ---
