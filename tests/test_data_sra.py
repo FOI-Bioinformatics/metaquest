@@ -645,6 +645,24 @@ class TestDownloadSra:
         assert sorted(a for a, _, _ in seen) == ["SRR1", "SRR2"] and all(on_main for _, _, on_main in seen)
         assert stats["failed_accessions"] == ["SRR2"] or stats["failed_accessions"] == ["SRR1"]
 
+    def test_on_result_failure_does_not_corrupt_the_tally(self, tmp_path):
+        """A raising on_result (e.g. a registry lock timeout) must not be mistaken for a download failure."""
+        calls = []
+
+        def flaky_on_result(acc, ok, message):
+            calls.append(acc)
+            if len(calls) == 1:
+                raise RuntimeError("registry locked")
+
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        with patch("metaquest.data.sra.download_accession", return_value=(True, "Downloaded 2 files")):
+            stats = download_sra(tmp_path / "fastq", acc, max_retries=0, on_result=flaky_on_result)
+        assert stats["successful"] == 2
+        assert stats["failed"] == 0
+        assert stats["failed_accessions"] == []
+        assert len(calls) == 2
+
     def test_max_downloads_cutoffs_are_returned(self, tmp_path):
         acc = tmp_path / "acc.txt"
         acc.write_text("SRR1\nSRR2\nSRR3\n")

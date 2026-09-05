@@ -193,7 +193,7 @@ class DownloadSraCommand(BaseCommand):
                 already_downloaded_now = set(query(registry, "downloaded"))
                 for acc in download_stats.get("already_downloaded_accessions", []):
                     if acc not in already_downloaded_now:
-                        record_download(registry, acc, "downloaded", fastq_dir)
+                        record_download(registry, acc, "downloaded", fastq_dir, attempt=False)
                 for acc in download_stats.get("blacklisted_accessions", []):
                     record_download(registry, acc, "skipped", fastq_dir, "blacklisted")
                 for acc in download_stats.get("skipped_accessions", []):

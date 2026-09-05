@@ -106,6 +106,13 @@ class TestRecords:
         reg.record_download(r, "SRR3", "skipped", tmp_path / "fastq", message="--max-downloads")
         assert r.datasets["SRR3"]["download"]["attempts"] == 0
 
+        # A "downloaded" state recorded without an actual attempt (e.g. already present on
+        # disk) must not bump attempts.
+        _fastq(tmp_path / "fastq" / "SRR4" / "SRR4_1.fastq")
+        reg.record_download(r, "SRR4", "downloaded", tmp_path / "fastq", attempt=False)
+        assert r.datasets["SRR4"]["download"]["state"] == "downloaded"
+        assert r.datasets["SRR4"]["download"]["attempts"] == 0
+
     def test_record_screening_from_table(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         table = tmp_path / "parsed_containment.txt"

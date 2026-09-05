@@ -29,6 +29,22 @@ def _safe_rmtree(path: Path) -> None:
         logger.warning(f"Could not remove directory {path}: {e}")
 
 
+def _notify_result(
+    on_result: Optional[Callable[[str, bool, str], None]], accession: str, success: bool, message: str
+) -> None:
+    """Call ``on_result`` in isolation so a failing callback never corrupts the download tally.
+
+    A registry write (or any other callback) can raise, e.g. a lock timeout. That must not be
+    mistaken for the download itself failing, so this is never allowed to propagate.
+    """
+    if on_result is None:
+        return
+    try:
+        on_result(accession, success, message)
+    except Exception as e:
+        logger.warning(f"Recording the result for {accession} failed: {e}")
+
+
 def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
     """Return True if the per-accession directory holds at least one FASTQ file.
 
@@ -390,24 +406,23 @@ def _retry_failed_downloads(
                     force=True,
                     temp_folder=temp_folder,
                 )
-                download_results[accession] = f"Retry {retry + 1}: {message}"
-
-                if success:
-                    retried_successful += 1
-                    logger.info(f"Successfully downloaded {accession} on retry {retry + 1}")
-                else:
-                    failed_accessions.append(accession)
-                    logger.warning(f"Failed to download {accession} on retry {retry + 1}: {message}")
-
-                if on_result is not None:
-                    on_result(accession, success, download_results[accession])
-
             except Exception as e:
                 failed_accessions.append(accession)
                 logger.error(f"Error retrying download for {accession}: {e}")
                 download_results[accession] = f"Retry {retry + 1} error: {str(e)}"
-                if on_result is not None:
-                    on_result(accession, False, download_results[accession])
+                _notify_result(on_result, accession, False, download_results[accession])
+                continue
+
+            download_results[accession] = f"Retry {retry + 1}: {message}"
+
+            if success:
+                retried_successful += 1
+                logger.info(f"Successfully downloaded {accession} on retry {retry + 1}")
+            else:
+                failed_accessions.append(accession)
+                logger.warning(f"Failed to download {accession} on retry {retry + 1}: {message}")
+
+            _notify_result(on_result, accession, success, download_results[accession])
 
     return retried_successful, failed_accessions
 
@@ -459,15 +474,15 @@ def _execute_parallel_downloads(
             acc = futures[future]
             try:
                 result = future.result()
-                futures_results.append((acc, result))
-                if on_result is not None:
-                    success, message = result
-                    on_result(acc, success, message)
             except Exception as e:
                 logger.error(f"Download failed for {acc}: {e}")
                 futures_results.append((acc, None))
-                if on_result is not None:
-                    on_result(acc, False, str(e))
+                _notify_result(on_result, acc, False, str(e))
+                continue
+
+            futures_results.append((acc, result))
+            success, message = result
+            _notify_result(on_result, acc, success, message)
 
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
 

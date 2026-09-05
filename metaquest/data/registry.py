@@ -267,11 +267,20 @@ def _file_entries(paths: Iterable[Path]) -> List[Dict[str, Any]]:
 
 
 def record_download(
-    registry: Registry, accession: str, state: str, fastq_dir: Union[str, Path], message: str = ""
+    registry: Registry,
+    accession: str,
+    state: str,
+    fastq_dir: Union[str, Path],
+    message: str = "",
+    attempt: bool = True,
 ) -> None:
-    """Record a download outcome; ``state`` is downloaded, failed, missing or skipped."""
+    """Record a download outcome; ``state`` is downloaded, failed, missing or skipped.
+
+    ``attempt`` counts this call against ``attempts``; pass ``False`` when recording a
+    state without an actual download attempt (e.g. a file found already present on disk).
+    """
     download = upsert_dataset(registry, accession).setdefault("download", {"attempts": 0})
-    if state in ("downloaded", "failed"):
+    if attempt and state in ("downloaded", "failed"):
         download["attempts"] = int(download.get("attempts", 0)) + 1
     files: List[Dict[str, Any]] = []
     if state == "downloaded":

@@ -670,6 +670,8 @@ class TestDownloadSraCommand:
 
         assert datasets["SRR3"]["download"]["state"] == "downloaded"
         assert "inferred" not in datasets["SRR3"]["download"]
+        # Already present on disk, not a real attempt: attempts stays at 0.
+        assert datasets["SRR3"]["download"]["attempts"] == 0
 
         assert datasets["SRR4"]["download"]["state"] == "skipped"
         assert datasets["SRR4"]["download"]["message"] == "blacklisted"
