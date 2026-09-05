@@ -4,15 +4,11 @@ Validation utilities for MetaQuest.
 This module provides functions for validating input data and configurations.
 """
 
-import csv
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Union
 
 from metaquest.core.exceptions import ValidationError, FormatError
-
-# Required columns for different file formats
-BRANCHWATER_REQUIRED_COLS = ["acc", "containment"]
 
 logger = logging.getLogger(__name__)
 
@@ -52,95 +48,6 @@ def detect_file_format(file_path: Union[str, Path]) -> str:
         if isinstance(e, FormatError):
             raise
         raise FormatError(f"Error reading file {file_path}: {str(e)}")
-
-
-def _check_csv_headers(file_path, headers, required_cols):
-    """
-    Check that CSV headers contain all required columns.
-
-    Args:
-        file_path: Path to the CSV file
-        headers: List of header columns
-        required_cols: List of required columns
-
-    Raises:
-        ValidationError: If required columns are missing
-    """
-    missing_cols = [col for col in required_cols if col not in headers]
-    if missing_cols:
-        raise ValidationError(
-            f"Missing required columns in {file_path}: {', '.join(missing_cols)}\n"
-            f"Headers found: {', '.join(headers)}"
-        )
-
-
-def _check_csv_data(file_path, reader):
-    """
-    Check that CSV file has at least one data row.
-
-    Args:
-        file_path: Path to the CSV file
-        reader: CSV reader object
-
-    Raises:
-        ValidationError: If file has no data rows
-    """
-    try:
-        next(reader)  # Try to read the first data row
-    except StopIteration:
-        raise ValidationError(f"File {file_path} contains headers but no data rows")
-
-
-def validate_csv_file(file_path: Union[str, Path], file_format: Optional[str] = None) -> Tuple[str, List[str]]:
-    """
-    Validate a CSV file by checking required columns and format.
-
-    Args:
-        file_path: Path to the CSV file to validate
-        file_format: The expected format ('branchwater')
-                     If None, format will be automatically detected
-
-    Returns:
-        A tuple of (detected format, list of column headers)
-
-    Raises:
-        ValidationError: If the file does not meet validation requirements
-    """
-    try:
-        # Auto-detect format if not specified
-        detected_format = detect_file_format(file_path) if file_format is None else file_format
-
-        # Determine required columns based on format
-        if detected_format == "branchwater":
-            required_cols = BRANCHWATER_REQUIRED_COLS
-        else:
-            raise ValidationError(f"Unsupported file format: {detected_format}")
-
-        # Read and validate headers
-        with open(file_path, "r") as f:
-            reader = csv.reader(f)
-            try:
-                headers = next(reader)
-            except StopIteration:
-                raise ValidationError(f"File {file_path} is empty")
-
-            # Check for required columns
-            _check_csv_headers(file_path, headers, required_cols)
-
-            # Check for data rows
-            _check_csv_data(file_path, reader)
-
-        return detected_format, headers
-
-    except FormatError:
-        # Re-raise FormatError as is
-        raise
-    except ValidationError:
-        # Re-raise ValidationError as is
-        raise
-    except Exception as e:
-        # Wrap other exceptions in ValidationError
-        raise ValidationError(f"Error validating {file_path}: {str(e)}")
 
 
 def validate_accession(accession: str) -> bool:

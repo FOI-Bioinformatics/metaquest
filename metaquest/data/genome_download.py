@@ -5,7 +5,6 @@ using the datasets command-line tool, extracting FASTA files, and creating
 manifests suitable for downstream analysis tools such as sourmash.
 """
 
-import csv
 import logging
 import re
 import shutil
@@ -55,19 +54,6 @@ def partition_present_genomes(accessions: List[str], output_dir: Path) -> Tuple[
     return present, missing
 
 
-def check_datasets_available() -> bool:
-    """Check if NCBI datasets CLI is installed and accessible.
-
-    Returns:
-        True if the datasets CLI is available, False otherwise.
-    """
-    try:
-        SecureSubprocess.run_secure("datasets", ["--version"])
-        return True
-    except Exception:
-        return False
-
-
 def download_genomes(
     accessions: List[str],
     output_dir: Path,
@@ -113,66 +99,6 @@ def download_genomes(
         SecureSubprocess.run_secure("datasets", args)
     except Exception as e:
         raise DataAccessError(f"Failed to download genomes: {e}")
-
-    if not zip_path.exists():
-        raise DataAccessError("Download completed but zip file was not created.")
-
-    logger.info(f"Downloaded genomes to {zip_path}")
-    return zip_path
-
-
-def download_from_file(
-    accession_file: Path,
-    output_dir: Path,
-    include: str = "genome",
-) -> Path:
-    """Download genomes from a text file of accessions (one per line).
-
-    Args:
-        accession_file: Path to a file with one accession per line.
-        output_dir: Directory for the downloaded zip file.
-        include: Data type to include (default: genome).
-
-    Returns:
-        Path to the downloaded zip file.
-
-    Raises:
-        DataAccessError: If the file is missing or download fails.
-    """
-    accession_file = Path(accession_file)
-    if not accession_file.exists():
-        raise DataAccessError(f"Accession file not found: {accession_file}")
-
-    # Validate accessions in the file
-    accessions = read_accession_file(accession_file)
-    if not accessions:
-        raise DataAccessError(f"No valid accessions found in {accession_file}")
-    for acc in accessions:
-        _validate_genome_accession(acc)
-
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    zip_path = output_dir / "ncbi_dataset.zip"
-
-    args = [
-        "download",
-        "genome",
-        "accession",
-        "--inputfile",
-        str(accession_file),
-        "--include",
-        include,
-        "--filename",
-        str(zip_path),
-    ]
-
-    logger.info(f"Downloading genomes from accession file {accession_file}")
-
-    try:
-        SecureSubprocess.run_secure("datasets", args)
-    except Exception as e:
-        raise DataAccessError(f"Failed to download genomes from file: {e}")
 
     if not zip_path.exists():
         raise DataAccessError("Download completed but zip file was not created.")
@@ -288,41 +214,3 @@ def read_accession_file(file_path: Path) -> List[str]:
         raise DataAccessError(f"Error reading accession file: {e}")
 
     return accessions
-
-
-def create_genome_manifest(
-    genome_paths: Dict[str, Path],
-    manifest_file: Path,
-) -> Path:
-    """Create a CSV manifest suitable for sourmash manysketch.
-
-    The output CSV has columns: name, genome_filename, protein_filename
-
-    Args:
-        genome_paths: Dict mapping accession to FASTA file path.
-        manifest_file: Path to write the manifest CSV.
-
-    Returns:
-        Path to the created manifest file.
-
-    Raises:
-        DataAccessError: If the manifest cannot be written.
-    """
-    manifest_file = Path(manifest_file)
-
-    if not genome_paths:
-        raise DataAccessError("No genome paths provided for manifest.")
-
-    try:
-        manifest_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(manifest_file, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["name", "genome_filename", "protein_filename"])
-            for accession, fasta_path in sorted(genome_paths.items()):
-                writer.writerow([accession, str(fasta_path), ""])
-
-    except Exception as e:
-        raise DataAccessError(f"Error writing genome manifest: {e}")
-
-    logger.info(f"Created genome manifest with {len(genome_paths)} entries: " f"{manifest_file}")
-    return manifest_file

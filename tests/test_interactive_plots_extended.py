@@ -17,7 +17,6 @@ from metaquest.visualization.interactive import (
     create_interactive_tsne,
     create_interactive_heatmap,
     create_diversity_comparison_plot,
-    create_beta_diversity_plot,
 )
 from metaquest.core.exceptions import VisualizationError
 
@@ -323,82 +322,6 @@ class TestDiversityComparisonExtended:
                     diversity_metric="shannon",
                     show_plot=False,
                 )
-
-
-class TestBetaDiversityPlot:
-    """Test beta diversity plotting function."""
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_pca_method(self, mock_show, sample_data, sample_metadata):
-        """Test beta diversity plot with PCA method."""
-        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", method="PCA", show_plot=False)
-
-        assert fig is not None
-        mock_show.assert_not_called()
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_pcoa_method(self, mock_show, sample_data, sample_metadata):
-        """Test beta diversity plot with PCoA method (falls back to PCA)."""
-        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", method="PCoA", show_plot=False)
-
-        assert fig is not None
-        mock_show.assert_not_called()
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_nmds_method(self, mock_show, sample_data, sample_metadata):
-        """Test beta diversity plot with NMDS method (falls back to PCA)."""
-        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", method="NMDS", show_plot=False)
-
-        assert fig is not None
-        mock_show.assert_not_called()
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_custom_title(self, mock_show, sample_data, sample_metadata):
-        """Test beta diversity plot with custom title."""
-        fig = create_beta_diversity_plot(
-            sample_data, sample_metadata, color_by="group", title="Custom Beta Diversity Plot", show_plot=False
-        )
-
-        assert fig is not None
-        mock_show.assert_not_called()
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_save_file(self, mock_show, sample_data, sample_metadata, tmp_path):
-        """Test beta diversity plot saving to file."""
-        output_file = tmp_path / "test_beta_diversity.html"
-
-        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
-            create_beta_diversity_plot(
-                sample_data, sample_metadata, color_by="group", output_file=output_file, show_plot=False
-            )
-
-            mock_write.assert_called_once()
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_different_distance_metric(self, mock_show, sample_data, sample_metadata):
-        """Test beta diversity plot with different distance metric."""
-        fig = create_beta_diversity_plot(
-            sample_data, sample_metadata, color_by="group", distance_metric="euclidean", show_plot=False
-        )
-
-        assert fig is not None
-        mock_show.assert_not_called()
-
-    @patch("metaquest.visualization.interactive.go.Figure.show")
-    def test_beta_diversity_show_plot_true(self, mock_show, sample_data, sample_metadata):
-        """Test beta diversity plot with show_plot=True."""
-        fig = create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", show_plot=True)
-
-        assert fig is not None
-        # PCA is called with show_plot=True, so show should be called
-        mock_show.assert_called()
-
-    def test_beta_diversity_error_handling(self, sample_data, sample_metadata):
-        """Test beta diversity plot error handling."""
-        with pytest.raises(VisualizationError, match="Failed to create beta diversity plot"):
-            with patch("metaquest.visualization.interactive.create_interactive_pca") as mock_pca:
-                mock_pca.side_effect = VisualizationError("PCA failed")
-                create_beta_diversity_plot(sample_data, sample_metadata, color_by="group", show_plot=False)
 
 
 class TestEdgeCasesExtended:

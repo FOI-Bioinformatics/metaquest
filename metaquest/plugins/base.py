@@ -6,11 +6,8 @@ Plugins allow extending functionality without modifying the core codebase.
 """
 
 import abc
-import importlib
-import inspect
 import logging
-import pkgutil
-from typing import Dict, Generic, List, Set, Type, TypeVar
+from typing import Dict, Generic, List, Type, TypeVar
 
 from metaquest.core.exceptions import PluginError
 
@@ -123,64 +120,6 @@ class PluginRegistry(Generic[T]):
             A dictionary mapping plugin names to plugin classes
         """
         return self._plugins.copy()
-
-
-def discover_plugins(package: str, base_class: Type[T]) -> Set[Type[T]]:
-    """
-    Discover all plugins in a package that inherit from a base class.
-
-    Args:
-        package: The package to search for plugins
-        base_class: The base class that plugins must inherit from
-
-    Returns:
-        A set of discovered plugin classes
-    """
-    discovered_plugins = set()
-
-    try:
-        package_obj = importlib.import_module(package)
-        package_path = package_obj.__path__
-        prefix = package_obj.__name__ + "."
-
-        for _, name, is_pkg in pkgutil.iter_modules(package_path, prefix):
-            try:
-                module = importlib.import_module(name)
-
-                for item_name, item in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(item, base_class) and item is not base_class and item.__module__ == module.__name__:
-                        discovered_plugins.add(item)
-                        logger.debug(f"Discovered plugin: {item.get_name()} in {module.__name__}")
-
-                # If it's a package, recursively discover plugins
-                if is_pkg:
-                    sub_plugins = discover_plugins(name, base_class)
-                    discovered_plugins.update(sub_plugins)
-
-            except Exception as e:
-                logger.warning(f"Error loading module {name}: {e}")
-
-    except ImportError as e:
-        logger.warning(f"Could not import package {package}: {e}")
-
-    return discovered_plugins
-
-
-def register_discovered_plugins(registry: PluginRegistry[T], package: str, base_class: Type[T]) -> None:
-    """
-    Discover and register all plugins in a package.
-
-    Args:
-        registry: The plugin registry to register plugins with
-        package: The package to search for plugins
-        base_class: The base class that plugins must inherit from
-    """
-    plugins = discover_plugins(package, base_class)
-    for plugin in plugins:
-        try:
-            registry.register(plugin)
-        except PluginError as e:
-            logger.warning(f"Failed to register plugin {plugin.get_name()}: {e}")
 
 
 # Define a type variable for the Plugin type

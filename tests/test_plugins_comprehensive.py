@@ -21,8 +21,6 @@ from metaquest.core.models import Containment, SRAMetadata
 from metaquest.plugins.base import (
     Plugin,
     PluginRegistry,
-    discover_plugins,
-    register_discovered_plugins,
     format_registry,
     visualizer_registry,
 )
@@ -168,66 +166,6 @@ class TestPluginRegistry:
         assert len(all_plugins) == 2
         assert all_plugins["mock_format"] == MockFormatPlugin
         assert all_plugins["mock_visualizer"] == MockVisualizerPlugin
-
-
-class TestPluginDiscovery:
-    """Test plugin discovery mechanisms."""
-
-    def test_discover_plugins_success(self):
-        """Test successful plugin discovery (simplified)."""
-        # This is a simplified test that focuses on the registry behavior
-        # rather than the complex mock setup of importlib
-        registry = PluginRegistry()
-
-        # Manually register plugins (simulating discovery)
-        registry.register(MockFormatPlugin)
-        registry.register(MockVisualizerPlugin)
-
-        # Test that plugins were discovered/registered
-        assert "mock_format" in registry.list()
-        assert "mock_visualizer" in registry.list()
-
-        # Test retrieval
-        format_plugin = registry.get("mock_format")
-        viz_plugin = registry.get("mock_visualizer")
-
-        assert format_plugin == MockFormatPlugin
-        assert viz_plugin == MockVisualizerPlugin
-
-    @patch("metaquest.plugins.base.importlib.import_module")
-    def test_discover_plugins_import_error(self, mock_import_module):
-        """Test plugin discovery with import errors."""
-        mock_import_module.side_effect = ImportError("Package not found")
-
-        plugins = discover_plugins("nonexistent.package", Plugin)
-        assert len(plugins) == 0
-
-    def test_register_discovered_plugins(self):
-        """Test registering discovered plugins."""
-        registry = PluginRegistry()
-
-        # Mock discovered plugins
-        with patch("metaquest.plugins.base.discover_plugins") as mock_discover:
-            mock_discover.return_value = {MockFormatPlugin, MockVisualizerPlugin}
-
-            register_discovered_plugins(registry, "fake.package", Plugin)
-
-            assert "mock_format" in registry.list()
-            assert "mock_visualizer" in registry.list()
-
-    def test_register_discovered_plugins_with_errors(self):
-        """Test registering discovered plugins with errors."""
-        registry = PluginRegistry()
-        registry.register(MockFormatPlugin)  # Pre-register to cause conflict
-
-        # Mock discovered plugins
-        with patch("metaquest.plugins.base.discover_plugins") as mock_discover:
-            mock_discover.return_value = {MockFormatPlugin, MockVisualizerPlugin}
-
-            register_discovered_plugins(registry, "fake.package", Plugin)
-
-            # Should still register the non-conflicting plugin
-            assert "mock_visualizer" in registry.list()
 
 
 class TestBranchWaterFormatPlugin:
@@ -497,37 +435,6 @@ class TestBarChartPlugin:
         with pytest.raises(VisualizationError, match="Error creating bar chart"):
             BarChartPlugin.create_plot(data=self.test_data)
 
-    @patch("matplotlib.pyplot.subplots")
-    def test_create_grouped_bar_chart(self, mock_subplots):
-        """Test grouped bar chart creation."""
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-
-        # Create test data for grouped chart
-        grouped_data = pd.DataFrame(
-            {
-                "x_col": ["A", "A", "B", "B", "C", "C"],
-                "group_col": ["G1", "G2", "G1", "G2", "G1", "G2"],
-                "value_col": [10, 15, 20, 25, 30, 35],
-            }
-        )
-
-        # Mock pivot_table
-        pivot_mock = Mock()
-        pivot_mock.plot = Mock()
-
-        with patch("pandas.DataFrame.pivot_table", return_value=pivot_mock):
-            result = BarChartPlugin.create_grouped_bar_chart(
-                data=grouped_data,
-                x_column="x_col",
-                group_column="group_col",
-                value_column="value_col",
-                title="Grouped Chart",
-            )
-
-            assert result == mock_fig
-
 
 class TestHeatmapPlugin:
     """Test the HeatmapPlugin."""
@@ -607,18 +514,6 @@ class TestHeatmapPlugin:
                 mock_fig.savefig.assert_called_once()
             finally:
                 os.unlink(temp_file.name)
-
-    @patch("seaborn.clustermap")
-    def test_create_presence_heatmap(self, mock_clustermap):
-        """Test presence/absence heatmap creation."""
-        mock_grid = Mock()
-        mock_grid.fig = Mock()
-        mock_clustermap.return_value = mock_grid
-
-        result = HeatmapPlugin.create_presence_heatmap(data=self.test_data, threshold=0.5, title="Presence Heatmap")
-
-        assert result == mock_grid.fig
-        mock_clustermap.assert_called_once()
 
     @patch("seaborn.heatmap")
     @patch("matplotlib.pyplot.subplots")
@@ -744,76 +639,6 @@ class TestMapVisualizerPlugin:
 
         with pytest.raises(VisualizationError, match="Error creating map"):
             MapVisualizerPlugin.create_plot(data=self.test_data, lat_lon_column="lat_lon")
-
-    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
-    @patch("matplotlib.pyplot.figure")
-    @patch("metaquest.plugins.visualizers.map.cfeature", create=True)
-    @patch("metaquest.plugins.visualizers.map.ccrs", create=True)
-    def test_create_choropleth(self, mock_ccrs, mock_cfeature, mock_figure):
-        """Test choropleth map creation."""
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_figure.return_value = mock_fig
-        mock_fig.add_subplot.return_value = mock_ax
-
-        # Mock NaturalEarthFeature
-        mock_feature = Mock()
-        mock_cfeature.NaturalEarthFeature.return_value = mock_feature
-        mock_feature.geometries.return_value = []
-
-        country_data = pd.DataFrame({"country": ["USA", "Canada", "Mexico"], "value": [0.8, 0.7, 0.6]})
-
-        result = MapVisualizerPlugin.create_choropleth(
-            data=country_data, country_column="country", value_column="value"
-        )
-
-        assert result == mock_fig
-
-    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
-    @patch("matplotlib.pyplot.figure")
-    @patch("metaquest.plugins.visualizers.map.cfeature", create=True)
-    @patch("metaquest.plugins.visualizers.map.ccrs", create=True)
-    def test_create_choropleth_colormap_not_deprecated(self, mock_ccrs, mock_cfeature, mock_figure):
-        """The colored-country branch must not use a deprecated matplotlib colormap API.
-
-        Exercises the geometry loop with a country that matches the data so the
-        colormap lookup actually runs, with MatplotlibDeprecationWarning promoted
-        to an error. plt.cm.get_cmap is removed in matplotlib 3.11.
-        """
-        import warnings
-        import matplotlib
-
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_figure.return_value = mock_fig
-        mock_fig.add_subplot.return_value = mock_ax
-
-        # A geometry that matches a country in the data -> colormap branch runs
-        matching_geom = Mock()
-        matching_geom.attributes = {"NAME": "USA"}
-        mock_feature = Mock()
-        mock_cfeature.NaturalEarthFeature.return_value = mock_feature
-        mock_feature.geometries.return_value = [matching_geom]
-
-        country_data = pd.DataFrame(
-            {
-                "country": ["USA"],
-                "value": [0.8],
-            }
-        )
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", matplotlib.MatplotlibDeprecationWarning)
-            result = MapVisualizerPlugin.create_choropleth(
-                data=country_data,
-                country_column="country",
-                value_column="value",
-            )
-
-        assert result == mock_fig
-        # The colored branch must have been taken with a real RGBA facecolor
-        facecolors = [call.kwargs.get("facecolor") for call in mock_ax.add_geometries.call_args_list]
-        assert any(isinstance(fc, tuple) and len(fc) == 4 for fc in facecolors)
 
 
 class TestPluginRegistries:

@@ -363,65 +363,6 @@ def plot_metadata_counts(
         raise VisualizationError(f"Error plotting metadata counts: {e}")
 
 
-def plot_heatmap(
-    data: Union[str, Path, pd.DataFrame],
-    title: Optional[str] = None,
-    threshold: float = 0.0,
-    cluster: bool = True,
-    output_file: Optional[Union[str, Path]] = None,
-    output_format: str = "png",
-) -> Optional[plt.Figure]:
-    """
-    Create a heatmap visualization.
-
-    Args:
-        data: DataFrame or path to data file
-        title: Title for the plot
-        threshold: Minimum value threshold
-        cluster: Whether to cluster rows and columns
-        output_file: Path to save the plot
-        output_format: Format to save the plot
-
-    Returns:
-        Matplotlib Figure if successful, None otherwise
-
-    Raises:
-        VisualizationError: If the visualization fails
-    """
-    try:
-        # Load data if string or Path
-        if isinstance(data, (str, Path)):
-            df = pd.read_csv(data, sep="\t", index_col=0)
-        else:
-            df = data.copy()
-
-        # Apply threshold
-        df = df.map(lambda x: x if x >= threshold else 0)
-
-        # Remove metadata columns if present
-        metadata_cols = ["max_containment", "max_containment_annotation"]
-        for col in metadata_cols:
-            if col in df.columns:
-                df = df.drop(col, axis=1)
-
-        # Use heatmap plugin
-        plugin = visualizer_registry.get("heatmap")
-        fig = plugin.create_plot(  # type: ignore[attr-defined]
-            data=df,
-            title=title,
-            cluster=cluster,
-            output_file=output_file,
-            output_format=output_format,
-        )
-
-        return fig
-
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error creating heatmap: {e}")
-
-
 def plot_correlation_matrix(
     data: Union[str, Path, pd.DataFrame],
     title: Optional[str] = None,

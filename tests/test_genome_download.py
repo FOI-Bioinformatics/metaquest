@@ -1,9 +1,7 @@
 """Tests for the genome download module."""
 
-import csv
 import subprocess
 import zipfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,9 +9,6 @@ import pytest
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.genome_download import (
     _validate_genome_accession,
-    check_datasets_available,
-    create_genome_manifest,
-    download_from_file,
     download_genomes,
     extract_and_organize,
     read_accession_file,
@@ -44,29 +39,6 @@ class TestValidateGenomeAccession:
     def test_empty_string(self):
         with pytest.raises(DataAccessError, match="Invalid genome accession prefix"):
             _validate_genome_accession("")
-
-
-# --- check_datasets_available ---
-
-
-class TestCheckDatasetsAvailable:
-    @patch("metaquest.data.genome_download.SecureSubprocess.run_secure")
-    def test_available(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        assert check_datasets_available() is True
-        mock_run.assert_called_once_with("datasets", ["--version"])
-
-    @patch("metaquest.data.genome_download.SecureSubprocess.run_secure")
-    def test_not_available(self, mock_run):
-        mock_run.side_effect = FileNotFoundError("datasets not found")
-        assert check_datasets_available() is False
-
-    @patch("metaquest.data.genome_download.SecureSubprocess.run_secure")
-    def test_security_error(self, mock_run):
-        from metaquest.core.exceptions import SecurityError
-
-        mock_run.side_effect = SecurityError("not allowed")
-        assert check_datasets_available() is False
 
 
 # --- download_genomes ---
@@ -140,51 +112,6 @@ class TestDownloadGenomes:
 
         with pytest.raises(DataAccessError, match="zip file was not created"):
             download_genomes(["GCF_000005845.2"], tmp_path)
-
-
-# --- download_from_file ---
-
-
-class TestDownloadFromFile:
-    @patch("metaquest.data.genome_download.SecureSubprocess.run_secure")
-    def test_download_from_file(self, mock_run, tmp_path):
-        acc_file = tmp_path / "accessions.txt"
-        acc_file.write_text("GCF_000005845.2\nGCA_000001405.1\n")
-
-        output_dir = tmp_path / "output"
-        zip_path = output_dir / "ncbi_dataset.zip"
-
-        def create_zip(*args, **kwargs):
-            output_dir.mkdir(parents=True, exist_ok=True)
-            zip_path.touch()
-            return MagicMock(returncode=0)
-
-        mock_run.side_effect = create_zip
-
-        result = download_from_file(acc_file, output_dir)
-
-        assert result == zip_path
-        call_args = mock_run.call_args[0][1]
-        assert "--inputfile" in call_args
-        assert str(acc_file) in call_args
-
-    def test_missing_file(self, tmp_path):
-        with pytest.raises(DataAccessError, match="Accession file not found"):
-            download_from_file(tmp_path / "nonexistent.txt", tmp_path / "out")
-
-    def test_empty_file(self, tmp_path):
-        acc_file = tmp_path / "empty.txt"
-        acc_file.write_text("\n\n")
-
-        with pytest.raises(DataAccessError, match="No valid accessions"):
-            download_from_file(acc_file, tmp_path / "out")
-
-    def test_file_with_invalid_accessions(self, tmp_path):
-        acc_file = tmp_path / "bad.txt"
-        acc_file.write_text("INVALID_123\n")
-
-        with pytest.raises(DataAccessError, match="Invalid genome accession"):
-            download_from_file(acc_file, tmp_path / "out")
 
 
 # --- extract_and_organize ---
@@ -345,66 +272,3 @@ class TestReadAccessionFile:
 
         result = read_accession_file(f)
         assert result == []
-
-
-# --- create_genome_manifest ---
-
-
-class TestCreateGenomeManifest:
-    def test_basic_manifest(self, tmp_path):
-        genome_paths = {
-            "GCF_000005845.2": tmp_path / "GCF_000005845.2.fna",
-            "GCA_000001405.1": tmp_path / "GCA_000001405.1.fna",
-        }
-        manifest = tmp_path / "manifest.csv"
-
-        result = create_genome_manifest(genome_paths, manifest)
-
-        assert result == manifest
-        assert manifest.exists()
-
-        with open(manifest) as f:
-            reader = csv.reader(f)
-            rows = list(reader)
-
-        assert rows[0] == ["name", "genome_filename", "protein_filename"]
-        assert len(rows) == 3
-        # Sorted by accession
-        assert rows[1][0] == "GCA_000001405.1"
-        assert rows[2][0] == "GCF_000005845.2"
-        # Protein column should be empty
-        assert rows[1][2] == ""
-        assert rows[2][2] == ""
-
-    def test_empty_genome_paths(self, tmp_path):
-        with pytest.raises(DataAccessError, match="No genome paths provided"):
-            create_genome_manifest({}, tmp_path / "manifest.csv")
-
-    def test_creates_parent_directory(self, tmp_path):
-        genome_paths = {
-            "GCF_000005845.2": tmp_path / "GCF_000005845.2.fna",
-        }
-        manifest = tmp_path / "subdir" / "manifest.csv"
-
-        result = create_genome_manifest(genome_paths, manifest)
-
-        assert result.exists()
-
-    def test_single_entry(self, tmp_path):
-        genome_paths = {
-            "GCF_000005845.2": Path("/data/GCF_000005845.2.fna"),
-        }
-        manifest = tmp_path / "manifest.csv"
-
-        create_genome_manifest(genome_paths, manifest)
-
-        with open(manifest) as f:
-            reader = csv.reader(f)
-            rows = list(reader)
-
-        assert len(rows) == 2
-        assert rows[1] == [
-            "GCF_000005845.2",
-            "/data/GCF_000005845.2.fna",
-            "",
-        ]

@@ -10,7 +10,6 @@ from metaquest.processing.diversity import (
     calculate_alpha_diversity,
     calculate_beta_diversity,
     perform_permanova,
-    calculate_dispersion,
 )
 
 
@@ -114,26 +113,6 @@ class TestDiversityMetrics:
         assert result["treatment"]["F_statistic"] >= 0
         assert 0 <= result["treatment"]["p_value"] <= 1
         assert isinstance(result["treatment"]["significant"], bool)
-
-    def test_calculate_dispersion(self):
-        """Test within-group dispersion calculation."""
-        distances = calculate_beta_diversity(self.abundance_df, metric="bray_curtis", return_dataframe=True)
-
-        result = calculate_dispersion(distances, self.metadata["treatment"])
-
-        # Check structure
-        assert isinstance(result, dict)
-        assert "A" in result
-        assert "B" in result
-
-        # Check metrics for each group
-        for group, stats in result.items():
-            assert "mean_distance" in stats
-            assert "median_distance" in stats
-            assert "std_distance" in stats
-            assert "n_samples" in stats
-            assert stats["mean_distance"] >= 0
-            assert stats["n_samples"] > 0
 
     def test_invalid_metric(self):
         """Test handling of invalid metrics."""

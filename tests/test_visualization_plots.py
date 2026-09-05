@@ -20,7 +20,6 @@ from metaquest.visualization.plots import (
     _save_plot_if_needed,
     plot_containment,
     plot_metadata_counts,
-    plot_heatmap,
     plot_correlation_matrix,
 )
 from metaquest.core.exceptions import VisualizationError
@@ -499,69 +498,6 @@ class TestPlotMetadataCounts:
         with patch("metaquest.plugins.base.visualizer_registry.get", return_value=None):
             with pytest.raises(VisualizationError, match="Unknown plot type"):
                 plot_metadata_counts(file_path=str(test_file), plot_type="unknown_type")
-
-
-class TestPlotHeatmap:
-    """Test plot_heatmap public API function."""
-
-    def test_plot_heatmap_success(self, tmp_path):
-        """Test successful heatmap creation."""
-        test_file = tmp_path / "heatmap_data.tsv"
-        test_data = pd.DataFrame(
-            {"sample1": [0.95, 0.12, 0.23], "sample2": [0.23, 0.87, 0.15], "sample3": [0.15, 0.45, 0.67]},
-            index=["genome1", "genome2", "genome3"],
-        )
-        test_data.to_csv(test_file, sep="\t")
-
-        mock_plugin = Mock()
-        mock_fig = Mock()
-        mock_plugin.create_plot.return_value = mock_fig
-
-        with patch("metaquest.plugins.base.visualizer_registry.get") as mock_get_plugin:
-            mock_get_plugin.return_value = mock_plugin
-
-            result = plot_heatmap(data=str(test_file), threshold=0.1)
-
-        assert result is not None
-        mock_plugin.create_plot.assert_called_once()
-
-    def test_plot_heatmap_with_threshold(self, tmp_path):
-        """Test heatmap with threshold filtering."""
-        test_file = tmp_path / "heatmap_data.tsv"
-        test_data = pd.DataFrame(
-            {
-                "sample1": [0.95, 0.05],  # 0.05 should be filtered out
-                "sample2": [0.23, 0.02],  # 0.02 should be filtered out
-            },
-            index=["genome1", "genome2"],
-        )
-        test_data.to_csv(test_file, sep="\t")
-
-        mock_plugin = Mock()
-        mock_fig = Mock()
-        mock_plugin.create_plot.return_value = mock_fig
-
-        with patch("metaquest.plugins.base.visualizer_registry.get") as mock_get_plugin:
-            mock_get_plugin.return_value = mock_plugin
-
-            plot_heatmap(data=str(test_file), threshold=0.1)
-
-        # Verify data was filtered
-        call_args = mock_plugin.create_plot.call_args
-        filtered_data = call_args.kwargs["data"]
-
-        # Values below threshold should be set to 0
-        assert (filtered_data == 0).any().any()  # Some values should be 0
-
-    def test_plot_heatmap_plugin_not_found(self, tmp_path):
-        """Test error when heatmap plugin not found."""
-        test_file = tmp_path / "heatmap_data.tsv"
-        test_data = pd.DataFrame({"sample1": [0.95]}, index=["genome1"])
-        test_data.to_csv(test_file, sep="\t")
-
-        with patch("metaquest.plugins.base.visualizer_registry.get", return_value=None):
-            with pytest.raises(VisualizationError, match="'NoneType' object has no attribute"):
-                plot_heatmap(data=str(test_file))
 
 
 class TestPlotCorrelationMatrix:

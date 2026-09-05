@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from metaquest.utils.security import SecureSubprocess, validate_file_path
+from metaquest.utils.security import SecureSubprocess
 from metaquest.core.exceptions import SecurityError
 
 
@@ -311,32 +311,6 @@ class TestSecureSubprocessRun:
                 assert mock_run.called
 
 
-class TestPathValidationFunction:
-    """Test the standalone validate_file_path function."""
-
-    def test_validate_file_path_basic(self):
-        """Test basic file path validation."""
-        with patch.object(SecureSubprocess, "validate_path", return_value=Path("/tmp/test.txt")):
-            result = validate_file_path("/tmp/test.txt", must_exist=True)
-            assert result.is_absolute()
-
-    def test_validate_file_path_must_exist(self):
-        """Test file path validation with must_exist flag."""
-        with patch.object(SecureSubprocess, "validate_path", return_value=Path("/tmp/nonexistent.txt")):
-            result = validate_file_path("/tmp/nonexistent.txt", must_exist=False)
-            assert result.is_absolute()
-
-    def test_validate_file_path_delegates_to_secure_subprocess(self):
-        """Test that validate_file_path delegates to SecureSubprocess."""
-        with patch.object(SecureSubprocess, "validate_path") as mock_validate:
-            mock_validate.return_value = Path("/safe/path")
-
-            result = validate_file_path("/safe/path", must_exist=True)
-
-            mock_validate.assert_called_once()
-            assert result == Path("/safe/path")
-
-
 class TestAdvancedSecurityScenarios:
     """Test advanced security scenarios and edge cases."""
 
@@ -489,6 +463,20 @@ class TestFasterqDumpCommandContract:
     def test_split_files_does_not_swallow_accession(self):
         cmd = SecureSubprocess._build_validated_command("fasterq-dump", ["--split-files", "SRR000001"])
         assert cmd == ["fasterq-dump", "--split-files", "SRR000001"]
+
+
+class TestSamtoolsOutputPaths:
+    def test_fastq_output_flags_are_path_validated(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        args = ["fastq", "-1", "out/r1.fq.gz", "-2", "out/r2.fq.gz", "-s", "out/s.fq.gz", "-0", "out/o.fq.gz", "in.bam"]
+        cmd = SecureSubprocess._build_validated_command("samtools", args)
+        resolved = str((tmp_path / "out" / "o.fq.gz").resolve())
+        assert cmd[cmd.index("-0") + 1] == resolved
+        assert cmd[cmd.index("-s") + 1] == str((tmp_path / "out" / "s.fq.gz").resolve())
+
+    def test_dead_fasterq_dump_flags_are_rejected(self):
+        with pytest.raises(SecurityError):
+            SecureSubprocess._build_validated_command("fasterq-dump", ["--gzip", "SRR000001"])
 
 
 class TestAllowedRoots:

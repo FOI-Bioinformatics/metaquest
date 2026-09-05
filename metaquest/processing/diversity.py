@@ -187,55 +187,6 @@ def perform_permanova(
         raise ProcessingError(f"Failed to perform PERMANOVA: {e}")
 
 
-def calculate_dispersion(
-    distance_matrix: Union[pd.DataFrame, np.ndarray], groups: pd.Series
-) -> Dict[str, Dict[str, float]]:
-    """
-    Calculate within-group dispersion (beta diversity).
-
-    Args:
-        distance_matrix: Beta diversity distance matrix
-        groups: Group labels for each sample
-
-    Returns:
-        Dictionary with dispersion statistics for each group
-    """
-    try:
-        if isinstance(distance_matrix, pd.DataFrame):
-            distances = distance_matrix.values
-            sample_names = distance_matrix.index
-        else:
-            distances = distance_matrix
-            sample_names = groups.index
-
-        # Align groups with distance matrix
-        groups_aligned = groups.loc[sample_names]
-
-        results = {}
-        unique_groups = groups_aligned.unique()
-
-        for group in unique_groups:
-            group_indices = np.where(groups_aligned == group)[0]
-            if len(group_indices) < 2:
-                continue
-
-            # Extract distances within group
-            group_distances = distances[np.ix_(group_indices, group_indices)]
-
-            # Calculate dispersion metrics
-            results[str(group)] = {
-                "mean_distance": np.mean(group_distances[np.triu_indices_from(group_distances, k=1)]),
-                "median_distance": np.median(group_distances[np.triu_indices_from(group_distances, k=1)]),
-                "std_distance": np.std(group_distances[np.triu_indices_from(group_distances, k=1)]),
-                "n_samples": len(group_indices),
-            }
-
-        return results
-
-    except Exception as e:
-        raise ProcessingError(f"Failed to calculate dispersion: {e}")
-
-
 # Private helper functions
 
 

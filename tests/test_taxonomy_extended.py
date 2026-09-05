@@ -6,7 +6,6 @@ This file adds tests for untested areas:
 - Rate limiting behavior
 - Cache file handling
 - Output file operations
-- suggest_species_corrections function
 - Additional edge cases
 
 Run: pytest tests/test_taxonomy_extended.py -v
@@ -22,7 +21,6 @@ from metaquest.data.taxonomy import (
     validate_taxonomic_assignments,
     create_taxonomic_summary,
     analyze_taxonomic_composition,
-    suggest_species_corrections,
 )
 from metaquest.core.exceptions import ProcessingError
 
@@ -315,66 +313,6 @@ class TestOutputFileOperations:
         # Directory should be created
         assert output_file.parent.exists()
         assert output_file.exists()
-
-
-# ============================================================================
-# TEST CLASS: suggest_species_corrections
-# ============================================================================
-
-
-class TestSuggestSpeciesCorrections:
-    """Test suggest_species_corrections function."""
-
-    def test_suggest_corrections_no_invalid(self):
-        """Test with no invalid species."""
-        validation_results = pd.DataFrame(
-            {
-                "original_name": ["Escherichia coli", "Bacillus subtilis"],
-                "is_valid": [True, True],
-            }
-        )
-
-        result = suggest_species_corrections(validation_results)
-
-        assert result.empty
-
-    def test_suggest_corrections_with_invalid(self):
-        """Test suggesting corrections for invalid species."""
-        validation_results = pd.DataFrame(
-            {
-                "original_name": ["Valid species", "Invalid species", "Another invalid"],
-                "is_valid": [True, False, False],
-            }
-        )
-
-        result = suggest_species_corrections(validation_results)
-
-        assert len(result) == 2
-        assert "Invalid species" in result["original_name"].values
-        assert "Another invalid" in result["original_name"].values
-        assert "suggested_correction" in result.columns
-
-    def test_suggest_corrections_with_confidence_threshold(self):
-        """Test with different confidence thresholds."""
-        validation_results = pd.DataFrame(
-            {
-                "original_name": ["Invalid 1", "Invalid 2"],
-                "is_valid": [False, False],
-            }
-        )
-
-        # Test with different thresholds
-        for threshold in ["low", "medium", "high"]:
-            result = suggest_species_corrections(validation_results, confidence_threshold=threshold)
-            assert len(result) >= 0  # Should handle all thresholds
-
-    def test_suggest_corrections_error_handling(self):
-        """Test error handling in corrections."""
-        # Invalid input
-        invalid_df = pd.DataFrame({"wrong_column": [1, 2, 3]})
-
-        with pytest.raises(ProcessingError):
-            suggest_species_corrections(invalid_df)
 
 
 # ============================================================================

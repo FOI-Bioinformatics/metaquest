@@ -9,7 +9,7 @@ import pytest
 
 import metaquest
 from metaquest.core.exceptions import ValidationError
-from metaquest.core.validation import detect_file_format, validate_csv_file
+from metaquest.core.validation import detect_file_format
 
 
 def test_version():
@@ -42,52 +42,6 @@ def test_detect_file_format_unknown():
         # Test format detection
         with pytest.raises(ValidationError):
             detect_file_format(f.name)
-
-    # Clean up
-    os.unlink(f.name)
-
-
-def test_validate_csv_file_branchwater():
-    """Test validation of Branchwater CSV file."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write("acc,containment,cANI,biosample,bioproject\n")
-        f.write("SRR123456,0.95,0.98,SAMN123456,PRJNA123456\n")
-        f.flush()
-
-        # Test validation
-        format_name, headers = validate_csv_file(f.name)
-        assert format_name == "branchwater"
-        assert "acc" in headers
-        assert "containment" in headers
-
-    # Clean up
-    os.unlink(f.name)
-
-
-def test_validate_csv_file_missing_columns():
-    """Test validation of CSV file with missing required columns."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write("acc,someOtherColumn\n")
-        f.write("SRR123456,value\n")
-        f.flush()
-
-        # Test validation
-        with pytest.raises(ValidationError):
-            validate_csv_file(f.name)
-
-    # Clean up
-    os.unlink(f.name)
-
-
-def test_validate_csv_file_empty():
-    """Test validation of empty CSV file."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write("acc,containment\n")
-        f.flush()
-
-        # Test validation
-        with pytest.raises(ValidationError):
-            validate_csv_file(f.name)
 
     # Clean up
     os.unlink(f.name)

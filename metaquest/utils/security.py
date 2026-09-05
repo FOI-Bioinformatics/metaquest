@@ -27,12 +27,12 @@ logger = logging.getLogger(__name__)
 # fasterq-dump flags that never take a value; any other allowlisted fasterq-dump
 # flag consumes the following token as its value.
 FASTERQ_DUMP_BOOLEAN_FLAGS = frozenset(
-    {"--progress", "--split-files", "--split-3", "--skip-technical", "--include-technical", "--force", "--gzip"}
+    {"--progress", "--split-files", "--skip-technical", "--include-technical", "--force"}
 )
 # fasterq-dump flags whose value must be a non-negative integer.
-FASTERQ_DUMP_INTEGER_FLAGS = frozenset({"--threads", "-e"})
+FASTERQ_DUMP_INTEGER_FLAGS = frozenset({"--threads"})
 # Flags (any tool) whose value is a filesystem path and must pass validate_path.
-PATH_VALUE_FLAGS = frozenset({"-O", "-o", "--out-dir", "--temp", "-1", "-2"})
+PATH_VALUE_FLAGS = frozenset({"-O", "-o", "--out-dir", "--temp", "-1", "-2", "-0", "-s"})
 
 
 class SecureSubprocess:
@@ -261,20 +261,3 @@ class SecureSubprocess:
             raise e
         except Exception as e:
             raise SecurityError(f"Subprocess execution failed: {e}")
-
-
-def validate_file_path(path: Union[str, Path], must_exist: bool = False) -> Path:
-    """
-    Validate a file path for security.
-
-    Args:
-        path: The file path to validate
-        must_exist: Whether the file must exist
-
-    Returns:
-        Validated Path object
-
-    Raises:
-        SecurityError: If path is unsafe
-    """
-    return SecureSubprocess.validate_path(path, allow_creation=not must_exist)

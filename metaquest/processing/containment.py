@@ -9,10 +9,9 @@ import gzip
 import urllib.request
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Union
 
 from metaquest.core.exceptions import ProcessingError
-from metaquest.core.utils import get_genome_columns
 from metaquest.data.file_io import ensure_directory
 
 logger = logging.getLogger(__name__)
@@ -148,104 +147,3 @@ def count_single_sample(
         if isinstance(e, ProcessingError):
             raise
         raise ProcessingError(f"Error counting single sample metadata: {e}")
-
-
-def filter_samples_by_containment(
-    summary_file: Union[str, Path],
-    threshold: float = 0.5,
-    genome_id: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    Filter samples based on containment threshold.
-
-    Args:
-        summary_file: Path to the containment summary file
-        threshold: Minimum containment threshold
-        genome_id: Specific genome ID to filter by (if None, use max_containment)
-
-    Returns:
-        DataFrame of filtered samples
-
-    Raises:
-        ProcessingError: If the operation fails
-    """
-    try:
-        # Load the summary dataframe
-        summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
-
-        # Apply filter
-        if genome_id is not None:
-            if genome_id not in summary_df.columns:
-                genome_cols = [
-                    col for col in summary_df.columns if col not in ("max_containment", "max_containment_annotation")
-                ]
-                raise ProcessingError(
-                    f"Genome {genome_id} not found in summary file. " f"Available genomes: {', '.join(genome_cols)}"
-                )
-            filtered_df = summary_df[summary_df[genome_id] >= threshold]
-            logger.info(f"Found {len(filtered_df)} samples with {genome_id} >= {threshold}")
-        else:
-            filtered_df = summary_df[summary_df["max_containment"] >= threshold]
-            logger.info(f"Found {len(filtered_df)} samples with max_containment >= {threshold}")
-
-        return filtered_df
-
-    except Exception as e:
-        if isinstance(e, ProcessingError):
-            raise
-        raise ProcessingError(f"Error filtering samples by containment: {e}")
-
-
-def find_co_occurring_genomes(
-    summary_file: Union[str, Path], threshold: float = 0.5, min_samples: int = 5
-) -> pd.DataFrame:
-    """
-    Find genomes that co-occur in the same samples.
-
-    Args:
-        summary_file: Path to the containment summary file
-        threshold: Minimum containment threshold
-        min_samples: Minimum number of samples for a genome to be considered
-
-    Returns:
-        DataFrame with co-occurrence matrix
-
-    Raises:
-        ProcessingError: If the operation fails
-    """
-    try:
-        # Load the summary dataframe
-        summary_df = pd.read_csv(summary_file, sep="\t", index_col=0)
-
-        # Get genome columns
-        genome_cols = get_genome_columns(summary_df)
-
-        # Create binary presence/absence matrix
-        presence_df = pd.DataFrame(index=summary_df.index)
-
-        for col in genome_cols:
-            presence_df[col] = (summary_df[col] >= threshold).astype(int)
-
-        # Filter to genomes present in at least min_samples
-        genome_counts = presence_df.sum()
-        frequent_genomes = genome_counts[genome_counts >= min_samples].index.tolist()
-
-        if not frequent_genomes:
-            logger.warning(f"No genomes found in at least {min_samples} samples at threshold {threshold}")
-            return pd.DataFrame()
-
-        # Create co-occurrence matrix
-        cooccurrence_matrix = pd.DataFrame(index=frequent_genomes, columns=frequent_genomes)
-
-        for i in frequent_genomes:
-            for j in frequent_genomes:
-                # Count samples where both genomes are present
-                cooccurrence_matrix.loc[i, j] = ((presence_df[i] == 1) & (presence_df[j] == 1)).sum()
-
-        logger.info(f"Created co-occurrence matrix for {len(frequent_genomes)} genomes")
-        return cooccurrence_matrix
-
-    except Exception as e:
-        if isinstance(e, ProcessingError):
-            raise
-        raise ProcessingError(f"Error finding co-occurring genomes: {e}")
