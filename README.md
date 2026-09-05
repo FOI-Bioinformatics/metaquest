@@ -277,10 +277,11 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 technology before downloading, use `sra_info` (needs an email for NCBI); see
 `docs/SRA_ENHANCED_FEATURES.md`.
 
-`download_sra` also honours the project registry: accessions excluded with `blacklist` are skipped
-automatically, without needing `--blacklist blacklist.txt` on every call (though that flag still
-works). Use `blacklist` to record an exclusion with a reason, keeping `blacklist.txt` and the
-registry in step:
+On a real run, `download_sra` also honours the project registry: accessions excluded with
+`blacklist` are skipped automatically, without needing `--blacklist blacklist.txt` on every call
+(though that flag still works). `--dry-run` neither reads nor writes the registry, so it does not
+apply blacklist exclusions and does not record anything. Use `blacklist` to record an exclusion
+with a reason, keeping `blacklist.txt` and the registry in step:
 
 ```bash
 metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"

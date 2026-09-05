@@ -46,11 +46,12 @@ metaquest select_datasets --threshold 0.95 --output accessions.txt
 check accessions.txt
 test "$(wc -l < accessions.txt)" -gt 0
 
-# use_branchwater/parse_containment/select_datasets already wrote metaquest_registry.json as they
-# ran; remove it here so status --init can demonstrate building the registry from an existing
-# project (matches folder, parsed containment table, accessions file) in one step.
+# use_branchwater/parse_containment/select_datasets already recorded screening and selection in
+# metaquest_registry.json as they ran. Rename it aside to simulate a project that was created
+# before the registry existed, so status --init can rebuild one from disk (matches folder, parsed
+# containment table, accessions file); the renamed copy is kept so the two can be compared below.
 echo "status --init"
-rm -f metaquest_registry.json
+mv metaquest_registry.json metaquest_registry.recorded.json
 metaquest status --init --parsed-containment parsed_containment.txt --accessions-file accessions.txt
 check metaquest_registry.json
 
@@ -79,7 +80,18 @@ selected = data['stages']['selected']['count']
 excluded = data['stages']['excluded']['count']
 assert selected > 0, f'expected stages.selected.count > 0, got {selected}'
 assert excluded == 1, f'expected stages.excluded.count == 1, got {excluded}'
+with open('metaquest_registry.recorded.json') as f:
+    recorded = json.load(f)
+with open('metaquest_registry.json') as f:
+    rebuilt = json.load(f)
+recorded_count = len(recorded['datasets'])
+rebuilt_count = len(rebuilt['datasets'])
+assert recorded_count == rebuilt_count, (
+    f'expected the rebuilt registry to agree with the recorded one, '
+    f'got recorded={recorded_count} rebuilt={rebuilt_count}'
+)
 print(f'status.json ok: selected={selected} excluded={excluded}')
+print(f'registry rebuild ok: recorded datasets={recorded_count} rebuilt datasets={rebuilt_count}')
 " || { echo "FAIL status.json stage counts"; exit 1; }
 
 echo "All steps passed (outputs in $WORK)"
