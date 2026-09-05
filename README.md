@@ -105,7 +105,7 @@ metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater
 After processing the Branchwater files, you can summarize the results:
 
 ```bash
-metaquest parse_containment --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt --step-size 0.05 --file-format branchwater
+metaquest parse_containment --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt --step-size 0.05
 ```
 
 *Example output:* parsed_containment.txt (samples x genomes) and summary_containment.txt (counts per containment step).

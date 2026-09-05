@@ -22,7 +22,7 @@ from metaquest.cli.commands.metadata import (
     CountMetadataCommand,
     PlotMetadataCountsCommand,
 )
-from metaquest.cli.commands.sra import DownloadSraCommand, AssembleDatasetsCommand
+from metaquest.cli.commands.sra import DownloadSraCommand
 from metaquest.cli.commands.samples import SingleSampleCommand
 from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
 from metaquest.core.exceptions import MetaQuestError
@@ -146,7 +146,6 @@ class TestParseContainmentCommand:
         assert args.parsed_containment_file == "parsed_containment.txt"
         assert args.summary_containment_file == "top_containments.txt"
         assert args.step_size == 0.1
-        assert args.file_format is None
 
     def test_configure_parser_with_optional_args(self):
         """Test parser with optional arguments."""
@@ -164,15 +163,12 @@ class TestParseContainmentCommand:
                 "custom_summary.txt",
                 "--step-size",
                 "0.1",
-                "--file-format",
-                "branchwater",
             ]
         )
 
         assert args.parsed_containment_file == "custom_parsed.txt"
         assert args.summary_containment_file == "custom_summary.txt"
         assert args.step_size == 0.1
-        assert args.file_format == "branchwater"
 
     @patch("metaquest.cli.commands.containment.parse_containment_data")
     def test_execute(self, mock_command):
@@ -185,7 +181,6 @@ class TestParseContainmentCommand:
             parsed_containment_file="parsed.txt",
             summary_containment_file="summary.txt",
             step_size=0.05,
-            file_format=None,
         )
 
         result = command.execute(args)
@@ -648,51 +643,6 @@ class TestSingleSampleCommand:
             threshold=0.1,
             top_n=100,
         )
-
-
-class TestAssembleDatasetsCommand:
-    """Test AssembleDatasetsCommand."""
-
-    def test_command_properties(self):
-        """Test command name and help."""
-        command = AssembleDatasetsCommand()
-        assert command.name == "assemble_datasets"
-        assert "assemble" in command.help.lower()
-        assert "datasets" in command.help.lower()
-
-    def test_configure_parser(self):
-        """Test parser configuration."""
-        command = AssembleDatasetsCommand()
-        parser = argparse.ArgumentParser()
-        command.configure_parser(parser)
-
-        # Test with required arguments
-        args = parser.parse_args(["--data-files", "file1.txt", "file2.txt", "--output-file", "assembled.txt"])
-
-        assert args.data_files == ["file1.txt", "file2.txt"]
-        assert args.output_file == "assembled.txt"
-
-    @patch("metaquest.cli.commands.sra.assemble_datasets")
-    def test_execute(self, mock_command):
-        """Test command execution."""
-        mock_command.return_value = None
-        command = AssembleDatasetsCommand()
-
-        args = argparse.Namespace(data_files=["file1.txt", "file2.txt"], output_file="assembled.txt")
-
-        result = command.execute(args)
-        assert result == 0
-        mock_command.assert_called_once_with(args)
-
-    @patch("metaquest.cli.commands.sra.assemble_datasets")
-    def test_execute_metaquest_error(self, mock_command):
-        """A MetaQuestError from assemble_datasets is caught and returns 1."""
-        mock_command.side_effect = MetaQuestError("not implemented")
-        command = AssembleDatasetsCommand()
-        args = argparse.Namespace(data_files=["file1.txt"], output_file="assembled.txt")
-
-        result = command.execute(args)
-        assert result == 1
 
 
 class TestParseMetadataCommand:

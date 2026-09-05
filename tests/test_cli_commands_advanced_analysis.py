@@ -390,26 +390,25 @@ class TestInteractivePlotCommand:
         result = command.execute(args)
         assert result == 1
 
-    @patch("pandas.read_csv")
-    def test_execute_unsupported_plot_type(self, mock_read_csv):
-        """Test execution with unsupported plot type."""
-        mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
-        mock_read_csv.return_value = mock_data_df
+    @patch("metaquest.cli.commands.advanced_analysis.create_interactive_tsne")
+    @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
+    def test_execute_tsne_plot(self, mock_read, mock_tsne, tmp_path):
+        import pandas as pd
 
-        command = InteractivePlotCommand()
+        mock_read.return_value = pd.DataFrame({"a": [1, 2, 3], "b": [3, 2, 1]}, index=["s1", "s2", "s3"])
         args = argparse.Namespace(
-            data_file="data.csv",
+            data_file="m.csv",
             metadata_file=None,
-            plot_type="tsne",  # Not yet implemented
+            plot_type="tsne",
             color_by=None,
             size_by=None,
-            output_file=None,
+            output_file=str(tmp_path / "t.html"),
             title=None,
-            no_show=False,
+            no_show=True,
         )
-
-        result = command.execute(args)
-        assert result == 1
+        assert InteractivePlotCommand().execute(args) == 0
+        assert mock_tsne.call_args.kwargs["output_file"] == str(tmp_path / "t.html")
+        assert mock_tsne.call_args.kwargs["show_plot"] is False
 
 
 class TestTaxonomyValidationCommand:

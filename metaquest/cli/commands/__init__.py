@@ -14,7 +14,7 @@ from .metadata import (
     PlotMetadataCountsCommand,
 )
 from .samples import SingleSampleCommand
-from .sra import DownloadSraCommand, AssembleDatasetsCommand
+from .sra import DownloadSraCommand
 from .status import StatusCommand
 from .read_extraction import ExtractTargetReadsCommand
 from .test_data import DownloadTestGenomeCommand
@@ -37,7 +37,6 @@ __all__ = [
     "PlotMetadataCountsCommand",
     "SingleSampleCommand",
     "DownloadSraCommand",
-    "AssembleDatasetsCommand",
     "StatusCommand",
     "ExtractTargetReadsCommand",
     "DownloadTestGenomeCommand",

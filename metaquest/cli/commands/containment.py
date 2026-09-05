@@ -47,12 +47,6 @@ class ParseContainmentCommand(BaseCommand):
             type=float,
             help="Size of steps for the containment thresholds",
         )
-        parser.add_argument(
-            "--file-format",
-            default=None,
-            choices=["branchwater"],
-            help="Format of the input files",
-        )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:

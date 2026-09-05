@@ -45,7 +45,6 @@ class TestRegisterAllCommands:
             "plot_containment",
             "plot_metadata_counts",
             "download_sra",
-            "assemble_datasets",
             "status",
             "extract_target_reads",
             "select_datasets",

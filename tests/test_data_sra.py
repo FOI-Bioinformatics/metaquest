@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
+from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import (
     _read_blacklist_files,
     _prepare_temp_folder,
@@ -19,7 +19,6 @@ from metaquest.data.sra import (
     _handle_download_failure,
     download_sra,
     _find_paired_reads,
-    assemble_datasets,
 )
 
 
@@ -660,54 +659,6 @@ class TestFindPairedReads:
         """Test with empty file list."""
         result = _find_paired_reads([])
         assert result == []
-
-
-class TestAssembleDatasets:
-    """Test assemble_datasets function."""
-
-    def test_assemble_datasets_not_implemented_does_not_fake_success(self, tmp_path):
-        """Assembly is not implemented: it must fail loudly, not silently no-op.
-
-        Regression: previously this returned [] and wrote an (empty) output file,
-        making a non-functional command look successful.
-        """
-        illumina_files = [tmp_path / "SRR456_R1.fastq", tmp_path / "SRR456_R2.fastq"]
-        nanopore_files = [tmp_path / "SRR789.fastq"]  # No R1/R2 in name = Nanopore
-
-        for file in illumina_files + nanopore_files:
-            file.write_text("@seq1\nACGT\n+\nIIII\n")
-
-        args = Mock()
-        args.fastq_folder = tmp_path
-        args.output_file = tmp_path / "datasets.json"
-
-        with pytest.raises(ProcessingError):
-            assemble_datasets(args)
-
-        # Must NOT have written a misleading success artifact
-        assert not args.output_file.exists()
-
-    def test_assemble_datasets_no_fastq_files(self, tmp_path):
-        """An empty folder still surfaces 'not implemented' rather than faking success."""
-        args = Mock()
-        args.fastq_folder = tmp_path
-        args.output_file = tmp_path / "datasets.json"
-
-        with pytest.raises(ProcessingError):
-            assemble_datasets(args)
-
-        assert not args.output_file.exists()
-
-    def test_assemble_datasets_nonexistent_folder(self, tmp_path):
-        """Test with nonexistent FASTQ folder."""
-        nonexistent = tmp_path / "nonexistent"
-
-        args = Mock()
-        args.fastq_folder = nonexistent
-        args.output_file = tmp_path / "datasets.json"
-
-        with pytest.raises(DataAccessError):
-            assemble_datasets(args)
 
 
 if __name__ == "__main__":

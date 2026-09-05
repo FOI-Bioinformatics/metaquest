@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
+from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
 
@@ -640,37 +640,3 @@ def _find_paired_reads(illumina_files):
             logger.warning(f"Could not find paired read file for {fastq_file}")
 
     return read_pairs
-
-
-def assemble_datasets(args):
-    """
-    Assemble datasets from FASTQ files.
-
-    De-novo assembly is not yet implemented. This function validates the input
-    location and then raises ProcessingError, rather than silently producing an
-    empty result and writing a misleading success file.
-
-    Args:
-        args: Command-line arguments with fastq_folder/data_files and output_file
-
-    Raises:
-        DataAccessError: If the input FASTQ folder does not exist
-        ProcessingError: Always, because assembly is not implemented
-    """
-    # Determine source folder - prefer fastq_folder (tests) over data_files (CLI)
-    if hasattr(args, "fastq_folder") and args.fastq_folder:
-        fastq_folder = Path(args.fastq_folder)
-    elif hasattr(args, "data_files") and args.data_files:
-        # For CLI, assume the first data_files entry lives in the source folder
-        fastq_folder = Path(args.data_files[0]).parent
-    else:
-        fastq_folder = Path("fastq")
-
-    if not fastq_folder.exists():
-        raise DataAccessError(f"Fastq folder {fastq_folder} does not exist")
-
-    raise ProcessingError(
-        "Dataset assembly is not implemented. Run a dedicated assembler "
-        "(e.g. megahit for Illumina or flye for long reads) on the downloaded "
-        "FASTQ files instead."
-    )

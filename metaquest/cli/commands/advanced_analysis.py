@@ -18,6 +18,7 @@ from metaquest.processing.diversity import (
 )
 from metaquest.visualization.interactive import (
     create_interactive_pca,
+    create_interactive_tsne,
     create_interactive_heatmap,
     create_diversity_comparison_plot,
 )
@@ -212,8 +213,16 @@ class InteractivePlotCommand(BaseCommand):
                     show_plot=show_plot,
                 )
 
-            else:
-                raise MetaQuestError(f"Plot type {args.plot_type} not yet implemented")
+            elif args.plot_type == "tsne":
+                logger.info("Creating interactive t-SNE plot...")
+                create_interactive_tsne(
+                    data_df,
+                    metadata_df,
+                    color_by=args.color_by,
+                    title=args.title or "Interactive t-SNE Plot",
+                    output_file=args.output_file,
+                    show_plot=show_plot,
+                )
 
             logger.info("Interactive plot created successfully!")
             return 0

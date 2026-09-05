@@ -10,10 +10,7 @@ from metaquest.cli.base import BaseCommand
 from pathlib import Path
 
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.sra import (
-    download_sra,
-    assemble_datasets,
-)
+from metaquest.data.sra import download_sra
 
 
 class DownloadSraCommand(BaseCommand):
@@ -183,32 +180,4 @@ class DownloadSraCommand(BaseCommand):
 
         except MetaQuestError as e:
             self.logger.error(f"Error downloading SRA data: {e}")
-            return 1
-
-
-class AssembleDatasetsCommand(BaseCommand):
-    """Command for assembling datasets from fastq files."""
-
-    @property
-    def name(self) -> str:
-        return "assemble_datasets"
-
-    @property
-    def help(self) -> str:
-        return "Assemble datasets from fastq files"
-
-    @property
-    def group(self) -> str:
-        return "Reads"
-
-    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--data-files", required=True, nargs="+", help="List of paths to data files")
-        parser.add_argument("--output-file", required=True, help="Path to save the assembled dataset")
-
-    def execute(self, args: argparse.Namespace) -> int:
-        try:
-            assemble_datasets(args)
-            return 0
-        except MetaQuestError as e:
-            self.logger.error(f"Error assembling datasets: {e}")
             return 1
