@@ -88,7 +88,11 @@ class CommandRegistry:
         subparsers.required = True
 
         for command in self._commands.values():
-            self._add_parser(subparsers, command, command.name, command.help)
+            # Omit the `help` kwarg for the canonical name too: passing it makes argparse
+            # print a second, flat listing of every command above the grouped epilog in
+            # `metaquest.cli.main._commands_epilog`. `description` (set unconditionally in
+            # `_add_parser`) still drives the per-command `metaquest COMMAND --help` text.
+            self._add_parser(subparsers, command, command.name, None)
             for alias in command.aliases:
                 # Omit the `help` kwarg entirely rather than passing argparse.SUPPRESS: on
                 # some Python versions SUPPRESS is rendered literally as "==SUPPRESS==" for

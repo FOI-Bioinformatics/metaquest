@@ -61,39 +61,39 @@ from metaquest.cli.commands.sra_intelligent import (
 def register_all_commands() -> None:
     """Register all available commands with the registry."""
     commands = [
-        DownloadTestGenomeCommand(),
+        # Containment commands
         BranchwaterSearchCommand(),
         UseBranchwaterCommand(),
-        ExtractBranchwaterMetadataCommand(),
         ParseContainmentCommand(),
+        PlotContainmentCommand(),
+        ExploreContainmentCommand(),
+        EnrichTaxonomyCommand(),
+        FindByTaxonomyCommand(),
+        # Metadata commands
+        ExtractBranchwaterMetadataCommand(),
         DownloadMetadataCommand(),
         ParseMetadataCommand(),
         CheckMetadataAttributesCommand(),
         CountMetadataCommand(),
         SingleSampleCommand(),
-        PlotContainmentCommand(),
         PlotMetadataCountsCommand(),
-        DownloadSraCommand(),
-        StatusCommand(),
-        ExtractTargetReadsCommand(),
-        SelectDatasetsCommand(),
-        # Enhanced SRA commands
-        SRAInfoCommand(),
-        SRAStatsCommand(),
-        SRAValidateCommand(),
-        # Intelligent SRA commands
-        SRAQualityProfileCommand(),
-        SRAInteractiveDashboardCommand(),
-        SRAComparativeAnalysisCommand(),
         # Genome commands
         GenomeSearchCommand(),
         GenomeDownloadCommand(),
         GenomePrepareCommand(),
-        # Taxonomy exploration commands
-        EnrichTaxonomyCommand(),
-        ExploreContainmentCommand(),
-        FindByTaxonomyCommand(),
-        # Advanced analysis commands
+        DownloadTestGenomeCommand(),
+        # Reads commands
+        SelectDatasetsCommand(),
+        DownloadSraCommand(),
+        StatusCommand(),
+        SRAInfoCommand(),
+        SRAStatsCommand(),
+        SRAValidateCommand(),
+        SRAQualityProfileCommand(),
+        SRAInteractiveDashboardCommand(),
+        SRAComparativeAnalysisCommand(),
+        ExtractTargetReadsCommand(),
+        # Analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),
         TaxonomyValidationCommand(),

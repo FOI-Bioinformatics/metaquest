@@ -86,6 +86,24 @@ class TestRegisterAllCommands:
             assert group in help_text
         assert help_text.index("Containment:") < help_text.index("Reads:")
 
+    def test_help_lists_each_command_once_in_pipeline_order(self):
+        # Canonical parsers used to be registered with a `help` kwarg, so argparse printed
+        # every command twice: once in its own flat "positional arguments" listing (in
+        # registration order) and again in the grouped `commands by pipeline step` epilog.
+        # A raw substring count can't tell a real second listing apart from a command name
+        # that legitimately appears in another command's help text (e.g. select_datasets'
+        # help mentions download_sra), so match each command as its own epilog entry line.
+        import re
+
+        register_all_commands()
+        help_text = create_parser().format_help()
+        entry_lines = {}
+        for name in command_registry.get_all_commands():
+            matches = re.findall(rf"^    {re.escape(name)}\s", help_text, flags=re.MULTILINE)
+            assert len(matches) == 1, f"{name} should be listed exactly once in the main help"
+            entry_lines[name] = help_text.index(f"    {name} ")
+        assert entry_lines["select_datasets"] < entry_lines["download_sra"]
+
     def test_every_command_declares_a_group(self):
         register_all_commands()
         ungrouped = [c.name for c in command_registry.get_all_commands().values() if c.group == "Other"]
