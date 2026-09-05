@@ -18,6 +18,16 @@ from metaquest.core.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
 
+# Columns of the enrich_taxonomy map and the lineage rank each one holds.
+MAP_RANK_COLUMNS = {
+    "species": "species",
+    "genus": "genus",
+    "family": "family",
+    "order": "order",
+    "class_name": "class",
+    "phylum": "phylum",
+}
+
 
 class NCBITaxonomyClient:
     """Client for interacting with NCBI Taxonomy database."""
@@ -304,18 +314,42 @@ def validate_taxonomic_assignments(
 
 
 def _build_taxonomy_lineage_map(taxonomy_data: pd.DataFrame) -> Dict[str, Dict[str, str]]:
-    """Map original_name -> {rank: name} for valid taxonomy rows that carry a lineage."""
+    """Map a species name or genome id to {rank: name}, from either taxonomy table MetaQuest writes."""
+    columns = set(taxonomy_data.columns)
+    if "genome_id" in columns:
+        return _lineages_from_taxonomy_map(taxonomy_data)
+    if {"original_name", "is_valid", "lineage"}.issubset(columns):
+        return _lineages_from_validation_table(taxonomy_data)
+    raise ProcessingError(
+        "Taxonomy file must come from validate_taxonomy (columns original_name, is_valid, lineage) "
+        "or enrich_taxonomy (column genome_id with rank columns)"
+    )
+
+
+def _lineages_from_validation_table(taxonomy_data: pd.DataFrame) -> Dict[str, Dict[str, str]]:
     taxonomy_dict: Dict[str, Dict[str, str]] = {}
     for _, row in taxonomy_data.iterrows():
         if not (row["is_valid"] and row["lineage"]):
             continue
         lineage_dict = {}
-        for part in row["lineage"].split(";"):
+        for part in str(row["lineage"]).split(";"):
             if ":" in part:
                 rank, name = part.split(":", 1)
                 lineage_dict[rank.lower()] = name
         taxonomy_dict[row["original_name"]] = lineage_dict
     return taxonomy_dict
+
+
+def _lineages_from_taxonomy_map(taxonomy_data: pd.DataFrame) -> Dict[str, Dict[str, str]]:
+    lineages: Dict[str, Dict[str, str]] = {}
+    for _, row in taxonomy_data.iterrows():
+        ranks = {}
+        for column, rank in MAP_RANK_COLUMNS.items():
+            value = row.get(column)
+            if isinstance(value, str) and value.strip():
+                ranks[rank] = value.strip()
+        lineages[str(row["genome_id"])] = ranks
+    return lineages
 
 
 def _summarize_sample_taxonomy(sample_abundances, taxonomy_dict, level, min_abundance) -> Dict[str, float]:
@@ -361,6 +395,8 @@ def create_taxonomic_summary(
         logger.info(f"Created taxonomic summary at {level} level: {summary_df.shape}")
         return summary_df
 
+    except ProcessingError:
+        raise
     except Exception as e:
         raise ProcessingError(f"Failed to create taxonomic summary: {e}")
 
@@ -399,6 +435,8 @@ def analyze_taxonomic_composition(
 
         return results
 
+    except ProcessingError:
+        raise
     except Exception as e:
         raise ProcessingError(f"Failed to analyze taxonomic composition: {e}")
 

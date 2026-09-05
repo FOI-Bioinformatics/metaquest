@@ -82,3 +82,9 @@ def read_table(path: Union[str, Path]) -> pd.DataFrame:
     """
     path = Path(path)
     return pd.read_csv(path, sep=_separator_for(path), index_col=0)
+
+
+def read_records(path: Union[str, Path]) -> pd.DataFrame:
+    """Read a record table (one row per entity, no index column); TSV or CSV by suffix."""
+    path = Path(path)
+    return pd.read_csv(path, sep=_separator_for(path))

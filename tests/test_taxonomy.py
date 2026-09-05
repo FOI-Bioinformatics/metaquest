@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 
+from metaquest.core.exceptions import ProcessingError
 from metaquest.data.taxonomy import (
     NCBITaxonomyClient,
     validate_taxonomic_assignments,
@@ -249,6 +250,40 @@ class TestTaxonomyEdgeCases:
         # Should handle invalid taxonomy gracefully
         assert isinstance(result, pd.DataFrame)
         assert result.shape[0] == 1  # 1 sample
+
+
+class TestTaxonomyMapInput:
+    def _abundance(self):
+        return pd.DataFrame({"GCF_1": [0.9, 0.0], "GCF_2": [0.1, 0.7], "GCF_9": [0.0, 0.2]}, index=["S1", "S2"])
+
+    def _taxonomy_map(self):
+        return pd.DataFrame(
+            {
+                "genome_id": ["GCF_1", "GCF_2"],
+                "species": ["Wolbachia pipientis", "Wolbachia sp947251865"],
+                "genus": ["Wolbachia", "Wolbachia"],
+                "family": ["Anaplasmataceae", "Anaplasmataceae"],
+                "order": ["Rickettsiales", "Rickettsiales"],
+                "class_name": ["Alphaproteobacteria", ""],
+                "phylum": ["Pseudomonadota", "Pseudomonadota"],
+                "organism": ["", ""],
+                "tax_id": ["", ""],
+            }
+        )
+
+    def test_genus_summary_from_map(self):
+        result = create_taxonomic_summary(self._abundance(), self._taxonomy_map(), level="genus", min_abundance=0.0)
+        assert result.loc["S1", "Wolbachia"] == pytest.approx(1.0)
+        assert result.loc["S2", "Unclassified_genus"] == pytest.approx(0.2)
+
+    def test_class_name_maps_to_class_rank(self):
+        result = create_taxonomic_summary(self._abundance(), self._taxonomy_map(), level="class", min_abundance=0.0)
+        assert result.loc["S1", "Alphaproteobacteria"] == pytest.approx(0.9)
+        assert result.loc["S1", "Unclassified_class"] == pytest.approx(0.1)
+
+    def test_unknown_table_shape_raises(self):
+        with pytest.raises(ProcessingError, match="validate_taxonomy .* or enrich_taxonomy"):
+            create_taxonomic_summary(self._abundance(), pd.DataFrame({"foo": [1]}), level="genus")
 
 
 if __name__ == "__main__":

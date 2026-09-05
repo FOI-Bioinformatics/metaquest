@@ -604,15 +604,15 @@ class TestTaxonomicSummaryCommand:
         assert args.levels == ["phylum", "genus"]
         assert args.min_abundance == 0.01
 
-    @patch("pandas.read_csv")
+    @patch("metaquest.cli.commands.advanced_analysis.read_records")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.analyze_taxonomic_composition")
-    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_csv):
+    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_records):
         """Test successful execution."""
         mock_abundance_df = pd.DataFrame({"sample1": [10, 20], "sample2": [15, 25]})
         mock_taxonomy_df = pd.DataFrame({"species": ["Species1", "Species2"], "phylum": ["Phylum1", "Phylum2"]})
         mock_read_matrix.return_value = mock_abundance_df
-        mock_read_csv.return_value = mock_taxonomy_df
+        mock_read_records.return_value = mock_taxonomy_df
 
         mock_summaries = {
             "phylum": pd.DataFrame({"Phylum1": [10, 15], "Phylum2": [20, 25]}),
@@ -723,6 +723,32 @@ class TestAdvancedAnalysisIntegration:
 
             assert result == 1
             mock_logger.error.assert_called()
+
+
+class TestTaxonomicSummaryWithEnrichMap:
+    def test_parsed_containment_plus_taxonomy_tsv(self, tmp_path):
+        from metaquest.cli.commands.advanced_analysis import TaxonomicSummaryCommand
+
+        cont = tmp_path / "parsed_containment.txt"
+        cont.write_text(
+            "\tGCF_1\tGCF_2\tmax_containment\tmax_containment_annotation\nS1\t0.9\t0.1\t0.9\tGCF_1\nS2\t0.0\t0.7\t0.7\tGCF_2\n"  # noqa: E501
+        )
+        tax = tmp_path / "taxonomy.tsv"
+        tax.write_text(
+            "genome_id\tspecies\tgenus\tfamily\torder\tclass_name\tphylum\torganism\ttax_id\n"
+            "GCF_1\tWolbachia pipientis\tWolbachia\tAnaplasmataceae\tRickettsiales\tAlphaproteobacteria\tPseudomonadota\t\t\n"  # noqa: E501
+            "GCF_2\tWolbachia sp947251865\tWolbachia\tAnaplasmataceae\tRickettsiales\tAlphaproteobacteria\tPseudomonadota\t\t\n"  # noqa: E501
+        )
+        args = argparse.Namespace(
+            abundance_file=str(cont),
+            taxonomy_file=str(tax),
+            output_dir=str(tmp_path / "out"),
+            levels=["genus"],
+            min_abundance=0.0,
+        )
+        assert TaxonomicSummaryCommand().execute(args) == 0
+        out = (tmp_path / "out" / "taxonomy_summary_genus.csv").read_text().splitlines()
+        assert out[0].startswith(",Wolbachia")
 
 
 if __name__ == "__main__":

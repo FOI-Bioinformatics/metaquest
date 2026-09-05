@@ -68,3 +68,21 @@ class TestReadTable:
         assert list(df.columns) == ["treatment", "abundance"]
         assert list(df.index) == ["SRR1", "SRR2"]
         assert df.loc["SRR2", "treatment"] == "treated"
+
+
+class TestReadRecords:
+    def test_tsv_keeps_first_column(self, tmp_path):
+        from metaquest.data.defaults import read_records
+
+        f = tmp_path / "taxonomy.tsv"
+        f.write_text("genome_id\tgenus\nGCF_1\tWolbachia\n")
+        df = read_records(f)
+        assert list(df.columns) == ["genome_id", "genus"]
+        assert df.loc[0, "genome_id"] == "GCF_1"
+
+    def test_csv(self, tmp_path):
+        from metaquest.data.defaults import read_records
+
+        f = tmp_path / "v.csv"
+        f.write_text("original_name,is_valid\nE. coli,True\n")
+        assert list(read_records(f).columns) == ["original_name", "is_valid"]

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.defaults import read_matrix, read_table
+from metaquest.data.defaults import read_matrix, read_records, read_table
 from metaquest.processing.diversity import (
     calculate_alpha_diversity,
     calculate_beta_diversity,
@@ -324,7 +324,7 @@ class TaxonomicSummaryCommand(BaseCommand):
         parser.add_argument(
             "--taxonomy-file",
             required=True,
-            help="CSV file with taxonomy validation results",
+            help="Taxonomy table from enrich_taxonomy (TSV, genome_id and ranks) or validate_taxonomy (CSV)",
         )
         parser.add_argument(
             "--output-dir",
@@ -346,14 +346,12 @@ class TaxonomicSummaryCommand(BaseCommand):
 
     def execute(self, args):
         try:
-            import pandas as pd
-
             # Load data
             logger.info("Loading abundance data...")
             abundance_df = read_matrix(args.abundance_file)
 
             logger.info("Loading taxonomy data...")
-            taxonomy_df = pd.read_csv(args.taxonomy_file)
+            taxonomy_df = read_records(args.taxonomy_file)
 
             # Create taxonomic summaries
             logger.info("Creating taxonomic summaries...")

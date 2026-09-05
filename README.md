@@ -385,14 +385,16 @@ metaquest validate_taxonomy \
 ```
 
 ### Taxonomic Summary Analysis
-Generate comprehensive taxonomic summaries at multiple levels:
+Summarise containment per taxonomic rank. The taxonomy table can be the map written by
+`enrich_taxonomy` (genome ids and ranks, the usual route after `parse_containment`) or the validation
+CSV written by `validate_taxonomy`:
 
 ```bash
-metaquest taxonomic_summary \
-    --abundance-file abundance_matrix.csv \
-    --taxonomy-file validation_results.csv \
-    --levels phylum class order family genus \
-    --output-dir taxonomic_summaries
+metaquest enrich_taxonomy --parsed-containment parsed_containment.txt --output taxonomy.tsv
+metaquest taxonomic_summary --abundance-file parsed_containment.txt --taxonomy-file taxonomy.tsv \
+    --levels phylum class order family genus --output-dir taxonomic_summaries
+
+metaquest taxonomic_summary --abundance-file abundance_matrix.csv --taxonomy-file validation_results.csv
 ```
 
 ## Documentation
