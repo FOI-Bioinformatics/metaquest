@@ -34,7 +34,7 @@ Download and assembly steps call command-line tools that are not Python packages
 
 | Tool | Used by |
 |---|---|
-| `fasterq-dump` (sra-tools) | `download_sra`, `sra_download`, `sra-download-intelligent` |
+| `fasterq-dump` (sra-tools) | `download_sra` |
 | `datasets` (ncbi-datasets-cli) | `genome_download`, `genome_prepare`, `download_test_genome` |
 | `minimap2`, `samtools` | `extract_target_reads` |
 | `megahit` | `extract_target_reads --assemble` |
@@ -225,40 +225,24 @@ metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
     --metadata-column geo_loc_name_country_calc --metadata-value France --output accessions.txt
 ```
 
-`accessions.txt` is the input for `download_sra`, `sra_download` and `sra-download-intelligent`.
-All three write `fastq/<accession>/<accession>_1.fastq` (and `_2` for paired runs), which is the layout
-`status`, `sra_stats`, `sra-profile-quality`, `sra-dashboard` and `extract_target_reads` read.
+`accessions.txt` is the input for `download_sra`, which writes `fastq/<accession>/<accession>_1.fastq`
+(and `_2` for paired runs), the layout `status`, `sra_stats`, `sra_profile_quality`, `sra_dashboard`
+and `extract_target_reads` read.
 
-### Which SRA download command should I use?
+### Downloading reads
 
-MetaQuest ships three ways to download SRA reads; pick one:
-
-- `download_sra` — basic, dependable parallel `fasterq-dump`. Start here.
-- `sra_download` — adds sequencing-technology detection and a richer download report.
-- `sra-download-intelligent` (alias `sra_download_intelligent`) — adds accession-level
-  resume (skips accessions already present) and download-order optimization.
-
-All three skip accessions whose FASTQ files already exist unless `--force` is given.
-(The four `sra-*` commands also accept snake_case names, e.g. `sra_dashboard`.)
-
-### Intelligent SRA Downloading
-
-Download SRA datasets with intelligent resume capability and bandwidth optimization:
+`download_sra` runs `fasterq-dump` in parallel, skips accessions whose FASTQ files already exist
+(unless `--force`), retries failures, and writes `fastq/failed_accessions.txt` for reruns:
 
 ```bash
-# Intelligent download with resume capability
-metaquest sra-download-intelligent \
-    --accessions-file accessions.txt \
-    --output-dir fastq \
-    --max-parallel-downloads 4 \
-    --max-bandwidth-mbps 100 \
-    --resume
-
-# Dry run to estimate download time and requirements
-metaquest sra-download-intelligent \
-    --accessions-file accessions.txt \
-    --dry-run
+metaquest download_sra --accessions-file accessions.txt --fastq-folder fastq --max-workers 4 --num-threads 4
+metaquest download_sra --accessions-file accessions.txt --dry-run
+metaquest download_sra --accessions-file accessions.txt --report-file download_report.csv
 ```
+
+`--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`
+or `blacklisted`. To see sizes and sequencing technology before downloading, use `sra_info` (needs an
+email for NCBI); see `docs/SRA_ENHANCED_FEATURES.md`.
 
 ### SRA Quality Profiling
 
@@ -316,26 +300,6 @@ Example groups file format:
   "Treatment_Group": ["SRR123456", "SRR123457"],
   "Control_Group": ["SRR789012", "SRR789013"]
 }
-```
-
-### Enhanced SRA Features
-
-For additional SRA capabilities with technology detection:
-
-```bash
-# Get detailed dataset information before downloading
-metaquest sra_info \
-    --accessions-file accessions.txt \
-    --email your.email@domain.com \
-    --output-report sra_analysis.csv
-
-# Enhanced download with technology detection
-metaquest sra_download \
-    --accessions-file accessions.txt \
-    --fastq-folder fastq \
-    --email your.email@domain.com \
-    --num-threads 8 \
-    --max-workers 4
 ```
 
 ## Visualizing Results
@@ -435,7 +399,7 @@ metaquest taxonomic_summary \
 
 For comprehensive documentation including advanced features and technical details, see the [docs/](docs/) directory:
 
-- **[Enhanced SRA Features](docs/SRA_ENHANCED_FEATURES.md)** - Advanced SRA downloading with technology detection and statistics
+- **[SRA Information, Statistics and Validation](docs/SRA_ENHANCED_FEATURES.md)** - Dataset information, read statistics and validation commands supporting `download_sra`
 - **[Branchwater Workflow](docs/branchwater_workflow.md)** - Detailed workflow guide for branchwater functionality
 - **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions
 - **[CLAUDE.md](CLAUDE.md)** - Development guidelines, testing strategies, and architectural patterns for contributors

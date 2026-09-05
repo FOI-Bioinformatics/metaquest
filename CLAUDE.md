@@ -71,11 +71,10 @@ New commands should:
 4. **CRITICAL**: Use dashes in CLI arguments (e.g., `--matches-folder`), not underscores
 
 ### Advanced SRA Commands
-The intelligent SRA package provides four main CLI commands:
-- `sra-download-intelligent` - Downloads with resume capability and bandwidth optimization
-- `sra-profile-quality` - Comprehensive quality analysis of downloaded datasets
-- `sra-dashboard` - Interactive HTML dashboard generation
-- `sra-compare` - Statistical comparison between dataset groups
+The SRA package provides three analysis commands:
+- `sra_profile_quality` - Comprehensive quality analysis of downloaded datasets
+- `sra_dashboard` - Interactive HTML dashboard generation
+- `sra_compare` - Statistical comparison between dataset groups
 
 ### Plugin Development
 - Format plugins inherit from base Plugin class in `plugins/base.py`
@@ -89,7 +88,7 @@ The typical workflow involves:
 2. Extracting/downloading metadata (`extract_branchwater_metadata` or `download_metadata`)
 3. Parsing containment data (`parse_containment`) 
 4. Visualization and analysis (`plot_containment`, `count_metadata`)
-5. Advanced SRA operations (`sra-download-intelligent`, `sra-profile-quality`, `sra-dashboard`)
+5. Advanced SRA operations (`download_sra`, `sra_profile_quality`, `sra_dashboard`)
 
 ### Code Quality Standards & Current Status
 
@@ -306,7 +305,6 @@ When working on MetaQuest, follow this priority order:
 - [x] **Orphan code removed** - Clean architecture maintained
 
 #### Advanced SRA Features Achievements
-- [x] **IntelligentDownloadManager** - Resume capability, bandwidth optimization
 - [x] **SRADatasetAnalyzer** - Quality profiling, comparative analysis, anomaly detection
 - [x] **SRAReportGenerator** - Interactive dashboards, Plotly visualizations
 - [x] **CLI Integration** - Four new intelligent SRA commands fully functional
@@ -328,7 +326,6 @@ When working on MetaQuest, follow this priority order:
 
 #### SRA Package Structure
 The advanced SRA package (`metaquest.sra`) provides specialized functionality:
-- **download_manager.py** - Intelligent downloading with checkpoints and bandwidth management
 - **analytics.py** - Comprehensive quality analysis and statistical testing
 - **reporting.py** - Interactive dashboard generation with Plotly integration
 - **__init__.py** - Clean API exposure with proper imports
