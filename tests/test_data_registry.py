@@ -86,6 +86,7 @@ class TestLoadSave:
         target = tmp_path / "metaquest_registry.json"
         lock = tmp_path / "metaquest_registry.json.lock"
         monkeypatch.setattr(reg, "LOCK_STALE_SECONDS", 0.3)
+        monkeypatch.setattr(reg, "LOCK_WAIT_SECONDS", 0.3)
         lock.write_text("1")
         os.utime(lock, (0, 0))  # ancient -> stale -> removed
         reg.save_registry(reg.load_registry(target))
@@ -94,6 +95,45 @@ class TestLoadSave:
         with pytest.raises(DataAccessError, match="locked"):
             reg.save_registry(reg.load_registry(target))
         lock.unlink()
+
+    def test_wait_deadline_is_its_own_constant(self, tmp_path, monkeypatch):
+        """A long staleness window still gives up after the (separate) wait deadline."""
+        target = tmp_path / "metaquest_registry.json"
+        lock = tmp_path / "metaquest_registry.json.lock"
+        monkeypatch.setattr(reg, "LOCK_STALE_SECONDS", 600.0)
+        monkeypatch.setattr(reg, "LOCK_WAIT_SECONDS", 0.2)
+        lock.write_text("1")
+        with pytest.raises(DataAccessError, match="locked"):
+            reg.save_registry(reg.load_registry(target))
+        assert lock.exists()  # not reclaimed as stale
+        lock.unlink()
+
+
+class TestRegistryTransaction:
+    def test_transaction_reloads_before_writing(self, tmp_path):
+        """A change made between transactions survives, because each one loads from disk."""
+        target = tmp_path / "metaquest_registry.json"
+        reg.save_registry(reg.load_registry(target))
+        other = reg.load_registry(target)
+        reg.record_exclusion(other, "SRR9", "amplicon")
+        reg.save_registry(other)
+
+        with reg.registry_transaction(target) as r:
+            reg.record_download(r, "SRR1", "failed", tmp_path / "fastq", message="timeout")
+
+        data = json.loads(target.read_text())
+        assert data["datasets"]["SRR9"]["exclusion"]["excluded"] is True
+        assert data["datasets"]["SRR1"]["download"]["state"] == "failed"
+        assert not list(tmp_path.glob("*.lock")) and not list(tmp_path.glob("*.tmp.*"))
+
+    def test_transaction_writes_nothing_on_error(self, tmp_path):
+        target = tmp_path / "metaquest_registry.json"
+        with pytest.raises(ValueError, match="boom"):
+            with reg.registry_transaction(target) as r:
+                reg.record_exclusion(r, "SRR1", "amplicon")
+                raise ValueError("boom")
+        assert not target.exists()
+        assert not list(tmp_path.glob("*.lock"))
 
 
 class TestNanToNone:

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
+from metaquest.core.exceptions import ProcessingError
 from helpers_extraction import _fake_tools
 
 
@@ -39,6 +40,21 @@ def _tree(tmp):
     d.mkdir(parents=True)
     (d / "SRR1_1.fastq.gz").write_text("x")
     (d / "SRR1_2.fastq.gz").write_text("x")
+    genome = root / "GCF_1.fna"
+    genome.write_text(">s\nACGT\n")
+    return root, table, genome
+
+
+def _two_sample_tree(tmp):
+    """Like _tree, but with two samples above the threshold."""
+    root = Path(tmp)
+    table = root / "parsed_containment.txt"
+    table.write_text("\tGCF_1\nSRR1\t0.9\nSRR2\t0.8\n")
+    for acc in ("SRR1", "SRR2"):
+        d = root / "fastq" / acc
+        d.mkdir(parents=True)
+        (d / f"{acc}_1.fastq.gz").write_text("x")
+        (d / f"{acc}_2.fastq.gz").write_text("x")
     genome = root / "GCF_1.fna"
     genome.write_text(">s\nACGT\n")
     return root, table, genome
@@ -253,6 +269,42 @@ class TestExtractTargetReadsCommand:
         extraction = data["datasets"]["SRR1"]["extractions"]["GCF_1"]
         assert extraction["mapped_reads"] > 0
         assert extraction["assembly"]["contigs"] == 2
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_records_are_checkpointed_when_a_later_assembly_fails(self, mock_run):
+        """Each extraction and assembly is written as it completes, so a later failure keeps them."""
+        mock_run.side_effect = _fake_tools({})
+
+        def fail_on_second(reads, out_dir, **kwargs):
+            if "SRR2" in str(out_dir):
+                raise ProcessingError("megahit crashed")
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            (Path(out_dir) / "final.contigs.fa").write_text(">c1 len=100\nACGT\n")
+            return Path(out_dir), True
+
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _two_sample_tree(tmp)
+            registry_file = root / "registry.json"
+            with patch("metaquest.cli.commands.read_extraction.assemble_extracted_reads", side_effect=fail_on_second):
+                rc = cmd.execute(
+                    _args(
+                        tmp,
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                        assemble=True,
+                        registry=str(registry_file),
+                    )
+                )
+            assert rc == 1
+            datasets = json.loads(registry_file.read_text())["datasets"]
+        assert datasets["SRR1"]["extractions"]["GCF_1"]["mapped_reads"] > 0
+        assert datasets["SRR2"]["extractions"]["GCF_1"]["mapped_reads"] > 0
+        assert datasets["SRR1"]["extractions"]["GCF_1"]["assembly"]["contigs"] == 1
+        assert datasets["SRR2"]["extractions"]["GCF_1"].get("assembly") is None
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_second_run_skips_and_returns_0(self, mock_run):

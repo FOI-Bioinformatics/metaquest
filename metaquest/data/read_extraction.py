@@ -17,7 +17,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import pandas as pd
 
@@ -47,6 +47,23 @@ class ExtractionResult:
     mapped_records: int
     unequal_mates: bool = False
     skipped: bool = False
+
+
+def _notify_result(
+    on_result: Optional[Callable[[str, "ExtractionResult"], None]], accession: str, result: "ExtractionResult"
+) -> None:
+    """Call ``on_result`` in isolation so a failing callback never stops the run.
+
+    The callback records the result (a registry write, which can raise, for example on a
+    lock timeout). One sample's bookkeeping failing must not cost the remaining samples
+    their extraction.
+    """
+    if on_result is None:
+        return
+    try:
+        on_result(accession, result)
+    except Exception as e:
+        logger.warning("Recording the extraction result for %s failed: %s", accession, e)
 
 
 def _count_bam_records(bam_path: Path) -> int:
@@ -209,6 +226,7 @@ def extract_target_reads(
     dry_run: bool = False,
     force: bool = False,
     already_done: Optional[Dict[str, Dict[str, Any]]] = None,
+    on_result: Optional[Callable[[str, ExtractionResult], None]] = None,
 ) -> Dict[str, ExtractionResult]:
     """Extract reads mapping to a target genome for every qualifying sample.
 
@@ -226,6 +244,10 @@ def extract_target_reads(
         already_done: Accession -> the registry's extraction record for this genome. A sample
             already recorded there is skipped (unless ``force``) when the record's genome FASTA,
             preset and threshold match this call and its files are still on disk (or it mapped 0).
+        on_result: Called on the main thread with (accession, result) after every sample of a
+            real run, skipped samples included, so the caller can checkpoint each result as it
+            lands. A callback that raises is logged and does not stop the run. Dry runs never
+            call it.
 
     Returns:
         Mapping of accession to an ``ExtractionResult`` (empty files in dry-run).
@@ -269,6 +291,7 @@ def extract_target_reads(
                 unequal_mates=bool(record.get("unequal_mates", False)),
                 skipped=True,
             )
+            _notify_result(on_result, accession, results[accession])
             continue
         reads = _sample_reads(fastq_root, accession)
         if not reads:
@@ -279,6 +302,7 @@ def extract_target_reads(
             continue
         outcome = _map_and_extract(accession, reads, genome_path, output_root / accession, genome_id, preset, threads)
         results[accession] = outcome
+        _notify_result(on_result, accession, outcome)
         if outcome.files:
             logger.info(
                 "Extracted %d mapped records for %s -> %s",

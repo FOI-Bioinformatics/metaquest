@@ -154,6 +154,7 @@ class TestExtractTargetReads:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_dry_run_runs_no_tools(self, mock_run):
+        seen = []
         with tempfile.TemporaryDirectory() as tmp:
             root, table, genome = _make_tree(tmp)
             results = extract_target_reads(
@@ -164,9 +165,39 @@ class TestExtractTargetReads:
                 output_folder=root / "targeted",
                 threshold=0.3,
                 dry_run=True,
+                on_result=lambda acc, result: seen.append(acc),
             )
         assert set(results) == {"SRR1", "SRR2"}
         mock_run.assert_not_called()
+        assert seen == []  # a dry run records nothing
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_on_result_runs_per_sample_and_failures_are_isolated(self, mock_run, caplog):
+        """A callback that raises for one sample must not stop the next sample's extraction."""
+        mock_run.side_effect = _fake_tools({})
+        seen = []
+
+        def on_result(accession, result):
+            seen.append((accession, result.mapped_records))
+            if accession == "SRR1":
+                raise RuntimeError("registry is locked by another process")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            with caplog.at_level("WARNING"):
+                results = extract_target_reads(
+                    parsed_containment=table,
+                    genome_id="GCF_1",
+                    genome_fasta=genome,
+                    fastq_folder=root / "fastq",
+                    output_folder=root / "targeted",
+                    threshold=0.3,
+                    on_result=on_result,
+                )
+            assert [p.name for p in results["SRR2"].files] == ["GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"]
+        assert [acc for acc, _ in seen] == ["SRR1", "SRR2"]
+        assert set(results) == {"SRR1", "SRR2"}
+        assert "Recording the extraction result for SRR1 failed" in caplog.text
 
     def test_missing_table_raises(self):
         with pytest.raises(DataAccessError):
@@ -212,6 +243,7 @@ class TestExtractionIdempotency:
                 }
             }
             calls_before = len(state["calls"])
+            notified = []
             again = extract_target_reads(
                 parsed_containment=table,
                 genome_id="GCF_1",
@@ -220,8 +252,10 @@ class TestExtractionIdempotency:
                 output_folder=root / "targeted",
                 threshold=0.5,
                 already_done=record,
+                on_result=lambda acc, result: notified.append((acc, result.skipped)),
             )
             assert again["SRR1"].skipped is True and len(state["calls"]) == calls_before
+            assert notified == [("SRR1", True)]  # skips are reported too
             forced = extract_target_reads(
                 parsed_containment=table,
                 genome_id="GCF_1",

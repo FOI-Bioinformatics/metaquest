@@ -11,7 +11,7 @@ from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.registry import load_registry, query, record_download, save_registry
+from metaquest.data.registry import Registry, load_registry, query, record_download, registry_transaction
 from metaquest.data.sra import download_sra
 
 
@@ -145,6 +145,30 @@ class DownloadSraCommand(BaseCommand):
             writer.writerow(["accession", "status", "message"])
             writer.writerows(sorted(rows))
 
+    @staticmethod
+    def _record_skip(reg: Registry, acc: str, message: str, fastq_dir: Path) -> None:
+        """Record a skipped accession, unless its record already says the reads are downloaded.
+
+        A blacklist entry or a `--max-downloads` cut-off must never erase the files and
+        sizes of an accession that was downloaded on an earlier run.
+        """
+        if reg.datasets.get(acc, {}).get("download", {}).get("state") == "downloaded":
+            return
+        record_download(reg, acc, "skipped", fastq_dir, message)
+
+    def _record_run_outcomes(self, args: argparse.Namespace, stats: dict, fastq_dir: Path) -> None:
+        """Record the outcomes the download loop could not report, one transaction per accession."""
+        for acc in stats.get("already_downloaded_accessions", []):
+            with registry_transaction(args.registry) as reg:
+                if reg.datasets.get(acc, {}).get("download", {}).get("state") != "downloaded":
+                    record_download(reg, acc, "downloaded", fastq_dir, attempt=False)
+        for acc in stats.get("blacklisted_accessions", []):
+            with registry_transaction(args.registry) as reg:
+                self._record_skip(reg, acc, "blacklisted", fastq_dir)
+        for acc in stats.get("skipped_accessions", []):
+            with registry_transaction(args.registry) as reg:
+                self._record_skip(reg, acc, "--max-downloads", fastq_dir)
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             if not args.dry_run and shutil.which("fasterq-dump") is None:
@@ -154,18 +178,16 @@ class DownloadSraCommand(BaseCommand):
                 )
                 return 1
 
-            registry = None
             excluded: set = set()
             on_result = None
             fastq_dir = Path(args.fastq_folder)
 
             if not args.dry_run:
-                registry = load_registry(args.registry)
-                excluded = set(query(registry, "excluded"))
+                excluded = set(query(load_registry(args.registry), "excluded"))
 
                 def _record_result(accession: str, success: bool, message: str) -> None:
-                    record_download(registry, accession, "downloaded" if success else "failed", fastq_dir, message)
-                    save_registry(registry)
+                    with registry_transaction(args.registry) as reg:
+                        record_download(reg, accession, "downloaded" if success else "failed", fastq_dir, message)
 
                 on_result = _record_result
 
@@ -188,17 +210,7 @@ class DownloadSraCommand(BaseCommand):
                 self._log_dry_run_summary(args, download_stats)
             else:
                 self._log_download_summary(download_stats)
-
-                assert registry is not None  # loaded above whenever dry_run is False
-                already_downloaded_now = set(query(registry, "downloaded"))
-                for acc in download_stats.get("already_downloaded_accessions", []):
-                    if acc not in already_downloaded_now:
-                        record_download(registry, acc, "downloaded", fastq_dir, attempt=False)
-                for acc in download_stats.get("blacklisted_accessions", []):
-                    record_download(registry, acc, "skipped", fastq_dir, "blacklisted")
-                for acc in download_stats.get("skipped_accessions", []):
-                    record_download(registry, acc, "skipped", fastq_dir, "--max-downloads")
-                save_registry(registry)
+                self._record_run_outcomes(args, download_stats, fastq_dir)
 
                 if args.report_file:
                     self._write_report(args.report_file, download_stats)

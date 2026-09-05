@@ -29,6 +29,7 @@ from metaquest.cli.commands.samples import SingleSampleCommand
 from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.registry import load_registry, record_download, record_exclusion, save_registry
 
 
 class TestUseBranchwaterCommand:
@@ -744,6 +745,100 @@ class TestDownloadSraCommand:
         # The failed_accessions.txt written by the fake download_sra (standing in for the
         # data layer) is untouched by the CLI.
         assert failed_file.read_text() == "SRR2\n"
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_blacklisted_accession_keeps_its_downloaded_record(self, mock_download, _which, tmp_path):
+        """An accession downloaded earlier and blacklisted later keeps its files and sizes."""
+        fastq_folder = tmp_path / "fastq"
+        (fastq_folder / "SRR1").mkdir(parents=True)
+        (fastq_folder / "SRR1" / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        registry_path = tmp_path / "metaquest_registry.json"
+
+        seeded = load_registry(registry_path)
+        record_download(seeded, "SRR1", "downloaded", fastq_folder)
+        record_exclusion(seeded, "SRR1", "16S amplicon")
+        save_registry(seeded)
+        before = json.loads(registry_path.read_text())["datasets"]["SRR1"]["download"]
+
+        mock_download.return_value = {
+            "total": 1,
+            "already_downloaded": 0,
+            "blacklisted": 1,
+            "successful": 0,
+            "failed": 0,
+            "failed_accessions": [],
+            "blacklisted_accessions": ["SRR1"],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+        after = json.loads(registry_path.read_text())["datasets"]["SRR1"]["download"]
+        assert after["state"] == "downloaded"
+        assert after["files"] == before["files"]
+        assert after["bytes_total"] == before["bytes_total"] > 0
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_concurrent_registry_edit_survives_the_run(self, mock_download, _which, tmp_path):
+        """An exclusion written by another process mid-run is not reverted by the download's writes."""
+        fastq_folder = tmp_path / "fastq"
+        registry_path = tmp_path / "metaquest_registry.json"
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, "Downloaded 1 file")
+            # Stand in for a second terminal running `metaquest blacklist --add SRR9`.
+            other = load_registry(registry_path)
+            record_exclusion(other, "SRR9", "16S amplicon")
+            save_registry(other)
+            kwargs["on_result"]("SRR2", True, "Downloaded 1 file")
+            return {
+                "total": 2,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 2,
+                "failed": 0,
+                "failed_accessions": [],
+            }
+
+        mock_download.side_effect = fake_download_sra
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+        datasets = json.loads(registry_path.read_text())["datasets"]
+        assert datasets["SRR9"]["exclusion"]["excluded"] is True
+        assert datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert datasets["SRR2"]["download"]["state"] == "downloaded"
 
 
 class TestSingleSampleCommand:

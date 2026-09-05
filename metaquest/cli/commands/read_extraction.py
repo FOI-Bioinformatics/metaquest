@@ -15,12 +15,13 @@ from metaquest.data.read_extraction import (
     selected_samples,
     summarise_contigs,
 )
+from metaquest.data.read_extraction import ExtractionResult
 from metaquest.data.registry import (
     extraction_record,
     load_registry,
     record_assembly,
     record_extraction,
-    save_registry,
+    registry_transaction,
 )
 
 
@@ -79,6 +80,25 @@ class ExtractTargetReadsCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
+    def _record_result(self, args: argparse.Namespace, accession: str, outcome: ExtractionResult) -> None:
+        """Checkpoint one extraction result; skipped samples are already recorded."""
+        if outcome.skipped:
+            return
+        with registry_transaction(args.registry) as reg:
+            record_extraction(
+                reg,
+                accession,
+                args.genome_id,
+                outcome.files,
+                outcome.mapped_records,
+                outcome.unequal_mates,
+                {
+                    "genome_fasta": str(Path(args.genome_fasta)),
+                    "preset": args.preset,
+                    "threshold": args.threshold,
+                },
+            )
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             registry = load_registry(args.registry)
@@ -100,6 +120,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 dry_run=args.dry_run,
                 force=args.force,
                 already_done=already_done,
+                on_result=lambda accession, outcome: self._record_result(args, accession, outcome),
             )
 
             if args.dry_run:
@@ -107,24 +128,6 @@ class ExtractTargetReadsCommand(BaseCommand):
                 for accession in results:
                     self.logger.info("  %s", accession)
                 return 0
-
-            for accession, outcome in results.items():
-                if outcome.skipped:
-                    continue
-                record_extraction(
-                    registry,
-                    accession,
-                    args.genome_id,
-                    outcome.files,
-                    outcome.mapped_records,
-                    outcome.unequal_mates,
-                    {
-                        "genome_fasta": str(Path(args.genome_fasta)),
-                        "preset": args.preset,
-                        "threshold": args.threshold,
-                    },
-                )
-            save_registry(registry)
 
             with_reads = {acc: r.files for acc, r in results.items() if r.files}
             self.logger.info("Extracted reads for %d of %d sample(s)", len(with_reads), len(results))
@@ -161,16 +164,16 @@ class ExtractTargetReadsCommand(BaseCommand):
                         min_contig_len=args.min_contig_len,
                         force=args.force,
                     )
-                    record_assembly(
-                        registry,
-                        accession,
-                        args.genome_id,
-                        out_dir,
-                        summarise_contigs(out_dir / "final.contigs.fa"),
-                        version,
-                        {"threads": asm_threads, "min_contig_len": args.min_contig_len},
-                    )
-                save_registry(registry)
+                    with registry_transaction(args.registry) as reg:
+                        record_assembly(
+                            reg,
+                            accession,
+                            args.genome_id,
+                            out_dir,
+                            summarise_contigs(out_dir / "final.contigs.fa"),
+                            version,
+                            {"threads": asm_threads, "min_contig_len": args.min_contig_len},
+                        )
                 self.logger.info("Assembled %d sample(s)", len(with_reads))
 
             return 0
