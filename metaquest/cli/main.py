@@ -11,7 +11,7 @@ import traceback
 from typing import Dict, List, Optional
 
 from metaquest import __version__
-from metaquest.cli.base import BaseCommand, command_registry
+from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, command_registry
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.utils.logging import setup_logging
 
@@ -109,8 +109,8 @@ def register_all_commands() -> None:
 GROUP_ORDER = ["Containment", "Metadata", "Genomes", "Reads", "Analysis", "Other"]
 
 
-class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
-    """Show option defaults and keep the epilog's line breaks."""
+class _HelpFormatter(DefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Show option defaults (when they exist) and keep the epilog's line breaks."""
 
 
 def _commands_epilog(commands: Dict[str, BaseCommand]) -> str:

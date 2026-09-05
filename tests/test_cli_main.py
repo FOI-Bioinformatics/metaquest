@@ -99,6 +99,13 @@ class TestRegisterAllCommands:
         ]
         assert "(default: matches)" in sub.format_help()
 
+    def test_help_omits_none_defaults(self):
+        parser = create_parser()
+        choices = next(a for a in parser._subparsers._group_actions if getattr(a, "choices", None)).choices
+        help_text = choices["count_metadata"].format_help()
+        assert "(default: None)" not in help_text
+        assert "(default: parsed_containment.txt)" in help_text
+
     def test_check_metadata_attributes_is_registered(self):
         """check_metadata_attributes is a real command (README step 7)."""
         assert "check_metadata_attributes" in self._subcommand_choices(create_parser())

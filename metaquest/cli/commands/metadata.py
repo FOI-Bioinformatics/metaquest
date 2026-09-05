@@ -157,7 +157,7 @@ class CountMetadataCommand(BaseCommand):
         parser.add_argument(
             "--summary-file",
             default="parsed_containment.txt",
-            help="Path to the summary file",
+            help="Summary file",
         )
         parser.add_argument(
             "--metadata-file",

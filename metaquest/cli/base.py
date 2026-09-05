@@ -10,6 +10,15 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
 
+class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Append '(default: ...)' only when the option has a real default."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        if action.default is None or action.default is argparse.SUPPRESS:
+            return action.help or ""
+        return super()._get_help_string(action) or ""
+
+
 class BaseCommand(ABC):
     """Base class for all CLI commands."""
 
@@ -94,7 +103,7 @@ class CommandRegistry:
         subparser = subparsers.add_parser(
             name,
             description=command.help,
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            formatter_class=DefaultsHelpFormatter,
             **kwargs,
         )
         command.configure_parser(subparser)
