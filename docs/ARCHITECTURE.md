@@ -62,11 +62,15 @@ The data layer manages access to data sources and external systems:
 root recording screening, selection, exclusion, download, metadata, analysis, extraction, and
 assembly outcomes for every accession a project touches. Record functions (`record_screening`,
 `record_selection`, `record_exclusion`, `record_download`, `record_metadata`, `record_analysis`,
-`record_extraction`, `record_assembly`) are called by the commands that produce those outcomes as
-each one finishes. Presence is never taken from the registry alone: `status` and the scanning
-functions (`scan_downloads`, `scan_metadata`, `scan_extractions`, `scan_assemblies`) re-check the
-filesystem, so a file removed by hand is reported as missing rather than done. Writes are atomic
-(a temporary file renamed into place) and serialized with a lock file to avoid concurrent corruption.
+`record_extraction`, `record_assembly`, `record_genome`) are called by the commands that produce
+those outcomes as each one finishes, each inside a `registry_transaction` that loads the file,
+applies one record and writes it back under a lock, so a run never reverts another process's edit.
+A screening entry carries its own source and query threshold per genome, and the number kept per
+genome is capped (`--registry-max-screened`). Presence is never taken from the registry alone:
+`status` and the scanning functions (`scan_downloads`, `scan_metadata`, `scan_extractions`,
+`scan_assemblies`) re-check the filesystem, so a file removed by hand is reported as missing rather
+than done. Writes are atomic (a temporary file renamed into place) and serialized with a lock file
+to avoid concurrent corruption.
 
 #### Plugin System
 The plugin system enables extensibility:

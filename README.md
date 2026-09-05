@@ -192,8 +192,9 @@ metaquest genome_download --accessions GCF_000006945.2 --dry-run
 
 `status` also reads the project registry (see "Project state" below): `--stage` lists the accessions
 in one pipeline stage, `--genome` restricts the extraction and assembly stages to one target genome,
-`--reconcile` records files that were removed by hand, `--export-tsv` writes the registry as two TSV
-tables, and `--next` suggests which command would advance the most datasets.
+`--reconcile` records files that were removed by hand and registers work found on disk that the
+registry did not know about, `--export-tsv` writes the registry as two TSV tables, and `--next`
+suggests which command would advance the most datasets.
 
 ### Project state
 
@@ -209,14 +210,22 @@ metaquest status --init                      # create the registry from an exist
 metaquest status                             # accession by stage matrix, per genome
 metaquest status --stage extracted --genome GCF_000008025.1
 metaquest status --next                      # which commands would advance the most datasets
-metaquest status --reconcile                 # record files removed by hand, list untracked work
+metaquest status --reconcile                 # record files removed by hand, register untracked work
 metaquest status --export-tsv registry       # registry_datasets.tsv and registry_extractions.tsv
 metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"
 ```
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
-and threshold; pass `--force` to redo them. Commit `metaquest_registry.json` with your project if
-you want the decisions to travel with the results.
+and threshold; pass `--force` to redo them.
+
+Each `select_datasets` run replaces the previous selection: only the accessions of the latest run
+count as selected, and `status --stage selected` shows which those are. To keep the registry small
+on a broad search, `branchwater_search` and `parse_containment` record at most 5000 accessions per
+genome, the ones with the highest containment; change that with `--registry-max-screened`. The
+match CSVs always keep every hit.
+
+Commit `metaquest_registry.json` with your project if you want the decisions to travel with the
+results.
 
 ### 11. Targeted Read Extraction Before Assembly
 
