@@ -106,7 +106,12 @@ class TestBuildLongDataframe:
 
     def test_min_containment(self, containment_df, taxonomy):
         df = _build_long_dataframe(containment_df, taxonomy, None, 0.5)
-        assert all(df["containment"] > 0.5)
+        assert all(df["containment"] >= 0.5)
+
+    def test_min_containment_is_inclusive(self, containment_df, taxonomy):
+        # genA at SRR001 is exactly 0.5 and must be kept when min_containment=0.5.
+        df = _build_long_dataframe(containment_df, taxonomy, None, 0.5)
+        assert ((df["sample"] == "SRR001") & (df["genome"] == "genA")).any()
 
 
 class TestBuildSummaryData:

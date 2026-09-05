@@ -120,7 +120,7 @@ metaquest download_metadata --matches-folder matches --metadata-folder metadata 
 
 * `matches_folder`: Directory containing match files.
 * `metadata_folder`: Directory where the metadata files will be saved.
-* `threshold`: Only consider matches with containment above this threshold.
+* `threshold`: Only consider matches with containment at or above this threshold.
 
 ### 6. Parsing Metadata
 

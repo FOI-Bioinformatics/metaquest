@@ -103,7 +103,7 @@ def _build_long_dataframe(
     for sample_id, row in containment_df.iterrows():
         for genome in genome_cols:
             val = row[genome]
-            if val > min_containment:
+            if val > 0 and val >= min_containment:
                 tax = taxonomy.get(genome)
                 entry = {
                     "sample": str(sample_id),

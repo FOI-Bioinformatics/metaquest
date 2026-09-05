@@ -58,7 +58,7 @@ known to be abundant in metagenomes before trusting an empty result.
 
 ### Containment steps
 
-`parse_containment` does not filter; it records every sample and summarizes how many samples exceed
+`parse_containment` does not filter; it records every sample and summarizes how many samples reach
 each containment step. Choose the step size for the summary and apply thresholds downstream:
 
 ```bash

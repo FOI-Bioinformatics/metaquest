@@ -18,7 +18,7 @@ class SelectDatasetsCommand(BaseCommand):
 
     @property
     def help(self) -> str:
-        return "Write an accessions file from parsed containment, for the download commands"
+        return "Write an accessions file from parsed containment, for download_sra"
 
     @property
     def group(self) -> str:
