@@ -433,55 +433,6 @@ class TestComparativePlotCreation:
 class TestJinja2TemplateRendering:
     """Test Jinja2 template rendering paths."""
 
-    def test_generate_download_html_with_plots(self, tmp_output_dir):
-        """Test download HTML generation with plots in template data."""
-        generator = SRAReportGenerator(tmp_output_dir)
-
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockSession:
-            session_id: str
-            download_results: dict
-
-        @dataclass
-        class MockResult:
-            status: str
-            downloaded_mb: float
-            progress_pct: float
-            speed_mbps: float
-            retry_count: int = 0
-
-        mock_session = MockSession(
-            session_id="test123", download_results={"SRR001": MockResult("completed", 500.0, 100.0, 10.0)}
-        )
-
-        report_data = {
-            "session": mock_session,
-            "timestamp": "2025-01-01 12:00:00",
-            "summary_stats": {
-                "total_accessions": 1,
-                "success_rate": 1.0,
-                "total_size_mb": 500.0,
-                "average_speed_mbps": 10.0,
-            },
-            "plots": {
-                "success_rate": "<div>Success Rate Plot</div>",
-                "speed_distribution": "<div>Speed Distribution</div>",
-            },
-        }
-
-        with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.sra.reporting.Environment") as mock_env:
-                mock_template = Mock()
-                mock_template.render.return_value = "<html>Test</html>"
-                mock_env.return_value.from_string.return_value = mock_template
-
-                html = generator._generate_download_html(report_data)
-
-        assert "<html>" in html
-        mock_template.render.assert_called_once()
-
     def test_generate_quality_html_with_anomalies(self, tmp_output_dir):
         """Test quality HTML generation with anomaly data."""
         generator = SRAReportGenerator(tmp_output_dir)

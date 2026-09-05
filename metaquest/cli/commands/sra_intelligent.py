@@ -1,9 +1,8 @@
 """
 Intelligent SRA CLI commands for MetaQuest.
 
-This module provides next-generation SRA capabilities including intelligent download
-management with resume capability, comprehensive quality analysis, and interactive
-reporting dashboards.
+This module provides advanced SRA capabilities including comprehensive quality
+analysis, comparative dataset analysis, and interactive reporting dashboards.
 """
 
 import logging
@@ -13,10 +12,8 @@ from typing import List
 
 from metaquest.cli.base import BaseCommand
 from metaquest.sra import (
-    IntelligentDownloadManager,
     SRADatasetAnalyzer,
     SRAReportGenerator,
-    DownloadSession,
     QualityProfile,
 )
 from metaquest.utils.browser import open_in_browser
@@ -39,193 +36,6 @@ def _read_accession_file(filename: str, warn_if_empty: bool = False) -> List[str
     if warn_if_empty and not accessions:
         print(f"No accessions found in {filename}")
     return accessions
-
-
-class SRAIntelligentDownloadCommand(BaseCommand):
-    """Command for intelligent SRA downloading with resume capability."""
-
-    @property
-    def name(self) -> str:
-        return "sra-download-intelligent"
-
-    @property
-    def aliases(self) -> List[str]:
-        return ["sra_download_intelligent"]
-
-    @property
-    def help(self) -> str:
-        return "Download SRA datasets with intelligent resume capability and optimization"
-
-    def configure_parser(self, parser):
-        parser.add_argument(
-            "--accessions-file",
-            required=True,
-            help="File containing SRA accessions, one per line",
-        )
-        parser.add_argument(
-            "--output-dir",
-            default="fastq",
-            help="Directory for downloaded files",
-        )
-        parser.add_argument(
-            "--temp-dir",
-            help="Directory for temporary files",
-        )
-        parser.add_argument(
-            "--checkpoint-dir",
-            help="Directory for download checkpoints",
-        )
-        parser.add_argument(
-            "--max-bandwidth-mbps",
-            type=float,
-            help="Maximum bandwidth limit in Mbps",
-        )
-        parser.add_argument(
-            "--max-parallel-downloads",
-            type=int,
-            default=4,
-            help="Maximum number of parallel downloads",
-        )
-        parser.add_argument(
-            "--resume",
-            action="store_true",
-            default=True,
-            help="Enable resume capability (default: enabled)",
-        )
-        parser.add_argument(
-            "--no-resume",
-            action="store_true",
-            help="Disable resume capability",
-        )
-        parser.add_argument(
-            "--force-restart",
-            action="store_true",
-            help="Force restart from beginning (ignore existing checkpoints)",
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Show download plan without executing",
-        )
-        parser.add_argument(
-            "--progress-report",
-            default="download_progress.json",
-            help="File to save download progress report",
-        )
-
-    def _read_accessions(self, filename: str) -> List[str]:
-        """Read accessions from file, warning if the file is empty."""
-        return _read_accession_file(filename, warn_if_empty=True)
-
-    def _print_download_estimate(self, manager: IntelligentDownloadManager, accessions: List[str]):
-        """Print download time estimates."""
-        try:
-            estimate = manager.estimate_download_time(accessions)
-            print("\nDownload Estimate:")
-            print("=================")
-            print(f"Total datasets: {len(accessions)}")
-            print(f"Total size: {estimate['total_size_mb'] / 1024:.2f} GB")
-            print(f"Estimated time: {estimate['estimated_time_formatted']}")
-            print(f"Network bandwidth: {estimate['network_bandwidth_mbps']:.1f} Mbps")
-            print(f"Optimal parallelization: {estimate['optimal_parallel_downloads']}")
-        except Exception as e:
-            logger.warning(f"Could not generate estimate: {e}")
-
-    def _print_session_summary(self, session: DownloadSession):
-        """Print download session summary."""
-        print("\nDownload Session Summary:")
-        print("========================")
-        print(f"Session ID: {session.session_id}")
-        print(f"Started: {session.start_time}")
-        print(f"Total datasets: {len(session.accessions)}")
-        print(f"Completed: {session.success_count}")
-        print(f"Failed: {session.failure_count}")
-
-        if session.end_time:
-            print(f"Finished: {session.end_time}")
-            duration = session.end_time - session.start_time
-            print(f"Duration: {duration}")
-
-        if session.network_conditions:
-            print("\nThroughput Statistics:")
-            print(f"  Measured bandwidth: {session.network_conditions.bandwidth_mbps:.1f} Mbps")
-            print(f"  Average speed: {session.average_speed_mbps:.1f} MB/min")
-
-    def execute(self, args):
-        try:
-            accessions = self._read_accessions(args.accessions_file)
-            if not accessions:
-                return 1
-
-            # Configure resume setting
-            resume_enabled = args.resume and not args.no_resume
-
-            print("Initializing intelligent download manager...")
-            print(f"Resume capability: {'enabled' if resume_enabled else 'disabled'}")
-
-            manager = IntelligentDownloadManager(
-                output_dir=args.output_dir,
-                temp_dir=args.temp_dir,
-                checkpoint_dir=args.checkpoint_dir,
-                max_bandwidth_mbps=args.max_bandwidth_mbps,
-                max_parallel_downloads=args.max_parallel_downloads,
-                resume_enabled=resume_enabled,
-            )
-
-            # Show download estimate
-            self._print_download_estimate(manager, accessions)
-
-            if args.dry_run:
-                print("\n🔍 Dry run mode - no files will be downloaded")
-                return 0
-
-            print(f"\nStarting intelligent download of {len(accessions)} datasets...")
-            print("Press Ctrl+C to safely interrupt and save progress")
-
-            # Start download with resume capability
-            session = manager.download_with_resume(accessions, args.force_restart)
-
-            # Print results
-            self._print_session_summary(session)
-
-            # Save progress report
-            failed_accessions = [acc for acc, result in session.download_results.items() if result.status == "failed"]
-            progress_file = Path(args.progress_report)
-            with open(progress_file, "w") as progress_f:
-                json.dump(
-                    {
-                        "session_id": session.session_id,
-                        "start_time": session.start_time.isoformat(),
-                        "end_time": session.end_time.isoformat() if session.end_time else None,
-                        "total_datasets": len(session.accessions),
-                        "completed_downloads": session.success_count,
-                        "failed_downloads": session.failure_count,
-                        "failed_accessions": failed_accessions,
-                        "average_speed_mbps": session.average_speed_mbps,
-                        "network_bandwidth_mbps": (
-                            session.network_conditions.bandwidth_mbps if session.network_conditions else None
-                        ),
-                    },
-                    progress_f,
-                    indent=2,
-                )
-
-            print(f"\nProgress report saved to: {progress_file}")
-
-            if session.failure_count > 0:
-                print(f"\n⚠️  {session.failure_count} downloads failed")
-                return 1
-
-            print("\n✅ All downloads completed successfully!")
-            return 0
-
-        except KeyboardInterrupt:
-            print("\n\n⏸️  Download interrupted by user")
-            print("Progress has been saved - use --resume to continue")
-            return 2
-        except Exception as e:
-            logger.error(f"Intelligent download failed: {e}")
-            return 1
 
 
 class SRAQualityProfileCommand(BaseCommand):
@@ -469,10 +279,6 @@ class SRAInteractiveDashboardCommand(BaseCommand):
             help="File containing SRA accessions, one per line",
         )
         parser.add_argument(
-            "--download-session",
-            help="JSON file from intelligent download session",
-        )
-        parser.add_argument(
             "--quality-profiles",
             help="Directory containing quality profile JSONs",
         )
@@ -489,7 +295,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
         )
         parser.add_argument(
             "--dashboard-type",
-            choices=["download", "quality", "comparative", "full"],
+            choices=["quality", "comparative", "full"],
             default="full",
             help="Type of dashboard to generate",
         )
@@ -526,21 +332,6 @@ class SRAInteractiveDashboardCommand(BaseCommand):
             print(f"Generating {args.dashboard_type} dashboard for {len(accessions)} accessions...")
 
             dashboard_path = None
-
-            if args.dashboard_type in ["download", "full"]:
-                # Download summary dashboard
-                if args.download_session:
-                    try:
-                        with open(args.download_session, "r") as session_f:
-                            json.load(session_f)  # Load but don't store (not used yet)
-                        print("Creating download summary dashboard...")
-                        # Note: This would need to reconstruct DownloadSession object
-                        # For now, we'll create a quality dashboard
-                        dashboard_path = reporter.generate_quality_dashboard(
-                            accessions, title=f"{args.title} - Download Summary"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not load download session: {e}")
 
             if args.dashboard_type in ["quality", "full"]:
                 # Quality analysis dashboard

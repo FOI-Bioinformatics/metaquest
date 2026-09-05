@@ -3,14 +3,12 @@ Advanced SRA Reporting and Dashboard Generation.
 
 This module provides comprehensive reporting capabilities including:
 - Interactive HTML dashboards with Plotly visualizations
-- Download session summaries and performance analytics
 - Quality control reports with recommendations
 - Comparative analysis reports across datasets
-- Export capabilities for metadata and statistics
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from html import escape as html_escape
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Any
@@ -34,7 +32,6 @@ try:
 except ImportError:
     JINJA2_AVAILABLE = False
 
-from metaquest.sra.download_manager import DownloadSession
 from metaquest.sra.analytics import (
     QualityProfile,
     ComparativeAnalysis,
@@ -56,64 +53,6 @@ class SRAReportGenerator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.analyzer = SRADatasetAnalyzer(fastq_dir=fastq_dir)
-
-    def create_download_summary(self, session: DownloadSession, include_plots: bool = True) -> Path:
-        """
-        Create comprehensive download session summary report.
-
-        Args:
-            session: DownloadSession with results
-            include_plots: Include interactive plots
-
-        Returns:
-            Path to generated HTML report
-        """
-        logger.info(f"Creating download summary for session {session.session_id}")
-
-        report_data = {
-            "session": session,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "include_plots": include_plots and PLOTLY_AVAILABLE,
-        }
-
-        # Calculate additional statistics
-        session_duration = session.end_time - session.start_time if session.end_time else timedelta(0)
-        successful_downloads = [r for r in session.download_results.values() if r.status == "completed"]
-        failed_downloads = [r for r in session.download_results.values() if r.status == "failed"]
-
-        # Performance metrics
-        total_mb = sum(r.downloaded_mb for r in session.download_results.values())
-        avg_speed = total_mb / (session_duration.total_seconds() / 60) if session_duration.total_seconds() > 0 else 0
-
-        report_data.update(
-            {
-                "summary_stats": {
-                    "total_accessions": len(session.accessions),
-                    "successful_downloads": len(successful_downloads),
-                    "failed_downloads": len(failed_downloads),
-                    "success_rate": len(successful_downloads) / len(session.accessions) if session.accessions else 0,
-                    "total_size_mb": total_mb,
-                    "session_duration": str(session_duration),
-                    "average_speed_mbps": avg_speed,
-                    "network_bandwidth": session.network_conditions.bandwidth_mbps,
-                }
-            }
-        )
-
-        # Create visualizations if enabled
-        if include_plots and PLOTLY_AVAILABLE:
-            plots = self._create_download_plots(session)
-            report_data["plots"] = plots
-
-        # Generate HTML report
-        html_content = self._generate_download_html(report_data)
-
-        report_path = self.output_dir / f"download_summary_{session.session_id}.html"
-        with open(report_path, "w") as f:
-            f.write(html_content)
-
-        logger.info(f"Download summary saved to {report_path}")
-        return report_path
 
     def generate_quality_dashboard(self, accessions: List[str], title: str = "SRA Quality Dashboard") -> Path:
         """
@@ -210,120 +149,6 @@ class SRAReportGenerator:
 
         logger.info(f"Comparative analysis saved to {report_path}")
         return report_path
-
-    def export_metadata_enriched(self, accessions: List[str], output_format: str = "csv") -> Path:
-        """
-        Export enriched metadata with quality metrics.
-
-        Args:
-            accessions: List of SRA accessions
-            output_format: 'csv', 'json', or 'excel'
-
-        Returns:
-            Path to exported file
-        """
-        logger.info(f"Exporting enriched metadata for {len(accessions)} accessions")
-
-        # Collect all data
-        export_data = []
-        for accession in accessions:
-            try:
-                profile = self.analyzer.profile_dataset_quality(accession)
-                recommendations = self.analyzer.recommend_processing_params(accession, profile)
-
-                data_row = {
-                    "accession": accession,
-                    "total_reads": profile.total_reads,
-                    "total_bases": profile.total_bases,
-                    "avg_read_length": profile.avg_read_length,
-                    "gc_content": profile.gc_content,
-                    "quality_grade": profile.quality_grade,
-                    "complexity_score": profile.complexity_score,
-                    "n_content": profile.n_content,
-                    "adapter_contamination": profile.contamination_indicators.get("adapter_contamination", 0),
-                    "recommended_pipeline": recommendations.recommended_pipeline,
-                    "quality_trimming_needed": recommendations.quality_trimming["enabled"],
-                    "adapter_removal_needed": recommendations.adapter_removal["enabled"],
-                    "estimated_memory_gb": recommendations.computational_requirements["memory_gb"],
-                    "estimated_processing_time": recommendations.estimated_processing_time,
-                }
-
-                export_data.append(data_row)
-
-            except Exception as e:
-                logger.error(f"Failed to process {accession}: {e}")
-
-        # Create DataFrame and export
-        df = pd.DataFrame(export_data)
-
-        if output_format.lower() == "csv":
-            output_path = self.output_dir / f"enriched_metadata_{int(datetime.now().timestamp())}.csv"
-            df.to_csv(output_path, index=False)
-        elif output_format.lower() == "json":
-            output_path = self.output_dir / f"enriched_metadata_{int(datetime.now().timestamp())}.json"
-            df.to_json(output_path, orient="records", indent=2)
-        elif output_format.lower() == "excel":
-            output_path = self.output_dir / f"enriched_metadata_{int(datetime.now().timestamp())}.xlsx"
-            df.to_excel(output_path, index=False)
-        else:
-            raise ValueError(f"Unsupported format: {output_format}")
-
-        logger.info(f"Enriched metadata exported to {output_path}")
-        return output_path
-
-    def _create_download_plots(self, session: DownloadSession) -> Dict[str, str]:
-        """Create interactive plots for download session."""
-        plots: dict = {}
-
-        if not PLOTLY_AVAILABLE:
-            return plots
-
-        # The overall success rate is already carried by the summary stat card and
-        # the per-row green/red status in the results table, so it is not repeated
-        # as a chart here.
-
-        # Download speeds histogram
-        speeds = [r.speed_mbps for r in session.download_results.values() if r.speed_mbps > 0]
-        if speeds:
-            fig_speeds = go.Figure(data=[go.Histogram(x=speeds, nbinsx=20)])
-            fig_speeds.update_layout(**plotly_layout())
-            fig_speeds.update_layout(
-                title_text="Download speed distribution", xaxis_title="Speed (MB/s)", yaxis_title="Count"
-            )
-            plots["speed_distribution"] = pyo.plot(fig_speeds, output_type="div", include_plotlyjs=False)
-
-        # File size vs download time scatter
-        sizes = []
-        times = []
-        accessions = []
-
-        for acc, result in session.download_results.items():
-            if result.downloaded_mb > 0 and result.speed_mbps > 0:
-                sizes.append(result.downloaded_mb)
-                times.append(result.downloaded_mb / result.speed_mbps * 60)  # Convert to seconds
-                accessions.append(acc)
-
-        if sizes:
-            fig_scatter = go.Figure(
-                data=[
-                    go.Scatter(
-                        x=sizes,
-                        y=times,
-                        mode="markers",
-                        text=accessions,
-                        hovertemplate="<b>%{text}</b><br>Size: %{x:.1f} MB<br>Time: %{y:.1f} seconds",
-                    )
-                ]
-            )
-            fig_scatter.update_layout(**plotly_layout())
-            fig_scatter.update_layout(
-                title_text="File size vs download time",
-                xaxis_title="File size (MB)",
-                yaxis_title="Download time (seconds)",
-            )
-            plots["size_vs_time"] = pyo.plot(fig_scatter, output_type="div", include_plotlyjs=False)
-
-        return plots
 
     def _create_quality_plots(self, profiles: Dict[str, QualityProfile]) -> Dict[str, str]:
         """Create interactive plots for quality dashboard."""
@@ -442,86 +267,6 @@ class SRAReportGenerator:
             "average_contamination": avg_contamination,
             "high_contamination_count": high_contamination,
         }
-
-    def _generate_download_html(self, report_data: Dict[str, Any]) -> str:
-        """Generate HTML content for download summary report."""
-        if not JINJA2_AVAILABLE:
-            return self._generate_simple_download_html(report_data)
-
-        template_str = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SRA Download Summary - {{ session.session_id }}</title>
-    {{ plotly_js|safe }}
-    <style>{{ report_css|safe }}</style>
-</head>
-<body>
-    <header class="mq-header"><div class="mq-wrap">
-        <p class="mq-eyebrow">MetaQuest &middot; SRA download</p>
-        <h1 class="mq-title">Download summary</h1>
-        <p class="mq-readout"><span>session <b>{{ session.session_id }}</b></span>
-        <span>generated <b>{{ timestamp }}</b></span></p>
-    </div></header>
-    <main class="mq-wrap">
-        <section class="mq-stats" aria-label="Download summary">
-            <div class="mq-stat"><p class="k">Total downloads</p>
-                <div class="v">{{ summary_stats.total_accessions }}</div></div>
-            <div class="mq-stat"><p class="k">Success rate</p>
-                <div class="v">{{ "%.1f"|format(summary_stats.success_rate * 100) }}%</div></div>
-            <div class="mq-stat"><p class="k">Total size</p>
-                <div class="v">{{ "%.1f"|format(summary_stats.total_size_mb / 1024) }}<span
-                    style="font-size:0.9rem"> GB</span></div></div>
-            <div class="mq-stat"><p class="k">Average speed</p>
-                <div class="v">{{ "%.1f"|format(summary_stats.average_speed_mbps) }}<span
-                    style="font-size:0.9rem"> MB/min</span></div></div>
-        </section>
-
-        {% if plots %}
-        <section class="mq-section">
-            <h2>Download analytics</h2>
-            <div class="mq-grid">
-            {% for plot_name, plot_html in plots.items() %}
-                <div class="mq-panel">{{ plot_html|safe }}</div>
-            {% endfor %}
-            </div>
-        </section>
-        {% endif %}
-
-        <section class="mq-section">
-            <h2>Download results</h2>
-            <div class="mq-table-wrap">
-                <table class="mq-table">
-                    <thead><tr>
-                        <th>Accession</th><th>Status</th><th>Size (MB)</th>
-                        <th>Progress</th><th>Speed (MB/s)</th><th>Retries</th>
-                    </tr></thead>
-                    <tbody>
-                    {% for accession, result in session.download_results.items() %}
-                        <tr>
-                            <td>{{ accession }}</td>
-                            <td class="{{ 'mq-ok' if result.status == 'completed' else 'mq-bad' }}">{{
-                                result.status.title() }}</td>
-                            <td class="mq-num">{{ "%.1f"|format(result.downloaded_mb) }}</td>
-                            <td class="mq-num">{{ "%.1f"|format(result.progress_pct) }}%</td>
-                            <td class="mq-num">{{ "%.2f"|format(result.speed_mbps) }}</td>
-                            <td class="mq-num">{{ result.retry_count }}</td>
-                        </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </section>
-        <footer class="mq-footer">Generated by MetaQuest</footer>
-    </main>
-</body>
-</html>
-        """
-
-        template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
-        return template.render(plotly_js=plotly_js_script(), report_css=REPORT_CSS, **report_data)
 
     def _generate_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate HTML content for quality dashboard."""
@@ -677,40 +422,6 @@ class SRAReportGenerator:
 <main class="mq-wrap">{body}
 <footer class="mq-footer">Generated by MetaQuest</footer>
 </main></body></html>"""
-
-    def _generate_simple_download_html(self, report_data: Dict[str, Any]) -> str:
-        """Generate simple HTML without Jinja2."""
-        session = report_data["session"]
-        stats = report_data["summary_stats"]
-        session_id = html_escape(str(session.session_id))
-        timestamp = html_escape(str(report_data["timestamp"]))
-
-        rows = ""
-        for accession, result in session.download_results.items():
-            cls = "mq-ok" if str(result.status) == "completed" else "mq-bad"
-            rows += (
-                f"<tr><td>{html_escape(str(accession))}</td>"
-                f'<td class="{cls}">{html_escape(str(result.status).title())}</td>'
-                f'<td class="mq-num">{result.downloaded_mb:.1f}</td>'
-                f'<td class="mq-num">{result.progress_pct:.1f}%</td></tr>'
-            )
-
-        body = f"""
-<section class="mq-stats" aria-label="Download summary">
-<div class="mq-stat"><p class="k">Total downloads</p><div class="v">{stats['total_accessions']}</div></div>
-<div class="mq-stat"><p class="k">Success rate</p><div class="v">{stats['success_rate'] * 100:.1f}%</div></div>
-<div class="mq-stat"><p class="k">Total size</p><div class="v">{stats['total_size_mb'] / 1024:.1f}\
-<span style="font-size:0.9rem"> GB</span></div></div>
-<div class="mq-stat"><p class="k">Average speed</p><div class="v">{stats['average_speed_mbps']:.1f}\
-<span style="font-size:0.9rem"> MB/min</span></div></div>
-</section>
-<section class="mq-section"><h2>Download results</h2>
-<div class="mq-table-wrap"><table class="mq-table">
-<thead><tr><th>Accession</th><th>Status</th><th>Size (MB)</th><th>Progress</th></tr></thead>
-<tbody>{rows}</tbody></table></div></section>"""
-
-        readout = f"<span>session <b>{session_id}</b></span> <span>generated <b>{timestamp}</b></span>"
-        return self._simple_shell("MetaQuest &middot; SRA download", "Download summary", readout, body)
 
     def _generate_simple_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate simple quality HTML without Jinja2."""

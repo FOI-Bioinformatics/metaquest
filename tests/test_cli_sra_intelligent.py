@@ -1,8 +1,7 @@
 """
 COMPREHENSIVE TESTS for cli/commands/sra_intelligent.py (23% → 80%+ coverage)
 
-This file tests all 4 intelligent SRA CLI commands:
-- SRAIntelligentDownloadCommand
+This file tests the intelligent SRA CLI commands:
 - SRAQualityProfileCommand
 - SRAInteractiveDashboardCommand
 - SRAComparativeAnalysisCommand
@@ -14,11 +13,9 @@ import argparse
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
-from datetime import datetime
 from argparse import Namespace
 
 from metaquest.cli.commands.sra_intelligent import (
-    SRAIntelligentDownloadCommand,
     SRAQualityProfileCommand,
     SRAInteractiveDashboardCommand,
     SRAComparativeAnalysisCommand,
@@ -26,74 +23,8 @@ from metaquest.cli.commands.sra_intelligent import (
 
 # Builders that return the REAL backend dataclasses, so these tests exercise the
 # actual interface the CLI consumes (rather than masking mocks).
-from metaquest.sra.download_manager import (  # noqa: E402
-    DownloadSession,
-    DownloadProgress,
-    NetworkConditions,
-)
 from metaquest.sra.analytics import QualityProfile, ComparativeAnalysis  # noqa: E402
 from metaquest.sra.analytics import SRADatasetAnalyzer as RealSRADatasetAnalyzer  # noqa: E402
-
-# Keys returned by the real IntelligentDownloadManager.estimate_download_time()
-REAL_ESTIMATE = {
-    "total_size_mb": 1024.0,
-    "estimated_time_minutes": 30.0,
-    "estimated_time_formatted": "0:30:00",
-    "network_bandwidth_mbps": 50.0,
-    "optimal_parallel_downloads": 4,
-    "individual_estimates": {},
-}
-
-
-def make_session(session_id, completed, failed, failed_accessions):
-    """Build a real DownloadSession with the requested success/failure split."""
-    nc = NetworkConditions(
-        bandwidth_mbps=10.0,
-        latency_ms=100.0,
-        packet_loss_pct=0.0,
-        connection_stability=1.0,
-        optimal_parallel_downloads=4,
-        last_measured=datetime.now(),
-    )
-    results = {}
-    for acc in failed_accessions:
-        results[acc] = DownloadProgress(
-            accession=acc,
-            status="failed",
-            progress_pct=0.0,
-            downloaded_mb=0.0,
-            total_mb=None,
-            speed_mbps=0.0,
-            eta_seconds=None,
-            retry_count=0,
-            error_message="err",
-        )
-    for i in range(completed):
-        acc = f"SRRC{i}"
-        results[acc] = DownloadProgress(
-            accession=acc,
-            status="completed",
-            progress_pct=100.0,
-            downloaded_mb=1.0,
-            total_mb=1.0,
-            speed_mbps=5.0,
-            eta_seconds=0,
-            retry_count=0,
-            error_message=None,
-        )
-    return DownloadSession(
-        session_id=session_id,
-        accessions=list(results.keys()),
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        total_size_mb=float(len(results)),
-        downloaded_mb=float(completed),
-        success_count=completed,
-        failure_count=failed,
-        average_speed_mbps=5.0,
-        network_conditions=nc,
-        download_results=results,
-    )
 
 
 def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0):
@@ -115,240 +46,6 @@ def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0):
         quality_grade="good",
         recommendations=[],
     )
-
-
-# ============================================================================
-# TEST CLASS: SRAIntelligentDownloadCommand
-# ============================================================================
-
-
-class TestSRAIntelligentDownloadCommand:
-    """Test SRAIntelligentDownloadCommand functionality."""
-
-    def test_command_properties(self):
-        """Test command name and help text."""
-        cmd = SRAIntelligentDownloadCommand()
-        assert cmd.name == "sra-download-intelligent"
-        assert "intelligent" in cmd.help.lower()
-        assert "resume" in cmd.help.lower()
-
-    def test_configure_parser(self):
-        """Test parser configuration."""
-        cmd = SRAIntelligentDownloadCommand()
-        parser = Mock()
-        parser.add_argument = Mock()
-
-        cmd.configure_parser(parser)
-
-        # Verify all required arguments were added
-        assert parser.add_argument.call_count >= 10
-        call_args = [call[0][0] for call in parser.add_argument.call_args_list]
-        assert "--accessions-file" in call_args
-        assert "--output-dir" in call_args
-        assert "--resume" in call_args
-
-    def test_read_accessions_success(self, tmp_path):
-        """Test successful accession file reading."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "accessions.txt"
-        accessions_file.write_text("SRR001\nSRR002\nSRR003\n")
-
-        result = cmd._read_accessions(str(accessions_file))
-
-        assert len(result) == 3
-        assert "SRR001" in result
-        assert "SRR002" in result
-        assert "SRR003" in result
-
-    def test_read_accessions_strips_whitespace(self, tmp_path):
-        """Test that whitespace is stripped from accessions."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "accessions.txt"
-        accessions_file.write_text("  SRR001  \n\tSRR002\t\n\nSRR003\n  \n")
-
-        result = cmd._read_accessions(str(accessions_file))
-
-        assert len(result) == 3
-        assert all(acc.strip() == acc for acc in result)
-
-    def test_read_accessions_empty_file(self, tmp_path, capsys):
-        """Test reading empty accessions file."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "empty.txt"
-        accessions_file.write_text("\n\n  \n")
-
-        result = cmd._read_accessions(str(accessions_file))
-
-        assert len(result) == 0
-        captured = capsys.readouterr()
-        assert "No accessions found" in captured.out
-
-    def test_read_accessions_file_not_found(self, capsys):
-        """Test reading non-existent accessions file."""
-        cmd = SRAIntelligentDownloadCommand()
-
-        result = cmd._read_accessions("/nonexistent/file.txt")
-
-        assert len(result) == 0
-        captured = capsys.readouterr()
-        assert "not found" in captured.out
-
-    def test_print_download_estimate(self, capsys):
-        """Test download estimate printing."""
-        cmd = SRAIntelligentDownloadCommand()
-        mock_manager = Mock()
-        mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
-
-        cmd._print_download_estimate(mock_manager, ["SRR001", "SRR002"])
-
-        captured = capsys.readouterr()
-        assert "Download Estimate" in captured.out
-        assert "Total datasets: 2" in captured.out
-        assert "0:30:00" in captured.out  # estimated_time_formatted
-        assert "bandwidth" in captured.out.lower()
-
-    def test_print_session_summary(self, capsys):
-        """Test session summary printing."""
-        cmd = SRAIntelligentDownloadCommand()
-        session = make_session("test_123", completed=8, failed=2, failed_accessions=["SRR001", "SRR002"])
-
-        cmd._print_session_summary(session)
-
-        captured = capsys.readouterr()
-        assert "test_123" in captured.out
-        assert "Completed: 8" in captured.out
-        assert "Failed: 2" in captured.out
-        assert "Throughput Statistics" in captured.out
-
-    def test_execute_dry_run(self, tmp_path, capsys):
-        """Test execution in dry-run mode."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "accessions.txt"
-        accessions_file.write_text("SRR001\nSRR002\n")
-
-        args = Namespace(
-            accessions_file=str(accessions_file),
-            output_dir=str(tmp_path / "output"),
-            temp_dir=None,
-            checkpoint_dir=None,
-            max_bandwidth_mbps=None,
-            max_parallel_downloads=4,
-            resume=True,
-            no_resume=False,
-            force_restart=False,
-            dry_run=True,
-            progress_report="progress.json",
-        )
-
-        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager"):
-            result = cmd.execute(args)
-
-        assert result == 0
-        captured = capsys.readouterr()
-        assert "Dry run" in captured.out
-
-    def test_execute_success(self, tmp_path):
-        """Test successful download execution."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "accessions.txt"
-        accessions_file.write_text("SRR001\nSRR002\n")
-
-        args = Namespace(
-            accessions_file=str(accessions_file),
-            output_dir=str(tmp_path / "output"),
-            temp_dir=None,
-            checkpoint_dir=None,
-            max_bandwidth_mbps=None,
-            max_parallel_downloads=4,
-            resume=True,
-            no_resume=False,
-            force_restart=False,
-            dry_run=False,
-            progress_report=str(tmp_path / "progress.json"),
-        )
-
-        mock_session = make_session("test_123", completed=2, failed=0, failed_accessions=[])
-
-        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
-            mock_manager = Mock()
-            mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
-            mock_manager.download_with_resume.return_value = mock_session
-            mock_mgr_class.return_value = mock_manager
-
-            result = cmd.execute(args)
-
-        assert result == 0
-        assert Path(tmp_path / "progress.json").exists()
-        saved = json.loads(Path(tmp_path / "progress.json").read_text())
-        assert saved["completed_downloads"] == 2
-        assert saved["failed_downloads"] == 0
-        assert saved["failed_accessions"] == []
-
-    def test_execute_with_failures(self, tmp_path):
-        """Test execution with some failed downloads."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "accessions.txt"
-        accessions_file.write_text("SRR001\nSRR002\nSRR003\n")
-
-        args = Namespace(
-            accessions_file=str(accessions_file),
-            output_dir=str(tmp_path / "output"),
-            temp_dir=None,
-            checkpoint_dir=None,
-            max_bandwidth_mbps=None,
-            max_parallel_downloads=4,
-            resume=True,
-            no_resume=False,
-            force_restart=False,
-            dry_run=False,
-            progress_report=str(tmp_path / "progress.json"),
-        )
-
-        mock_session = make_session("test_123", completed=2, failed=1, failed_accessions=["SRR003"])
-
-        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
-            mock_manager = Mock()
-            mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
-            mock_manager.download_with_resume.return_value = mock_session
-            mock_mgr_class.return_value = mock_manager
-
-            result = cmd.execute(args)
-
-        assert result == 1  # Should return error code due to failures
-        saved = json.loads(Path(tmp_path / "progress.json").read_text())
-        assert saved["failed_accessions"] == ["SRR003"]
-
-    def test_execute_keyboard_interrupt(self, tmp_path, capsys):
-        """Test handling of keyboard interrupt."""
-        cmd = SRAIntelligentDownloadCommand()
-        accessions_file = tmp_path / "accessions.txt"
-        accessions_file.write_text("SRR001\n")
-
-        args = Namespace(
-            accessions_file=str(accessions_file),
-            output_dir=str(tmp_path / "output"),
-            temp_dir=None,
-            checkpoint_dir=None,
-            max_bandwidth_mbps=None,
-            max_parallel_downloads=4,
-            resume=True,
-            no_resume=False,
-            force_restart=False,
-            dry_run=False,
-            progress_report=str(tmp_path / "progress.json"),
-        )
-
-        with patch("metaquest.cli.commands.sra_intelligent.IntelligentDownloadManager") as mock_mgr_class:
-            mock_manager = Mock()
-            mock_manager.estimate_download_time.return_value = dict(REAL_ESTIMATE)
-            mock_manager.download_with_resume.side_effect = KeyboardInterrupt()
-            mock_mgr_class.return_value = mock_manager
-
-            result = cmd.execute(args)
-
-        assert result == 2  # Special exit code for interrupt
-        captured = capsys.readouterr()
-        assert "interrupted" in captured.out.lower()
 
 
 # ============================================================================
@@ -584,7 +281,6 @@ class TestSRAInteractiveDashboardCommand:
 
         args = Namespace(
             accessions_file=str(accessions_file),
-            download_session=None,
             quality_profiles=None,
             fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dashboards"),
@@ -613,7 +309,6 @@ class TestSRAInteractiveDashboardCommand:
 
         args = Namespace(
             accessions_file=str(accessions_file),
-            download_session=None,
             quality_profiles=None,
             fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dashboards"),
@@ -644,7 +339,6 @@ class TestSRAInteractiveDashboardCommand:
 
         args = Namespace(
             accessions_file=str(accessions_file),
-            download_session=None,
             quality_profiles=None,
             fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dashboards"),
@@ -786,71 +480,14 @@ class TestSRAComparativeAnalysisCommand:
 # ============================================================================
 # TEST CLASS: Integration against REAL backend dataclasses
 #
-# These tests construct the actual DownloadSession / QualityProfile /
-# ComparativeAnalysis objects returned by the sra/ backend (not mocks), to
-# guard against the CLI drifting away from the real dataclass interface.
+# These tests construct the actual QualityProfile / ComparativeAnalysis objects
+# returned by the sra/ backend (not mocks), to guard against the CLI drifting
+# away from the real dataclass interface.
 # ============================================================================
 
 
 class TestRealBackendInterface:
     """Drive the CLI summary helpers with the real backend dataclasses."""
-
-    def _real_session(self, success, failure, failed_accs):
-        from datetime import datetime
-        from metaquest.sra.download_manager import (
-            DownloadSession,
-            DownloadProgress,
-            NetworkConditions,
-        )
-
-        nc = NetworkConditions(
-            bandwidth_mbps=10.0,
-            latency_ms=100.0,
-            packet_loss_pct=0.0,
-            connection_stability=1.0,
-            optimal_parallel_downloads=4,
-            last_measured=datetime.now(),
-        )
-        results = {}
-        for acc in failed_accs:
-            results[acc] = DownloadProgress(
-                accession=acc,
-                status="failed",
-                progress_pct=0.0,
-                downloaded_mb=0.0,
-                total_mb=None,
-                speed_mbps=0.0,
-                eta_seconds=None,
-                retry_count=0,
-                error_message="boom",
-            )
-        for i in range(success):
-            acc = f"SRR9000{i}"
-            results[acc] = DownloadProgress(
-                accession=acc,
-                status="completed",
-                progress_pct=100.0,
-                downloaded_mb=1.0,
-                total_mb=1.0,
-                speed_mbps=5.0,
-                eta_seconds=0,
-                retry_count=0,
-                error_message=None,
-            )
-        accessions = list(results.keys())
-        return DownloadSession(
-            session_id="real_1",
-            accessions=accessions,
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-            total_size_mb=float(len(accessions)),
-            downloaded_mb=float(success),
-            success_count=success,
-            failure_count=failure,
-            average_speed_mbps=5.0,
-            network_conditions=nc,
-            download_results=results,
-        )
 
     def _real_profile(self, accession, n_content, dup_rate, adapter):
         from metaquest.sra.analytics import QualityProfile
@@ -872,17 +509,6 @@ class TestRealBackendInterface:
             quality_grade="good",
             recommendations=[],
         )
-
-    def test_print_session_summary_real(self, capsys):
-        cmd = SRAIntelligentDownloadCommand()
-        session = self._real_session(success=8, failure=2, failed_accs=["SRR001", "SRR002"])
-
-        cmd._print_session_summary(session)  # must not raise AttributeError
-
-        out = capsys.readouterr().out
-        assert "real_1" in out
-        assert "8" in out  # completed
-        assert "2" in out  # failed
 
     def test_print_quality_profile_real(self, capsys):
         cmd = SRAQualityProfileCommand()
@@ -980,7 +606,6 @@ class TestHonestExits:
         acc_file.write_text("SRR000001\n")
         args = argparse.Namespace(
             accessions_file=str(acc_file),
-            download_session=None,
             quality_profiles=None,
             fastq_dir=str(tmp_path / "fastq"),
             output_dir=str(tmp_path / "dash"),
@@ -997,7 +622,7 @@ class TestHonestExits:
 # After running these tests:
 # - Expected: 45+ tests pass
 # - Coverage: 23% → 80%+ for cli/commands/sra_intelligent.py
-# - All 4 CLI commands tested
+# - All 3 CLI commands tested
 #
 # Run tests:
 #   pytest tests/test_cli_sra_intelligent.py -v

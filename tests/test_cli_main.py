@@ -71,7 +71,6 @@ class TestRegisterAllCommands:
         """The kebab-case intelligent commands also accept snake_case names."""
         choices = self._subcommand_choices(create_parser())
         for kebab, snake in (
-            ("sra-download-intelligent", "sra_download_intelligent"),
             ("sra-profile-quality", "sra_profile_quality"),
             ("sra-dashboard", "sra_dashboard"),
             ("sra-compare", "sra_compare"),
