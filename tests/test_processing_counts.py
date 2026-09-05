@@ -686,6 +686,7 @@ class TestProcessGenomeAccessionsExtended:
         result = _process_genome_accessions("GCF_000001.1", summary_df, 0.5, metadata_df, "organism", df_list)
 
         assert result == 0
+        assert len(df_list) == 0
 
 
 def test_count_metadata_includes_samples_at_the_threshold(tmp_path):
