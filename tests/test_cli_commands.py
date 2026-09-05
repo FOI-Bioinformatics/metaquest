@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from metaquest.cli.commands.branchwater import (
@@ -263,20 +264,81 @@ class TestDownloadMetadataCommand:
         assert args.dry_run is True
 
     @patch("metaquest.cli.commands.metadata.download_metadata")
-    def test_execute(self, mock_command):
+    def test_execute(self, mock_command, tmp_path):
         """Test command execution."""
-        mock_command.return_value = None
+        mock_command.return_value = {}
         command = DownloadMetadataCommand()
 
         args = argparse.Namespace(
-            email="test@example.com", matches_folder="matches", metadata_folder="metadata", threshold=0.0, dry_run=False
+            email="test@example.com",
+            matches_folder="matches",
+            metadata_folder="metadata",
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
-            email="test@example.com", matches_folder="matches", metadata_folder="metadata", threshold=0.0, dry_run=False
+            email="test@example.com",
+            matches_folder="matches",
+            metadata_folder="metadata",
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=None,
         )
+
+    def test_execute_records_metadata_in_registry(self, tmp_path):
+        """Every accession download_metadata reports downloaded is recorded with its XML path."""
+        metadata_folder = tmp_path / "metadata"
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR1\nSRR2\n")
+
+        command = DownloadMetadataCommand()
+        args = argparse.Namespace(
+            email="test@example.com",
+            matches_folder=str(tmp_path / "matches"),
+            metadata_folder=str(metadata_folder),
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=str(accessions_file),
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        def fake_download(accession, metadata_path, entrez_email):
+            xml_path = metadata_path / f"{accession}_metadata.xml"
+            xml_path.write_text("<root/>")
+            return True, xml_path
+
+        with patch("metaquest.data.metadata._download_single_metadata", side_effect=fake_download):
+            result = command.execute(args)
+
+        assert result == 0
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        for acc in ("SRR1", "SRR2"):
+            assert registry["datasets"][acc]["metadata"]["xml"].endswith(f"{acc}_metadata.xml")
+
+    def test_execute_dry_run_records_nothing(self, tmp_path):
+        """A dry run does not touch the registry."""
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR1\n")
+
+        command = DownloadMetadataCommand()
+        args = argparse.Namespace(
+            email="test@example.com",
+            matches_folder=str(tmp_path / "matches"),
+            metadata_folder=str(tmp_path / "metadata"),
+            threshold=0.0,
+            dry_run=True,
+            accessions_file=str(accessions_file),
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        result = command.execute(args)
+        assert result == 0
+        assert not (tmp_path / "metaquest_registry.json").exists()
 
 
 class TestDownloadTestGenomeCommand:
@@ -795,16 +857,63 @@ class TestParseMetadataCommand:
         assert args.metadata_table_file == "custom_table.txt"
 
     @patch("metaquest.cli.commands.metadata.parse_metadata")
-    def test_execute(self, mock_command):
+    def test_execute(self, mock_command, tmp_path):
         """Test command execution."""
-        mock_command.return_value = None
+        mock_command.return_value = pd.DataFrame()
         command = ParseMetadataCommand()
 
-        args = argparse.Namespace(metadata_folder="metadata", metadata_table_file="metadata_table.txt")
+        args = argparse.Namespace(
+            metadata_folder="metadata",
+            metadata_table_file="metadata_table.txt",
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
 
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with("metadata", "metadata_table.txt")
+
+    def test_execute_records_metadata_in_registry(self, tmp_path):
+        """Parsing a metadata folder records run_size/run_md5 for each accession."""
+        metadata_folder = tmp_path / "metadata"
+        metadata_folder.mkdir()
+        xml_content = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE_SET>
+            <EXPERIMENT_PACKAGE>
+                <SAMPLE>
+                    <IDENTIFIERS>
+                        <PRIMARY_ID>SAMN123</PRIMARY_ID>
+                    </IDENTIFIERS>
+                    <SAMPLE_NAME>
+                        <SCIENTIFIC_NAME>Escherichia coli</SCIENTIFIC_NAME>
+                    </SAMPLE_NAME>
+                </SAMPLE>
+                <RUN_SET>
+                    <RUN>
+                        <IDENTIFIERS>
+                            <PRIMARY_ID>SRR123</PRIMARY_ID>
+                        </IDENTIFIERS>
+                        <size>12345</size>
+                        <md5>abcdef0123456789</md5>
+                    </RUN>
+                </RUN_SET>
+            </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+        (metadata_folder / "SRR123_metadata.xml").write_text(xml_content)
+
+        command = ParseMetadataCommand()
+        args = argparse.Namespace(
+            metadata_folder=str(metadata_folder),
+            metadata_table_file=str(tmp_path / "metadata_table.txt"),
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        result = command.execute(args)
+        assert result == 0
+
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        metadata = registry["datasets"]["SRR123"]["metadata"]
+        assert metadata["run_size"] == "12345"
+        assert metadata["run_md5"] == "abcdef0123456789"
 
 
 class TestCountMetadataCommand:

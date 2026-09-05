@@ -9,6 +9,7 @@ This module provides comprehensive analysis capabilities for SRA datasets includ
 - Processing parameter recommendations
 """
 
+import json
 import logging
 import statistics
 from collections import Counter, defaultdict
@@ -86,6 +87,49 @@ class ProcessingRecommendations:
     expected_coverage: Optional[float]
     computational_requirements: Dict[str, Any]
     estimated_processing_time: str
+
+
+_QUALITY_PROFILE_SUFFIX = "_quality_profile.json"
+
+
+def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityProfile"]:
+    """Load previously saved per-accession quality profile JSONs (see ``_write_detailed_report``).
+
+    Returns an accession -> QualityProfile mapping for every readable
+    ``*_quality_profile.json`` file found directly under ``profiles_dir``. A
+    missing directory yields an empty mapping; a file that is not valid JSON
+    is skipped with a warning rather than raising.
+    """
+    profiles: Dict[str, QualityProfile] = {}
+    directory = Path(profiles_dir)
+    if not directory.is_dir():
+        return profiles
+
+    for path in sorted(directory.glob(f"*{_QUALITY_PROFILE_SUFFIX}")):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Could not read quality profile %s: %s", path, e)
+            continue
+        accession = data.get("accession") or path.name[: -len(_QUALITY_PROFILE_SUFFIX)]
+        profiles[accession] = QualityProfile(
+            accession=accession,
+            total_reads=data.get("total_reads", 0),
+            total_bases=data.get("total_bases", 0),
+            avg_read_length=data.get("avg_read_length", 0.0),
+            read_length_distribution=data.get("read_length_distribution", {}),
+            gc_content=data.get("gc_content", 0.0),
+            gc_distribution=data.get("gc_distribution", []),
+            quality_distribution=data.get("quality_distribution", {}),
+            n_content=data.get("n_content", 0.0),
+            contamination_indicators=data.get("contamination_indicators", {}),
+            complexity_score=data.get("complexity_score", 0.0),
+            duplication_rate=data.get("duplication_rate"),
+            technology_confidence=data.get("technology_confidence", 0.0),
+            quality_grade=data.get("quality_grade", ""),
+            recommendations=data.get("recommendations", []),
+        )
+    return profiles
 
 
 class SequenceQualityAnalyzer:

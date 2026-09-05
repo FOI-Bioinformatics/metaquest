@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 import time
 import pandas as pd
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from Bio import Entrez
 from lxml import etree
@@ -74,6 +74,11 @@ def _get_unique_accessions(matches_folder, threshold):
     return unique_accessions
 
 
+def _read_accessions_file(path: Union[str, Path]) -> List[str]:
+    """Read non-empty, non-comment accession lines from a file, one accession per line."""
+    return [ln.strip() for ln in Path(path).read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+
 def _download_single_metadata(accession, metadata_path, entrez_email):
     """
     Download metadata for a single accession.
@@ -130,9 +135,10 @@ def download_metadata(
     metadata_folder: Union[str, Path],
     threshold: float = 0.0,
     dry_run: bool = False,
+    accessions_file: Optional[Union[str, Path]] = None,
 ) -> Dict[str, Path]:
     """
-    Download metadata for SRA accessions found in match files.
+    Download metadata for SRA accessions found in match files, or from an explicit list.
 
     Args:
         email: Email address for NCBI API
@@ -140,6 +146,8 @@ def download_metadata(
         metadata_folder: Folder to save metadata files
         threshold: Minimum containment threshold
         dry_run: If True, only count accessions without downloading
+        accessions_file: When given, the wanted accessions come from this file's
+            non-empty, non-comment lines and the matches folder is not read.
 
     Returns:
         Dictionary mapping accessions to metadata file paths
@@ -148,11 +156,13 @@ def download_metadata(
         DataAccessError: If the download fails
     """
     try:
-        matches_path = validate_folder(matches_folder)
         metadata_path = ensure_directory(metadata_folder)
 
-        # Get unique accessions from match files
-        unique_accessions = _get_unique_accessions(matches_path, threshold)
+        if accessions_file:
+            unique_accessions: set = set(_read_accessions_file(accessions_file))
+        else:
+            matches_path = validate_folder(matches_folder)
+            unique_accessions = _get_unique_accessions(matches_path, threshold)
 
         total_accessions = len(unique_accessions)
         logger.info(f"Found {total_accessions} unique accessions")

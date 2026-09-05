@@ -107,6 +107,7 @@ class TestSRAQualityProfileCommand:
             detailed_reports=False,
             include_contamination=False,
             summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
@@ -119,6 +120,11 @@ class TestSRAQualityProfileCommand:
             result = cmd.execute(args)
 
         assert result == 0
+
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        analysis = registry["datasets"]["SRR001"]["analyses"]["quality"]
+        assert analysis["summary"] == {"grade": "good", "total_reads": 1000, "gc_content": 0.45}
+        assert analysis["output"] == str(tmp_path / "output" / "quality_summary.json")
 
     def test_execute_batch_mode(self, tmp_path):
         """Test batch profiling mode."""
@@ -142,13 +148,15 @@ class TestSRAQualityProfileCommand:
             detailed_reports=True,
             include_contamination=True,
             summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
-        mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
+        def profile_for(accession, fastq_path):
+            return make_profile(accession, n_content=0.01, duplication_rate=0.15, adapter=0.02)
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
-            mock_analyzer.profile_dataset_quality.return_value = mock_profile
+            mock_analyzer.profile_dataset_quality.side_effect = profile_for
             mock_analyzer_class.return_value = mock_analyzer
 
             result = cmd.execute(args)
@@ -160,6 +168,15 @@ class TestSRAQualityProfileCommand:
         report = json.loads(report_path.read_text())
         assert report["quality_grade"] == "good"
         assert report["contamination_indicators"]["adapter_contamination"] == 0.02
+        # A profile written with --detailed-reports round-trips through load_quality_profiles.
+        assert "read_length_distribution" in report
+        assert "gc_distribution" in report
+        assert "technology_confidence" in report
+
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        for acc in ("SRR001", "SRR002"):
+            analysis = registry["datasets"][acc]["analyses"]["quality"]
+            assert analysis["output"] == str(tmp_path / "output" / f"{acc}_quality_profile.json")
 
     def test_execute_missing_fastq_marks_failed(self, tmp_path):
         """Accessions with no FASTQ files are recorded as failed and yield exit 1."""
@@ -178,6 +195,7 @@ class TestSRAQualityProfileCommand:
             detailed_reports=False,
             include_contamination=False,
             summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
@@ -221,6 +239,7 @@ class TestSRAQualityProfileCommand:
             detailed_reports=False,
             include_contamination=False,
             summary_only=True,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         mock_profile = make_profile("SRR", n_content=0.01, duplication_rate=0.15, adapter=0.02)
@@ -301,6 +320,64 @@ class TestSRAInteractiveDashboardCommand:
             result = cmd.execute(args)
 
         assert result == 0
+
+    def test_execute_uses_saved_quality_profiles(self, tmp_path):
+        """A saved quality profile is loaded and reused instead of reprofiling from FASTQ."""
+        cmd = SRAInteractiveDashboardCommand()
+
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR001\n")
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
+        (profiles_dir / "SRR001_quality_profile.json").write_text(
+            json.dumps(
+                {
+                    "accession": profile.accession,
+                    "total_reads": profile.total_reads,
+                    "total_bases": profile.total_bases,
+                    "avg_read_length": profile.avg_read_length,
+                    "read_length_distribution": profile.read_length_distribution,
+                    "gc_content": profile.gc_content,
+                    "gc_distribution": profile.gc_distribution,
+                    "quality_distribution": profile.quality_distribution,
+                    "n_content": profile.n_content,
+                    "contamination_indicators": profile.contamination_indicators,
+                    "complexity_score": profile.complexity_score,
+                    "duplication_rate": profile.duplication_rate,
+                    "technology_confidence": profile.technology_confidence,
+                    "quality_grade": profile.quality_grade,
+                    "recommendations": profile.recommendations,
+                }
+            )
+        )
+
+        args = Namespace(
+            accessions_file=str(accessions_file),
+            quality_profiles=str(profiles_dir),
+            fastq_dir=str(tmp_path / "fastq"),  # never created: no FASTQ files exist on disk
+            output_dir=str(tmp_path / "dashboards"),
+            title="Test Dashboard",
+            dashboard_type="quality",
+            no_open=True,
+        )
+
+        mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            mock_reporter = Mock()
+            mock_reporter.analyzer.find_fastq.return_value = None
+            mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
+            mock_reporter_class.return_value = mock_reporter
+
+            result = cmd.execute(args)
+
+        assert result == 0
+        mock_reporter.analyzer.profile_dataset_quality.assert_not_called()
+        _, kwargs = mock_reporter.generate_quality_dashboard.call_args
+        assert kwargs["profiles"]["SRR001"].accession == "SRR001"
+        assert kwargs["profiles"]["SRR001"].quality_grade == "good"
 
     def test_execute_opens_dashboard_when_not_suppressed(self, tmp_path):
         """Without --no-open the generated dashboard is passed to open_in_browser."""

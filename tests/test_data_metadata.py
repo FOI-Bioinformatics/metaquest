@@ -223,6 +223,33 @@ class TestDownloadMetadata:
             with pytest.raises(DataAccessError):
                 download_metadata("test@example.com", "invalid", tmp_path)
 
+    def test_download_metadata_accessions_file_bypasses_matches_folder(self, tmp_path):
+        """With --accessions-file the wanted set comes from the file; the matches folder is not read."""
+        metadata_dir = tmp_path / "metadata"
+        accessions_file = tmp_path / "accessions.txt"
+        accessions_file.write_text("SRR1\nSRR2\n# comment\n\nSRR3\n")
+
+        calls = []
+
+        def fake_single(accession, metadata_path, entrez_email):
+            calls.append(accession)
+            xml_path = metadata_path / f"{accession}_metadata.xml"
+            xml_path.write_text("<root/>")
+            return True, xml_path
+
+        with patch("metaquest.data.metadata.validate_folder") as mock_validate_folder:
+            with patch("metaquest.data.metadata._download_single_metadata", side_effect=fake_single):
+                result = download_metadata(
+                    "test@example.com",
+                    "does-not-exist",
+                    metadata_dir,
+                    accessions_file=accessions_file,
+                )
+
+        mock_validate_folder.assert_not_called()
+        assert sorted(calls) == ["SRR1", "SRR2", "SRR3"]
+        assert set(result) == {"SRR1", "SRR2", "SRR3"}
+
 
 class TestDownloadAccessionsMetadata:
     """Test _download_accessions_metadata function."""

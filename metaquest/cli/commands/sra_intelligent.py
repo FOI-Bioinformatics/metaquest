@@ -8,13 +8,15 @@ analysis, comparative dataset analysis, and interactive reporting dashboards.
 import logging
 import json
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from metaquest.cli.base import BaseCommand
+from metaquest.data.registry import load_registry, record_analysis, save_registry
 from metaquest.sra import (
     SRADatasetAnalyzer,
     SRAReportGenerator,
     QualityProfile,
+    load_quality_profiles,
 )
 from metaquest.utils.browser import open_in_browser
 
@@ -89,6 +91,7 @@ class SRAQualityProfileCommand(BaseCommand):
             action="store_true",
             help="Generate only summary statistics",
         )
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
@@ -135,12 +138,15 @@ class SRAQualityProfileCommand(BaseCommand):
                     "total_reads": profile.total_reads,
                     "total_bases": profile.total_bases,
                     "avg_read_length": profile.avg_read_length,
+                    "read_length_distribution": profile.read_length_distribution,
                     "gc_content": profile.gc_content,
+                    "gc_distribution": profile.gc_distribution,
                     "quality_grade": profile.quality_grade,
                     "quality_distribution": profile.quality_distribution,
                     "complexity_score": profile.complexity_score,
                     "n_content": profile.n_content,
                     "duplication_rate": profile.duplication_rate,
+                    "technology_confidence": profile.technology_confidence,
                     "contamination_indicators": profile.contamination_indicators,
                     "recommendations": profile.recommendations,
                 },
@@ -244,6 +250,27 @@ class SRAQualityProfileCommand(BaseCommand):
                     indent=2,
                 )
 
+            if profiles:
+                registry = load_registry(args.registry)
+                for profile in profiles:
+                    output = (
+                        output_dir / f"{profile.accession}_quality_profile.json"
+                        if args.detailed_reports
+                        else summary_file
+                    )
+                    record_analysis(
+                        registry,
+                        profile.accession,
+                        "quality",
+                        output,
+                        {
+                            "grade": profile.quality_grade,
+                            "total_reads": profile.total_reads,
+                            "gc_content": profile.gc_content,
+                        },
+                    )
+                save_registry(registry)
+
             print("\nQuality analysis complete!")
             print(f"Summary saved to: {summary_file}")
 
@@ -324,8 +351,12 @@ class SRAInteractiveDashboardCommand(BaseCommand):
             if not accessions:
                 return 1
 
+            profiles: Dict[str, QualityProfile] = {}
+            if args.quality_profiles and Path(args.quality_profiles).is_dir():
+                profiles = load_quality_profiles(args.quality_profiles)
+
             reporter = SRAReportGenerator(output_dir=str(output_dir), fastq_dir=args.fastq_dir)
-            missing = [acc for acc in accessions if reporter.analyzer.find_fastq(acc) is None]
+            missing = [acc for acc in accessions if acc not in profiles and reporter.analyzer.find_fastq(acc) is None]
             if len(missing) == len(accessions):
                 logger.error(
                     "No FASTQ files found for any of %d accession(s) under %s", len(accessions), args.fastq_dir
@@ -342,7 +373,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
                 # Quality analysis dashboard
                 print("Creating quality analysis dashboard...")
                 dashboard_path = reporter.generate_quality_dashboard(
-                    accessions, title=f"{args.title} - Quality Analysis"
+                    accessions, title=f"{args.title} - Quality Analysis", profiles=profiles or None
                 )
 
             if args.dashboard_type in ["comparative", "full"]:

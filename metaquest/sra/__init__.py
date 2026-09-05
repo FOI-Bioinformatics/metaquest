@@ -16,6 +16,7 @@ from .analytics import (
     ComparativeAnalysis,
     AnomalyReport,
     ProcessingRecommendations,
+    load_quality_profiles,
 )
 
 from .reporting import SRAReportGenerator
@@ -31,6 +32,7 @@ __all__ = [
     "ComparativeAnalysis",
     "AnomalyReport",
     "ProcessingRecommendations",
+    "load_quality_profiles",
     # Reporting
     "SRAReportGenerator",
 ]

@@ -8,7 +8,11 @@ previewing NCBI metadata, computing statistics, and validating downloaded datase
 import logging
 from pathlib import Path
 
+import pandas as pd
+
 from metaquest.cli.base import BaseCommand
+from metaquest.data.defaults import read_records
+from metaquest.data.registry import load_registry, record_analysis, save_registry
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
     create_download_preview,
@@ -165,6 +169,40 @@ class SRAStatsCommand(BaseCommand):
             nargs="*",
             help="Specific accessions to analyze (default: all)",
         )
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+
+    @staticmethod
+    def _clean(value):
+        return None if pd.isna(value) else value
+
+    def _record_statistics(self, args, report_path: Path) -> None:
+        """Record an sra_stats analysis for every accession in the statistics report.
+
+        If the report is missing, empty, or lacks an accession column (e.g. the
+        generator was mocked in a test without writing a real file), this logs at
+        debug level and does nothing.
+        """
+        if not report_path.exists():
+            logger.debug("Statistics report %s not found; skipping registry recording", report_path)
+            return
+        try:
+            df = read_records(report_path)
+        except Exception as e:
+            logger.debug("Could not read statistics report %s: %s", report_path, e)
+            return
+        if df.empty or "accession" not in df.columns:
+            logger.debug("Statistics report %s is empty; skipping registry recording", report_path)
+            return
+
+        registry = load_registry(args.registry)
+        for _, row in df.iterrows():
+            summary = {
+                "total_reads": self._clean(row.get("total_reads")),
+                "gc_content": self._clean(row.get("gc_content")),
+                "avg_read_length": self._clean(row.get("avg_read_length")),
+            }
+            record_analysis(registry, str(row["accession"]), "sra_stats", report_path, summary)
+        save_registry(registry)
 
     def execute(self, args):
         try:
@@ -180,6 +218,9 @@ class SRAStatsCommand(BaseCommand):
             generate_statistics_report(fastq_folder, args.output_report)
 
             print(f"\nStatistics report saved to: {args.output_report}")
+
+            self._record_statistics(args, Path(args.output_report))
+
             return 0
 
         except Exception as e:
@@ -218,6 +259,7 @@ class SRAValidateCommand(BaseCommand):
             action="store_true",
             help="Check that paired-end files have matching read counts",
         )
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def _find_accession_dirs(self, fastq_folder, specific_accessions=None):
         """Find accession directories to validate."""
@@ -313,10 +355,19 @@ class SRAValidateCommand(BaseCommand):
                 print("No accession directories found")
                 return 1
 
+            registry = load_registry(args.registry)
             validation_results = []
             for acc_dir in accession_dirs:
                 result = self._validate_directory(acc_dir, args.check_pairs)
                 validation_results.append(result)
+                record_analysis(
+                    registry,
+                    result["accession"],
+                    "validate",
+                    "",
+                    {"passed": result["status"] == "PASSED", "files": result.get("num_files", 0)},
+                )
+            save_registry(registry)
 
             success = self._print_validation_results(validation_results)
             return 0 if success else 1

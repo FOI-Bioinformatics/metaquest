@@ -54,22 +54,33 @@ class SRAReportGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.analyzer = SRADatasetAnalyzer(fastq_dir=fastq_dir)
 
-    def generate_quality_dashboard(self, accessions: List[str], title: str = "SRA Quality Dashboard") -> Path:
+    def generate_quality_dashboard(
+        self,
+        accessions: List[str],
+        title: str = "SRA Quality Dashboard",
+        profiles: Optional[Dict[str, "QualityProfile"]] = None,
+    ) -> Path:
         """
         Generate interactive quality control dashboard.
 
         Args:
             accessions: List of SRA accessions to analyze
             title: Dashboard title
+            profiles: Previously computed profiles keyed by accession. An accession
+                present here is reused as-is rather than reprofiled from FASTQ.
 
         Returns:
             Path to generated HTML dashboard
         """
         logger.info(f"Generating quality dashboard for {len(accessions)} datasets")
 
-        # Profile all datasets
+        # Profile all datasets, reusing any profile already supplied
+        supplied = profiles or {}
         profiles = {}
         for accession in accessions:
+            if accession in supplied:
+                profiles[accession] = supplied[accession]
+                continue
             try:
                 profile = self.analyzer.profile_dataset_quality(accession)
                 profiles[accession] = profile

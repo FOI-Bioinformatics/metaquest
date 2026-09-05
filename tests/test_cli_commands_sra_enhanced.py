@@ -6,8 +6,10 @@ focusing on argument parsing, validation, and proper delegation with mocked depe
 """
 
 import argparse
+import json
 from unittest.mock import Mock, patch, mock_open
 
+import pandas as pd_module
 import pytest
 
 from metaquest.cli.commands.sra_enhanced import (
@@ -223,6 +225,41 @@ class TestSRAStatsCommand:
 
         assert result == 0
         mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv")
+
+    @patch("builtins.print")
+    def test_execute_records_analyses_in_registry(self, mock_print, tmp_path):
+        """Each accession in the (mocked) statistics report is recorded as an sra_stats analysis."""
+        command = SRAStatsCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        report_path = tmp_path / "stats.csv"
+        registry_path = tmp_path / "metaquest_registry.json"
+
+        def fake_generate_report(folder, output_report):
+            pd_module.DataFrame(
+                [
+                    {"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0},
+                    {"accession": "SRR2", "total_reads": 2000, "gc_content": 50.0, "avg_read_length": 151.0},
+                ]
+            ).to_csv(output_report, index=False)
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            output_report=str(report_path),
+            accessions=None,
+            registry=str(registry_path),
+        )
+
+        with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
+            result = command.execute(args)
+
+        assert result == 0
+        registry = json.loads(registry_path.read_text())
+        for acc, total_reads in (("SRR1", 1000), ("SRR2", 2000)):
+            analysis = registry["datasets"][acc]["analyses"]["sra_stats"]
+            assert analysis["output"] == str(report_path)
+            assert analysis["summary"]["total_reads"] == total_reads
 
     @patch("builtins.print")
     def test_execute_folder_not_exists(self, mock_print):
@@ -467,16 +504,61 @@ class TestSRAValidateCommand:
         acc_dir.mkdir()
         (acc_dir / "test.fastq").write_text("content")
 
-        args = argparse.Namespace(fastq_folder=str(fastq_folder), accessions=None, check_pairs=False)
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accessions=None,
+            check_pairs=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
 
         # Mock _validate_directory to return success
         with patch.object(command, "_validate_directory") as mock_validate:
-            mock_validate.return_value = {"accession": "SRR123", "status": "PASSED", "issues": "None"}
+            mock_validate.return_value = {
+                "accession": "SRR123",
+                "status": "PASSED",
+                "issues": "None",
+                "num_files": 1,
+            }
 
             result = command.execute(args)
 
         assert result == 0
         mock_validate.assert_called_once()
+
+    @patch("builtins.print")
+    def test_execute_records_analyses_in_registry(self, mock_print, tmp_path):
+        """Each validated accession is recorded with its pass/fail status and file count."""
+        command = SRAValidateCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "test.fastq").write_text("@r\nACGT\n+\n!!!!\n")
+        registry_path = tmp_path / "metaquest_registry.json"
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accessions=None,
+            check_pairs=False,
+            registry=str(registry_path),
+        )
+
+        with patch.object(command, "_validate_directory") as mock_validate:
+            mock_validate.return_value = {
+                "accession": "SRR123",
+                "status": "PASSED",
+                "issues": "None",
+                "num_files": 1,
+            }
+            result = command.execute(args)
+
+        assert result == 0
+        registry = json.loads(registry_path.read_text())
+        assert registry["datasets"]["SRR123"]["analyses"]["validate"]["summary"] == {
+            "passed": True,
+            "files": 1,
+        }
 
     @patch("builtins.print")
     def test_execute_folder_not_exists(self, mock_print):
@@ -514,7 +596,12 @@ class TestSRAValidateCommand:
         acc_dir = fastq_folder / "SRR123"
         acc_dir.mkdir()
 
-        args = argparse.Namespace(fastq_folder=str(fastq_folder), accessions=None, check_pairs=False)
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accessions=None,
+            check_pairs=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
 
         # Mock _validate_directory to raise an exception
         with patch.object(command, "_validate_directory", side_effect=Exception("Test error")):
