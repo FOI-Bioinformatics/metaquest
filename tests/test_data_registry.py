@@ -106,6 +106,30 @@ class TestRecords:
         reg.record_download(r, "SRR3", "skipped", tmp_path / "fastq", message="--max-downloads")
         assert r.datasets["SRR3"]["download"]["attempts"] == 0
 
+    def test_record_screening_from_table(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        table = tmp_path / "parsed_containment.txt"
+        table.write_text(
+            "\tGCF_A\tGCF_B\tmax_containment\tmax_containment_annotation\n"
+            "SRR1\t0.9\t0.0\t0.9\tGCF_A\n"
+            "SRR2\t0.0\t0.3\t0.3\tGCF_B\n"
+        )
+        matches_folder = tmp_path / "matches"
+        count = reg.record_screening_from_table(r, table, matches_folder)
+        assert count == 2
+        assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_A"]["containment"] == 0.9
+        assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_A"]["csv"] == str(matches_folder / "GCF_A.csv")
+        assert r.datasets["SRR1"]["screening"]["source"] == "matches"
+        assert "GCF_B" not in r.datasets["SRR1"]["screening"]["genomes"]
+        assert r.datasets["SRR2"]["screening"]["genomes"]["GCF_B"]["containment"] == 0.3
+        assert "GCF_A" not in r.datasets["SRR2"]["screening"]["genomes"]
+
+    def test_record_screening_from_table_missing_returns_zero(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        count = reg.record_screening_from_table(r, tmp_path / "missing.txt", tmp_path / "matches")
+        assert count == 0
+        assert r.datasets == {}
+
     def test_metadata_analysis_extraction_assembly(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_metadata(

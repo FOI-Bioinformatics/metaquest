@@ -199,6 +199,44 @@ def record_selection(
         }
 
 
+def record_screening_from_table(
+    registry: Registry, table_path: Union[str, Path], matches_folder: Union[str, Path]
+) -> int:
+    """Record a screening entry for every positive containment in a parsed containment table.
+
+    Reads the table written by ``parse_containment_data`` and, for every column except
+    ``max_containment`` and ``max_containment_annotation`` (each a genome), records one
+    screening entry per row with a value greater than 0. Returns the number of entries
+    recorded. If the table does not exist, logs at debug level and returns 0 without raising.
+    """
+    table_path = Path(table_path)
+    if not table_path.exists():
+        logger.debug("Parsed containment table %s does not exist; nothing to record", table_path)
+        return 0
+
+    import pandas as pd
+
+    table = pd.read_csv(table_path, sep="\t", index_col=0)
+    genome_columns = [c for c in table.columns if c not in ("max_containment", "max_containment_annotation")]
+    recorded = 0
+    for accession, row in table.iterrows():
+        for column in genome_columns:
+            value = row[column]
+            if pd.notna(value) and float(value) > 0:
+                record_screening(
+                    registry,
+                    str(accession),
+                    column,
+                    float(value),
+                    None,
+                    "matches",
+                    0.0,
+                    Path(matches_folder) / f"{column}.csv",
+                )
+                recorded += 1
+    return recorded
+
+
 def record_exclusion(registry: Registry, accession: str, reason: str, source: str = "user") -> None:
     upsert_dataset(registry, accession)["exclusion"] = {
         "excluded": True,

@@ -7,6 +7,7 @@ import argparse
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater import parse_containment_data
+from metaquest.data.registry import load_registry, record_screening_from_table, save_registry
 from metaquest.visualization.plots import plot_containment as viz_plot_containment
 
 
@@ -47,6 +48,7 @@ class ParseContainmentCommand(BaseCommand):
             type=float,
             help="Size of steps for the containment thresholds",
         )
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -56,6 +58,9 @@ class ParseContainmentCommand(BaseCommand):
                 args.summary_containment_file,
                 args.step_size,
             )
+            registry = load_registry(args.registry)
+            record_screening_from_table(registry, args.parsed_containment_file, args.matches_folder)
+            save_registry(registry)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error parsing containment: {e}")

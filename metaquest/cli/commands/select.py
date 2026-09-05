@@ -7,6 +7,7 @@ from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.defaults import resolve_metadata_table
+from metaquest.data.registry import load_registry, record_selection, save_registry
 from metaquest.processing.selection import select_accessions
 
 
@@ -41,6 +42,7 @@ class SelectDatasetsCommand(BaseCommand):
         parser.add_argument("--metadata-column", default=None, help="Metadata column to filter on")
         parser.add_argument("--metadata-value", default=None, help="Required value in that column")
         parser.add_argument("--output", default="accessions.txt", help="Output file, one accession per line")
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -63,6 +65,21 @@ class SelectDatasetsCommand(BaseCommand):
             self.logger.info("Wrote %d accession(s) to %s", len(accessions), output)
             if not accessions:
                 self.logger.warning("No accessions met the criteria; %s is empty", output)
+
+            registry = load_registry(args.registry)
+            record_selection(
+                registry,
+                accessions,
+                {
+                    "column": args.genome_id or "max_containment",
+                    "threshold": args.threshold,
+                    "metadata_column": args.metadata_column,
+                    "metadata_value": args.metadata_value,
+                    "table": str(args.parsed_containment),
+                },
+                output,
+            )
+            save_registry(registry)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error selecting datasets: %s", e)

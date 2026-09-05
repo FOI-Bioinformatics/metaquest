@@ -7,11 +7,13 @@ from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater_search import (
     DEFAULT_SERVER,
+    KSIZE,
     load_signature,
     search_index,
     sketch_fasta,
     write_branchwater_csv,
 )
+from metaquest.data.registry import load_registry, record_screening, save_registry
 
 
 class BranchwaterSearchCommand(BaseCommand):
@@ -39,6 +41,7 @@ class BranchwaterSearchCommand(BaseCommand):
             "--output", default=None, help="Output CSV (default: <branchwater-folder>/<input stem>.csv)"
         )
         parser.add_argument("--server", default=DEFAULT_SERVER, help="Branchwater search API base URL")
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -70,6 +73,14 @@ class BranchwaterSearchCommand(BaseCommand):
                     args.threshold,
                 )
             self.logger.info("Next: metaquest use_branchwater --branchwater-folder %s", output.parent)
+
+            registry = load_registry(args.registry)
+            for accession, containment in matches:
+                cani = containment ** (1 / KSIZE) if containment > 0 else 0.0
+                record_screening(
+                    registry, accession, source.stem, containment, cani, "branchwater", args.threshold, output
+                )
+            save_registry(registry)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error searching Branchwater: %s", e)

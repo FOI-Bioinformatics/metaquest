@@ -1,6 +1,8 @@
 """Tests for the branchwater_search CLI command."""
 
 import argparse
+import json
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -8,7 +10,8 @@ from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.core.exceptions import DataAccessError
 
 
-def _args(**kwargs):
+def _args(tmp_path=None, **kwargs):
+    registry_dir = Path(tmp_path) if tmp_path is not None else Path(tempfile.mkdtemp())
     base = dict(
         genome_fasta=None,
         signature=None,
@@ -16,6 +19,7 @@ def _args(**kwargs):
         branchwater_folder="branchwater",
         output=None,
         server="https://s",
+        registry=str(registry_dir / "metaquest_registry.json"),
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -46,10 +50,14 @@ class TestBranchwaterSearchCommand:
         monkeypatch.chdir(tmp_path)
         mock_sketch.return_value = {"signatures": []}
         mock_search.return_value = [("SRR1", 0.9)]
-        rc = BranchwaterSearchCommand().execute(_args(genome_fasta="genomes/GCF_000008025.1.fna"))
+        rc = BranchwaterSearchCommand().execute(_args(tmp_path, genome_fasta="genomes/GCF_000008025.1.fna"))
         assert rc == 0
         mock_search.assert_called_once_with({"signatures": []}, 0.1, server="https://s")
         mock_write.assert_called_once_with([("SRR1", 0.9)], Path("branchwater") / "GCF_000008025.1.csv")
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        screening = data["datasets"]["SRR1"]["screening"]
+        assert screening["source"] == "branchwater"
+        assert screening["genomes"]["GCF_000008025.1"]["containment"] == 0.9
 
     @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
     @patch("metaquest.cli.commands.branchwater_search.search_index")
@@ -57,9 +65,10 @@ class TestBranchwaterSearchCommand:
     def test_signature_and_explicit_output(self, mock_load, mock_search, mock_write, tmp_path):
         mock_load.return_value = {"signatures": []}
         mock_search.return_value = []
-        rc = BranchwaterSearchCommand().execute(_args(signature="wmel.sig", output=str(tmp_path / "out.csv")))
+        rc = BranchwaterSearchCommand().execute(_args(tmp_path, signature="wmel.sig", output=str(tmp_path / "out.csv")))
         assert rc == 0
         mock_write.assert_called_once_with([], Path(tmp_path / "out.csv"))
+        assert (tmp_path / "metaquest_registry.json").exists()
 
     @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
     @patch("metaquest.cli.commands.branchwater_search.search_index", return_value=[])
@@ -81,7 +90,7 @@ class TestBranchwaterSearchCommand:
         )
         output = tmp_path / "out.csv"
         with caplog.at_level("WARNING"):
-            rc = BranchwaterSearchCommand().execute(_args(signature="wmel.sig", output=str(output)))
+            rc = BranchwaterSearchCommand().execute(_args(tmp_path, signature="wmel.sig", output=str(output)))
         assert rc == 0
         assert "control genome" in caplog.text
         assert output.read_text().splitlines() == [

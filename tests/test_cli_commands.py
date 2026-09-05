@@ -6,6 +6,7 @@ focusing on argument parsing, validation, and proper delegation.
 """
 
 import argparse
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -171,21 +172,46 @@ class TestParseContainmentCommand:
         assert args.step_size == 0.1
 
     @patch("metaquest.cli.commands.containment.parse_containment_data")
-    def test_execute(self, mock_command):
+    def test_execute(self, mock_command, tmp_path):
         """Test command execution."""
         mock_command.return_value = None
         command = ParseContainmentCommand()
 
         args = argparse.Namespace(
             matches_folder="test_matches",
-            parsed_containment_file="parsed.txt",
+            parsed_containment_file=str(tmp_path / "parsed.txt"),
             summary_containment_file="summary.txt",
             step_size=0.05,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         result = command.execute(args)
         assert result == 0
-        mock_command.assert_called_once_with("test_matches", "parsed.txt", "summary.txt", 0.05)
+        mock_command.assert_called_once_with("test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05)
+
+    def test_execute_records_screening_in_registry(self, tmp_path):
+        """Every accession in the parsed containment table is recorded as screened from matches."""
+        matches_folder = tmp_path / "matches"
+        matches_folder.mkdir()
+        (matches_folder / "GCF_A.csv").write_text("acc,containment\nSRR1,0.9\nSRR2,0.1\n")
+
+        command = ParseContainmentCommand()
+        args = argparse.Namespace(
+            matches_folder=str(matches_folder),
+            parsed_containment_file=str(tmp_path / "parsed.txt"),
+            summary_containment_file=str(tmp_path / "summary.txt"),
+            step_size=0.1,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        result = command.execute(args)
+        assert result == 0
+
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        for acc in ("SRR1", "SRR2"):
+            screening = data["datasets"][acc]["screening"]
+            assert screening["source"] == "matches"
+            assert "GCF_A" in screening["genomes"]
 
 
 class TestDownloadMetadataCommand:
