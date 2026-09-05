@@ -11,7 +11,7 @@ GENOME_ACCESSION_PATTERN = r"^GC[AF]_\d{9}\.\d+$"
 GENOME_ACCESSION_PREFIXES = ("GCF_", "GCA_")
 
 # Default Thresholds
-DEFAULT_CONTAINMENT_THRESHOLD = 0.5
+DEFAULT_CONTAINMENT_THRESHOLD = 0.1
 DEFAULT_METADATA_THRESHOLD = 0.0
 DEFAULT_SINGLE_SAMPLE_THRESHOLD = 0.1
 DEFAULT_STEP_SIZE = 0.1
@@ -86,6 +86,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "--k-step",
             "--no-mercy",
             "--bubble-level",
+            "--version",
         },
         "description": "Illumina assembly tool",
     },
@@ -178,6 +179,9 @@ UNSAFE_SHELL_CHARS = [
 # File Extensions
 FASTQ_EXTENSIONS = [".fastq", ".fq", ".fastq.gz", ".fq.gz"]
 ASSEMBLY_EXTENSIONS = [".fasta", ".fa", ".fna", ".fasta.gz", ".fa.gz"]
+
+# FASTA file patterns accepted as genome inputs (plain and gzipped).
+GENOME_FASTA_GLOBS = ("*.fna", "*.fna.gz", "*.fasta", "*.fasta.gz", "*.fa", "*.fa.gz")
 
 # Memory and Resource Limits
 DEFAULT_MEMORY_LIMIT_GB = 8

@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
+from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.processing.selection import select_accessions
@@ -29,7 +30,9 @@ class SelectDatasetsCommand(BaseCommand):
             "--parsed-containment", default="parsed_containment.txt", help="Table from parse_containment"
         )
         parser.add_argument("--genome-id", default=None, help="Genome column to rank on (default: max_containment)")
-        parser.add_argument("--threshold", type=float, default=0.1, help="Minimum containment, inclusive")
+        parser.add_argument(
+            "--threshold", type=float, default=DEFAULT_CONTAINMENT_THRESHOLD, help="Minimum containment, inclusive"
+        )
         parser.add_argument(
             "--metadata-file",
             default=None,

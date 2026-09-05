@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
+from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
@@ -40,7 +41,10 @@ class ExtractTargetReadsCommand(BaseCommand):
         parser.add_argument("--fastq-folder", default="fastq", help="Root folder of per-accession FASTQ files")
         parser.add_argument("--output-folder", default="targeted", help="Root folder for the extracted reads")
         parser.add_argument(
-            "--threshold", type=float, default=0.1, help="Minimum containment for a sample to be included"
+            "--threshold",
+            type=float,
+            default=DEFAULT_CONTAINMENT_THRESHOLD,
+            help="Minimum containment for a sample to be included",
         )
         parser.add_argument(
             "--preset", choices=sorted(MINIMAP2_PRESETS), default="sr", help="minimap2 preset for the read type"

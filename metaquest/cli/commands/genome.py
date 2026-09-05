@@ -6,12 +6,21 @@ import sys
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
+from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.genome_download import download_genomes, extract_and_organize, partition_present_genomes
 from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
 )
+
+
+def _genome_name(filename: str) -> str:
+    """Strip the FASTA suffix (and .gz) from a genome file name."""
+    for suffix in (".fna.gz", ".fasta.gz", ".fa.gz", ".fna", ".fasta", ".fa"):
+        if filename.endswith(suffix):
+            return filename[: -len(suffix)]
+    return filename
 
 
 class GenomeSearchCommand(BaseCommand):
@@ -296,8 +305,8 @@ class GenomePrepareCommand(BaseCommand):
         return accessions
 
     def _create_manifest(self, output_dir: Path, manifest_file: str) -> int:
-        """Create a manifest CSV from genome files in output_dir."""
-        genome_files = sorted(output_dir.glob("*.fna.gz")) + sorted(output_dir.glob("*.fasta.gz"))
+        """Create a manifest CSV from the genome FASTA files in output_dir."""
+        genome_files = sorted({p for pattern in GENOME_FASTA_GLOBS for p in output_dir.glob(pattern)})
         if not genome_files:
             self.logger.warning("No genome files found in %s", output_dir)
             return 0
@@ -307,10 +316,12 @@ class GenomePrepareCommand(BaseCommand):
             writer = csv.writer(f)
             writer.writerow(["name", "genome_filename", "protein_filename"])
             for gf in genome_files:
-                name = gf.stem.replace(".fna", "").replace(".fasta", "")
-                protein_file = gf.with_suffix("").with_suffix(".faa.gz")
-                protein_name = str(protein_file) if protein_file.exists() else ""
-                writer.writerow([name, str(gf), protein_name])
+                name = _genome_name(gf.name)
+                protein = next(
+                    (p for p in (gf.with_name(name + ".faa"), gf.with_name(name + ".faa.gz")) if p.exists()),
+                    None,
+                )
+                writer.writerow([name, str(gf), str(protein) if protein else ""])
 
         self.logger.info("Created manifest with %d entries: %s", len(genome_files), manifest_path)
         return len(genome_files)

@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
+from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
 from metaquest.data.sra import accession_has_fastq
@@ -34,7 +35,6 @@ LOCK_STALE_SECONDS = 30.0
 _MATE_SUFFIXES = ("_1", "_2", "_s", "_0")
 _ASSEMBLY_SUFFIX = "_assembly"
 _CONTIGS_NAME = "final.contigs.fa"
-_GENOME_GLOBS = ("*.fna", "*.fna.gz", "*.fasta", "*.fasta.gz", "*.fa", "*.fa.gz")
 
 
 def _now() -> str:
@@ -434,7 +434,7 @@ def scan_metadata(metadata_folder: Path) -> Set[str]:
 
 def _genome_ids_on_disk(paths: ProjectPaths, registry: Optional[Registry]) -> Set[str]:
     ids: Set[str] = set(known_genome_ids(registry)) if registry else set()
-    for pattern in _GENOME_GLOBS:
+    for pattern in GENOME_FASTA_GLOBS:
         for p in paths.genomes.glob(pattern):
             ids.add(p.name[: -len(pattern[1:])] if p.name.endswith(pattern[1:]) else p.stem)
     ids.update(p.stem for p in paths.matches.glob("*.csv"))

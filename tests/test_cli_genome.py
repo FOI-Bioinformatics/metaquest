@@ -497,6 +497,23 @@ class TestGenomePrepareCommand:
             result = cmd.execute(args)
             assert result == 0
 
+    def test_manifest_lists_plain_fna_files(self):
+        from metaquest.cli.commands.genome import GenomePrepareCommand
+
+        cmd = GenomePrepareCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "GCF_000006945.2.fna").write_text(">c\nACGT\n")
+            (tmp_path / "GCF_000006945.2.faa").write_text(">p\nM\n")
+            (tmp_path / "other.fasta.gz").write_bytes(b"")
+            manifest = tmp_path / "manifest.csv"
+            n = cmd._create_manifest(tmp_path, str(manifest))
+            rows = manifest.read_text().splitlines()
+            assert n == 2
+            assert rows[0] == "name,genome_filename,protein_filename"
+            assert rows[1].startswith("GCF_000006945.2,") and rows[1].endswith("GCF_000006945.2.faa")
+            assert rows[2].startswith("other,")
+
     @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
     @patch("metaquest.cli.commands.genome.get_accessions_for_genus")

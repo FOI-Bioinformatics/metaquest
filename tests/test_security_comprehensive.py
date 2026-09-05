@@ -126,6 +126,9 @@ class TestParameterValidation:
         with pytest.raises(SecurityError, match="No parameter validation defined"):
             SecureSubprocess.validate_parameter("unknown_tool", "-x")
 
+    def test_megahit_version_flag_allowed(self):
+        assert SecureSubprocess._build_validated_command("megahit", ["--version"]) == ["megahit", "--version"]
+
 
 class TestPathValidation:
     """Test file path validation and security."""
