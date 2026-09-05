@@ -2,12 +2,14 @@
 
 import argparse
 from pathlib import Path
+from typing import Dict, List
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
+    ExtractionResult,
     assemble_extracted_reads,
     extract_target_reads,
     megahit_version,
@@ -15,7 +17,6 @@ from metaquest.data.read_extraction import (
     selected_samples,
     summarise_contigs,
 )
-from metaquest.data.read_extraction import ExtractionResult
 from metaquest.data.registry import (
     extraction_record,
     load_registry,
@@ -99,6 +100,66 @@ class ExtractTargetReadsCommand(BaseCommand):
                 },
             )
 
+    @staticmethod
+    def _has_assembly_record(args: argparse.Namespace, accession: str) -> bool:
+        """True when the registry already holds an assembly block for this sample and genome."""
+        record = extraction_record(load_registry(args.registry), accession, args.genome_id) or {}
+        return record.get("assembly") is not None
+
+    def _report_dry_run(self, args: argparse.Namespace, results: Dict[str, ExtractionResult]) -> None:
+        """List the samples a real run would extract, and those it would skip."""
+        would_skip = [acc for acc, r in results.items() if r.skipped]
+        self.logger.info(
+            "Dry run: %d sample(s) would be extracted for %s", len(results) - len(would_skip), args.genome_id
+        )
+        if would_skip:
+            self.logger.info("  %d already extracted, would be skipped: %s", len(would_skip), ", ".join(would_skip))
+        for accession, outcome in results.items():
+            if not outcome.skipped:
+                self.logger.info("  %s", accession)
+
+    def _report_no_reads(self, args: argparse.Namespace, results: Dict[str, ExtractionResult]) -> None:
+        """Say which of the three reasons left the run without a single mapped read."""
+        selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
+        if not selected:
+            self.logger.error("No sample meets containment >= %s for %s", args.threshold, args.genome_id)
+        elif not results:
+            self.logger.error(
+                "No FASTQ files found for the %d selected sample(s) under %s", len(selected), args.fastq_folder
+            )
+        else:
+            self.logger.error("No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id)
+
+    def _assemble(self, args: argparse.Namespace, with_reads: Dict[str, List[Path]]) -> None:
+        """Assemble every sample that has mapped reads, recording each assembly as it lands."""
+        asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
+        if args.assembly_threads is None and asm_threads < args.threads:
+            self.logger.info(
+                "Running megahit single-threaded on macOS (its parallel sort is unstable here); "
+                "override with --assembly-threads"
+            )
+        version = megahit_version()
+        for accession, reads in with_reads.items():
+            out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
+            _, ran = assemble_extracted_reads(
+                reads, out_dir, threads=asm_threads, min_contig_len=args.min_contig_len, force=args.force
+            )
+            if not ran and self._has_assembly_record(args, accession):
+                # megahit did not run, so the recorded version and parameters still describe
+                # the assembly on disk; leave them alone.
+                continue
+            with registry_transaction(args.registry) as reg:
+                record_assembly(
+                    reg,
+                    accession,
+                    args.genome_id,
+                    out_dir,
+                    summarise_contigs(out_dir / "final.contigs.fa"),
+                    version,
+                    {"threads": asm_threads, "min_contig_len": args.min_contig_len},
+                )
+        self.logger.info("Assembled %d sample(s)", len(with_reads))
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             registry = load_registry(args.registry)
@@ -124,58 +185,19 @@ class ExtractTargetReadsCommand(BaseCommand):
             )
 
             if args.dry_run:
-                self.logger.info("Dry run: %d sample(s) would be extracted for %s", len(results), args.genome_id)
-                for accession in results:
-                    self.logger.info("  %s", accession)
+                self._report_dry_run(args, results)
                 return 0
 
-            with_reads = {acc: r.files for acc, r in results.items() if r.files}
+            # A zero-mapped sample can still have leftover files on disk from an earlier run;
+            # they are not reads that mapped, and must never reach the assembler.
+            with_reads = {acc: r.files for acc, r in results.items() if r.files and r.mapped_records > 0}
             self.logger.info("Extracted reads for %d of %d sample(s)", len(with_reads), len(results))
             if not with_reads:
-                selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
-                if not selected:
-                    self.logger.error("No sample meets containment >= %s for %s", args.threshold, args.genome_id)
-                elif not results:
-                    self.logger.error(
-                        "No FASTQ files found for the %d selected sample(s) under %s",
-                        len(selected),
-                        args.fastq_folder,
-                    )
-                else:
-                    self.logger.error(
-                        "No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id
-                    )
+                self._report_no_reads(args, results)
                 return 1
 
             if args.assemble:
-                asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
-                if args.assembly_threads is None and asm_threads < args.threads:
-                    self.logger.info(
-                        "Running megahit single-threaded on macOS (its parallel sort is unstable here); "
-                        "override with --assembly-threads"
-                    )
-                version = megahit_version()
-                for accession, reads in with_reads.items():
-                    out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
-                    assemble_extracted_reads(
-                        reads,
-                        out_dir,
-                        threads=asm_threads,
-                        min_contig_len=args.min_contig_len,
-                        force=args.force,
-                    )
-                    with registry_transaction(args.registry) as reg:
-                        record_assembly(
-                            reg,
-                            accession,
-                            args.genome_id,
-                            out_dir,
-                            summarise_contigs(out_dir / "final.contigs.fa"),
-                            version,
-                            {"threads": asm_threads, "min_contig_len": args.min_contig_len},
-                        )
-                self.logger.info("Assembled %d sample(s)", len(with_reads))
-
+                self._assemble(args, with_reads)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error extracting target reads: %s", e)

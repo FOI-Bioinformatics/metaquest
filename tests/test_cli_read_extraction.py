@@ -1,13 +1,16 @@
 """Tests for the extract_target_reads CLI command."""
 
 import argparse
+import gzip
 import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
+from metaquest.cli.commands.status import StatusCommand
 from metaquest.core.exceptions import ProcessingError
+from metaquest.data.registry import load_registry, record_extraction, save_registry
 from helpers_extraction import _fake_tools
 
 
@@ -43,6 +46,49 @@ def _tree(tmp):
     genome = root / "GCF_1.fna"
     genome.write_text(">s\nACGT\n")
     return root, table, genome
+
+
+def _bootstrapped_tree(tmp):
+    """A project whose extraction already happened on disk, with no registry yet."""
+    root = Path(tmp)
+    table = root / "parsed_containment.txt"
+    table.write_text("\tGCF_1\nSRR1\t0.9\n")
+    reads = root / "fastq" / "SRR1"
+    reads.mkdir(parents=True)
+    (reads / "SRR1_1.fastq.gz").write_text("x")
+    (reads / "SRR1_2.fastq.gz").write_text("x")
+    genome = root / "genomes" / "GCF_1.fna"
+    genome.parent.mkdir(parents=True)
+    genome.write_text(">s\nACGT\n")
+    extracted = root / "targeted" / "SRR1"
+    extracted.mkdir(parents=True)
+    for name in ("GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"):
+        with gzip.open(extracted / name, "wt") as handle:
+            handle.write("@r1\nACGT\n+\nIIII\n")
+    return root, table, genome
+
+
+def _status_args(root, **overrides):
+    base = dict(
+        fastq_folder=str(root / "fastq"),
+        metadata_folder=str(root / "metadata"),
+        genomes_folder=str(root / "genomes"),
+        targeted_folder=str(root / "targeted"),
+        matches_folder=str(root / "matches"),
+        registry=str(root / "metaquest_registry.json"),
+        accessions_file=None,
+        parsed_containment=None,
+        stage=None,
+        genome=None,
+        init=True,
+        reconcile=False,
+        export_tsv=None,
+        next=False,
+        list_missing=False,
+        json=True,
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
 
 
 def _two_sample_tree(tmp):
@@ -269,6 +315,121 @@ class TestExtractTargetReadsCommand:
         extraction = data["datasets"]["SRR1"]["extractions"]["GCF_1"]
         assert extraction["mapped_reads"] > 0
         assert extraction["assembly"]["contigs"] == 2
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_zero_mapped_sample_is_never_assembled(self, mock_run):
+        """Leftover files of a zero-mapped sample must not reach megahit."""
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            leftovers = root / "targeted" / "SRR1"
+            leftovers.mkdir(parents=True)
+            names = ["GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz", "GCF_1_s.fastq.gz"]
+            for name in names:
+                (leftovers / name).write_text("")
+            seeded = load_registry(registry_file)
+            record_extraction(
+                seeded,
+                "SRR1",
+                "GCF_1",
+                [leftovers / name for name in names],
+                0,
+                False,
+                {"genome_fasta": str(genome), "preset": "sr", "threshold": 0.5},
+            )
+            save_registry(seeded)
+
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                    registry=str(registry_file),
+                )
+            )
+        assert rc == 1
+        assert "megahit" not in [c.args[0] for c in mock_run.call_args_list]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_dry_run_reports_would_be_skips(self, mock_run, caplog):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(args) == 0
+            with caplog.at_level("INFO"):
+                rc = cmd.execute(_args(tmp, **{**vars(args), "dry_run": True}))
+        assert rc == 0
+        assert "already extracted, would be skipped: SRR1" in caplog.text
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_rerun_keeps_the_recorded_assembly(self, mock_run):
+        """A rerun that does not run megahit again leaves the recorded assembly untouched."""
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(args) == 0
+            # Stand in for the megahit version that produced the assembly on the first run.
+            seeded = load_registry(registry_file)
+            seeded.datasets["SRR1"]["extractions"]["GCF_1"]["assembly"]["version"] = "v1.2.9"
+            save_registry(seeded)
+
+            assert cmd.execute(args) == 0
+            second = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert second["version"] == "v1.2.9"
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_bootstrapped_registry_skips_the_extraction(self, mock_run):
+        """status --init infers records without parameters; a rerun must still skip the mapping."""
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _bootstrapped_tree(tmp)
+            registry_file = root / "metaquest_registry.json"
+            assert StatusCommand().execute(_status_args(root)) == 0
+            assert registry_file.exists()
+            calls_before = len(mock_run.call_args_list)
+
+            rc = ExtractTargetReadsCommand().execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    registry=str(registry_file),
+                )
+            )
+        assert rc == 0
+        assert "minimap2" not in [c.args[0] for c in mock_run.call_args_list[calls_before:]]
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_records_are_checkpointed_when_a_later_assembly_fails(self, mock_run):

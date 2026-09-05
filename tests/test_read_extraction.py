@@ -275,21 +275,131 @@ class TestExtractionIdempotency:
             out = Path(tmp) / "asm"
             out.mkdir()
             (out / "final.contigs.fa").write_text(">c len=4\nACGT\n")
-            assemble_extracted_reads([Path(tmp) / "r1.fq.gz", Path(tmp) / "r2.fq.gz"], out)
-            assert not mock_run.called
+            _, ran = assemble_extracted_reads([Path(tmp) / "r1.fq.gz", Path(tmp) / "r2.fq.gz"], out)
+            assert not mock_run.called and ran is False
             (out / "final.contigs.fa").unlink()
             with pytest.raises(ProcessingError, match="rerun with --force"):
                 assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out)
-            assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, force=True)
-            assert mock_run.called
+            _, ran = assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, force=True)
+            assert mock_run.called and ran is True
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_inferred_record_without_parameters_is_skipped(self, mock_run):
+        """A record bootstrapped from disk has no parameters; each missing one is a wildcard."""
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            first = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+            )
+            inferred = {
+                "SRR1": {
+                    "mapped_reads": 5,
+                    "files": [str(p) for p in first["SRR1"].files],
+                    "unequal_mates": False,
+                }
+            }
+            calls_before = len(state["calls"])
+            again = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                already_done=inferred,
+            )
+            assert again["SRR1"].skipped is True and len(state["calls"]) == calls_before
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_inferred_zero_mapped_record_is_skipped(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            results = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                already_done={"SRR1": {"mapped_reads": 0, "files": [], "unequal_mates": False}},
+            )
+        assert results["SRR1"].skipped is True
+        mock_run.assert_not_called()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_relative_genome_path_matches_recorded_path(self, mock_run, monkeypatch):
+        """./genomes/x.fna and genomes/x.fna are the same file, so the record still matches."""
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            monkeypatch.chdir(root)
+            record = {
+                "SRR1": {
+                    "genome_fasta": "./GCF_1.fna",
+                    "preset": "sr",
+                    "threshold": 0.5,
+                    "mapped_reads": 0,
+                    "files": [],
+                    "unequal_mates": False,
+                }
+            }
+            results = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta="GCF_1.fna",
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                already_done=record,
+            )
+        assert results["SRR1"].skipped is True
+        mock_run.assert_not_called()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_dry_run_reports_would_be_skips(self, mock_run, caplog):
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            record = {
+                "SRR1": {
+                    "genome_fasta": str(genome),
+                    "preset": "sr",
+                    "threshold": 0.5,
+                    "mapped_reads": 42,
+                    "files": [],
+                    "unequal_mates": False,
+                }
+            }
+            with caplog.at_level("INFO"):
+                results = extract_target_reads(
+                    parsed_containment=table,
+                    genome_id="GCF_1",
+                    genome_fasta=genome,
+                    fastq_folder=root / "fastq",
+                    output_folder=root / "targeted",
+                    threshold=0.5,
+                    dry_run=True,
+                    already_done=record,
+                )
+        assert results["SRR1"].skipped is True and results["SRR1"].mapped_records == 42
+        assert "would skip SRR1 (already extracted, 42 mapped reads); use --force to redo" in caplog.text
+        mock_run.assert_not_called()
 
 
 class TestAssembleExtractedReads:
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_paired_uses_1_2(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
-        out = assemble_extracted_reads([Path("a_1.fastq.gz"), Path("a_2.fastq.gz")], "asm")
-        assert out == Path("asm")
+        out, ran = assemble_extracted_reads([Path("a_1.fastq.gz"), Path("a_2.fastq.gz")], "asm")
+        assert out == Path("asm") and ran is True
         args = mock_run.call_args.args[1]
         assert "-1" in args and "-2" in args and "-r" not in args
 

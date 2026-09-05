@@ -17,7 +17,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -121,16 +121,34 @@ def selected_samples(parsed_containment: Union[str, Path], genome_id: str, thres
 
 
 def _record_matches(record: Dict[str, Any], genome_path: Path, preset: str, threshold: float) -> bool:
-    """True when a registry extraction record matches the current call and its files are still usable."""
-    if record.get("genome_fasta") != str(genome_path):
+    """True when a registry extraction record matches the current call and its files are still usable.
+
+    A parameter that is absent or None is a wildcard. Records rebuilt from disk by
+    ``status --init`` carry no parameters at all, and rejecting them would remap every
+    sample of an already extracted project.
+    """
+    recorded_fasta = record.get("genome_fasta")
+    if recorded_fasta is not None and Path(recorded_fasta).resolve() != genome_path.resolve():
         return False
-    if record.get("preset") != preset:
+    recorded_preset = record.get("preset")
+    if recorded_preset is not None and recorded_preset != preset:
         return False
-    if float(record.get("threshold", float("nan"))) != float(threshold):
+    recorded_threshold = record.get("threshold")
+    if recorded_threshold is not None and float(recorded_threshold) != float(threshold):
         return False
     if record.get("mapped_reads") == 0:
         return True
     return all(Path(p).exists() for p in record.get("files", []))
+
+
+def _skipped_result(record: Dict[str, Any]) -> ExtractionResult:
+    """The result of a sample whose recorded extraction still stands."""
+    return ExtractionResult(
+        files=[Path(p) for p in record.get("files", [])],
+        mapped_records=int(record.get("mapped_reads") or 0),
+        unequal_mates=bool(record.get("unequal_mates", False)),
+        skipped=True,
+    )
 
 
 def _sample_reads(fastq_folder: Path, accession: str) -> List[Path]:
@@ -278,18 +296,14 @@ def extract_target_reads(
 
     for accession in samples:
         record = already_done.get(accession)
-        if record and not force and not dry_run and _record_matches(record, genome_path, preset, threshold):
+        done = bool(record) and not force and _record_matches(record or {}, genome_path, preset, threshold)
+        if done and not dry_run:
+            results[accession] = _skipped_result(record or {})
             logger.info(
                 "%s already extracted against %s (%d mapped reads); use --force to redo",
                 accession,
                 genome_id,
-                int(record["mapped_reads"]),
-            )
-            results[accession] = ExtractionResult(
-                files=[Path(p) for p in record["files"]],
-                mapped_records=int(record["mapped_reads"]),
-                unequal_mates=bool(record.get("unequal_mates", False)),
-                skipped=True,
+                results[accession].mapped_records,
             )
             _notify_result(on_result, accession, results[accession])
             continue
@@ -298,7 +312,13 @@ def extract_target_reads(
             logger.warning("No FASTQ files found for %s under %s; skipping", accession, fastq_root)
             continue
         if dry_run:
-            results[accession] = ExtractionResult([], 0)
+            results[accession] = _skipped_result(record or {}) if done else ExtractionResult([], 0)
+            if done:
+                logger.info(
+                    "would skip %s (already extracted, %d mapped reads); use --force to redo",
+                    accession,
+                    results[accession].mapped_records,
+                )
             continue
         outcome = _map_and_extract(accession, reads, genome_path, output_root / accession, genome_id, preset, threads)
         results[accession] = outcome
@@ -342,7 +362,7 @@ def assemble_extracted_reads(
     threads: int = 4,
     min_contig_len: Optional[int] = None,
     force: bool = False,
-) -> Path:
+) -> Tuple[Path, bool]:
     """Assemble a set of extracted FASTQ files with megahit.
 
     Single-end input (one file) uses megahit ``-r``; paired input (two files) uses
@@ -361,7 +381,8 @@ def assemble_extracted_reads(
         force: If True, redo the assembly even if it already ran.
 
     Returns:
-        Path to the megahit output directory.
+        The megahit output directory and whether megahit actually ran (False when the
+        assembly was already there), so the caller can leave an existing record alone.
 
     Raises:
         ProcessingError: If the number of reads is unsupported, or the output
@@ -372,7 +393,7 @@ def assemble_extracted_reads(
     if out_dir.exists():
         if contigs_path.exists() and not force:
             logger.info("%s already assembled; use --force to redo", out_dir)
-            return out_dir
+            return out_dir, False
         if not contigs_path.exists() and not force:
             raise ProcessingError("Assembly folder exists but holds no contigs (interrupted run?); rerun with --force")
         if force:
@@ -393,7 +414,7 @@ def assemble_extracted_reads(
 
     SecureSubprocess.run_secure("megahit", args)
     logger.info("Assembly written to %s", out_dir)
-    return out_dir
+    return out_dir, True
 
 
 def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, int]:
