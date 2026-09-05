@@ -250,14 +250,14 @@ Generate comprehensive quality profiles for downloaded SRA datasets:
 
 ```bash
 # Profile multiple datasets with detailed reports
-metaquest sra-profile-quality \
+metaquest sra_profile_quality \
     --accessions-file accessions.txt \
     --fastq-dir fastq \
     --output-dir quality_profiles \
     --detailed-reports
 
 # Profile single dataset
-metaquest sra-profile-quality \
+metaquest sra_profile_quality \
     --accession SRR123456 \
     --fastq-dir fastq \
     --include-contamination
@@ -269,14 +269,14 @@ Generate interactive HTML dashboards for SRA analysis:
 
 ```bash
 # Comprehensive dashboard
-metaquest sra-dashboard \
+metaquest sra_dashboard \
     --accessions-file accessions.txt \
     --output-dir dashboards \
     --title "Project SRA Analysis" \
     --dashboard-type full
 
 # Quality analysis dashboard only
-metaquest sra-dashboard \
+metaquest sra_dashboard \
     --accessions-file accessions.txt \
     --dashboard-type quality
 ```
@@ -287,7 +287,7 @@ Perform statistical comparisons between SRA dataset groups:
 
 ```bash
 # Compare treatment vs control groups
-metaquest sra-compare \
+metaquest sra_compare \
     --groups-file comparison_groups.json \
     --fastq-dir fastq \
     --statistical-tests \

@@ -27,6 +27,10 @@ class DownloadMetadataCommand(BaseCommand):
     def help(self) -> str:
         return "Download metadata for SRA accessions"
 
+    @property
+    def group(self) -> str:
+        return "Metadata"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--email", required=True, help="Your email address for NCBI API access")
         parser.add_argument("--matches-folder", default="matches", help="Folder containing match files")
@@ -73,6 +77,10 @@ class ParseMetadataCommand(BaseCommand):
     def help(self) -> str:
         return "Parse downloaded metadata files"
 
+    @property
+    def group(self) -> str:
+        return "Metadata"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--metadata-folder",
@@ -105,6 +113,10 @@ class CheckMetadataAttributesCommand(BaseCommand):
     def help(self) -> str:
         return "Count how often each metadata attribute is populated"
 
+    @property
+    def group(self) -> str:
+        return "Metadata"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--file-path",
@@ -136,6 +148,10 @@ class CountMetadataCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Count metadata values by genome"
+
+    @property
+    def group(self) -> str:
+        return "Metadata"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -192,6 +208,10 @@ class PlotMetadataCountsCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Plot metadata counts"
+
+    @property
+    def group(self) -> str:
+        return "Metadata"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--file-path", required=True, help="Counts table from count_metadata (or its _stats file)")

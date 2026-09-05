@@ -8,10 +8,10 @@ import argparse
 import logging
 import sys
 import traceback
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from metaquest import __version__
-from metaquest.cli.base import command_registry
+from metaquest.cli.base import BaseCommand, command_registry
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.utils.logging import setup_logging
 
@@ -106,6 +106,28 @@ def register_all_commands() -> None:
         command_registry.register(command)
 
 
+GROUP_ORDER = ["Containment", "Metadata", "Genomes", "Reads", "Analysis", "Other"]
+
+
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Show option defaults and keep the epilog's line breaks."""
+
+
+def _commands_epilog(commands: Dict[str, BaseCommand]) -> str:
+    """List commands under their pipeline step for the main --help."""
+    by_group: Dict[str, List[BaseCommand]] = {}
+    for command in commands.values():
+        by_group.setdefault(command.group, []).append(command)
+    lines = ["commands by pipeline step:"]
+    for group in GROUP_ORDER + sorted(set(by_group) - set(GROUP_ORDER)):
+        if group not in by_group:
+            continue
+        lines.append(f"  {group}:")
+        for command in by_group[group]:
+            lines.append(f"    {command.name:<28} {command.help}")
+    return "\n".join(lines)
+
+
 def create_parser() -> argparse.ArgumentParser:
     """
     Create the command line argument parser.
@@ -113,9 +135,13 @@ def create_parser() -> argparse.ArgumentParser:
     Returns:
         Configured ArgumentParser instance
     """
+    # Register all commands before building the parser so the epilog can list them.
+    register_all_commands()
+
     parser = argparse.ArgumentParser(
         description="MetaQuest: A toolkit for analyzing metagenomic datasets based on genome containment.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=_commands_epilog(command_registry.get_all_commands()),
+        formatter_class=_HelpFormatter,
     )
 
     parser.add_argument("--version", action="version", version=f"MetaQuest v{__version__}")
@@ -123,12 +149,11 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        metavar="LEVEL",
         default="INFO",
-        help="Set the logging level",
+        help="Set the logging level (one of DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
-    # Register all commands and setup subparsers
-    register_all_commands()
     command_registry.setup_parsers(parser)
 
     return parser

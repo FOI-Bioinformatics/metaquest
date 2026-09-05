@@ -25,6 +25,10 @@ class GenomeSearchCommand(BaseCommand):
     def help(self) -> str:
         return "Search GTDB for genome accessions by species or genus"
 
+    @property
+    def group(self) -> str:
+        return "Genomes"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
@@ -99,6 +103,10 @@ class GenomeDownloadCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Download genome assemblies from NCBI by accession, species, or genus"
+
+    @property
+    def group(self) -> str:
+        return "Genomes"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -224,6 +232,10 @@ class GenomePrepareCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Search GTDB, download genomes, and create a manifest CSV"
+
+    @property
+    def group(self) -> str:
+        return "Genomes"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         group = parser.add_mutually_exclusive_group()

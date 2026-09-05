@@ -26,6 +26,10 @@ class StatusCommand(BaseCommand):
     def help(self) -> str:
         return "Report which SRA reads, metadata, and genomes are already available locally"
 
+    @property
+    def group(self) -> str:
+        return "Reads"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
         parser.add_argument("--metadata-folder", default="metadata", help="Folder holding NCBI metadata XML")

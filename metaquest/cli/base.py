@@ -34,6 +34,11 @@ class BaseCommand(ABC):
         """Return alternate names this command also responds to (default: none)."""
         return []
 
+    @property
+    def group(self) -> str:
+        """Pipeline step the command belongs to, used to group the main help listing."""
+        return "Other"
+
     @abstractmethod
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         """Configure the argument parser for this command."""
@@ -64,19 +69,36 @@ class CommandRegistry:
         return self._commands.copy()
 
     def setup_parsers(self, main_parser: argparse.ArgumentParser) -> None:
-        """Setup subparsers for all registered commands."""
+        """Add one subparser per command plus a hidden subparser per alias."""
         subparsers = main_parser.add_subparsers(
             title="commands",
-            description="valid commands",
-            help="additional help",
             dest="command",
+            metavar="COMMAND",
+            help="Run 'metaquest COMMAND --help' for the options of one command",
         )
         subparsers.required = True
 
         for command in self._commands.values():
-            subparser = subparsers.add_parser(command.name, help=command.help, aliases=command.aliases)
-            command.configure_parser(subparser)
-            subparser.set_defaults(func=command.execute)
+            self._add_parser(subparsers, command, command.name, command.help)
+            for alias in command.aliases:
+                # Omit the `help` kwarg entirely rather than passing argparse.SUPPRESS: on
+                # some Python versions SUPPRESS is rendered literally as "==SUPPRESS==" for
+                # subparser choices instead of being hidden. Not passing `help` at all means
+                # argparse never records a choices entry for this alias, so it is left out
+                # of the listing while still parsing normally.
+                self._add_parser(subparsers, command, alias, None)
+
+    @staticmethod
+    def _add_parser(subparsers, command: BaseCommand, name: str, help_text: Optional[str]) -> None:
+        kwargs = {} if help_text is None else {"help": help_text}
+        subparser = subparsers.add_parser(
+            name,
+            description=command.help,
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            **kwargs,
+        )
+        command.configure_parser(subparser)
+        subparser.set_defaults(func=command.execute)
 
 
 # Global registry instance

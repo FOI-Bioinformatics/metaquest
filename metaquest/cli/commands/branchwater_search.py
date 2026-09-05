@@ -25,6 +25,10 @@ class BranchwaterSearchCommand(BaseCommand):
     def help(self) -> str:
         return "Search the Branchwater index of SRA metagenomes with a genome and write a Branchwater CSV"
 
+    @property
+    def group(self) -> str:
+        return "Containment"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--genome-fasta", help="Genome FASTA to sketch (needs the sourmash extra)")

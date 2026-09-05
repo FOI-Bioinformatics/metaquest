@@ -43,15 +43,19 @@ class SRAQualityProfileCommand(BaseCommand):
 
     @property
     def name(self) -> str:
-        return "sra-profile-quality"
+        return "sra_profile_quality"
 
     @property
     def aliases(self) -> List[str]:
-        return ["sra_profile_quality"]
+        return ["sra-profile-quality"]
 
     @property
     def help(self) -> str:
         return "Generate comprehensive quality profiles for SRA datasets"
+
+    @property
+    def group(self) -> str:
+        return "Reads"
 
     def configure_parser(self, parser):
         parser.add_argument(
@@ -262,15 +266,19 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
     @property
     def name(self) -> str:
-        return "sra-dashboard"
+        return "sra_dashboard"
 
     @property
     def aliases(self) -> List[str]:
-        return ["sra_dashboard"]
+        return ["sra-dashboard"]
 
     @property
     def help(self) -> str:
         return "Generate interactive HTML dashboards for SRA analysis"
+
+    @property
+    def group(self) -> str:
+        return "Reads"
 
     def configure_parser(self, parser):
         parser.add_argument(
@@ -374,15 +382,19 @@ class SRAComparativeAnalysisCommand(BaseCommand):
 
     @property
     def name(self) -> str:
-        return "sra-compare"
+        return "sra_compare"
 
     @property
     def aliases(self) -> List[str]:
-        return ["sra_compare"]
+        return ["sra-compare"]
 
     @property
     def help(self) -> str:
         return "Perform comparative analysis between SRA dataset groups"
+
+    @property
+    def group(self) -> str:
+        return "Reads"
 
     def configure_parser(self, parser):
         parser.add_argument(

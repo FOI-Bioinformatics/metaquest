@@ -30,6 +30,10 @@ class EnrichTaxonomyCommand(BaseCommand):
     def help(self) -> str:
         return "Enrich genome accessions with taxonomy from GTDB"
 
+    @property
+    def group(self) -> str:
+        return "Containment"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--parsed-containment",
@@ -84,6 +88,10 @@ class ExploreContainmentCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Generate interactive HTML explorer for containment data"
+
+    @property
+    def group(self) -> str:
+        return "Containment"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -187,6 +195,10 @@ class FindByTaxonomyCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Filter containment results by taxonomic classification"
+
+    @property
+    def group(self) -> str:
+        return "Containment"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(

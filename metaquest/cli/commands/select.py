@@ -20,6 +20,10 @@ class SelectDatasetsCommand(BaseCommand):
     def help(self) -> str:
         return "Write an accessions file from parsed containment, for the download commands"
 
+    @property
+    def group(self) -> str:
+        return "Reads"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--parsed-containment", default="parsed_containment.txt", help="Table from parse_containment"

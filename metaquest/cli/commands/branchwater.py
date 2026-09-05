@@ -25,6 +25,10 @@ class UseBranchwaterCommand(BaseCommand):
     def help(self) -> str:
         return "Process pre-downloaded Branchwater files"
 
+    @property
+    def group(self) -> str:
+        return "Containment"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--branchwater-folder",
@@ -56,6 +60,10 @@ class ExtractBranchwaterMetadataCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Extract metadata from Branchwater files"
+
+    @property
+    def group(self) -> str:
+        return "Metadata"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(

@@ -67,15 +67,37 @@ class TestRegisterAllCommands:
         action = next(a for a in parser._subparsers._group_actions if getattr(a, "choices", None))
         return set(action.choices)
 
-    def test_snake_case_aliases_resolve(self):
-        """The kebab-case intelligent commands also accept snake_case names."""
-        choices = self._subcommand_choices(create_parser())
-        for kebab, snake in (
-            ("sra-profile-quality", "sra_profile_quality"),
-            ("sra-dashboard", "sra_dashboard"),
-            ("sra-compare", "sra_compare"),
+    def test_kebab_aliases_parse_but_are_hidden(self):
+        parser = create_parser()
+        choices = self._subcommand_choices(parser)
+        for snake, kebab in (
+            ("sra_profile_quality", "sra-profile-quality"),
+            ("sra_dashboard", "sra-dashboard"),
+            ("sra_compare", "sra-compare"),
         ):
-            assert kebab in choices and snake in choices
+            assert snake in choices and kebab in choices
+        help_text = parser.format_help()
+        assert "sra_dashboard" in help_text
+        assert "sra-dashboard" not in help_text
+        assert "{" not in help_text.split("commands by pipeline step")[0].split("usage:")[1]
+
+    def test_help_groups_commands_by_step(self):
+        help_text = create_parser().format_help()
+        for group in ("Containment:", "Metadata:", "Genomes:", "Reads:", "Analysis:"):
+            assert group in help_text
+        assert help_text.index("Containment:") < help_text.index("Reads:")
+
+    def test_every_command_declares_a_group(self):
+        register_all_commands()
+        ungrouped = [c.name for c in command_registry.get_all_commands().values() if c.group == "Other"]
+        assert ungrouped == []
+
+    def test_subcommand_help_shows_defaults(self):
+        parser = create_parser()
+        sub = next(a for a in parser._subparsers._group_actions if getattr(a, "choices", None)).choices[
+            "parse_containment"
+        ]
+        assert "(default: matches)" in sub.format_help()
 
     def test_check_metadata_attributes_is_registered(self):
         """check_metadata_attributes is a real command (README step 7)."""

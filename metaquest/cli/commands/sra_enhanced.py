@@ -31,6 +31,10 @@ class SRAInfoCommand(BaseCommand):
     def help(self) -> str:
         return "Get detailed information about SRA datasets before downloading"
 
+    @property
+    def group(self) -> str:
+        return "Reads"
+
     def configure_parser(self, parser):
         parser.add_argument(
             "--accessions-file",
@@ -141,6 +145,10 @@ class SRAStatsCommand(BaseCommand):
     def help(self) -> str:
         return "Calculate comprehensive statistics for downloaded SRA datasets"
 
+    @property
+    def group(self) -> str:
+        return "Reads"
+
     def configure_parser(self, parser):
         parser.add_argument(
             "--fastq-folder",
@@ -189,6 +197,10 @@ class SRAValidateCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Validate integrity of downloaded SRA datasets"
+
+    @property
+    def group(self) -> str:
+        return "Reads"
 
     def configure_parser(self, parser):
         parser.add_argument(

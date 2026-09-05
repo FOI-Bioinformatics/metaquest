@@ -59,7 +59,8 @@ class TestSRAQualityProfileCommand:
     def test_command_properties(self):
         """Test command name and help text."""
         cmd = SRAQualityProfileCommand()
-        assert cmd.name == "sra-profile-quality"
+        assert cmd.name == "sra_profile_quality"
+        assert "sra-profile-quality" in cmd.aliases
         assert "quality" in cmd.help.lower()
 
     def test_configure_parser(self):
@@ -257,7 +258,8 @@ class TestSRAInteractiveDashboardCommand:
     def test_command_properties(self):
         """Test command name and help text."""
         cmd = SRAInteractiveDashboardCommand()
-        assert cmd.name == "sra-dashboard"
+        assert cmd.name == "sra_dashboard"
+        assert "sra-dashboard" in cmd.aliases
         assert "dashboard" in cmd.help.lower()
 
     def test_configure_parser(self):
@@ -372,7 +374,8 @@ class TestSRAComparativeAnalysisCommand:
     def test_command_properties(self):
         """Test command name and help text."""
         cmd = SRAComparativeAnalysisCommand()
-        assert cmd.name == "sra-compare"
+        assert cmd.name == "sra_compare"
+        assert "sra-compare" in cmd.aliases
         assert "comparative" in cmd.help.lower()
 
     def test_configure_parser(self):

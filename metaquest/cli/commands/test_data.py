@@ -20,6 +20,10 @@ class DownloadTestGenomeCommand(BaseCommand):
     def help(self) -> str:
         return "Download test genome"
 
+    @property
+    def group(self) -> str:
+        return "Genomes"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--output-folder",

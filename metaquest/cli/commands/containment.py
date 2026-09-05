@@ -21,11 +21,15 @@ class ParseContainmentCommand(BaseCommand):
     def help(self) -> str:
         return "Parse containment data from match files"
 
+    @property
+    def group(self) -> str:
+        return "Containment"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--matches-folder",
             default="matches",
-            help="Folder containing containment match files",
+            help="Folder containing match files",
         )
         parser.add_argument(
             "--parsed-containment-file",
@@ -74,6 +78,10 @@ class PlotContainmentCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Plot containment data"
+
+    @property
+    def group(self) -> str:
+        return "Containment"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--file-path", required=True, help="Path to the containment file")

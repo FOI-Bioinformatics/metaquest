@@ -25,6 +25,10 @@ class ExtractTargetReadsCommand(BaseCommand):
     def help(self) -> str:
         return "Filter reads that map to a target genome for a small, targeted assembly"
 
+    @property
+    def group(self) -> str:
+        return "Reads"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--parsed-containment",

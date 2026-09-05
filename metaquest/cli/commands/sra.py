@@ -27,6 +27,10 @@ class DownloadSraCommand(BaseCommand):
     def help(self) -> str:
         return "Download SRA datasets"
 
+    @property
+    def group(self) -> str:
+        return "Reads"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--fastq-folder",
@@ -192,6 +196,10 @@ class AssembleDatasetsCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Assemble datasets from fastq files"
+
+    @property
+    def group(self) -> str:
+        return "Reads"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--data-files", required=True, nargs="+", help="List of paths to data files")

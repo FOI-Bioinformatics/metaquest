@@ -21,6 +21,10 @@ class SingleSampleCommand(BaseCommand):
     def help(self) -> str:
         return "Analyze a single sample"
 
+    @property
+    def group(self) -> str:
+        return "Metadata"
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--summary-file",

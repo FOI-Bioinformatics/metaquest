@@ -40,6 +40,10 @@ class DiversityAnalysisCommand(BaseCommand):
     def help(self) -> str:
         return "Calculate alpha and beta diversity metrics"
 
+    @property
+    def group(self) -> str:
+        return "Analysis"
+
     def configure_parser(self, parser):
         parser.add_argument(
             "--abundance-file",
@@ -136,6 +140,10 @@ class InteractivePlotCommand(BaseCommand):
     def help(self) -> str:
         return "Create interactive visualizations"
 
+    @property
+    def group(self) -> str:
+        return "Analysis"
+
     def configure_parser(self, parser):
         parser.add_argument("--data-file", required=True, help="CSV file with data matrix")
         parser.add_argument("--metadata-file", help="CSV file with sample metadata")
@@ -226,6 +234,10 @@ class TaxonomyValidationCommand(BaseCommand):
     def help(self) -> str:
         return "Validate species names against NCBI taxonomy"
 
+    @property
+    def group(self) -> str:
+        return "Analysis"
+
     def configure_parser(self, parser):
         parser.add_argument(
             "--species-file",
@@ -314,6 +326,10 @@ class TaxonomicSummaryCommand(BaseCommand):
     @property
     def help(self) -> str:
         return "Create taxonomic summaries at different levels"
+
+    @property
+    def group(self) -> str:
+        return "Analysis"
 
     def configure_parser(self, parser):
         parser.add_argument(
