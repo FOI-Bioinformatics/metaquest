@@ -27,7 +27,7 @@ from metaquest.cli.commands.metadata import (
 from metaquest.cli.commands.sra import DownloadSraCommand
 from metaquest.cli.commands.samples import SingleSampleCommand
 from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
-from metaquest.core.constants import FAILED_ACCESSIONS_FILE
+from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.registry import load_registry, record_download, record_exclusion, save_registry
 
@@ -150,6 +150,7 @@ class TestParseContainmentCommand:
         assert args.parsed_containment_file == "parsed_containment.txt"
         assert args.summary_containment_file == "top_containments.txt"
         assert args.step_size == 0.1
+        assert args.registry_max_screened == DEFAULT_REGISTRY_MAX_SCREENED
 
     def test_configure_parser_with_optional_args(self):
         """Test parser with optional arguments."""
@@ -186,6 +187,7 @@ class TestParseContainmentCommand:
             summary_containment_file="summary.txt",
             step_size=0.05,
             registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
         )
 
         result = command.execute(args)
@@ -205,6 +207,7 @@ class TestParseContainmentCommand:
             summary_containment_file=str(tmp_path / "summary.txt"),
             step_size=0.1,
             registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
         )
 
         result = command.execute(args)
@@ -213,8 +216,8 @@ class TestParseContainmentCommand:
         data = json.loads((tmp_path / "metaquest_registry.json").read_text())
         for acc in ("SRR1", "SRR2"):
             screening = data["datasets"][acc]["screening"]
-            assert screening["source"] == "matches"
             assert "GCF_A" in screening["genomes"]
+            assert screening["genomes"]["GCF_A"]["source"] == "matches"
 
 
 class TestDownloadMetadataCommand:

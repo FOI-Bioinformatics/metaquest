@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
-from metaquest.core.constants import GENOME_FASTA_GLOBS
+from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
 from metaquest.data.sra import accession_has_fastq
@@ -83,6 +83,8 @@ def registry_path(explicit: Optional[Union[str, Path]] = None, start: Union[str,
     for folder in (current, *current.parents):
         candidate = folder / REGISTRY_FILENAME
         if candidate.exists():
+            if folder != current:
+                logger.info("Using the project registry found above the working directory: %s", candidate)
             return candidate
     return current / REGISTRY_FILENAME
 
@@ -207,11 +209,14 @@ def record_screening(
     csv_path: Optional[Union[str, Path]],
 ) -> None:
     screening = upsert_dataset(registry, accession).setdefault("screening", {})
-    screening.update({"source": source, "query_threshold": query_threshold, "date": _now()})
+    screening["date"] = _now()
+    screening.pop("inferred", None)
     screening.setdefault("genomes", {})[genome_id] = {
         "containment": round(float(containment), 4),
         "cani": round(float(cani), 4) if cani is not None else None,
         "csv": str(csv_path) if csv_path else None,
+        "source": source,
+        "query_threshold": query_threshold,
     }
     registry.genomes.setdefault(genome_id, {})
 
@@ -240,15 +245,53 @@ def record_selection(
         }
 
 
+def cap_screening(registry: Registry, genome_id: str, max_screened: int = DEFAULT_REGISTRY_MAX_SCREENED) -> int:
+    """Keep only the ``max_screened`` highest containments for one genome; return how many were dropped.
+
+    A broad search can match tens of thousands of metagenomes. The CSVs remain the raw
+    record; the registry keeps the best matches so it stays small enough to rewrite after
+    every completed accession.
+    """
+    entries = [
+        (acc, float(record["screening"]["genomes"][genome_id].get("containment") or 0.0))
+        for acc, record in registry.datasets.items()
+        if genome_id in record.get("screening", {}).get("genomes", {})
+    ]
+    if len(entries) <= max_screened:
+        return 0
+    for accession, _ in sorted(entries, key=lambda item: item[1], reverse=True)[max_screened:]:
+        record = registry.datasets[accession]
+        genomes = record["screening"]["genomes"]
+        del genomes[genome_id]
+        if not genomes:
+            del record["screening"]
+        if not record:
+            del registry.datasets[accession]
+    dropped = len(entries) - max_screened
+    logger.warning(
+        "Kept the %d highest containments for %s in the registry and dropped %d more "
+        "(the limit is --registry-max-screened); the match CSV keeps them all",
+        max_screened,
+        genome_id,
+        dropped,
+    )
+    return dropped
+
+
 def record_screening_from_table(
-    registry: Registry, table_path: Union[str, Path], matches_folder: Union[str, Path]
+    registry: Registry,
+    table_path: Union[str, Path],
+    matches_folder: Union[str, Path],
+    max_screened: int = DEFAULT_REGISTRY_MAX_SCREENED,
 ) -> int:
     """Record a screening entry for every positive containment in a parsed containment table.
 
     Reads the table written by ``parse_containment_data`` and, for every column except
     ``max_containment`` and ``max_containment_annotation`` (each a genome), records one
-    screening entry per row with a value greater than 0. Returns the number of entries
-    recorded. If the table does not exist, logs at debug level and returns 0 without raising.
+    screening entry per row with a value greater than 0, keeping at most ``max_screened``
+    accessions per genome. Cells that do not hold a number are skipped. Returns the number
+    of entries recorded. If the table does not exist, logs at debug level and returns 0
+    without raising.
     """
     table_path = Path(table_path)
     if not table_path.exists():
@@ -262,19 +305,24 @@ def record_screening_from_table(
     recorded = 0
     for accession, row in table.iterrows():
         for column in genome_columns:
-            value = row[column]
-            if pd.notna(value) and float(value) > 0:
+            try:
+                value = float(row[column])
+            except (ValueError, TypeError):
+                continue
+            if pd.notna(value) and value > 0:
                 record_screening(
                     registry,
                     str(accession),
                     column,
-                    float(value),
+                    value,
                     None,
                     "matches",
                     0.0,
                     Path(matches_folder) / f"{column}.csv",
                 )
                 recorded += 1
+    for column in genome_columns:
+        cap_screening(registry, column, max_screened)
     return recorded
 
 
@@ -397,6 +445,7 @@ def record_assembly(
 ) -> None:
     extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
     entry = extractions.setdefault(genome_id, {"files": [], "mapped_reads": None})
+    entry.pop("inferred", None)
     entry["assembly"] = {
         "date": _now(),
         "dir": str(assembly_dir),
@@ -572,12 +621,6 @@ def empty_assembly_dirs(targeted_folder: Path, genome_ids: Sequence[str]) -> Lis
     return sorted(pairs)
 
 
-def _counts_as_read_file(name: str, genome_ids: Sequence[str]) -> bool:
-    """True for the mate-1, single-end and unpaired files, so paired reads are counted once."""
-    split = split_extract_filename(name, genome_ids)
-    return split is not None and split[1] in ("_1", "", "_0")
-
-
 def _read_accession_list(path: Optional[Union[str, Path]]) -> List[str]:
     if not path or not Path(path).exists():
         return []
@@ -632,11 +675,13 @@ def _bootstrap_downloads_and_metadata(registry: Registry, paths: ProjectPaths) -
         registry.datasets[acc]["metadata"]["inferred"] = True
 
 
-def _infer_extraction(
-    registry: Registry, acc: str, genome_id: str, files: Sequence[Path], genome_ids: Sequence[str]
-) -> None:
-    """Record one (accession, genome) extraction found on disk, marked as inferred."""
-    reads = sum(count_fastq_reads(f) for f in files if _counts_as_read_file(f.name, genome_ids))
+def _infer_extraction(registry: Registry, acc: str, genome_id: str, files: Sequence[Path]) -> None:
+    """Record one (accession, genome) extraction found on disk, marked as inferred.
+
+    Reads are counted in every file of the pair (both mates, singles and unpaired), so the
+    inferred count approximates the number of BAM records a real extraction records.
+    """
+    reads = sum(count_fastq_reads(f) for f in files)
     record_extraction(registry, acc, genome_id, files, reads, False, {})
     registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
 
@@ -652,7 +697,7 @@ def _infer_assembly(registry: Registry, acc: str, genome_id: str, asm_dir: Path)
 def _bootstrap_extractions(registry: Registry, paths: ProjectPaths, genome_ids: List[str]) -> None:
     for acc, per_genome_files in scan_extractions(paths.targeted, genome_ids).items():
         for genome_id, files in per_genome_files.items():
-            _infer_extraction(registry, acc, genome_id, files, genome_ids)
+            _infer_extraction(registry, acc, genome_id, files)
     for acc, per_genome_asm in scan_assemblies(paths.targeted, genome_ids).items():
         for genome_id, asm_dir in per_genome_asm.items():
             _infer_assembly(registry, acc, genome_id, asm_dir)
@@ -703,7 +748,7 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
         for genome_id, files in per_genome_files.items():
             if extraction_record(registry, acc, genome_id) is None:
                 report.untracked_extractions.append((acc, genome_id))
-                _infer_extraction(registry, acc, genome_id, files, genome_ids)
+                _infer_extraction(registry, acc, genome_id, files)
                 asm_dir = assemblies.get(acc, {}).get(genome_id)
                 if asm_dir is not None:
                     _infer_assembly(registry, acc, genome_id, asm_dir)

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
+from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED
 from metaquest.core.exceptions import DataAccessError
 
 
@@ -20,6 +21,7 @@ def _args(tmp_path=None, **kwargs):
         output=None,
         server="https://s",
         registry=str(registry_dir / "metaquest_registry.json"),
+        registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -36,6 +38,7 @@ class TestBranchwaterSearchCommand:
         BranchwaterSearchCommand().configure_parser(parser)
         args = parser.parse_args(["--genome-fasta", "g.fna"])
         assert args.threshold == 0.1 and args.branchwater_folder == "branchwater" and args.output is None
+        assert args.registry_max_screened == DEFAULT_REGISTRY_MAX_SCREENED
         try:
             parser.parse_args([])
         except SystemExit as e:
@@ -56,7 +59,7 @@ class TestBranchwaterSearchCommand:
         mock_write.assert_called_once_with([("SRR1", 0.9)], Path("branchwater") / "GCF_000008025.1.csv")
         data = json.loads((tmp_path / "metaquest_registry.json").read_text())
         screening = data["datasets"]["SRR1"]["screening"]
-        assert screening["source"] == "branchwater"
+        assert screening["genomes"]["GCF_000008025.1"]["source"] == "branchwater"
         assert screening["genomes"]["GCF_000008025.1"]["containment"] == 0.9
 
     @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
@@ -97,6 +100,22 @@ class TestBranchwaterSearchCommand:
             "acc,containment,cANI,biosample,bioproject,assay_type,collection_date_sam,"
             "geo_loc_name_country_calc,organism,lat_lon"
         ]
+
+    @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
+    @patch("metaquest.cli.commands.branchwater_search.search_index")
+    @patch("metaquest.cli.commands.branchwater_search.load_signature")
+    def test_screening_entries_are_capped(self, mock_load, mock_search, _write, tmp_path, caplog):
+        """A broad search must not fill the registry; only the best matches are kept."""
+        mock_load.return_value = {"signatures": []}
+        mock_search.return_value = [("SRR1", 0.9), ("SRR2", 0.5), ("SRR3", 0.2)]
+        with caplog.at_level("WARNING"):
+            rc = BranchwaterSearchCommand().execute(
+                _args(tmp_path, signature="wmel.sig", output=str(tmp_path / "out.csv"), registry_max_screened=2)
+            )
+        assert rc == 0
+        datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
+        assert sorted(datasets) == ["SRR1", "SRR2"]
+        assert "2" in caplog.text
 
     def test_registered(self):
         from metaquest.cli.main import create_parser, register_all_commands

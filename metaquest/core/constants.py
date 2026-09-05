@@ -183,6 +183,10 @@ ASSEMBLY_EXTENSIONS = [".fasta", ".fa", ".fna", ".fasta.gz", ".fa.gz"]
 # FASTA file patterns accepted as genome inputs (plain and gzipped).
 GENOME_FASTA_GLOBS = ("*.fna", "*.fna.gz", "*.fasta", "*.fasta.gz", "*.fa", "*.fa.gz")
 
+# Most screening entries the registry keeps per target genome; the lowest containments
+# beyond this are dropped, so a broad search does not bloat the project journal.
+DEFAULT_REGISTRY_MAX_SCREENED = 5000
+
 # Memory and Resource Limits
 DEFAULT_MEMORY_LIMIT_GB = 8
 MAX_FILE_SIZE_MB = 1024  # 1GB max file size for uploads

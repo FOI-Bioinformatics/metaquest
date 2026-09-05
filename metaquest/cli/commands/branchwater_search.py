@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
+from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater_search import (
     DEFAULT_SERVER,
@@ -13,7 +14,7 @@ from metaquest.data.branchwater_search import (
     sketch_fasta,
     write_branchwater_csv,
 )
-from metaquest.data.registry import load_registry, record_screening, save_registry
+from metaquest.data.registry import cap_screening, record_screening, registry_transaction
 
 
 class BranchwaterSearchCommand(BaseCommand):
@@ -42,6 +43,12 @@ class BranchwaterSearchCommand(BaseCommand):
         )
         parser.add_argument("--server", default=DEFAULT_SERVER, help="Branchwater search API base URL")
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+        parser.add_argument(
+            "--registry-max-screened",
+            type=int,
+            default=DEFAULT_REGISTRY_MAX_SCREENED,
+            help="Most screening entries to keep in the registry per genome (the CSV keeps them all)",
+        )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -74,13 +81,13 @@ class BranchwaterSearchCommand(BaseCommand):
                 )
             self.logger.info("Next: metaquest use_branchwater --branchwater-folder %s", output.parent)
 
-            registry = load_registry(args.registry)
-            for accession, containment in matches:
-                cani = containment ** (1 / KSIZE) if containment > 0 else 0.0
-                record_screening(
-                    registry, accession, source.stem, containment, cani, "branchwater", args.threshold, output
-                )
-            save_registry(registry)
+            with registry_transaction(args.registry) as registry:
+                for accession, containment in matches:
+                    cani = containment ** (1 / KSIZE) if containment > 0 else 0.0
+                    record_screening(
+                        registry, accession, source.stem, containment, cani, "branchwater", args.threshold, output
+                    )
+                cap_screening(registry, source.stem, args.registry_max_screened)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error searching Branchwater: %s", e)

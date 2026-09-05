@@ -179,6 +179,66 @@ class TestRecords:
         assert r.datasets["SRR4"]["download"]["state"] == "downloaded"
         assert r.datasets["SRR4"]["download"]["attempts"] == 0
 
+    def test_screening_source_and_threshold_are_per_genome(self, tmp_path):
+        """A later screening from another source must not overwrite the first genome's provenance."""
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_screening(r, "SRR1", "GCF_1", 0.9, 0.99, "branchwater", 0.1, tmp_path / "bw.csv")
+        reg.record_screening(r, "SRR1", "GCF_2", 0.3, None, "matches", 0.0, tmp_path / "m.csv")
+        screening = r.datasets["SRR1"]["screening"]
+        assert screening["genomes"]["GCF_1"]["source"] == "branchwater"
+        assert screening["genomes"]["GCF_1"]["query_threshold"] == 0.1
+        assert screening["genomes"]["GCF_2"]["source"] == "matches"
+        assert "source" not in screening and "query_threshold" not in screening
+        assert screening["date"]
+
+    def test_real_records_clear_the_inferred_flag(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_screening(r, "SRR1", "GCF_1", 0.5, None, "matches", 0.0, None)
+        r.datasets["SRR1"]["screening"]["inferred"] = True
+        reg.record_screening(r, "SRR1", "GCF_1", 0.9, 0.99, "branchwater", 0.1, None)
+        assert "inferred" not in r.datasets["SRR1"]["screening"]
+
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 3, False, {})
+        r.datasets["SRR1"]["extractions"]["GCF_1"]["inferred"] = True
+        reg.record_assembly(r, "SRR1", "GCF_1", Path("d"), {"contigs": 1}, "v1.2.9", {})
+        assert "inferred" not in r.datasets["SRR1"]["extractions"]["GCF_1"]
+
+    def test_screening_cap_keeps_the_best(self, tmp_path, caplog):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        table = tmp_path / "parsed_containment.txt"
+        table.write_text("\tGCF_A\nSRR1\t0.9\nSRR2\t0.2\nSRR3\t0.5\n")
+        with caplog.at_level("WARNING"):
+            reg.record_screening_from_table(r, table, tmp_path / "matches", max_screened=2)
+        assert sorted(reg.query(r, "screened")) == ["SRR1", "SRR3"]
+        assert "SRR2" not in r.datasets  # nothing else was recorded for it
+        assert "2" in caplog.text and "screen" in caplog.text.lower()
+
+    def test_screening_cap_keeps_accessions_with_other_records(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_exclusion(r, "SRR2", "16S amplicon")
+        table = tmp_path / "parsed_containment.txt"
+        table.write_text("\tGCF_A\nSRR1\t0.9\nSRR2\t0.2\n")
+        reg.record_screening_from_table(r, table, tmp_path / "matches", max_screened=1)
+        assert reg.query(r, "screened") == ["SRR1"]
+        assert r.datasets["SRR2"]["exclusion"]["excluded"] is True and "screening" not in r.datasets["SRR2"]
+
+    def test_screening_from_table_skips_non_numeric_cells(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        table = tmp_path / "parsed_containment.txt"
+        table.write_text("\tGCF_A\tGCF_B\nSRR1\t0.9\tnot-a-number\n")
+        count = reg.record_screening_from_table(r, table, tmp_path / "matches")
+        assert count == 1
+        assert list(r.datasets["SRR1"]["screening"]["genomes"]) == ["GCF_A"]
+
+    def test_registry_path_logs_a_registry_above_the_working_directory(self, tmp_path, caplog):
+        (tmp_path / "metaquest_registry.json").write_text("{}")
+        sub = tmp_path / "targeted"
+        sub.mkdir()
+        with caplog.at_level("INFO"):
+            found = reg.registry_path(start=sub)
+        assert found.resolve() == (tmp_path / "metaquest_registry.json").resolve()
+        assert str(found) in caplog.text
+
     def test_record_screening_from_table(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         table = tmp_path / "parsed_containment.txt"
@@ -192,7 +252,7 @@ class TestRecords:
         assert count == 2
         assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_A"]["containment"] == 0.9
         assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_A"]["csv"] == str(matches_folder / "GCF_A.csv")
-        assert r.datasets["SRR1"]["screening"]["source"] == "matches"
+        assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_A"]["source"] == "matches"
         assert "GCF_B" not in r.datasets["SRR1"]["screening"]["genomes"]
         assert r.datasets["SRR2"]["screening"]["genomes"]["GCF_B"]["containment"] == 0.3
         assert "GCF_A" not in r.datasets["SRR2"]["screening"]["genomes"]
@@ -334,7 +394,8 @@ class TestScanners:
         )
         assert r.datasets["SRR1"]["metadata"]["inferred"] is True and "metadata" not in r.datasets["SRR2"]
         ext = reg.extraction_record(r, "SRR1", "GCF_1")
-        assert ext["mapped_reads"] == 2 and ext["assembly"]["contigs"] == 1 and ext["inferred"] is True
+        # both mates are counted, so the inferred count matches what a real extraction records
+        assert ext["mapped_reads"] == 4 and ext["assembly"]["contigs"] == 1 and ext["inferred"] is True
         assert "GCF_1" in r.genomes
 
         (paths.fastq / "SRR2" / "SRR2_1.fastq").unlink()
