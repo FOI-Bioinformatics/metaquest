@@ -9,6 +9,7 @@ import pytest
 
 from metaquest.core.exceptions import DataAccessError, ProcessingError
 from metaquest.data.read_extraction import (
+    ExtractionResult,
     assemble_extracted_reads,
     extract_target_reads,
     resolve_assembly_threads,
@@ -66,7 +67,7 @@ class TestExtractTargetReads:
                 threshold=0.5,
             )
             assert list(results) == ["SRR1"]
-            assert [p.name for p in results["SRR1"]] == ["GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"]
+            assert [p.name for p in results["SRR1"].files] == ["GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"]
             # The orphan file (-0) is removed when empty.
             assert not (root / "targeted" / "SRR1" / "GCF_1_0.fastq.gz").exists()
 
@@ -91,7 +92,7 @@ class TestExtractTargetReads:
                 output_folder=root / "targeted",
                 threshold=0.5,
             )
-            assert [p.name for p in results["SRR1"]] == ["GCF_1.fastq.gz"]
+            assert [p.name for p in results["SRR1"].files] == ["GCF_1.fastq.gz"]
         fastq_args = state["calls"][3][1]
         assert "-0" in fastq_args
 
@@ -110,7 +111,7 @@ class TestExtractTargetReads:
                     output_folder=root / "targeted",
                     threshold=0.5,
                 )
-            assert results == {"SRR1": []}
+            assert results == {"SRR1": ExtractionResult([], 0)}
             assert list((root / "targeted" / "SRR1").glob("*.fastq.gz")) == []
         assert "No reads from SRR1 mapped to GCF_1" in caplog.text
         # samtools fastq is never run when nothing mapped.
@@ -131,7 +132,7 @@ class TestExtractTargetReads:
                     output_folder=root / "targeted",
                     threshold=0.5,
                 )
-            assert [p.name for p in results["SRR1"]] == ["GCF_1_0.fastq.gz"]
+            assert [p.name for p in results["SRR1"].files] == ["GCF_1_0.fastq.gz"]
         assert "different read counts" in caplog.text
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
@@ -183,6 +184,70 @@ class TestExtractTargetReads:
             root, table, _ = _make_tree(tmp)
             with pytest.raises(DataAccessError):
                 extract_target_reads(table, "GCF_1", root / "absent.fna", fastq_folder=root / "fastq")
+
+
+class TestExtractionIdempotency:
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_recorded_extraction_is_skipped_unless_forced(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            first = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+            )
+            record = {
+                "SRR1": {
+                    "genome_fasta": str(genome),
+                    "preset": "sr",
+                    "threshold": 0.5,
+                    "mapped_reads": first["SRR1"].mapped_records,
+                    "unequal_mates": False,
+                    "files": [str(p) for p in first["SRR1"].files],
+                }
+            }
+            calls_before = len(state["calls"])
+            again = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                already_done=record,
+            )
+            assert again["SRR1"].skipped is True and len(state["calls"]) == calls_before
+            forced = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                already_done=record,
+                force=True,
+            )
+            assert forced["SRR1"].skipped is False and len(state["calls"]) > calls_before
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_assembly_skips_existing_contigs_and_refuses_empty_dir(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "asm"
+            out.mkdir()
+            (out / "final.contigs.fa").write_text(">c len=4\nACGT\n")
+            assemble_extracted_reads([Path(tmp) / "r1.fq.gz", Path(tmp) / "r2.fq.gz"], out)
+            assert not mock_run.called
+            (out / "final.contigs.fa").unlink()
+            with pytest.raises(ProcessingError, match="rerun with --force"):
+                assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out)
+            assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, force=True)
+            assert mock_run.called
 
 
 class TestAssembleExtractedReads:

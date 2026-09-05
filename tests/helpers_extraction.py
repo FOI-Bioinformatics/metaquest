@@ -28,6 +28,13 @@ def _fake_tools(state):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     with gzip.open(path, "wt") as handle:
                         handle.write("@r1\nACGT\n+\nIIII\n")
+        if executable == "megahit":
+            if "--version" in args:
+                result.stdout = ""
+            elif "-o" in args:
+                out_dir = Path(args[args.index("-o") + 1])
+                out_dir.mkdir(parents=True, exist_ok=True)
+                (out_dir / "final.contigs.fa").write_text(">c1 len=100\nACGT\n>c2 len=50\nACGT\n")
         return result
 
     return run

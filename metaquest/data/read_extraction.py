@@ -14,9 +14,10 @@ import gzip
 import logging
 import platform
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 
@@ -45,6 +46,7 @@ class ExtractionResult:
     files: List[Path]
     mapped_records: int
     unequal_mates: bool = False
+    skipped: bool = False
 
 
 def _count_bam_records(bam_path: Path) -> int:
@@ -99,6 +101,19 @@ def selected_samples(parsed_containment: Union[str, Path], genome_id: str, thres
         raise DataAccessError(f"Parsed containment table not found: {table_path}")
     containment = pd.read_csv(table_path, sep="\t", index_col=0)
     return select_samples_for_genome(containment, genome_id, threshold)
+
+
+def _record_matches(record: Dict[str, Any], genome_path: Path, preset: str, threshold: float) -> bool:
+    """True when a registry extraction record matches the current call and its files are still usable."""
+    if record.get("genome_fasta") != str(genome_path):
+        return False
+    if record.get("preset") != preset:
+        return False
+    if float(record.get("threshold", float("nan"))) != float(threshold):
+        return False
+    if record.get("mapped_reads") == 0:
+        return True
+    return all(Path(p).exists() for p in record.get("files", []))
 
 
 def _sample_reads(fastq_folder: Path, accession: str) -> List[Path]:
@@ -192,7 +207,9 @@ def extract_target_reads(
     preset: str = "sr",
     threads: int = 4,
     dry_run: bool = False,
-) -> Dict[str, List[Path]]:
+    force: bool = False,
+    already_done: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, ExtractionResult]:
     """Extract reads mapping to a target genome for every qualifying sample.
 
     Args:
@@ -205,9 +222,13 @@ def extract_target_reads(
         preset: minimap2 preset (sr, map-ont, map-pb, map-hifi).
         threads: Threads for minimap2 and samtools.
         dry_run: If True, report the qualifying samples without running any tool.
+        force: If True, redo extraction even for a sample already recorded in ``already_done``.
+        already_done: Accession -> the registry's extraction record for this genome. A sample
+            already recorded there is skipped (unless ``force``) when the record's genome FASTA,
+            preset and threshold match this call and its files are still on disk (or it mapped 0).
 
     Returns:
-        Mapping of accession to the list of FASTQ files written (empty in dry-run).
+        Mapping of accession to an ``ExtractionResult`` (empty files in dry-run).
 
     Raises:
         DataAccessError: If inputs are missing.
@@ -228,20 +249,36 @@ def extract_target_reads(
     samples = select_samples_for_genome(containment, genome_id, threshold)
     logger.info("%d sample(s) meet containment >= %.3f for %s", len(samples), threshold, genome_id)
 
-    results: Dict[str, List[Path]] = {}
+    results: Dict[str, ExtractionResult] = {}
     output_root = Path(output_folder)
     SecureSubprocess.add_allowed_root(output_root)
+    already_done = already_done or {}
 
     for accession in samples:
+        record = already_done.get(accession)
+        if record and not force and not dry_run and _record_matches(record, genome_path, preset, threshold):
+            logger.info(
+                "%s already extracted against %s (%d mapped reads); use --force to redo",
+                accession,
+                genome_id,
+                int(record["mapped_reads"]),
+            )
+            results[accession] = ExtractionResult(
+                files=[Path(p) for p in record["files"]],
+                mapped_records=int(record["mapped_reads"]),
+                unequal_mates=bool(record.get("unequal_mates", False)),
+                skipped=True,
+            )
+            continue
         reads = _sample_reads(fastq_root, accession)
         if not reads:
             logger.warning("No FASTQ files found for %s under %s; skipping", accession, fastq_root)
             continue
         if dry_run:
-            results[accession] = []
+            results[accession] = ExtractionResult([], 0)
             continue
         outcome = _map_and_extract(accession, reads, genome_path, output_root / accession, genome_id, preset, threads)
-        results[accession] = outcome.files
+        results[accession] = outcome
         if outcome.files:
             logger.info(
                 "Extracted %d mapped records for %s -> %s",
@@ -280,25 +317,43 @@ def assemble_extracted_reads(
     output_dir: Union[str, Path],
     threads: int = 4,
     min_contig_len: Optional[int] = None,
+    force: bool = False,
 ) -> Path:
     """Assemble a set of extracted FASTQ files with megahit.
 
     Single-end input (one file) uses megahit ``-r``; paired input (two files) uses
     ``-1``/``-2``. The reads are expected to be a small, target-filtered set.
 
+    If ``output_dir`` already holds contigs, the assembly is considered done and
+    megahit is not rerun unless ``force`` is set. If the folder exists but holds no
+    contigs (an interrupted run), an error is raised unless ``force`` is set, in
+    which case the folder is removed before megahit runs.
+
     Args:
         reads: One or two FASTQ files to assemble.
-        output_dir: megahit output directory (must not already exist).
+        output_dir: megahit output directory.
         threads: CPU threads.
         min_contig_len: Optional minimum contig length.
+        force: If True, redo the assembly even if it already ran.
 
     Returns:
         Path to the megahit output directory.
 
     Raises:
-        ProcessingError: If the number of reads is unsupported.
+        ProcessingError: If the number of reads is unsupported, or the output
+            directory exists without contigs and ``force`` is not set.
     """
     out_dir = Path(output_dir)
+    contigs_path = out_dir / "final.contigs.fa"
+    if out_dir.exists():
+        if contigs_path.exists() and not force:
+            logger.info("%s already assembled; use --force to redo", out_dir)
+            return out_dir
+        if not contigs_path.exists() and not force:
+            raise ProcessingError("Assembly folder exists but holds no contigs (interrupted run?); rerun with --force")
+        if force:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
     SecureSubprocess.add_allowed_root(out_dir.parent)
     args: List[str] = []
     if len(reads) == 2:
@@ -353,3 +408,12 @@ def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, int]:
             n50 = length
             break
     return {"contigs": len(lengths), "total_bp": total, "n50": n50, "largest": lengths[0] if lengths else 0}
+
+
+def megahit_version() -> str:
+    """The installed megahit's version string, or an empty string if it cannot be run."""
+    try:
+        result = SecureSubprocess.run_secure("megahit", ["--version"])
+        return (result.stdout or "").strip()
+    except Exception:
+        return ""
