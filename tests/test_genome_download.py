@@ -11,7 +11,6 @@ from metaquest.data.genome_download import (
     _validate_genome_accession,
     download_genomes,
     extract_and_organize,
-    read_accession_file,
 )
 
 # --- _validate_genome_accession ---
@@ -228,47 +227,3 @@ class TestExtractAndOrganize:
 
         extract_dir = tmp_path / "ncbi_extract_tmp"
         assert not extract_dir.exists()
-
-
-# --- read_accession_file ---
-
-
-class TestReadAccessionFile:
-    def test_basic_file(self, tmp_path):
-        f = tmp_path / "acc.txt"
-        f.write_text("GCF_000005845.2\nGCA_000001405.1\n")
-
-        result = read_accession_file(f)
-        assert result == ["GCF_000005845.2", "GCA_000001405.1"]
-
-    def test_skips_empty_lines(self, tmp_path):
-        f = tmp_path / "acc.txt"
-        f.write_text("GCF_000005845.2\n\n\nGCA_000001405.1\n\n")
-
-        result = read_accession_file(f)
-        assert result == ["GCF_000005845.2", "GCA_000001405.1"]
-
-    def test_skips_comments(self, tmp_path):
-        f = tmp_path / "acc.txt"
-        f.write_text("# This is a comment\nGCF_000005845.2\n# Another comment\n")
-
-        result = read_accession_file(f)
-        assert result == ["GCF_000005845.2"]
-
-    def test_strips_whitespace(self, tmp_path):
-        f = tmp_path / "acc.txt"
-        f.write_text("  GCF_000005845.2  \n  GCA_000001405.1\t\n")
-
-        result = read_accession_file(f)
-        assert result == ["GCF_000005845.2", "GCA_000001405.1"]
-
-    def test_missing_file(self, tmp_path):
-        with pytest.raises(DataAccessError, match="Accession file not found"):
-            read_accession_file(tmp_path / "missing.txt")
-
-    def test_empty_file(self, tmp_path):
-        f = tmp_path / "empty.txt"
-        f.write_text("")
-
-        result = read_accession_file(f)
-        assert result == []

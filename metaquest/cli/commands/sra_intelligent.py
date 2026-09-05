@@ -21,11 +21,10 @@ from metaquest.utils.browser import open_in_browser
 logger = logging.getLogger(__name__)
 
 
-def _read_accession_file(filename: str, warn_if_empty: bool = False) -> List[str]:
+def _read_accession_file(filename: str) -> List[str]:
     """Read non-empty, stripped accession lines from a file.
 
-    A missing file prints a message and returns []. When ``warn_if_empty`` is
-    set, an existing-but-empty file also prints a "No accessions found" message.
+    A missing file prints a message and returns [].
     """
     try:
         with open(filename, "r") as f:
@@ -33,8 +32,6 @@ def _read_accession_file(filename: str, warn_if_empty: bool = False) -> List[str
     except FileNotFoundError:
         print(f"Accessions file not found: {filename}")
         return []
-    if warn_if_empty and not accessions:
-        print(f"No accessions found in {filename}")
     return accessions
 
 

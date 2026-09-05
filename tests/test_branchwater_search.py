@@ -100,6 +100,25 @@ class TestLoadSignature:
         with pytest.raises(DataAccessError, match="not valid JSON"):
             load_signature(path)
 
+    def test_multi_sketch_selects_k21(self, tmp_path):
+        k31_sketch = {
+            "num": 0,
+            "ksize": 31,
+            "seed": 42,
+            "max_hash": 18446744073709552,
+            "mins": [4, 5, 6],
+            "molecule": "DNA",
+        }
+        k21_sketch = SIG_OBJECT["signatures"][0]
+        multi = {**SIG_OBJECT, "signatures": [k31_sketch, k21_sketch]}
+        path = tmp_path / "multi.sig"
+        path.write_text(json.dumps([multi]))
+
+        signature = load_signature(path)
+
+        assert len(signature["signatures"]) == 1
+        assert signature["signatures"][0]["ksize"] == 21
+
 
 class TestSearchIndex:
     @patch("metaquest.data.branchwater_search.requests.post")

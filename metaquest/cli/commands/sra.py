@@ -83,7 +83,8 @@ class DownloadSraCommand(BaseCommand):
             default=None,
             help=(
                 "Write a CSV of accession,status,message after the run "
-                "(statuses: downloaded, failed, already_present, blacklisted)"
+                "(statuses: downloaded, failed, already_present, blacklisted); "
+                "accessions skipped by --max-downloads get no row"
             ),
         )
 

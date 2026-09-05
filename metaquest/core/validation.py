@@ -8,46 +8,9 @@ import logging
 from pathlib import Path
 from typing import Optional, Union
 
-from metaquest.core.exceptions import ValidationError, FormatError
+from metaquest.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
-
-
-def detect_file_format(file_path: Union[str, Path]) -> str:
-    """
-    Automatically detect the format of a CSV file.
-
-    Args:
-        file_path: Path to the CSV file to analyze
-
-    Returns:
-        Detected format: 'branchwater'
-
-    Raises:
-        FormatError: If the file format cannot be determined
-    """
-    try:
-        with open(file_path, "r") as f:
-            # Read the header line
-            header = f.readline().strip()
-
-            # Split the header into column names
-            columns = [col.strip() for col in header.split(",")]
-
-            # Check for branchwater format - must have "acc" column
-            if "acc" in columns and "containment" in columns:
-                return "branchwater"
-
-            # If we can't determine the format
-            raise FormatError(
-                f"Could not determine file format for {file_path}. "
-                f"Missing required columns for known formats. "
-                f"Header: {header}"
-            )
-    except Exception as e:
-        if isinstance(e, FormatError):
-            raise
-        raise FormatError(f"Error reading file {file_path}: {str(e)}")
 
 
 def validate_accession(accession: str) -> bool:

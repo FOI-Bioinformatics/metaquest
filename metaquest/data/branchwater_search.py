@@ -85,7 +85,13 @@ def sketch_fasta(fasta_path: Union[str, Path]) -> Dict[str, Any]:
 
 
 def load_signature(sig_path: Union[str, Path]) -> Dict[str, Any]:
-    """Read one sourmash JSON signature (list or single object) and check its sketch parameters."""
+    """Read one sourmash JSON signature (list or single object) and select its k=21, scaled=1000 sketch.
+
+    A signature holding several sketches (for example one file with k=21 and k=31
+    sketches) is common when a .sig was built with multiple k-mer sizes; only the
+    k=21, scaled=1000 sketch is what Branchwater expects, so the returned object's
+    ``signatures`` list is narrowed to that one sketch.
+    """
     path = Path(sig_path)
     if not path.exists():
         raise DataAccessError(f"Signature file not found: {path}")
@@ -98,19 +104,23 @@ def load_signature(sig_path: Union[str, Path]) -> Dict[str, Any]:
     signature = data[0] if isinstance(data, list) and data else data
     if not isinstance(signature, dict) or not signature.get("signatures"):
         raise DataAccessError(f"Not a sourmash signature file: {path}")
-    _check_sketch_parameters(signature, path)
-    return signature
+    sketch = _select_sketch(signature, path)
+    return {**signature, "signatures": [sketch]}
 
 
-def _check_sketch_parameters(signature: Dict[str, Any], path: Path) -> None:
+def _select_sketch(signature: Dict[str, Any], path: Path) -> Dict[str, Any]:
+    """Return the k=21, scaled=1000 sketch from a signature's (possibly multi-sketch) list."""
+    for sketch in signature["signatures"]:
+        max_hash = sketch.get("max_hash") or 0
+        scaled = round(2**64 / max_hash) if max_hash else None
+        if sketch.get("ksize") == KSIZE and scaled == SCALED:
+            return sketch
+
     sketch = signature["signatures"][0]
     ksize = sketch.get("ksize")
     max_hash = sketch.get("max_hash") or 0
     scaled = round(2**64 / max_hash) if max_hash else None
-    if ksize != KSIZE or scaled != SCALED:
-        raise DataAccessError(
-            f"Branchwater needs k={KSIZE}, scaled={SCALED}; {path.name} has k={ksize}, scaled={scaled}"
-        )
+    raise DataAccessError(f"Branchwater needs k={KSIZE}, scaled={SCALED}; {path.name} has k={ksize}, scaled={scaled}")
 
 
 def search_index(

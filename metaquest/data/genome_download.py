@@ -185,32 +185,3 @@ def extract_and_organize(
 
     logger.info(f"Extracted and organized {len(genome_paths)} genome(s)")
     return genome_paths
-
-
-def read_accession_file(file_path: Path) -> List[str]:
-    """Read accessions from a text file (one per line, skip empty/comments).
-
-    Args:
-        file_path: Path to the accession file.
-
-    Returns:
-        List of accession strings.
-
-    Raises:
-        DataAccessError: If the file cannot be read.
-    """
-    file_path = Path(file_path)
-    if not file_path.exists():
-        raise DataAccessError(f"Accession file not found: {file_path}")
-
-    accessions = []
-    try:
-        with open(file_path, "r", encoding="utf-8-sig") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    accessions.append(line)
-    except Exception as e:
-        raise DataAccessError(f"Error reading accession file: {e}")
-
-    return accessions
