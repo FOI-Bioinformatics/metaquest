@@ -413,7 +413,7 @@ MetaQuest follows modern Python development practices with comprehensive testing
 ### Current Status
 - **Test Coverage**: 88%+ overall (from 53% baseline, 199 new tests added)
 - **CLI Commands**: 100% coverage, including intelligent SRA commands at 86% ✅
-- **Data Layer**: 93-99% coverage for all core modules (sra_metadata, sra_enhanced, taxonomy) ✅
+- **Data Layer**: 93-99% coverage for all core modules (sra_metadata, taxonomy) ✅
 - **Core Processing**: 92-99% coverage with comprehensive edge case testing ✅
 - **SRA Advanced Features**: 95% coverage for reporting, quality profiling, and analytics ✅
 - **Visualization Plugins**: Bar chart plugin at 99% coverage ✅
@@ -426,7 +426,7 @@ Significant improvements have been implemented across the codebase:
 
 - **Intelligent SRA Package**: Complete implementation of next-generation SRA capabilities including intelligent downloads with resume functionality, comprehensive quality profiling, and interactive dashboard generation
 - **Major Test Coverage Achievement**: Improved from 53% to 88%+ with 199 new comprehensive tests across 8 files
-  - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_enhanced, sra_metadata, bar visualizer, taxonomy)
+  - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy)
   - Integration test suite with 12 end-to-end workflow tests
   - Performance benchmarks with 25 tests using pytest-benchmark
   - All modules now at 86-99% coverage
