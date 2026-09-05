@@ -610,6 +610,7 @@ class TestDownloadSra:
             "failed": 0,
             "already_downloaded_accessions": [],
             "blacklisted_accessions": [],
+            "skipped_accessions": [],
         }
         assert result == expected_result
         mock_logger.info.assert_called_with("Dry run: would download 2 accessions")
@@ -624,6 +625,38 @@ class TestDownloadSra:
         stats = download_sra(tmp_path / "fastq", acc, dry_run=True, blacklist=[black])
         assert stats["already_downloaded_accessions"] == ["SRR2"]
         assert stats["blacklisted_accessions"] == ["SRR1"]
+
+    def test_on_result_called_on_main_thread_per_accession(self, tmp_path, monkeypatch):
+        import threading
+
+        seen = []
+        main = threading.get_ident()
+
+        def on_result(acc, ok, message):
+            seen.append((acc, ok, threading.get_ident() == main))
+
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        with patch(
+            "metaquest.data.sra.download_accession",
+            side_effect=[(True, "Downloaded 2 files"), (False, "Download failed: x")],
+        ):
+            stats = download_sra(tmp_path / "fastq", acc, max_workers=2, max_retries=0, on_result=on_result)
+        assert sorted(a for a, _, _ in seen) == ["SRR1", "SRR2"] and all(on_main for _, _, on_main in seen)
+        assert stats["failed_accessions"] == ["SRR2"] or stats["failed_accessions"] == ["SRR1"]
+
+    def test_max_downloads_cutoffs_are_returned(self, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\nSRR3\n")
+        with patch("metaquest.data.sra.download_accession", return_value=(True, "Downloaded 2 files")):
+            stats = download_sra(tmp_path / "fastq", acc, max_downloads=1)
+        assert len(stats["skipped_accessions"]) == 2
+
+    def test_registry_exclusions_join_the_blacklist(self, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        stats = download_sra(tmp_path / "fastq", acc, dry_run=True, blacklist_accessions={"SRR2"})
+        assert stats["blacklisted_accessions"] == ["SRR2"]
 
 
 class TestFindPairedReads:

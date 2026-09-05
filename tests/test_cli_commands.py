@@ -26,6 +26,7 @@ from metaquest.cli.commands.metadata import (
 from metaquest.cli.commands.sra import DownloadSraCommand
 from metaquest.cli.commands.samples import SingleSampleCommand
 from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
+from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 
 
@@ -372,7 +373,7 @@ class TestDownloadSraCommand:
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute(self, mock_command, _which):
+    def test_execute(self, mock_command, _which, tmp_path):
         """Test command execution."""
         mock_command.return_value = {
             "total": 1,
@@ -386,7 +387,7 @@ class TestDownloadSraCommand:
 
         args = argparse.Namespace(
             accessions_file="accessions.txt",
-            fastq_folder="fastq",
+            fastq_folder=str(tmp_path / "fastq"),
             max_downloads=None,
             num_threads=4,
             max_workers=4,
@@ -396,25 +397,30 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=None,
             report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         result = command.execute(args)
         assert result == 0
-        mock_command.assert_called_once_with(
-            fastq_folder="fastq",
-            accessions_file="accessions.txt",
-            max_downloads=None,
-            dry_run=False,
-            num_threads=4,
-            max_workers=4,
-            force=False,
-            max_retries=1,
-            temp_folder=None,
-            blacklist=None,
-        )
+        call_kwargs = dict(mock_command.call_args.kwargs)
+        on_result = call_kwargs.pop("on_result")
+        assert callable(on_result)
+        assert call_kwargs == {
+            "fastq_folder": str(tmp_path / "fastq"),
+            "accessions_file": "accessions.txt",
+            "max_downloads": None,
+            "dry_run": False,
+            "num_threads": 4,
+            "max_workers": 4,
+            "force": False,
+            "max_retries": 1,
+            "temp_folder": None,
+            "blacklist": None,
+            "blacklist_accessions": set(),
+        }
 
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute_dry_run(self, mock_command):
+    def test_execute_dry_run(self, mock_command, tmp_path):
         """Dry-run logs the plan (incl. blacklisted and max-downloads branches) and returns 0."""
         mock_command.return_value = {
             "total": 10,
@@ -427,7 +433,7 @@ class TestDownloadSraCommand:
         command = DownloadSraCommand()
         args = argparse.Namespace(
             accessions_file="accessions.txt",
-            fastq_folder="fastq",
+            fastq_folder=str(tmp_path / "fastq"),
             max_downloads=5,
             num_threads=4,
             max_workers=4,
@@ -437,27 +443,35 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=["bl.txt"],
             report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         result = command.execute(args)
         assert result == 0
+        assert not (tmp_path / "metaquest_registry.json").exists()
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute_with_failures_writes_failed_file(self, mock_command, _which, tmp_path):
-        """Failed downloads return 1 and write failed_accessions.txt for retry."""
-        mock_command.return_value = {
-            "total": 3,
-            "already_downloaded": 1,
-            "blacklisted": 1,
-            "successful": 1,
-            "failed": 1,
-            "failed_accessions": ["SRR999"],
-        }
+    def test_execute_with_failures_writes_failed_file(self, mock_command, _which, tmp_path, caplog):
+        """Failed downloads return 1; the retry hint is logged and the CLI itself writes no file."""
+        failed_file = tmp_path / "fastq" / FAILED_ACCESSIONS_FILE
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR999", False, "Download failed: t")
+            return {
+                "total": 3,
+                "already_downloaded": 1,
+                "blacklisted": 1,
+                "successful": 1,
+                "failed": 1,
+                "failed_accessions": ["SRR999"],
+            }
+
+        mock_command.side_effect = fake_download_sra
         command = DownloadSraCommand()
         args = argparse.Namespace(
             accessions_file="accessions.txt",
-            fastq_folder=str(tmp_path),
+            fastq_folder=str(tmp_path / "fastq"),
             max_downloads=None,
             num_threads=4,
             max_workers=4,
@@ -467,23 +481,27 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=None,
             report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
-        result = command.execute(args)
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
         assert result == 1
-        failed_file = tmp_path / "failed_accessions.txt"
-        assert failed_file.exists()
-        assert "SRR999" in failed_file.read_text()
+        # The data layer (fake download_sra here) is the only writer of this file; the CLI
+        # itself never creates it.
+        assert not failed_file.exists()
+        assert str(failed_file) in caplog.text
+        assert "--accessions-file" in caplog.text
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute_metaquest_error(self, mock_command, _which):
+    def test_execute_metaquest_error(self, mock_command, _which, tmp_path):
         """A MetaQuestError from the backend is caught and returns 1."""
         mock_command.side_effect = MetaQuestError("backend boom")
         command = DownloadSraCommand()
         args = argparse.Namespace(
             accessions_file="accessions.txt",
-            fastq_folder="fastq",
+            fastq_folder=str(tmp_path / "fastq"),
             max_downloads=None,
             num_threads=4,
             max_workers=4,
@@ -493,6 +511,7 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=None,
             report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
 
         result = command.execute(args)
@@ -515,6 +534,7 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=None,
             report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
         assert DownloadSraCommand().execute(args) == 1
         mock_download.assert_not_called()
@@ -544,6 +564,7 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=None,
             report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
         assert DownloadSraCommand().execute(args) == 0
 
@@ -576,6 +597,7 @@ class TestDownloadSraCommand:
             temp_folder=None,
             blacklist=None,
             report_file=str(report),
+            registry=str(tmp_path / "metaquest_registry.json"),
         )
         DownloadSraCommand().execute(args)
         assert report.read_text().splitlines() == [
@@ -585,6 +607,79 @@ class TestDownloadSraCommand:
             "SRR3,already_present,",
             "SRR4,blacklisted,",
         ]
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_records_outcomes_in_registry(self, mock_download, _which, tmp_path):
+        """Every accession's outcome ends up in the registry; the CLI never touches failed_accessions.txt."""
+        fastq_folder = tmp_path / "fastq"
+        (fastq_folder / "SRR1").mkdir(parents=True)
+        (fastq_folder / "SRR1" / "SRR1_1.fastq").write_text("@r\nA\n+\nI\n")
+        registry_path = tmp_path / "metaquest_registry.json"
+        failed_file = fastq_folder / FAILED_ACCESSIONS_FILE
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, "Downloaded 2 files")
+            kwargs["on_result"]("SRR2", False, "Download failed: t")
+            failed_file.parent.mkdir(parents=True, exist_ok=True)
+            failed_file.write_text("SRR2\n")
+            return {
+                "total": 5,
+                "already_downloaded": 1,
+                "blacklisted": 1,
+                "successful": 1,
+                "failed": 1,
+                "failed_accessions": ["SRR2"],
+                "results": {"SRR1": "Downloaded 2 files", "SRR2": "Download failed: t"},
+                "already_downloaded_accessions": ["SRR3"],
+                "blacklisted_accessions": ["SRR4"],
+                "skipped_accessions": ["SRR5"],
+            }
+
+        mock_download.side_effect = fake_download_sra
+
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\nSRR3\nSRR4\nSRR5\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+        )
+
+        result = DownloadSraCommand().execute(args)
+        assert result == 1
+
+        registry = json.loads(registry_path.read_text())
+        datasets = registry["datasets"]
+
+        assert datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert datasets["SRR1"]["download"]["files"][0]["path"].endswith("SRR1_1.fastq")
+        assert "inferred" not in datasets["SRR1"]["download"]
+
+        assert datasets["SRR2"]["download"]["state"] == "failed"
+        assert datasets["SRR2"]["download"]["attempts"] == 1
+
+        assert datasets["SRR3"]["download"]["state"] == "downloaded"
+        assert "inferred" not in datasets["SRR3"]["download"]
+
+        assert datasets["SRR4"]["download"]["state"] == "skipped"
+        assert datasets["SRR4"]["download"]["message"] == "blacklisted"
+
+        assert datasets["SRR5"]["download"]["state"] == "skipped"
+        assert datasets["SRR5"]["download"]["message"] == "--max-downloads"
+
+        # The failed_accessions.txt written by the fake download_sra (standing in for the
+        # data layer) is untouched by the CLI.
+        assert failed_file.read_text() == "SRR2\n"
 
 
 class TestSingleSampleCommand:

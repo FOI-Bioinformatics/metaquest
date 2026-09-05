@@ -10,8 +10,9 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
+from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
@@ -347,6 +348,7 @@ def _retry_failed_downloads(
     num_threads,
     temp_folder,
     download_results,
+    on_result: Optional[Callable[[str, bool, str], None]] = None,
 ):
     """
     Retry failed downloads.
@@ -358,6 +360,7 @@ def _retry_failed_downloads(
         num_threads: Number of threads to use
         temp_folder: Temporary folder path
         download_results: Dictionary to store results
+        on_result: Optional callback invoked with (accession, success, message) after each retry
 
     Returns:
         Tuple of (retried_successful, failed_accessions)
@@ -396,10 +399,15 @@ def _retry_failed_downloads(
                     failed_accessions.append(accession)
                     logger.warning(f"Failed to download {accession} on retry {retry + 1}: {message}")
 
+                if on_result is not None:
+                    on_result(accession, success, download_results[accession])
+
             except Exception as e:
                 failed_accessions.append(accession)
                 logger.error(f"Error retrying download for {accession}: {e}")
                 download_results[accession] = f"Retry {retry + 1} error: {str(e)}"
+                if on_result is not None:
+                    on_result(accession, False, download_results[accession])
 
     return retried_successful, failed_accessions
 
@@ -416,7 +424,7 @@ def _handle_download_failure(fastq_path, failed_accessions):
         return
 
     # Write failed accessions to file for easier retry
-    failed_file = Path(fastq_path) / "failed_accessions.txt"
+    failed_file = Path(fastq_path) / FAILED_ACCESSIONS_FILE
     with open(failed_file, "w") as f:
         for acc in failed_accessions:
             f.write(f"{acc}\n")
@@ -430,7 +438,15 @@ def _handle_download_failure(fastq_path, failed_accessions):
 
 
 def _execute_parallel_downloads(
-    accessions, fastq_path, num_threads, max_workers, force, temp_folder, download_results, failed_accessions
+    accessions,
+    fastq_path,
+    num_threads,
+    max_workers,
+    force,
+    temp_folder,
+    download_results,
+    failed_accessions,
+    on_result: Optional[Callable[[str, bool, str], None]] = None,
 ):
     """Download accessions concurrently and tally results. Returns (successful, failed)."""
     futures_results: list = []
@@ -442,10 +458,16 @@ def _execute_parallel_downloads(
         for future in as_completed(futures):
             acc = futures[future]
             try:
-                futures_results.append((acc, future.result()))
+                result = future.result()
+                futures_results.append((acc, result))
+                if on_result is not None:
+                    success, message = result
+                    on_result(acc, success, message)
             except Exception as e:
                 logger.error(f"Download failed for {acc}: {e}")
                 futures_results.append((acc, None))
+                if on_result is not None:
+                    on_result(acc, False, str(e))
 
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
 
@@ -466,7 +488,14 @@ def _resolve_fastq_path(fastq_folder: Union[str, Path], dry_run: bool) -> Path:
 
 
 def _download_with_retries(
-    accessions_to_download, fastq_path, num_threads, max_workers, force, temp_folder, max_retries
+    accessions_to_download,
+    fastq_path,
+    num_threads,
+    max_workers,
+    force,
+    temp_folder,
+    max_retries,
+    on_result: Optional[Callable[[str, bool, str], None]] = None,
 ) -> Tuple[int, int, List[str], Dict[str, Any]]:
     """Run the parallel downloads and optional retry pass.
 
@@ -483,6 +512,7 @@ def _download_with_retries(
         temp_folder,
         download_results,
         failed_accessions,
+        on_result,
     )
 
     if max_retries > 0 and failed_accessions:
@@ -493,6 +523,7 @@ def _download_with_retries(
             num_threads,
             temp_folder,
             download_results,
+            on_result,
         )
         successful_count += retried_successful
         failed_count -= retried_successful
@@ -513,6 +544,8 @@ def download_sra(
     max_retries: int = 1,
     temp_folder: Optional[Union[str, Path]] = None,
     blacklist: Optional[List[Union[str, Path]]] = None,
+    blacklist_accessions: Optional[Set[str]] = None,
+    on_result: Optional[Callable[[str, bool, str], None]] = None,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -528,6 +561,10 @@ def download_sra(
         max_retries: Maximum number of retry attempts for failed downloads
         temp_folder: Directory to use for fasterq-dump temporary files
         blacklist: One or more files containing accessions to skip
+        blacklist_accessions: An additional set of accessions to skip (e.g. registry exclusions),
+            joined with any accessions read from ``blacklist``
+        on_result: Optional callback invoked with (accession, success, message) on the main
+            thread as each download (and each retry) completes
 
     Returns:
         Dictionary with download statistics
@@ -545,8 +582,10 @@ def download_sra(
 
         logger.info(f"Found {len(all_accessions)} accessions in file")
 
-        # Read blacklisted accessions
+        # Read blacklisted accessions (from files, plus any passed in directly, e.g. registry exclusions)
         blacklisted_accessions = _read_blacklist_files(blacklist)
+        if blacklist_accessions:
+            blacklisted_accessions |= set(blacklist_accessions)
         if blacklisted_accessions:
             logger.info(f"Found total of {len(blacklisted_accessions)} blacklisted accessions")
 
@@ -559,6 +598,12 @@ def download_sra(
         logger.info(f"{len(blacklisted)} accessions blacklisted")
         logger.info(f"{len(accessions_to_download)} accessions need downloading")
 
+        # Accessions that --max-downloads would cut off, computed before any truncation so a
+        # dry run can report them too.
+        skipped_accessions: List[str] = []
+        if max_downloads is not None and max_downloads < len(accessions_to_download):
+            skipped_accessions = accessions_to_download[max_downloads:]
+
         if dry_run:
             logger.info(f"Dry run: would download {len(accessions_to_download)} accessions")
             return {
@@ -570,6 +615,7 @@ def download_sra(
                 "failed": 0,
                 "already_downloaded_accessions": sorted(str(a) for a in already_downloaded),
                 "blacklisted_accessions": sorted(str(a) for a in blacklisted),
+                "skipped_accessions": sorted(str(a) for a in skipped_accessions),
             }
 
         # Limit number of downloads if specified
@@ -579,7 +625,7 @@ def download_sra(
 
         # Download accessions in parallel, with an optional retry pass
         successful_count, failed_count, failed_accessions, download_results = _download_with_retries(
-            accessions_to_download, fastq_path, num_threads, max_workers, force, temp_folder, max_retries
+            accessions_to_download, fastq_path, num_threads, max_workers, force, temp_folder, max_retries, on_result
         )
 
         # Log final summary
@@ -604,6 +650,7 @@ def download_sra(
             "results": download_results,
             "already_downloaded_accessions": sorted(str(a) for a in already_downloaded),
             "blacklisted_accessions": sorted(str(a) for a in blacklisted),
+            "skipped_accessions": sorted(str(a) for a in skipped_accessions),
         }
 
         return download_stats

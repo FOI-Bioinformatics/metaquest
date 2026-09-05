@@ -9,7 +9,9 @@ import shutil
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
 
+from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.registry import load_registry, query, record_download, save_registry
 from metaquest.data.sra import download_sra
 
 
@@ -83,9 +85,14 @@ class DownloadSraCommand(BaseCommand):
             default=None,
             help=(
                 "Write a CSV of accession,status,message after the run "
-                "(statuses: downloaded, failed, already_present, blacklisted); "
-                "accessions skipped by --max-downloads get no row"
+                "(statuses: downloaded, failed, already_present, blacklisted, skipped); "
+                "accessions skipped by --max-downloads get a skipped row"
             ),
+        )
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
         )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
@@ -110,16 +117,11 @@ class DownloadSraCommand(BaseCommand):
         self.logger.info(f"  Total processed: {stats['total']} datasets")
 
     def _report_failed_downloads(self, args: argparse.Namespace, stats: dict) -> None:
-        """Warn about failures and write the failed accessions to a retry file."""
+        """Warn about failures and point at the retry file the data layer already wrote."""
         self.logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable automatic retry.")
         if not stats.get("failed_accessions"):
             return
-        failed_file = Path(args.fastq_folder) / "failed_accessions.txt"
-        failed_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(failed_file, "w") as f:
-            for acc in stats["failed_accessions"]:
-                f.write(f"{acc}\n")
-        self.logger.info(f"Failed accessions written to {failed_file}")
+        failed_file = Path(args.fastq_folder) / FAILED_ACCESSIONS_FILE
         self.logger.info(
             f"To retry only failed accessions: metaquest download_sra "
             f"--accessions-file {failed_file} "
@@ -135,6 +137,7 @@ class DownloadSraCommand(BaseCommand):
             rows.append((accession, "failed" if accession in failed else "downloaded", message))
         rows.extend((acc, "already_present", "") for acc in stats.get("already_downloaded_accessions", []))
         rows.extend((acc, "blacklisted", "") for acc in stats.get("blacklisted_accessions", []))
+        rows.extend((acc, "skipped", "--max-downloads") for acc in stats.get("skipped_accessions", []))
         path = Path(report_file)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="") as handle:
@@ -151,6 +154,21 @@ class DownloadSraCommand(BaseCommand):
                 )
                 return 1
 
+            registry = None
+            excluded: set = set()
+            on_result = None
+            fastq_dir = Path(args.fastq_folder)
+
+            if not args.dry_run:
+                registry = load_registry(args.registry)
+                excluded = set(query(registry, "excluded"))
+
+                def _record_result(accession: str, success: bool, message: str) -> None:
+                    record_download(registry, accession, "downloaded" if success else "failed", fastq_dir, message)
+                    save_registry(registry)
+
+                on_result = _record_result
+
             download_stats = download_sra(
                 fastq_folder=args.fastq_folder,
                 accessions_file=args.accessions_file,
@@ -162,12 +180,25 @@ class DownloadSraCommand(BaseCommand):
                 max_retries=args.max_retries,
                 temp_folder=args.temp_folder,
                 blacklist=args.blacklist,
+                blacklist_accessions=excluded,
+                on_result=on_result,
             )
 
             if args.dry_run:
                 self._log_dry_run_summary(args, download_stats)
             else:
                 self._log_download_summary(download_stats)
+
+                assert registry is not None  # loaded above whenever dry_run is False
+                already_downloaded_now = set(query(registry, "downloaded"))
+                for acc in download_stats.get("already_downloaded_accessions", []):
+                    if acc not in already_downloaded_now:
+                        record_download(registry, acc, "downloaded", fastq_dir)
+                for acc in download_stats.get("blacklisted_accessions", []):
+                    record_download(registry, acc, "skipped", fastq_dir, "blacklisted")
+                for acc in download_stats.get("skipped_accessions", []):
+                    record_download(registry, acc, "skipped", fastq_dir, "--max-downloads")
+                save_registry(registry)
 
                 if args.report_file:
                     self._write_report(args.report_file, download_stats)
