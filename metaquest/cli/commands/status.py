@@ -16,26 +16,23 @@ from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.file_io import write_csv
-from metaquest.data.read_extraction import summarise_contigs
 from metaquest.data.registry import (
     ProjectPaths,
     ReconcileReport,
     Registry,
     STAGES,
     bootstrap_from_disk,
+    empty_assembly_dirs,
     known_genome_ids,
     load_registry,
     query,
     reconcile,
     registry_path,
     save_registry,
-    scan_assemblies,
     stage_counts,
     to_dataframes,
 )
 from metaquest.data.sra import accession_has_fastq
-
-_CONTIGS_NAME = "final.contigs.fa"
 
 
 class StatusCommand(BaseCommand):
@@ -190,10 +187,8 @@ class StatusCommand(BaseCommand):
             genome_ids = [g for g in genome_ids if g in wanted]
 
         empty_by_genome: Dict[str, List[str]] = {}
-        for acc, per_genome in scan_assemblies(paths.targeted, genome_ids).items():
-            for genome_id, asm_dir in per_genome.items():
-                if summarise_contigs(asm_dir / _CONTIGS_NAME)["contigs"] == 0:
-                    empty_by_genome.setdefault(genome_id, []).append(acc)
+        for acc, genome_id in empty_assembly_dirs(paths.targeted, genome_ids):
+            empty_by_genome.setdefault(genome_id, []).append(acc)
 
         report: Dict[str, Any] = {}
         for genome_id in genome_ids:
@@ -398,7 +393,14 @@ class StatusCommand(BaseCommand):
             )
             registry_file = registry_path(args.registry)
             existed = registry_file.exists()
-            if existed and not args.init:
+            if existed and args.init:
+                self.logger.error(
+                    "Registry already exists at %s; run status --reconcile to update it from disk, "
+                    "or remove the file to rebuild it",
+                    registry_file,
+                )
+                return 1
+            if existed:
                 registry = load_registry(registry_file)
             else:
                 registry = bootstrap_from_disk(paths, args.accessions_file, args.parsed_containment)

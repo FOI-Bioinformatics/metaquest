@@ -186,6 +186,16 @@ class TestStatusWithRegistry:
         data = json.loads((tmp_path / "metaquest_registry.json").read_text())
         assert data["datasets"]["SRR1"]["download"]["inferred"] is True
 
+    def test_second_init_refuses_to_overwrite(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True, accessions_file=str(tmp_path / "accessions.txt")))
+        capsys.readouterr()
+        registry_path = tmp_path / "metaquest_registry.json"
+        before = registry_path.read_text()
+        rc = StatusCommand().execute(_status_args(tmp_path, init=True))
+        assert rc == 1
+        assert registry_path.read_text() == before
+
     def test_stage_and_genome_filters_list_accessions(self, tmp_path, capsys):
         _project_tree(tmp_path)
         StatusCommand().execute(_status_args(tmp_path, init=True))

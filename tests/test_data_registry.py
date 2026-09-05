@@ -185,6 +185,18 @@ class TestScanners:
         assert reg.split_extract_filename("GCF_9_1.fastq.gz", genomes) == ("GCF_9", "_1")  # suffix fallback
         assert reg.split_extract_filename("notes.txt", genomes) is None
 
+    def test_empty_assembly_dirs(self, tmp_path):
+        paths = _project(tmp_path)
+        empty_asm = paths.targeted / "SRR1" / "GCF_1_assembly"
+        empty_asm.mkdir(parents=True)  # interrupted, no contigs file
+        full_asm = paths.targeted / "SRR2" / "GCF_1_assembly"
+        full_asm.mkdir(parents=True)
+        (full_asm / "final.contigs.fa").write_text(">k len=5\nACGTA\n")
+        (paths.targeted / "SRR3").mkdir(parents=True)  # no assembly folder at all
+
+        pairs = reg.empty_assembly_dirs(paths.targeted, ["GCF_1"])
+        assert pairs == [("SRR1", "GCF_1")]
+
     def test_bootstrap_handles_non_numeric_cani(self, tmp_path):
         paths = _project(tmp_path)
         paths.matches.mkdir(parents=True)

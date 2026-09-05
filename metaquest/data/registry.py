@@ -467,6 +467,16 @@ def scan_assemblies(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[st
     return found
 
 
+def empty_assembly_dirs(targeted_folder: Path, genome_ids: Sequence[str]) -> List[Tuple[str, str]]:
+    """(accession, genome_id) pairs whose assembly directory holds zero contigs, sorted."""
+    pairs: List[Tuple[str, str]] = []
+    for acc, per_genome_asm in scan_assemblies(targeted_folder, genome_ids).items():
+        for genome_id, asm_dir in per_genome_asm.items():
+            if summarise_contigs(asm_dir / _CONTIGS_NAME)["contigs"] == 0:
+                pairs.append((acc, genome_id))
+    return sorted(pairs)
+
+
 def _counts_as_read_file(name: str, genome_ids: Sequence[str]) -> bool:
     """True for the mate-1, single-end and unpaired files, so paired reads are counted once."""
     split = split_extract_filename(name, genome_ids)
@@ -576,10 +586,7 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
         for genome_id in per_genome_files:
             if extraction_record(registry, acc, genome_id) is None:
                 report.untracked_extractions.append((acc, genome_id))
-    for acc, per_genome_asm in scan_assemblies(paths.targeted, genome_ids).items():
-        for genome_id, asm_dir in per_genome_asm.items():
-            if summarise_contigs(asm_dir / _CONTIGS_NAME)["contigs"] == 0:
-                report.empty_assembly_dirs.append((acc, genome_id))
+    report.empty_assembly_dirs = empty_assembly_dirs(paths.targeted, genome_ids)
     return report
 
 
