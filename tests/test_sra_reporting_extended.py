@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 from dataclasses import dataclass
 from typing import Dict, List, Any
 
+from metaquest.sra.analytics import QualityProfile
 from metaquest.sra.reporting import SRAReportGenerator
 
 
@@ -273,6 +274,47 @@ class TestQualityDashboardGeneration:
         with patch.object(generator.analyzer, "profile_dataset_quality", side_effect=Exception("API Error")):
             with pytest.raises(ValueError, match="No datasets could be profiled"):
                 generator.generate_quality_dashboard(accessions=["SRR001", "SRR002"], title="Failed Dashboard")
+
+    def test_generate_quality_dashboard_reuses_supplied_profile(self, tmp_output_dir):
+        """An accession covered by the ``profiles`` argument is not reprofiled from FASTQ."""
+        generator = SRAReportGenerator(tmp_output_dir)
+
+        profile = QualityProfile(
+            accession="SRRX",
+            total_reads=12345,
+            total_bases=1850000,
+            avg_read_length=150.0,
+            read_length_distribution={},
+            gc_content=0.55,
+            gc_distribution=[],
+            quality_distribution={"excellent_q30+": 0.9},
+            n_content=0.01,
+            contamination_indicators={"adapter_contamination": 0.01},
+            complexity_score=0.9,
+            duplication_rate=0.1,
+            technology_confidence=0.8,
+            quality_grade="excellent",
+            recommendations=[],
+        )
+        mock_anomaly = MockAnomalyReport(anomalous_datasets=[], explanations={})
+
+        with patch.object(generator.analyzer, "profile_dataset_quality") as mock_profile_call:
+            with patch.object(generator.analyzer, "detect_dataset_anomalies", return_value=mock_anomaly):
+                with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                    with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
+                        result_path = generator.generate_quality_dashboard(
+                            accessions=["SRRX"],
+                            title="Reused Profile Dashboard",
+                            profiles={"SRRX": profile},
+                        )
+
+        mock_profile_call.assert_not_called()
+        assert result_path.exists()
+        # The supplied profile's own values (not some freshly computed default) reached the
+        # rendered summary: total_reads=12,345 and gc_content=55.0%.
+        html_content = result_path.read_text()
+        assert "12,345" in html_content
+        assert "55.0%" in html_content
 
 
 class TestComparativeAnalysisReports:

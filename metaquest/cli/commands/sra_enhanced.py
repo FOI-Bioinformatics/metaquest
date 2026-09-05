@@ -8,11 +8,9 @@ previewing NCBI metadata, computing statistics, and validating downloaded datase
 import logging
 from pathlib import Path
 
-import pandas as pd
-
 from metaquest.cli.base import BaseCommand
 from metaquest.data.defaults import read_records
-from metaquest.data.registry import load_registry, record_analysis, save_registry
+from metaquest.data.registry import load_registry, nan_to_none, record_analysis, save_registry
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
     create_download_preview,
@@ -171,10 +169,6 @@ class SRAStatsCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
-    @staticmethod
-    def _clean(value):
-        return None if pd.isna(value) else value
-
     def _record_statistics(self, args, report_path: Path) -> None:
         """Record an sra_stats analysis for every accession in the statistics report.
 
@@ -197,9 +191,9 @@ class SRAStatsCommand(BaseCommand):
         registry = load_registry(args.registry)
         for _, row in df.iterrows():
             summary = {
-                "total_reads": self._clean(row.get("total_reads")),
-                "gc_content": self._clean(row.get("gc_content")),
-                "avg_read_length": self._clean(row.get("avg_read_length")),
+                "total_reads": nan_to_none(row.get("total_reads")),
+                "gc_content": nan_to_none(row.get("gc_content")),
+                "avg_read_length": nan_to_none(row.get("avg_read_length")),
             }
             record_analysis(registry, str(row["accession"]), "sra_stats", report_path, summary)
         save_registry(registry)

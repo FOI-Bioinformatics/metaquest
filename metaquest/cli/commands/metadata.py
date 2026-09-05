@@ -16,7 +16,7 @@ from metaquest.data.metadata import (
     download_metadata,
     parse_metadata,
 )
-from metaquest.data.registry import load_registry, record_metadata, save_registry
+from metaquest.data.registry import load_registry, nan_to_none, record_metadata, save_registry
 from metaquest.processing.counts import count_metadata
 from metaquest.visualization.plots import plot_metadata_counts
 
@@ -111,11 +111,7 @@ class ParseMetadataCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
-    @staticmethod
-    def _clean(value: Any) -> Any:
-        return None if pd.isna(value) else value
-
-    def _record_row(self, registry, metadata_folder: Path, df: pd.DataFrame, row: "pd.Series") -> None:
+    def _record_row(self, registry, metadata_folder: Path, row: "pd.Series") -> None:
         accession = row.get("Run_ID")
         if accession is None or pd.isna(accession):
             return
@@ -127,8 +123,8 @@ class ParseMetadataCommand(BaseCommand):
             ("organism", "Sample_Scientific_Name"),
             ("collection_date", "collection_date"),
         ):
-            if column in df.columns:
-                fields[field] = self._clean(row.get(column))
+            if column in row.index:
+                fields[field] = nan_to_none(row.get(column))
         record_metadata(registry, str(accession), metadata_folder / f"{accession}_metadata.xml", fields)
 
     def execute(self, args: argparse.Namespace) -> int:
@@ -137,7 +133,7 @@ class ParseMetadataCommand(BaseCommand):
             registry = load_registry(args.registry)
             metadata_folder = Path(args.metadata_folder)
             for _, row in df.iterrows():
-                self._record_row(registry, metadata_folder, df, row)
+                self._record_row(registry, metadata_folder, row)
             save_registry(registry)
             return 0
         except MetaQuestError as e:

@@ -4,6 +4,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -55,6 +56,25 @@ class TestLoadSave:
         with pytest.raises(DataAccessError, match="not valid JSON"):
             reg.load_registry(target)
 
+    def test_load_registry_wraps_os_error(self, tmp_path):
+        """A read failure (permissions, I/O error) surfaces as DataAccessError, not a raw traceback."""
+        target = tmp_path / "metaquest_registry.json"
+        target.write_text("{}")
+        with patch.object(Path, "read_text", side_effect=OSError("permission denied")):
+            with pytest.raises(DataAccessError, match="Cannot read registry"):
+                reg.load_registry(target)
+
+    def test_save_registry_wraps_os_error(self, tmp_path):
+        """A write failure (disk full, permissions) surfaces as DataAccessError, not a raw traceback."""
+        target = tmp_path / "metaquest_registry.json"
+        r = reg.load_registry(target)
+        with patch("os.replace", side_effect=OSError("disk full")):
+            with pytest.raises(DataAccessError, match="Cannot write registry"):
+                reg.save_registry(r)
+        # The lock and any temp file must not be left behind after the failure.
+        assert not list(tmp_path.glob("*.lock"))
+        assert not list(tmp_path.glob("*.tmp.*"))
+
     def test_registry_path_walks_up(self, tmp_path, monkeypatch):
         (tmp_path / "metaquest_registry.json").write_text("{}")
         sub = tmp_path / "targeted" / "SRR1"
@@ -74,6 +94,12 @@ class TestLoadSave:
         with pytest.raises(DataAccessError, match="locked"):
             reg.save_registry(reg.load_registry(target))
         lock.unlink()
+
+
+class TestNanToNone:
+    def test_nan_to_none(self):
+        assert reg.nan_to_none(float("nan")) is None
+        assert reg.nan_to_none("SRR1") == "SRR1"
 
 
 class TestRecords:

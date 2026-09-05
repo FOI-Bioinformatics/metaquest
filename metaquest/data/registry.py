@@ -91,7 +91,11 @@ def load_registry(path: Optional[Union[str, Path]] = None) -> Registry:
     if not target.exists():
         return Registry(path=target)
     try:
-        data = json.loads(target.read_text())
+        text = target.read_text()
+    except OSError as e:
+        raise DataAccessError(f"Cannot read registry {target}: {e}") from e
+    try:
+        data = json.loads(text)
     except json.JSONDecodeError as e:
         raise DataAccessError(f"Registry is not valid JSON: {target} ({e})") from e
     return Registry(
@@ -144,10 +148,14 @@ def save_registry(registry: Registry, path: Optional[Union[str, Path]] = None) -
     }
     lock = target.with_name(target.name + ".lock")
     _acquire_lock(lock)
+    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     try:
-        tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, target)
+        try:
+            tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            os.replace(tmp, target)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            raise DataAccessError(f"Cannot write registry {target}: {e}") from e
     finally:
         lock.unlink(missing_ok=True)
     return target
@@ -295,6 +303,13 @@ def record_download(
         }
     )
     download.pop("inferred", None)
+
+
+def nan_to_none(value: Any) -> Any:
+    """Return ``None`` for a pandas NaN/NA value, else ``value`` unchanged."""
+    import pandas as pd
+
+    return None if pd.isna(value) else value
 
 
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
