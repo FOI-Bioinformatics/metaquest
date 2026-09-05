@@ -50,7 +50,6 @@ class TestRegisterAllCommands:
             "extract_target_reads",
             "select_datasets",
             "sra_info",
-            "sra_download",
             "sra_stats",
             "sra_validate",
             "diversity_analysis",

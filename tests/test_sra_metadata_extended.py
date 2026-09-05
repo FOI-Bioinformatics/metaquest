@@ -659,6 +659,15 @@ class TestAPIRequestErrorHandling:
                 client._make_request("http://test.com", {})
 
 
+class TestEstimateDownloadTime:
+    def test_scales_with_size_and_parallelism(self):
+        from metaquest.data.sra_metadata import estimate_download_time
+
+        one = estimate_download_time(1.0, 100.0, 4)
+        assert one == pytest.approx(1.0 * 1024 * 8 / (100.0 * 4 * 0.8) / 3600)
+        assert estimate_download_time(2.0, 100.0, 4) == pytest.approx(2 * one)
+
+
 # ============================================================================
 # SUCCESS METRICS:
 #
@@ -672,5 +681,5 @@ class TestAPIRequestErrorHandling:
 #
 # Check coverage:
 #   pytest --cov=metaquest.data.sra_metadata --cov-report=term-missing \
-#          tests/test_sra_enhanced.py tests/test_sra_metadata_extended.py
+#          tests/test_sra_metadata_client.py tests/test_sra_metadata_extended.py
 # ============================================================================

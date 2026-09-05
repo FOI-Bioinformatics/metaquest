@@ -1,21 +1,18 @@
 """
 Enhanced SRA CLI commands for MetaQuest.
 
-This module provides comprehensive SRA downloading commands with technology detection,
-metadata fetching, and detailed statistics reporting.
+This module provides the sra_info, sra_stats, and sra_validate commands for
+previewing NCBI metadata, computing statistics, and validating downloaded datasets.
 """
 
 import logging
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
-from metaquest.data.sra_enhanced import (
-    EnhancedSRADownloader,
-    verify_sra_tools,
-    estimate_download_time,
-    create_download_report,
-)
 from metaquest.data.sra_metadata import (
+    SRAMetadataClient,
+    create_download_preview,
+    estimate_download_time,
     save_metadata_report,
     generate_statistics_report,
 )
@@ -114,8 +111,8 @@ class SRAInfoCommand(BaseCommand):
 
             print(f"Analyzing {len(accessions)} SRA accessions...")
 
-            downloader = EnhancedSRADownloader(args.email, args.api_key)
-            metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
+            client = SRAMetadataClient(args.email, args.api_key)
+            metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
 
             if not metadata:
                 print("Could not fetch metadata for any accessions")
@@ -130,198 +127,6 @@ class SRAInfoCommand(BaseCommand):
 
         except Exception as e:
             logger.error(f"SRA info command failed: {e}")
-            return 1
-
-
-class SRADownloadEnhancedCommand(BaseCommand):
-    """Command for enhanced SRA downloading with technology detection."""
-
-    @property
-    def name(self) -> str:
-        return "sra_download"
-
-    @property
-    def help(self) -> str:
-        return "Download SRA datasets with enhanced features and technology detection"
-
-    def configure_parser(self, parser):
-        parser.add_argument(
-            "--fastq-folder",
-            default="fastq",
-            help="Folder to save downloaded FASTQ files",
-        )
-        parser.add_argument(
-            "--accessions-file",
-            required=True,
-            help="File containing SRA accessions, one per line",
-        )
-        parser.add_argument(
-            "--email",
-            required=True,
-            help="Email address for NCBI API access (required by NCBI)",
-        )
-        parser.add_argument(
-            "--api-key",
-            help="NCBI API key for increased rate limits (optional)",
-        )
-        parser.add_argument(
-            "--max-downloads",
-            type=int,
-            help="Maximum number of datasets to download",
-        )
-        parser.add_argument(
-            "--num-threads",
-            type=int,
-            default=4,
-            help="Number of threads for each fasterq-dump",
-        )
-        parser.add_argument(
-            "--max-workers",
-            type=int,
-            default=4,
-            help="Number of parallel downloads",
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Show what would be downloaded without downloading",
-        )
-        parser.add_argument(
-            "--force",
-            action="store_true",
-            help="Force redownload even if files exist",
-        )
-        parser.add_argument(
-            "--temp-folder",
-            help="Directory for temporary files (must be writable)",
-        )
-        parser.add_argument(
-            "--blacklist",
-            nargs="+",
-            help="Files containing blacklisted accessions",
-        )
-        parser.add_argument(
-            "--verify-tools",
-            action="store_true",
-            help="Verify SRA tools are installed before starting",
-        )
-        parser.add_argument(
-            "--report-file",
-            default="download_report.csv",
-            help="Output file for download report",
-        )
-
-    def _verify_tools(self, args):
-        """Verify SRA tools if requested."""
-        if args.verify_tools:
-            print("Verifying SRA tools...")
-            if not verify_sra_tools():
-                print("SRA tools verification failed. Please install SRA toolkit.")
-                return False
-            print("✓ SRA tools verified")
-        return True
-
-    def _read_accessions(self, filename):
-        """Read accessions from file."""
-        with open(filename, "r") as f:
-            accessions = [line.strip() for line in f if line.strip()]
-        if not accessions:
-            print("No accessions found in file")
-            return None
-        return accessions
-
-    def _read_blacklist(self, blacklist_files):
-        """Read blacklisted accessions from files."""
-        blacklisted = set()
-        if blacklist_files:
-            for blacklist_file in blacklist_files:
-                try:
-                    with open(blacklist_file, "r") as f:
-                        file_accessions = {line.strip() for line in f if line.strip()}
-                        blacklisted.update(file_accessions)
-                    logger.info(f"Read {len(file_accessions)} blacklisted accessions " f"from {blacklist_file}")
-                except Exception as e:
-                    logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
-        return blacklisted
-
-    def _handle_dry_run(self, downloader, accessions):
-        """Handle dry run mode."""
-        print("Dry run mode: analyzing datasets...")
-        metadata, tech_counts, total_size_gb = downloader.preview_downloads(accessions)
-
-        print("\nWould download:")
-        print(f"  Accessions: {len(accessions)}")
-        print(f"  Total size: {total_size_gb:.2f} GB")
-
-        if tech_counts:
-            print("  Technologies:")
-            for tech, count in tech_counts.items():
-                print(f"    {tech}: {count}")
-
-    def _print_results(self, results):
-        """Print download results summary."""
-        print("\nDownload Summary:")
-        print("================")
-        print(f"Total: {results['total']}")
-        print(f"Successful: {results['successful']}")
-        print(f"Failed: {results['failed']}")
-
-        if results["technology_summary"]:
-            print("\nTechnology breakdown:")
-            for tech, count in results["technology_summary"].items():
-                print(f"  {tech}: {count}")
-
-    def execute(self, args):
-        try:
-            if not self._verify_tools(args):
-                return 1
-
-            accessions = self._read_accessions(args.accessions_file)
-            if accessions is None:
-                return 1
-
-            blacklisted = self._read_blacklist(args.blacklist)
-
-            downloader = EnhancedSRADownloader(
-                args.email,
-                args.api_key,
-                args.num_threads,
-                args.max_workers,
-                args.temp_folder,
-            )
-
-            if args.dry_run:
-                self._handle_dry_run(downloader, accessions)
-                return 0
-
-            print(f"Starting enhanced download of {len(accessions)} datasets...")
-            if blacklisted:
-                print(f"Blacklisted accessions: {len(blacklisted)}")
-
-            results = downloader.download_batch_enhanced(
-                accessions,
-                args.fastq_folder,
-                args.force,
-                args.max_downloads,
-                blacklisted,
-            )
-
-            self._print_results(results)
-
-            create_download_report(results, args.report_file)
-            print(f"\nDetailed report saved to: {args.report_file}")
-
-            if results["failed_accessions"]:
-                failed_file = Path(args.fastq_folder) / "failed_accessions.txt"
-                with open(failed_file, "w") as f:
-                    for acc in results["failed_accessions"]:
-                        f.write(f"{acc}\n")
-                print(f"Failed accessions saved to: {failed_file}")
-
-            return 0 if results["failed"] == 0 else 1
-
-        except Exception as e:
-            logger.error(f"Enhanced SRA download failed: {e}")
             return 1
 
 

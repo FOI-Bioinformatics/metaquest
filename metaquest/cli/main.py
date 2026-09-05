@@ -49,7 +49,6 @@ from metaquest.cli.commands.advanced_analysis import (
 )
 from metaquest.cli.commands.sra_enhanced import (
     SRAInfoCommand,
-    SRADownloadEnhancedCommand,
     SRAStatsCommand,
     SRAValidateCommand,
 )
@@ -83,7 +82,6 @@ def register_all_commands() -> None:
         SelectDatasetsCommand(),
         # Enhanced SRA commands
         SRAInfoCommand(),
-        SRADownloadEnhancedCommand(),
         SRAStatsCommand(),
         SRAValidateCommand(),
         # Intelligent SRA commands

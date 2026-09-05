@@ -1,5 +1,6 @@
 """
-Tests for enhanced SRA functionality.
+Tests for the SRA metadata client: NCBI queries, technology detection, and
+read statistics calculation.
 """
 
 import pytest
@@ -14,7 +15,6 @@ def _force_fresh_import():
     """Force fresh import of SRA modules to get real implementations."""
     modules_to_clear = [
         "metaquest.data.sra_metadata",
-        "metaquest.data.sra_enhanced",
     ]
     for module_name in modules_to_clear:
         if module_name in sys.modules:
@@ -31,12 +31,6 @@ from metaquest.data.sra_metadata import (  # noqa: E402
     SRADatasetInfo,
     detect_sequencing_technology,
     calculate_read_statistics,
-    create_download_preview,
-)
-from metaquest.data.sra_enhanced import (  # noqa: E402
-    EnhancedSRADownloader,
-    verify_sra_tools,
-    estimate_download_time,
 )
 
 
@@ -239,166 +233,6 @@ class TestReadStatistics:
 
             # Total bases: 1000, so N50 should be 300 (cumulative reaches 500 at 300)
             assert stats.n50 == 300
-
-
-class TestEnhancedSRADownloader:
-    """Test enhanced SRA downloader."""
-
-    def setup_method(self):
-        """Set up test downloader."""
-        self.downloader = EnhancedSRADownloader("test@example.com")
-
-    @patch("metaquest.data.sra_enhanced.create_download_preview")
-    def test_preview_downloads(self, mock_preview):
-        """Test download preview."""
-        mock_metadata = {"SRR123": MagicMock()}
-        mock_tech_counts = {"illumina": 1}
-        mock_size_gb = 1.5
-
-        mock_preview.return_value = (mock_metadata, mock_tech_counts, mock_size_gb)
-
-        metadata, tech_counts, size_gb = self.downloader.preview_downloads(["SRR123"])
-
-        assert metadata == mock_metadata
-        assert tech_counts == mock_tech_counts
-        assert size_gb == mock_size_gb
-
-    def test_build_download_command_illumina(self):
-        """Test building download command for Illumina."""
-        args = self.downloader._build_download_command("SRR123", Path("/tmp"), "illumina")
-
-        assert "SRR123" in args
-        assert "--split-files" in args
-
-    def test_build_download_command_nanopore(self):
-        """Test building download command for Nanopore."""
-        args = self.downloader._build_download_command("SRR123", Path("/tmp"), "nanopore")
-
-        assert "SRR123" in args
-        assert "--include-technical" in args
-
-    def test_rename_files_illumina_paired(self):
-        """Test file renaming for Illumina paired-end."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            output_path = temp_path / "SRR123"
-
-            # Create test files
-            file1 = temp_path / "SRR123_1.fastq"
-            file2 = temp_path / "SRR123_2.fastq"
-            file1.touch()
-            file2.touch()
-
-            renamed = self.downloader._rename_files_by_technology([file1, file2], "illumina", output_path)
-
-            assert len(renamed) == 2
-            assert str(renamed[file1]).endswith("_R1.fastq")
-            assert str(renamed[file2]).endswith("_R2.fastq")
-
-    def test_illumina_rename_keeps_uncompressed_suffix(self):
-        """Test that uncompressed FASTQ input keeps uncompressed suffix."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            output_path = temp_path / "SRR001"
-            file1 = temp_path / "SRR001_1.fastq"
-            file2 = temp_path / "SRR001_2.fastq"
-            file1.touch()
-            file2.touch()
-
-            renamed = self.downloader._rename_files_by_technology([file1, file2], "illumina", output_path)
-
-            assert renamed[file1] == output_path / "SRR001_R1.fastq"
-            assert renamed[file2] == output_path / "SRR001_R2.fastq"
-
-    def test_illumina_rename_keeps_gz_suffix(self):
-        """Test that gzipped FASTQ input keeps gzipped suffix."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            output_path = temp_path / "SRR001"
-            file1 = temp_path / "SRR001_1.fastq.gz"
-            file1.touch()
-
-            renamed = self.downloader._rename_files_by_technology([file1], "illumina", output_path)
-
-            assert renamed[file1] == output_path / "SRR001_R1.fastq.gz"
-
-    def test_rename_files_nanopore(self):
-        """Test file renaming for Nanopore."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            output_path = temp_path / "SRR123"
-
-            # Create test file
-            file1 = temp_path / "SRR123.fastq"
-            file1.touch()
-
-            renamed = self.downloader._rename_files_by_technology([file1], "nanopore", output_path)
-
-            assert len(renamed) == 1
-            assert str(renamed[file1]).endswith("_long.fastq")
-
-
-class TestSRAUtilities:
-    """Test SRA utility functions."""
-
-    @patch("subprocess.run")
-    def test_verify_sra_tools_success(self, mock_run):
-        """Test successful SRA tools verification."""
-        mock_run.return_value = MagicMock()
-
-        result = verify_sra_tools()
-
-        assert result is True
-        assert mock_run.call_count == 3  # Three tools to verify
-
-    @patch("subprocess.run")
-    def test_verify_sra_tools_failure(self, mock_run):
-        """Test SRA tools verification failure."""
-        mock_run.side_effect = FileNotFoundError()
-
-        result = verify_sra_tools()
-
-        assert result is False
-
-    def test_estimate_download_time(self):
-        """Test download time estimation."""
-        # Test with 1 GB at 100 Mbps with 4 parallel downloads
-        time_hours = estimate_download_time(1.0, 100.0, 4)
-
-        # Should be less than 1 hour
-        assert time_hours < 1.0
-        assert time_hours > 0
-
-    def test_download_preview_creation(self):
-        """Test download preview creation."""
-        # Mock metadata client
-        mock_client = MagicMock()
-        mock_dataset = SRADatasetInfo(
-            accession="SRR123",
-            title="Test",
-            organism="E. coli",
-            platform="ILLUMINA",
-            instrument="HiSeq",
-            strategy="WGS",
-            layout="PAIRED",
-            spots=1000,
-            bases=150000,
-            avg_length=150.0,
-            size_mb=100.0,
-            release_date="2023-01-01",
-            bioproject="",
-            biosample="",
-            library_selection="",
-            library_source="",
-        )
-        mock_client.get_sra_metadata.return_value = {"SRR123": mock_dataset}
-
-        metadata, tech_counts, total_size_gb = create_download_preview(["SRR123"], mock_client)
-
-        assert len(metadata) == 1
-        assert "SRR123" in metadata
-        assert tech_counts["illumina"] == 1
-        assert total_size_gb == 100.0 / 1024  # Convert MB to GB
 
 
 class TestSRAIntegration:

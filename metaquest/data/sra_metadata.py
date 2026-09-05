@@ -587,3 +587,28 @@ def generate_statistics_report(fastq_folder: Union[str, Path], output_file: Unio
     df.to_csv(output_file, index=False)
     logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
     _print_statistics_summary(df)
+
+
+def estimate_download_time(total_size_gb: float, bandwidth_mbps: float = 100, num_parallel: int = 4) -> float:
+    """
+    Estimate download time based on size and bandwidth.
+
+    Args:
+        total_size_gb: Total size in GB
+        bandwidth_mbps: Bandwidth in Mbps
+        num_parallel: Number of parallel downloads
+
+    Returns:
+        Estimated time in hours
+    """
+    # Convert GB to Mb
+    total_size_mb = total_size_gb * 1024 * 8
+
+    # Account for parallel downloads (with some efficiency loss)
+    effective_bandwidth = bandwidth_mbps * num_parallel * 0.8
+
+    # Calculate time in seconds, convert to hours
+    time_seconds = total_size_mb / effective_bandwidth
+    time_hours = time_seconds / 3600
+
+    return time_hours
