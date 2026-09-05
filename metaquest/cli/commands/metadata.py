@@ -43,7 +43,7 @@ class DownloadMetadataCommand(BaseCommand):
             "--threshold",
             type=float,
             default=0.0,
-            help="Threshold for containment values",
+            help="Threshold for containment values (inclusive)",
         )
         parser.add_argument(
             "--dry-run",
@@ -173,7 +173,7 @@ class CountMetadataCommand(BaseCommand):
             "--threshold",
             type=float,
             default=0.5,
-            help="Threshold for containment values",
+            help="Threshold for containment values (inclusive)",
         )
         parser.add_argument(
             "--output-file",

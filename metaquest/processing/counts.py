@@ -51,12 +51,12 @@ def _process_genome_accessions(genome_column, summary_df, threshold, metadata_df
         Number of samples processed
     """
     try:
-        # Find accessions with containment above threshold
-        selected_accessions = summary_df[summary_df[genome_column] > threshold].index
+        # Find accessions with containment at or above threshold
+        selected_accessions = summary_df[summary_df[genome_column] >= threshold].index
 
         # Skip if no matching accessions
         if len(selected_accessions) == 0:
-            logger.warning(f"No accessions found for {genome_column} above threshold {threshold}")
+            logger.warning(f"No accessions found for {genome_column} at or above threshold {threshold}")
             return 0
 
         # Filter metadata to selected accessions
@@ -137,7 +137,7 @@ def count_metadata(
                 metadata_column,
                 df_list,
             )
-            unique_accessions.update(summary_df[summary_df[genome_column] > threshold].index)
+            unique_accessions.update(summary_df[summary_df[genome_column] >= threshold].index)
             if selected_count > 0:
                 processed_count += 1
 

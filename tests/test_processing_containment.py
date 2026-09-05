@@ -409,11 +409,11 @@ class TestFilterSamplesByContainment:
 
         result = filter_samples_by_containment(summary_file, threshold=0.5, genome_id="GCF_000001.1")
 
-        # Should NOT include SRR003 since it's not > 0.5
-        assert len(result) == 2
+        # Should include SRR003 since the threshold is inclusive (>= 0.5)
+        assert len(result) == 3
         assert "SRR001" in result.index
         assert "SRR005" in result.index
-        assert "SRR003" not in result.index
+        assert "SRR003" in result.index
 
 
 class TestFindCoOccurringGenomes:

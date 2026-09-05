@@ -50,7 +50,7 @@ class SingleSampleCommand(BaseCommand):
             "--threshold",
             type=float,
             default=0.1,
-            help="Threshold for the column in the summary file",
+            help="Threshold for the column in the summary file (inclusive)",
         )
         parser.add_argument("--top-n", type=int, default=100, help="Number of top items to keep")
 

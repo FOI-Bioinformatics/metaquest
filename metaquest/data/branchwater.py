@@ -325,7 +325,7 @@ def _generate_containment_summary(containment_data, output_file, summary_file, s
         for i in range(int(1 / step_size), -1, -1):
             threshold = i * step_size
             rounded_threshold = round(threshold, 2)
-            count = len(df[df["max_containment"] > threshold])
+            count = len(df[df["max_containment"] >= threshold])
 
             thresholds.append(rounded_threshold)
             counts.append(count)

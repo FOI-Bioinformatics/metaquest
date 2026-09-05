@@ -625,5 +625,17 @@ class TestBranchwaterIntegration:
             assert any(run_id.startswith("ERR") or run_id.startswith("SRR") for run_id in run_ids)
 
 
+def test_summary_counts_samples_at_exactly_one(tmp_path):
+    """A sample whose containment exactly equals the threshold must be counted (inclusive rule)."""
+    from metaquest.data.branchwater import parse_containment_data
+
+    matches = tmp_path / "matches"
+    matches.mkdir()
+    (matches / "GCF_1.csv").write_text("acc,containment,cANI\nSRR1,1.0,1.0\nSRR2,0.5,0.9\n")
+    parse_containment_data(matches, tmp_path / "parsed.txt", tmp_path / "summary.txt", 0.5)
+    rows = dict(line.split("\t") for line in (tmp_path / "summary.txt").read_text().splitlines()[1:])
+    assert rows["1.0"] == "1" and rows["0.5"] == "2"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

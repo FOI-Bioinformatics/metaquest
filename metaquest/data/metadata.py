@@ -63,7 +63,7 @@ def _get_unique_accessions(matches_folder, threshold):
 
             # Filter by threshold
             if threshold > 0:
-                df = df[df[containment_col] > threshold]
+                df = df[df[containment_col] >= threshold]
 
             # Add accessions to set
             unique_accessions.update(df[accession_col].tolist())

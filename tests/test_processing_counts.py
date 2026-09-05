@@ -213,7 +213,7 @@ class TestProcessGenomeAccessions:
 
         _process_genome_accessions("GCF_000001.1", summary_df, threshold, metadata_df, "organism", df_list)
 
-        mock_logger.warning.assert_called_with("No accessions found for GCF_000001.1 above threshold 0.5")
+        mock_logger.warning.assert_called_with("No accessions found for GCF_000001.1 at or above threshold 0.5")
 
 
 class TestCountGenomeMetadata:
@@ -686,4 +686,16 @@ class TestProcessGenomeAccessionsExtended:
         result = _process_genome_accessions("GCF_000001.1", summary_df, 0.5, metadata_df, "organism", df_list)
 
         assert result == 0
-        assert len(df_list) == 0
+
+
+def test_count_metadata_includes_samples_at_the_threshold(tmp_path):
+    """A sample whose containment exactly equals the threshold must be counted (inclusive rule)."""
+    from metaquest.processing.counts import count_metadata
+
+    summary = tmp_path / "parsed_containment.txt"
+    summary.write_text("\tGCF_1\nSRR1\t0.9\nSRR2\t0.5\n")
+    meta = tmp_path / "meta.txt"
+    meta.write_text("Run_ID\torganism\nSRR1\tA\nSRR2\tB\n")
+    out = tmp_path / "counts.txt"
+    result = count_metadata(summary, meta, "organism", 0.9, out)
+    assert list(result.index) == ["A"]

@@ -396,7 +396,7 @@ def plot_heatmap(
             df = data.copy()
 
         # Apply threshold
-        df = df.map(lambda x: x if x > threshold else 0)
+        df = df.map(lambda x: x if x >= threshold else 0)
 
         # Remove metadata columns if present
         metadata_cols = ["max_containment", "max_containment_annotation"]

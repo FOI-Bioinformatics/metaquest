@@ -112,9 +112,9 @@ def count_single_sample(
                 f"Available columns: {', '.join(metadata_df.columns)}"
             )
 
-        # Find accessions above threshold
-        selected_accessions = summary_df[summary_df[summary_column] > threshold].index
-        logger.info(f"Found {len(selected_accessions)} accessions with {summary_column} > {threshold}")
+        # Find accessions at or above threshold
+        selected_accessions = summary_df[summary_df[summary_column] >= threshold].index
+        logger.info(f"Found {len(selected_accessions)} accessions with {summary_column} >= {threshold}")
 
         if len(selected_accessions) == 0:
             logger.warning("No accessions found above threshold")
@@ -182,11 +182,11 @@ def filter_samples_by_containment(
                 raise ProcessingError(
                     f"Genome {genome_id} not found in summary file. " f"Available genomes: {', '.join(genome_cols)}"
                 )
-            filtered_df = summary_df[summary_df[genome_id] > threshold]
-            logger.info(f"Found {len(filtered_df)} samples with {genome_id} > {threshold}")
+            filtered_df = summary_df[summary_df[genome_id] >= threshold]
+            logger.info(f"Found {len(filtered_df)} samples with {genome_id} >= {threshold}")
         else:
-            filtered_df = summary_df[summary_df["max_containment"] > threshold]
-            logger.info(f"Found {len(filtered_df)} samples with max_containment > {threshold}")
+            filtered_df = summary_df[summary_df["max_containment"] >= threshold]
+            logger.info(f"Found {len(filtered_df)} samples with max_containment >= {threshold}")
 
         return filtered_df
 
@@ -224,7 +224,7 @@ def find_co_occurring_genomes(
         presence_df = pd.DataFrame(index=summary_df.index)
 
         for col in genome_cols:
-            presence_df[col] = (summary_df[col] > threshold).astype(int)
+            presence_df[col] = (summary_df[col] >= threshold).astype(int)
 
         # Filter to genomes present in at least min_samples
         genome_counts = presence_df.sum()
