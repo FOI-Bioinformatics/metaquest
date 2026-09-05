@@ -73,6 +73,13 @@ class TestReadBlacklistFiles:
         result = _read_blacklist_files([blacklist])
         assert result == {"SRR123", "SRR456"}
 
+    def test_blacklist_reader_ignores_inline_reasons_and_comment_lines(self, tmp_path):
+        from metaquest.data.sra import _read_blacklist_files
+
+        bl = tmp_path / "blacklist.txt"
+        bl.write_text("# written by metaquest blacklist\nSRR1  # amplicon\nSRR2\n\n")
+        assert _read_blacklist_files([bl]) == {"SRR1", "SRR2"}
+
 
 class TestPrepareTempFolder:
     """Test _prepare_temp_folder function."""

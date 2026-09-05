@@ -48,6 +48,7 @@ class TestRegisterAllCommands:
             "status",
             "extract_target_reads",
             "select_datasets",
+            "blacklist",
             "sra_info",
             "sra_stats",
             "sra_validate",

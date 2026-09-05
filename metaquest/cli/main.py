@@ -39,6 +39,7 @@ from metaquest.cli.commands import (
     FindByTaxonomyCommand,
 )
 from metaquest.cli.commands.select import SelectDatasetsCommand
+from metaquest.cli.commands.blacklist import BlacklistCommand
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.cli.commands.advanced_analysis import (
     DiversityAnalysisCommand,
@@ -84,6 +85,7 @@ def register_all_commands() -> None:
         DownloadTestGenomeCommand(),
         # Reads commands
         SelectDatasetsCommand(),
+        BlacklistCommand(),
         DownloadSraCommand(),
         StatusCommand(),
         SRAInfoCommand(),

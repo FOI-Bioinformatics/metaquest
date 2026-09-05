@@ -59,7 +59,7 @@ def _read_blacklist_files(blacklist_files):
             file_accessions = set()
             with open(blacklist_file, "r") as f:
                 for line in f:
-                    accession = line.strip()
+                    accession = line.split("#", 1)[0].strip()
                     if accession:
                         file_accessions.add(accession)
                         blacklisted_accessions.add(accession)
