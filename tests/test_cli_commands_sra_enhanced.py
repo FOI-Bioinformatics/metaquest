@@ -7,33 +7,14 @@ focusing on argument parsing, validation, and proper delegation with mocked depe
 
 import argparse
 from unittest.mock import Mock, patch, mock_open
-import sys
 
 import pytest
 
-# Store original module before mocking
-_original_sra_metadata = sys.modules.get("metaquest.data.sra_metadata")
-
-# Mock dependencies to avoid import issues
-mock_sra_metadata = Mock()
-mock_sra_metadata.save_metadata_report = Mock()
-mock_sra_metadata.generate_statistics_report = Mock()
-mock_sra_metadata.estimate_download_time = Mock(return_value=2.5)
-
-sys.modules["metaquest.data.sra_metadata"] = mock_sra_metadata
-
-from metaquest.cli.commands.sra_enhanced import (  # noqa: E402
+from metaquest.cli.commands.sra_enhanced import (
     SRAInfoCommand,
     SRAStatsCommand,
     SRAValidateCommand,
 )
-
-# Restore original module immediately after importing the commands under test.
-# This prevents mock pollution of sys.modules that would affect other test files.
-if _original_sra_metadata is not None:
-    sys.modules["metaquest.data.sra_metadata"] = _original_sra_metadata
-else:
-    sys.modules.pop("metaquest.data.sra_metadata", None)
 
 
 class TestSRAInfoCommand:
@@ -86,10 +67,11 @@ class TestSRAInfoCommand:
         assert args.output_report == "custom_report.csv"
         assert args.bandwidth_mbps == 250.5
 
+    @patch("metaquest.cli.commands.sra_enhanced.save_metadata_report")
     @patch("metaquest.cli.commands.sra_enhanced.create_download_preview")
     @patch("metaquest.cli.commands.sra_enhanced.SRAMetadataClient")
     @patch("builtins.print")
-    def test_execute_success(self, mock_print, mock_client_class, mock_create_preview, tmp_path):
+    def test_execute_success(self, mock_print, mock_client_class, mock_create_preview, mock_save_report, tmp_path):
         """Test successful execution."""
         command = SRAInfoCommand()
         args = argparse.Namespace(
@@ -120,7 +102,7 @@ class TestSRAInfoCommand:
         assert result == 0
         mock_client_class.assert_called_once_with("test@example.com", "test_key")
         mock_create_preview.assert_called_once_with(["SRR123456", "SRR789012"], mock_client)
-        mock_sra_metadata.save_metadata_report.assert_called_once()
+        mock_save_report.assert_called_once()
 
     @patch("builtins.print")
     def test_execute_no_accessions(self, mock_print):
@@ -225,8 +207,9 @@ class TestSRAStatsCommand:
         assert args.output_report == "custom_stats.csv"
         assert args.accessions == ["SRR123", "SRR456"]
 
+    @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
     @patch("builtins.print")
-    def test_execute_success(self, mock_print, tmp_path):
+    def test_execute_success(self, mock_print, mock_generate_report, tmp_path):
         """Test successful execution."""
         command = SRAStatsCommand()
 
@@ -239,7 +222,7 @@ class TestSRAStatsCommand:
         result = command.execute(args)
 
         assert result == 0
-        mock_sra_metadata.generate_statistics_report.assert_called_once_with(fastq_folder, "stats.csv")
+        mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv")
 
     @patch("builtins.print")
     def test_execute_folder_not_exists(self, mock_print):
@@ -252,8 +235,9 @@ class TestSRAStatsCommand:
         assert result == 1
         mock_print.assert_called_with("FASTQ folder /nonexistent/folder does not exist")
 
+    @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
     @patch("metaquest.cli.commands.sra_enhanced.logger")
-    def test_execute_exception_handling(self, mock_logger, tmp_path):
+    def test_execute_exception_handling(self, mock_logger, mock_generate_report, tmp_path):
         """Test exception handling during execution."""
         command = SRAStatsCommand()
 
@@ -263,7 +247,7 @@ class TestSRAStatsCommand:
         args = argparse.Namespace(fastq_folder=str(fastq_folder), output_report="stats.csv", accessions=None)
 
         # Mock generate_statistics_report to raise an exception
-        mock_sra_metadata.generate_statistics_report.side_effect = Exception("Test error")
+        mock_generate_report.side_effect = Exception("Test error")
 
         result = command.execute(args)
 
