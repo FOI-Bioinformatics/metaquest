@@ -216,6 +216,11 @@ def record_screening(
     registry.genomes.setdefault(genome_id, {})
 
 
+def record_genome(registry: Registry, genome_id: str, fasta: Union[str, Path], manifest: Union[str, Path]) -> None:
+    """Record where a target genome's FASTA lives, and the manifest it came from."""
+    registry.genomes[genome_id] = {"fasta": str(fasta), "manifest": str(manifest), "date": _now()}
+
+
 def record_selection(
     registry: Registry, accessions: Sequence[str], criteria: Dict[str, Any], output: Union[str, Path]
 ) -> None:
@@ -627,18 +632,30 @@ def _bootstrap_downloads_and_metadata(registry: Registry, paths: ProjectPaths) -
         registry.datasets[acc]["metadata"]["inferred"] = True
 
 
+def _infer_extraction(
+    registry: Registry, acc: str, genome_id: str, files: Sequence[Path], genome_ids: Sequence[str]
+) -> None:
+    """Record one (accession, genome) extraction found on disk, marked as inferred."""
+    reads = sum(count_fastq_reads(f) for f in files if _counts_as_read_file(f.name, genome_ids))
+    record_extraction(registry, acc, genome_id, files, reads, False, {})
+    registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+
+
+def _infer_assembly(registry: Registry, acc: str, genome_id: str, asm_dir: Path) -> None:
+    """Record the assembly in ``asm_dir``, marked as inferred, when it holds contigs."""
+    stats = summarise_contigs(asm_dir / _CONTIGS_NAME)
+    if stats["contigs"] > 0:
+        record_assembly(registry, acc, genome_id, asm_dir, stats, "", {})
+        registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+
+
 def _bootstrap_extractions(registry: Registry, paths: ProjectPaths, genome_ids: List[str]) -> None:
     for acc, per_genome_files in scan_extractions(paths.targeted, genome_ids).items():
         for genome_id, files in per_genome_files.items():
-            reads = sum(count_fastq_reads(f) for f in files if _counts_as_read_file(f.name, genome_ids))
-            record_extraction(registry, acc, genome_id, files, reads, False, {})
-            registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+            _infer_extraction(registry, acc, genome_id, files, genome_ids)
     for acc, per_genome_asm in scan_assemblies(paths.targeted, genome_ids).items():
         for genome_id, asm_dir in per_genome_asm.items():
-            stats = summarise_contigs(asm_dir / _CONTIGS_NAME)
-            if stats["contigs"] > 0:
-                record_assembly(registry, acc, genome_id, asm_dir, stats, "", {})
-                registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+            _infer_assembly(registry, acc, genome_id, asm_dir)
 
 
 def bootstrap_from_disk(
@@ -660,7 +677,12 @@ def bootstrap_from_disk(
 
 
 def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
-    """Compare the registry with the disk: mark missing downloads, list untracked work and empty assemblies."""
+    """Compare the registry with the disk: mark missing downloads, register untracked work.
+
+    Untracked FASTQ and extractions are recorded the way ``bootstrap_from_disk`` records
+    them, with ``"inferred": true``, so a project worked on outside MetaQuest lands in the
+    journal instead of being reported as drift on every run. They stay in the report.
+    """
     report = ReconcileReport()
     on_disk = scan_downloads(paths.fastq)
     for acc, record in registry.datasets.items():
@@ -671,11 +693,20 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
             report.recorded_missing.append(acc)
     tracked = {acc for acc, r in registry.datasets.items() if r.get("download", {}).get("state") == "downloaded"}
     report.untracked_fastq = sorted(acc for acc in on_disk if acc not in tracked)
+    for acc in report.untracked_fastq:
+        record_download(registry, acc, "downloaded", paths.fastq, attempt=False)
+        registry.datasets[acc]["download"]["inferred"] = True
+        registry.datasets[acc]["download"]["attempts"] = 0
     genome_ids = sorted(_genome_ids_on_disk(paths, registry))
+    assemblies = scan_assemblies(paths.targeted, genome_ids)
     for acc, per_genome_files in scan_extractions(paths.targeted, genome_ids).items():
-        for genome_id in per_genome_files:
+        for genome_id, files in per_genome_files.items():
             if extraction_record(registry, acc, genome_id) is None:
                 report.untracked_extractions.append((acc, genome_id))
+                _infer_extraction(registry, acc, genome_id, files, genome_ids)
+                asm_dir = assemblies.get(acc, {}).get(genome_id)
+                if asm_dir is not None:
+                    _infer_assembly(registry, acc, genome_id, asm_dir)
     report.empty_assembly_dirs = empty_assembly_dirs(paths.targeted, genome_ids)
     return report
 

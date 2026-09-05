@@ -4,6 +4,7 @@ import argparse
 import csv
 import sys
 from pathlib import Path
+from typing import Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import GENOME_FASTA_GLOBS
@@ -13,6 +14,7 @@ from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
 )
+from metaquest.data.registry import record_genome, registry_transaction
 
 
 def _genome_name(filename: str) -> str:
@@ -282,6 +284,7 @@ class GenomePrepareCommand(BaseCommand):
             action="store_true",
             help="Only create manifest from existing files in output-dir",
         )
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def _collect_accessions(self, args: argparse.Namespace) -> list:
         """Collect accessions from GTDB or accession file."""
@@ -304,14 +307,15 @@ class GenomePrepareCommand(BaseCommand):
 
         return accessions
 
-    def _create_manifest(self, output_dir: Path, manifest_file: str) -> int:
-        """Create a manifest CSV from the genome FASTA files in output_dir."""
+    def _create_manifest(self, output_dir: Path, manifest_file: str, registry: Optional[str] = None) -> int:
+        """Create a manifest CSV from the genome FASTA files in output_dir and record its rows."""
         genome_files = sorted({p for pattern in GENOME_FASTA_GLOBS for p in output_dir.glob(pattern)})
         if not genome_files:
             self.logger.warning("No genome files found in %s", output_dir)
             return 0
 
         manifest_path = Path(manifest_file)
+        rows = []
         with open(manifest_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["name", "genome_filename", "protein_filename"])
@@ -322,6 +326,11 @@ class GenomePrepareCommand(BaseCommand):
                     None,
                 )
                 writer.writerow([name, str(gf), str(protein) if protein else ""])
+                rows.append((name, gf))
+
+        with registry_transaction(registry) as reg:
+            for name, gf in rows:
+                record_genome(reg, name, gf, manifest_path)
 
         self.logger.info("Created manifest with %d entries: %s", len(genome_files), manifest_path)
         return len(genome_files)
@@ -349,7 +358,7 @@ class GenomePrepareCommand(BaseCommand):
                 zip_path = download_genomes(accessions, output_dir)
                 extract_and_organize(zip_path, output_dir)
 
-            self._create_manifest(output_dir, args.manifest_file)
+            self._create_manifest(output_dir, args.manifest_file, args.registry)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error preparing genomes: %s", e)

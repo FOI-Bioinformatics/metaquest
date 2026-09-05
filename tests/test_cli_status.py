@@ -1,15 +1,26 @@
 """Tests for the `status` (local inventory) CLI command."""
 
 import argparse
+import gzip
 import json
 import tempfile
 from pathlib import Path
 
 from metaquest.cli.commands.status import StatusCommand
+from metaquest.data.registry import (
+    SCHEMA_VERSION,
+    load_registry,
+    record_exclusion,
+    record_extraction,
+    record_genome,
+    record_selection,
+    save_registry,
+)
 
 
-def _args(**kwargs):
+def _args(registry, **kwargs):
     base = dict(
+        registry=str(registry),
         fastq_folder="fastq",
         metadata_folder="metadata",
         genomes_folder="genomes",
@@ -19,7 +30,6 @@ def _args(**kwargs):
         json=False,
         targeted_folder="targeted",
         matches_folder="matches",
-        registry=None,
         stage=None,
         genome=None,
         init=False,
@@ -55,6 +65,7 @@ class TestStatusCommand:
             root = _make_tree(tmp)
             result = cmd.execute(
                 _args(
+                    root / "metaquest_registry.json",
                     fastq_folder=str(root / "fastq"),
                     metadata_folder=str(root / "metadata"),
                     genomes_folder=str(root / "genomes"),
@@ -74,6 +85,7 @@ class TestStatusCommand:
             accs.write_text("SRR1\nSRR2\n")
             result = cmd.execute(
                 _args(
+                    root / "metaquest_registry.json",
                     fastq_folder=str(root / "fastq"),
                     metadata_folder=str(root / "metadata"),
                     genomes_folder=str(root / "genomes"),
@@ -95,6 +107,7 @@ class TestStatusCommand:
             accs.write_text("SRR1\nSRR2\n")
             result = cmd.execute(
                 _args(
+                    root / "metaquest_registry.json",
                     fastq_folder=str(root / "fastq"),
                     metadata_folder=str(root / "metadata"),
                     genomes_folder=str(root / "genomes"),
@@ -116,6 +129,7 @@ class TestStatusCommand:
             table.write_text("accession\tGCF_x\nSRR1\t0.9\nSRR2\t0.4\n")
             result = cmd.execute(
                 _args(
+                    root / "metaquest_registry.json",
                     fastq_folder=str(root / "fastq"),
                     metadata_folder=str(root / "metadata"),
                     genomes_folder=str(root / "genomes"),
@@ -127,9 +141,9 @@ class TestStatusCommand:
         report = json.loads(capsys.readouterr().out)
         assert report["wanted"]["total"] == 2
 
-    def test_missing_accessions_file_errors(self):
+    def test_missing_accessions_file_errors(self, tmp_path):
         cmd = StatusCommand()
-        result = cmd.execute(_args(accessions_file="/nonexistent/accs.txt"))
+        result = cmd.execute(_args(tmp_path / "metaquest_registry.json", accessions_file="/nonexistent/accs.txt"))
         assert result == 1
 
 
@@ -216,6 +230,58 @@ class TestStatusWithRegistry:
             "extract_target_reads" in c and "GCF_1" in c for c in commands
         )  # SRR1/SRR2 downloaded, not extracted
 
+    def test_next_extraction_command_is_runnable(self, tmp_path, capsys):
+        """The extract suggestion carries the table it was selected from and a FASTA that exists."""
+        _project_tree(tmp_path)
+        (tmp_path / "genomes").mkdir()
+        (tmp_path / "genomes" / "GCF_1.fasta").write_text(">s\nACGT\n")
+        table = tmp_path / "tables" / "containment.txt"
+        table.parent.mkdir()
+        table.write_text("\tGCF_1\nSRR1\t0.9\nSRR2\t0.4\n")
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        record_selection(seeded, ["SRR1", "SRR2"], {"column": "GCF_1", "table": str(table)}, tmp_path / "acc.txt")
+        save_registry(seeded)
+        capsys.readouterr()
+
+        StatusCommand().execute(_status_args(tmp_path, next=True))
+        out = json.loads(capsys.readouterr().out)
+        extract = next(s for s in out["next"] if "extract_target_reads" in s["command"])
+        assert f"--parsed-containment {table}" in extract["command"]
+        assert f"--genome-fasta {tmp_path / 'genomes' / 'GCF_1.fasta'}" in extract["command"]
+
+    def test_next_uses_the_recorded_genome_fasta(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        record_genome(seeded, "GCF_1", tmp_path / "refs" / "wMel.fna", tmp_path / "manifest.csv")
+        save_registry(seeded)
+        capsys.readouterr()
+
+        StatusCommand().execute(_status_args(tmp_path, next=True))
+        out = json.loads(capsys.readouterr().out)
+        extract = next(s for s in out["next"] if "extract_target_reads" in s["command"])
+        assert f"--genome-fasta {tmp_path / 'refs' / 'wMel.fna'}" in extract["command"]
+
+    def test_next_drops_excluded_and_already_extracted_accessions(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True, accessions_file=str(tmp_path / "accessions.txt")))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        record_exclusion(seeded, "SRR3", "16S amplicon")  # selected, not downloaded
+        record_exclusion(seeded, "SRR2", "16S amplicon")  # downloaded
+        record_extraction(seeded, "SRR1", "GCF_1", [], 0, False, {})  # zero mapped, but recorded
+        save_registry(seeded)
+        capsys.readouterr()
+
+        StatusCommand().execute(_status_args(tmp_path, next=True))
+        out = json.loads(capsys.readouterr().out)
+        download = [s for s in out["next"] if "download_sra" in s["command"]]
+        extract = [
+            s for s in out["next"] if "extract_target_reads" in s["command"] and "--assemble" not in s["command"]
+        ]
+        assert download == []  # SRR3 was the only one left to download
+        assert extract == []  # SRR1 has a record, SRR2 is excluded
+
     def test_reconcile_marks_missing_and_untracked(self, tmp_path, capsys):
         _project_tree(tmp_path)
         StatusCommand().execute(_status_args(tmp_path, init=True))
@@ -228,6 +294,65 @@ class TestStatusWithRegistry:
         assert out["drift"]["recorded_missing"] == ["SRR2"] and out["drift"]["untracked_fastq"] == ["SRR8"]
         data = json.loads((tmp_path / "metaquest_registry.json").read_text())
         assert data["datasets"]["SRR2"]["download"]["state"] == "missing"
+
+    def test_reconcile_registers_untracked_work(self, tmp_path, capsys):
+        """Untracked FASTQ and extractions are recorded as inferred, and still reported."""
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        capsys.readouterr()
+        (tmp_path / "fastq" / "SRR8").mkdir()
+        (tmp_path / "fastq" / "SRR8" / "SRR8_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        extracted = tmp_path / "targeted" / "SRR1"
+        extracted.mkdir(parents=True)
+        for name in ("GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"):
+            with gzip.open(extracted / name, "wt") as handle:
+                handle.write("@r1\nACGT\n+\nIIII\n")
+
+        StatusCommand().execute(_status_args(tmp_path, reconcile=True))
+        out = json.loads(capsys.readouterr().out)
+        assert out["drift"]["untracked_fastq"] == ["SRR8"]
+        assert out["drift"]["untracked_extractions"] == [["SRR1", "GCF_1"]]
+
+        datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
+        assert datasets["SRR8"]["download"]["state"] == "downloaded"
+        assert datasets["SRR8"]["download"]["inferred"] is True
+        assert datasets["SRR8"]["download"]["attempts"] == 0
+        extraction = datasets["SRR1"]["extractions"]["GCF_1"]
+        assert extraction["mapped_reads"] > 0 and extraction["inferred"] is True
+
+    def test_reconcile_without_a_registry_refuses(self, tmp_path, caplog):
+        _project_tree(tmp_path)
+        with caplog.at_level("ERROR"):
+            rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True))
+        assert rc == 1
+        assert not (tmp_path / "metaquest_registry.json").exists()
+        assert "status --init" in caplog.text
+
+    def test_report_carries_the_schema_version(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        out = json.loads(capsys.readouterr().out)
+        assert out["registry"]["version"] == SCHEMA_VERSION
+
+    def test_text_report_shows_selection_criteria_and_exclusion_reasons(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        record_selection(
+            seeded,
+            ["SRR1"],
+            {"column": "GCF_1", "threshold": 0.5, "metadata_column": "organism", "metadata_value": "soil"},
+            tmp_path / "accessions.txt",
+        )
+        record_exclusion(seeded, "SRR2", "16S amplicon")
+        record_exclusion(seeded, "SRR3", "16S amplicon")
+        save_registry(seeded)
+        capsys.readouterr()
+
+        StatusCommand().execute(_status_args(tmp_path, json=False))
+        out = capsys.readouterr().out
+        assert "column GCF_1" in out and "threshold 0.5" in out and "organism = soil" in out
+        assert "16S amplicon: 2" in out
 
     def test_export_tsv(self, tmp_path, capsys):
         _project_tree(tmp_path)

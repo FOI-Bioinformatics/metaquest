@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
-from metaquest.core.constants import GENOME_FASTA_GLOBS
+from metaquest.core.constants import DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.file_io import write_csv
 from metaquest.data.registry import (
@@ -23,6 +23,7 @@ from metaquest.data.registry import (
     STAGES,
     bootstrap_from_disk,
     empty_assembly_dirs,
+    extraction_record,
     known_genome_ids,
     load_registry,
     query,
@@ -231,31 +232,50 @@ class StatusCommand(BaseCommand):
         ]
 
     @staticmethod
+    def _selection_table(registry: Registry) -> str:
+        """The containment table a selection was recorded from, else the default name."""
+        for record in registry.datasets.values():
+            selection = record.get("selection") or {}
+            table = (selection.get("criteria") or {}).get("table") if selection.get("selected") else None
+            if table:
+                return str(table)
+        return DEFAULT_PARSED_CONTAINMENT_FILE
+
+    @staticmethod
+    def _genome_fasta(registry: Registry, paths: ProjectPaths, genome_id: str) -> Path:
+        """The genome's FASTA: the recorded one, else a file on disk, else the conventional name."""
+        recorded = (registry.genomes.get(genome_id) or {}).get("fasta")
+        if recorded:
+            return Path(recorded)
+        for pattern in GENOME_FASTA_GLOBS:
+            candidate = paths.genomes / pattern.replace("*", genome_id)
+            if candidate.exists():
+                return candidate
+        return paths.genomes / f"{genome_id}.fna"
+
+    @staticmethod
     def _extraction_next_steps(registry: Registry, paths: ProjectPaths) -> List[Dict[str, Any]]:
         steps: List[Dict[str, Any]] = []
-        downloaded = query(registry, "downloaded")
+        excluded = set(query(registry, "excluded"))
+        downloaded = [acc for acc in query(registry, "downloaded") if acc not in excluded]
+        table = StatusCommand._selection_table(registry)
         for genome_id in sorted(known_genome_ids(registry)):
-            genome_fasta = paths.genomes / f"{genome_id}.fna"
-            extracted = set(query(registry, "extracted", genome_id))
-            to_extract = [acc for acc in downloaded if acc not in extracted]
+            genome_fasta = StatusCommand._genome_fasta(registry, paths, genome_id)
+            base = (
+                f"metaquest extract_target_reads --parsed-containment {table} "
+                f"--genome-id {genome_id} --genome-fasta {genome_fasta}"
+            )
+            # Any record, including a zero-mapped one, means the sample has been tried.
+            recorded = {acc for acc in registry.datasets if extraction_record(registry, acc, genome_id) is not None}
+            to_extract = [acc for acc in downloaded if acc not in recorded]
             if to_extract:
-                steps.append(
-                    {
-                        "command": f"metaquest extract_target_reads --genome-id {genome_id} "
-                        f"--genome-fasta {genome_fasta}",
-                        "accessions": to_extract,
-                    }
-                )
+                steps.append({"command": base, "accessions": to_extract})
             assembled = set(query(registry, "assembled", genome_id))
-            to_assemble = [acc for acc in query(registry, "extracted", genome_id) if acc not in assembled]
+            to_assemble = [
+                acc for acc in query(registry, "extracted", genome_id) if acc not in assembled and acc not in excluded
+            ]
             if to_assemble:
-                steps.append(
-                    {
-                        "command": f"metaquest extract_target_reads --genome-id {genome_id} "
-                        f"--genome-fasta {genome_fasta} --assemble",
-                        "accessions": to_assemble,
-                    }
-                )
+                steps.append({"command": f"{base} --assemble", "accessions": to_assemble})
         return steps
 
     def _next_steps(self, registry: Registry, paths: ProjectPaths) -> List[Dict[str, Any]]:
@@ -289,12 +309,49 @@ class StatusCommand(BaseCommand):
                     print("  Missing metadata : " + ", ".join(w["metadata_missing"]))
 
     @staticmethod
-    def _print_stages(stages: Dict[str, Any]) -> None:
+    def _selection_detail(registry: Registry) -> str:
+        """The criteria and date of the most recent selection, for the selected stage row."""
+        latest: Dict[str, Any] = {}
+        for record in registry.datasets.values():
+            selection = record.get("selection") or {}
+            if selection.get("selected") and str(selection.get("date", "")) >= str(latest.get("date", "")):
+                latest = selection
+        if not latest:
+            return ""
+        criteria = latest.get("criteria") or {}
+        parts = []
+        if criteria.get("column"):
+            parts.append(f"column {criteria['column']}")
+        if criteria.get("threshold") is not None:
+            parts.append(f"threshold {criteria['threshold']}")
+        if criteria.get("metadata_column"):
+            parts.append(f"{criteria['metadata_column']} = {criteria.get('metadata_value')}")
+        parts.append(str(latest.get("date", "")))
+        return ", ".join(p for p in parts if p)
+
+    @staticmethod
+    def _exclusion_detail(registry: Registry) -> str:
+        """How many accessions carry each exclusion reason."""
+        reasons: Dict[str, int] = {}
+        for record in registry.datasets.values():
+            exclusion = record.get("exclusion") or {}
+            if exclusion.get("excluded"):
+                reason = str(exclusion.get("reason") or "no reason given")
+                reasons[reason] = reasons.get(reason, 0) + 1
+        return ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items()))
+
+    @staticmethod
+    def _print_stages(stages: Dict[str, Any], registry: Registry) -> None:
         print("\nStages")
         print("======")
+        details = {
+            "selected": StatusCommand._selection_detail(registry),
+            "excluded": StatusCommand._exclusion_detail(registry),
+        }
         for stage in STAGES:
             info = stages[stage]
-            print(f"  {stage:<10s} : {info['count']}")
+            detail = details.get(stage)
+            print(f"  {stage:<10s} : {info['count']}" + (f"   {detail}" if detail else ""))
 
     @staticmethod
     def _print_genomes(genomes: Dict[str, Any]) -> None:
@@ -365,7 +422,7 @@ class StatusCommand(BaseCommand):
 
     def _print_report(self, args: argparse.Namespace, report: Dict[str, Any], registry: Registry) -> None:
         self._print_inventory(report, args.list_missing)
-        self._print_stages(report["stages"])
+        self._print_stages(report["stages"], registry)
         self._print_genomes(report["genomes"])
         self._print_stage_filter(registry, args.stage, args.genome)
         if args.list_missing:
@@ -400,6 +457,12 @@ class StatusCommand(BaseCommand):
                     registry_file,
                 )
                 return 1
+            if args.reconcile and not existed:
+                self.logger.error(
+                    "No registry at %s to reconcile; create one first with: metaquest status --init",
+                    registry_file,
+                )
+                return 1
             if existed:
                 registry = load_registry(registry_file)
             else:
@@ -417,6 +480,7 @@ class StatusCommand(BaseCommand):
             report = self._inventory_report(args, registry)
             report["registry"] = {
                 "path": str(registry_file),
+                "version": registry.version,
                 "exists": existed or args.init,
                 "updated": registry.updated,
             }

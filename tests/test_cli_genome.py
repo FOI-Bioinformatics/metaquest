@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -416,6 +417,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file=str(manifest),
                 skip_download=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -439,6 +441,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file=str(manifest),
                 skip_download=True,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -459,6 +462,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file="manifest.csv",
                 skip_download=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 1
@@ -477,6 +481,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file="manifest.csv",
                 skip_download=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 1
@@ -493,6 +498,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file=str(manifest),
                 skip_download=True,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -507,12 +513,43 @@ class TestGenomePrepareCommand:
             (tmp_path / "GCF_000006945.2.faa").write_text(">p\nM\n")
             (tmp_path / "other.fasta.gz").write_bytes(b"")
             manifest = tmp_path / "manifest.csv"
-            n = cmd._create_manifest(tmp_path, str(manifest))
+            n = cmd._create_manifest(tmp_path, str(manifest), str(tmp_path / "metaquest_registry.json"))
             rows = manifest.read_text().splitlines()
             assert n == 2
             assert rows[0] == "name,genome_filename,protein_filename"
             assert rows[1].startswith("GCF_000006945.2,") and rows[1].endswith("GCF_000006945.2.faa")
             assert rows[2].startswith("other,")
+
+    def test_manifest_rows_are_recorded_as_genomes(self, tmp_path):
+        """Every manifest row becomes a registry genome, so later commands can find its FASTA."""
+        cmd = GenomePrepareCommand()
+        (tmp_path / "GCF_000006945.2.fna").write_text(">c\nACGT\n")
+        (tmp_path / "wMel.fasta").write_text(">c\nACGT\n")
+        manifest = tmp_path / "manifest.csv"
+        registry_file = tmp_path / "metaquest_registry.json"
+        args = argparse.Namespace(
+            species=None,
+            genus=None,
+            accession_file=None,
+            output_dir=str(tmp_path),
+            representative_only=True,
+            manifest_file=str(manifest),
+            skip_download=True,
+            registry=str(registry_file),
+        )
+
+        assert cmd.execute(args) == 0
+        genomes = json.loads(registry_file.read_text())["genomes"]
+        assert set(genomes) == {"GCF_000006945.2", "wMel"}
+        assert genomes["GCF_000006945.2"]["fasta"] == str(tmp_path / "GCF_000006945.2.fna")
+        assert genomes["GCF_000006945.2"]["manifest"] == str(manifest)
+        assert genomes["wMel"]["date"]
+
+    def test_configure_parser_has_registry(self):
+        cmd = GenomePrepareCommand()
+        parser = argparse.ArgumentParser()
+        cmd.configure_parser(parser)
+        assert parser.parse_args(["--registry", "r.json"]).registry == "r.json"
 
     @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
@@ -532,6 +569,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file=str(manifest),
                 skip_download=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -555,6 +593,7 @@ class TestGenomePrepareCommand:
                 representative_only=True,
                 manifest_file=str(manifest),
                 skip_download=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
