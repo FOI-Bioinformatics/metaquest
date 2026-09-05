@@ -61,7 +61,20 @@ make clean         # Clean build artifacts
 
 ### 1. Getting Containment Files from Branchwater
 
-First, visit [https://branchwater.jgi.doe.gov/](https://branchwater.jgi.doe.gov/) to search and download containment files for your genomes of interest. Save these CSV files to a designated folder.
+Search the Branchwater index directly from a genome. The command sketches the FASTA with sourmash
+(install the extra with `pip install 'metaquest[sourmash]'`, or use `environment.yml`), queries the
+public search API and writes `branchwater/<genome>.csv` in the layout the next steps read:
+
+```bash
+metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1
+```
+
+The CSV carries the accession, containment and cANI; the metadata columns are empty until step 5
+(`download_metadata`) fills them from NCBI. If you already have a k=21, scaled=1000 sourmash signature,
+pass `--signature file.sig` instead of the FASTA.
+
+Alternatively, search at [https://branchwater.sourmash.bio/](https://branchwater.sourmash.bio/) in a
+browser, download the CSV, and save it to the same folder.
 
 ### 2. Process Branchwater Files
 

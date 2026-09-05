@@ -40,6 +40,7 @@ from metaquest.cli.commands import (
     FindByTaxonomyCommand,
 )
 from metaquest.cli.commands.select import SelectDatasetsCommand
+from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.cli.commands.advanced_analysis import (
     DiversityAnalysisCommand,
     InteractivePlotCommand,
@@ -64,6 +65,7 @@ def register_all_commands() -> None:
     """Register all available commands with the registry."""
     commands = [
         DownloadTestGenomeCommand(),
+        BranchwaterSearchCommand(),
         UseBranchwaterCommand(),
         ExtractBranchwaterMetadataCommand(),
         ParseContainmentCommand(),

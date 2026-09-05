@@ -33,6 +33,7 @@ class TestRegisterAllCommands:
         command_names = [cmd.name for cmd in command_registry._commands.values()]
         expected_commands = [
             "download_test_genome",
+            "branchwater_search",
             "use_branchwater",
             "extract_branchwater_metadata",
             "parse_containment",

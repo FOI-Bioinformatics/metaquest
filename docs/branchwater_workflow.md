@@ -42,6 +42,18 @@ metaquest parse_metadata --metadata-folder metadata --metadata-table-file parsed
 - Longer processing time
 - Rate-limited downloads
 
+## Searching from a FASTA
+
+`branchwater_search` replaces the manual download. It needs the sourmash extra and network access:
+
+```bash
+metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1 --branchwater-folder branchwater
+metaquest use_branchwater --branchwater-folder branchwater --matches-folder matches
+```
+
+A run that returns zero matches is reported as a warning, not an error; verify the index with a genome
+known to be abundant in metagenomes before trusting an empty result.
+
 ## Advanced Filtering and Thresholds
 
 ### Containment steps
