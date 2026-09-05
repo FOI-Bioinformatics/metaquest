@@ -16,11 +16,14 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
 from metaquest.data.sra import accession_has_fastq
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -483,14 +486,17 @@ def _screening_from_matches(registry: Registry, matches_folder: Path) -> None:
         with open(csv_path, newline="") as handle:
             for row in csv.DictReader(handle):
                 acc = (row.get("acc") or row.get("SRA accession") or "").strip()
+                if not acc:
+                    continue
                 try:
                     containment = float(row.get("containment", ""))
                 except ValueError:
                     continue
-                if not acc:
-                    continue
                 cani_raw = row.get("cANI") or ""
-                cani = float(cani_raw) if cani_raw.strip() else None
+                try:
+                    cani = float(cani_raw) if cani_raw.strip() else None
+                except ValueError:
+                    cani = None
                 record_screening(registry, acc, csv_path.stem, containment, cani, "matches", 0.0, csv_path)
                 registry.datasets[acc]["screening"]["inferred"] = True
 
@@ -577,7 +583,7 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
     return report
 
 
-def to_dataframes(registry: Registry):
+def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
     """Flat views: one row per accession, and one row per (accession, genome) extraction."""
     import pandas as pd
 

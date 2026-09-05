@@ -185,6 +185,16 @@ class TestScanners:
         assert reg.split_extract_filename("GCF_9_1.fastq.gz", genomes) == ("GCF_9", "_1")  # suffix fallback
         assert reg.split_extract_filename("notes.txt", genomes) is None
 
+    def test_bootstrap_handles_non_numeric_cani(self, tmp_path):
+        paths = _project(tmp_path)
+        paths.matches.mkdir(parents=True)
+        (paths.matches / "GCF_1.csv").write_text("acc,containment,cANI\nSRR1,0.5,NA\nSRR2,0.6,\n")
+        r = reg.bootstrap_from_disk(paths)
+        assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_1"]["containment"] == 0.5
+        assert r.datasets["SRR1"]["screening"]["genomes"]["GCF_1"]["cani"] is None
+        assert r.datasets["SRR2"]["screening"]["genomes"]["GCF_1"]["containment"] == 0.6
+        assert r.datasets["SRR2"]["screening"]["genomes"]["GCF_1"]["cani"] is None
+
     def test_bootstrap_and_reconcile(self, tmp_path):
         paths = _project(tmp_path)
         _fastq(paths.fastq / "SRR1" / "SRR1_1.fastq")
