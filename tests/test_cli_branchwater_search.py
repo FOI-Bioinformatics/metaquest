@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.core.exceptions import DataAccessError
@@ -72,6 +72,22 @@ class TestBranchwaterSearchCommand:
     @patch("metaquest.cli.commands.branchwater_search.load_signature", side_effect=DataAccessError("bad sig"))
     def test_error_returns_1(self, _load):
         assert BranchwaterSearchCommand().execute(_args(signature="wmel.sig")) == 1
+
+    @patch("metaquest.data.branchwater_search.requests.post")
+    @patch("metaquest.cli.commands.branchwater_search.load_signature", return_value={"signatures": []})
+    def test_server_ignoring_threshold_is_filtered_locally(self, _load, mock_post, tmp_path, caplog):
+        mock_post.return_value = Mock(
+            status_code=200, text="SRA accession,containment\nSRR1,0.0009\nSRR2,0.001\nSRR3,0.0005\n"
+        )
+        output = tmp_path / "out.csv"
+        with caplog.at_level("WARNING"):
+            rc = BranchwaterSearchCommand().execute(_args(signature="wmel.sig", output=str(output)))
+        assert rc == 0
+        assert "control genome" in caplog.text
+        assert output.read_text().splitlines() == [
+            "acc,containment,cANI,biosample,bioproject,assay_type,collection_date_sam,"
+            "geo_loc_name_country_calc,organism,lat_lon"
+        ]
 
     def test_registered(self):
         from metaquest.cli.main import create_parser, register_all_commands

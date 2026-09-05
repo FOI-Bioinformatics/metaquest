@@ -124,7 +124,12 @@ def search_index(
         raise DataAccessError(f"Branchwater search failed: {e}") from e
     if response.status_code != 200:
         raise DataAccessError(f"Branchwater search returned HTTP {response.status_code}: {response.text[:200]}")
-    return _parse_search_csv(response.text)
+    matches = _parse_search_csv(response.text)
+    kept = [match for match in matches if match[1] >= threshold]
+    n_dropped = len(matches) - len(kept)
+    if n_dropped:
+        logger.info("Dropped %d match(es) below containment %.2f reported by the server", n_dropped, threshold)
+    return kept
 
 
 def _parse_search_csv(text: str) -> List[Tuple[str, float]]:

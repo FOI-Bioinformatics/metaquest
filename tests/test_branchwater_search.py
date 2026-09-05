@@ -135,6 +135,19 @@ class TestSearchIndex:
         mock_post.return_value = Mock(status_code=200, text="SRA accession,containment\n")
         assert search_index(SIG_OBJECT, 0.1) == []
 
+    @patch("metaquest.data.branchwater_search.requests.post")
+    def test_rows_below_threshold_are_dropped(self, mock_post):
+        mock_post.return_value = Mock(
+            status_code=200, text="SRA accession,containment\nSRR1,0.0009\nSRR2,0.5\nSRR3,0.1\n"
+        )
+        matches = search_index(SIG_OBJECT, 0.1)
+        assert matches == [("SRR2", 0.5), ("SRR3", 0.1)]
+
+    @patch("metaquest.data.branchwater_search.requests.post")
+    def test_all_rows_below_threshold_gives_empty(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, text="SRA accession,containment\nSRR1,0.0009\nSRR2,0.001\n")
+        assert search_index(SIG_OBJECT, 0.1) == []
+
 
 class TestWriteBranchwaterCsv:
     def test_header_and_cani(self, tmp_path):

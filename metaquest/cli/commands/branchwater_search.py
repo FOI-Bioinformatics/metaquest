@@ -33,7 +33,7 @@ class BranchwaterSearchCommand(BaseCommand):
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--genome-fasta", help="Genome FASTA to sketch (needs the sourmash extra)")
         source.add_argument("--signature", help="Existing sourmash signature file (k=21, scaled=1000)")
-        parser.add_argument("--threshold", type=float, default=0.1, help="Minimum containment reported by Branchwater")
+        parser.add_argument("--threshold", type=float, default=0.1, help="Minimum containment to keep (inclusive)")
         parser.add_argument("--branchwater-folder", default="branchwater", help="Folder for the Branchwater CSV")
         parser.add_argument(
             "--output", default=None, help="Output CSV (default: <branchwater-folder>/<input stem>.csv)"
