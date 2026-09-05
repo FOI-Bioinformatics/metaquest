@@ -57,6 +57,17 @@ The data layer manages access to data sources and external systems:
 - Communication with external APIs
 - Caching mechanisms
 
+#### Project registry
+`metaquest/data/registry.py` is the project journal: a `metaquest_registry.json` file in the project
+root recording screening, selection, exclusion, download, metadata, analysis, extraction, and
+assembly outcomes for every accession a project touches. Record functions (`record_screening`,
+`record_selection`, `record_exclusion`, `record_download`, `record_metadata`, `record_analysis`,
+`record_extraction`, `record_assembly`) are called by the commands that produce those outcomes as
+each one finishes. Presence is never taken from the registry alone: `status` and the scanning
+functions (`scan_downloads`, `scan_metadata`, `scan_extractions`, `scan_assemblies`) re-check the
+filesystem, so a file removed by hand is reported as missing rather than done. Writes are atomic
+(a temporary file renamed into place) and serialized with a lock file to avoid concurrent corruption.
+
 #### Plugin System
 The plugin system enables extensibility:
 - Format plugins for different file formats
@@ -77,6 +88,8 @@ The plugin system enables extensibility:
 - **branchwater**: Functionality for working with Branchwater data
 - **metadata**: Functions for downloading and processing metadata
 - **sra**: Functions for downloading and working with SRA data
+- **registry**: The project journal (`metaquest_registry.json`); records dataset state and
+  re-checks presence against the filesystem
 
 #### Processing Components
 

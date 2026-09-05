@@ -67,6 +67,21 @@ metaquest select_datasets --threshold 0.9 --output accessions.txt
 metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.9
 ```
 
+## What the registry records
+
+Most commands in this workflow update the project registry (`metaquest_registry.json`) as they run;
+`status` reads it back. One line per command:
+
+- `branchwater_search` / `parse_containment`: screening, the containment per genome
+- `select_datasets`: selection, the threshold and metadata filter used
+- `blacklist`: exclusions, with a reason
+- `download_sra`: download outcomes, with file sizes and dates
+- `download_metadata` / `parse_metadata`: metadata
+- `sra_stats` / `sra_validate` / `sra_profile_quality`: analyses
+- `extract_target_reads`: extraction and assembly, per target genome
+
+See the README's "Project state" section and `metaquest status --help` for the full set of flags.
+
 ## Troubleshooting Common Issues
 
 ### Format Validation Errors

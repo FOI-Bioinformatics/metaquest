@@ -88,7 +88,12 @@ The typical workflow involves:
 2. Extracting/downloading metadata (`extract_branchwater_metadata` or `download_metadata`)
 3. Parsing containment data (`parse_containment`) 
 4. Visualization and analysis (`plot_containment`, `count_metadata`)
-5. Advanced SRA operations (`download_sra`, `sra_profile_quality`, `sra_dashboard`)
+5. Excluding unwanted datasets (`blacklist`)
+6. Advanced SRA operations (`download_sra`, `sra_profile_quality`, `sra_dashboard`)
+7. Checking project state (`status`)
+
+Each step records its outcome in the project registry (`metaquest_registry.json`, see
+`metaquest/data/registry.py`); `status` reads it back and re-checks the filesystem.
 
 ### Code Quality Standards & Current Status
 

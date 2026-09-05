@@ -46,6 +46,20 @@ metaquest select_datasets --threshold 0.95 --output accessions.txt
 check accessions.txt
 test "$(wc -l < accessions.txt)" -gt 0
 
+# use_branchwater/parse_containment/select_datasets already wrote metaquest_registry.json as they
+# ran; remove it here so status --init can demonstrate building the registry from an existing
+# project (matches folder, parsed containment table, accessions file) in one step.
+echo "status --init"
+rm -f metaquest_registry.json
+metaquest status --init --parsed-containment parsed_containment.txt --accessions-file accessions.txt
+check metaquest_registry.json
+
+echo "blacklist"
+metaquest blacklist --add SRR31320538 --reason "walkthrough example"
+
+echo "status --stage excluded"
+metaquest status --stage excluded
+
 echo "status"
 metaquest status --parsed-containment parsed_containment.txt --list-missing
 
@@ -54,5 +68,18 @@ if [ -f genomes/GCF_000008985.1.fna ]; then
     metaquest extract_target_reads --parsed-containment parsed_containment.txt --genome-id salmonella_subset \
         --genome-fasta genomes/GCF_000008985.1.fna --threshold 0.95 --dry-run
 fi
+
+echo "status --json"
+metaquest status --json > status.json
+python3 -c "
+import json
+with open('status.json') as f:
+    data = json.load(f)
+selected = data['stages']['selected']['count']
+excluded = data['stages']['excluded']['count']
+assert selected > 0, f'expected stages.selected.count > 0, got {selected}'
+assert excluded == 1, f'expected stages.excluded.count == 1, got {excluded}'
+print(f'status.json ok: selected={selected} excluded={excluded}')
+" || { echo "FAIL status.json stage counts"; exit 1; }
 
 echo "All steps passed (outputs in $WORK)"

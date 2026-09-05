@@ -190,6 +190,34 @@ re-download or `--dry-run` to report present-vs-missing without downloading:
 metaquest genome_download --accessions GCF_000006945.2 --dry-run
 ```
 
+`status` also reads the project registry (see "Project state" below): `--stage` lists the accessions
+in one pipeline stage, `--genome` restricts the extraction and assembly stages to one target genome,
+`--reconcile` records files that were removed by hand, `--export-tsv` writes the registry as two TSV
+tables, and `--next` suggests which command would advance the most datasets.
+
+### Project state
+
+MetaQuest keeps a journal of every dataset a project touches in `metaquest_registry.json` in the
+project root: which genomes it was screened against and with what containment, whether it was
+selected (and by which threshold and filter), whether it is excluded and why, the download outcome
+with file sizes and dates, which analyses ran, and for each target genome the number of mapped reads
+and the assembly statistics. Commands update it as they finish; `status` reads it and always
+re-checks the disk, so a deleted folder shows up as missing rather than done.
+
+```bash
+metaquest status --init                      # create the registry from an existing project
+metaquest status                             # accession by stage matrix, per genome
+metaquest status --stage extracted --genome GCF_000008025.1
+metaquest status --next                      # which commands would advance the most datasets
+metaquest status --reconcile                 # record files removed by hand, list untracked work
+metaquest status --export-tsv registry       # registry_datasets.tsv and registry_extractions.tsv
+metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"
+```
+
+`extract_target_reads` skips samples already extracted or assembled with the same genome, preset
+and threshold; pass `--force` to redo them. Commit `metaquest_registry.json` with your project if
+you want the decisions to travel with the results.
+
 ### 11. Targeted Read Extraction Before Assembly
 
 To assemble only the reads relevant to a target genome (a small, targeted assembly rather than a
@@ -214,6 +242,10 @@ megahit on each sample's extracted reads. This step requires `minimap2`, `samtoo
 On macOS the assembly defaults to a single thread, because megahit 1.2.9's parallel k-mer sorting step
 is unstable on recent macOS releases (mapping with minimap2/samtools still uses `--threads`). Override
 the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
+
+A sample already extracted or assembled with the same genome FASTA, preset, and threshold is skipped
+on a rerun, including samples that mapped zero reads; an assembly folder with no contigs is reported
+as interrupted with a hint to rerun. Pass `--force` to redo extraction and assembly regardless.
 
 ## Advanced SRA Operations
 
@@ -240,9 +272,21 @@ metaquest download_sra --accessions-file accessions.txt --dry-run
 metaquest download_sra --accessions-file accessions.txt --report-file download_report.csv
 ```
 
-`--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`
-or `blacklisted`. To see sizes and sequencing technology before downloading, use `sra_info` (needs an
-email for NCBI); see `docs/SRA_ENHANCED_FEATURES.md`.
+`--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`,
+`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). To see sizes and sequencing
+technology before downloading, use `sra_info` (needs an email for NCBI); see
+`docs/SRA_ENHANCED_FEATURES.md`.
+
+`download_sra` also honours the project registry: accessions excluded with `blacklist` are skipped
+automatically, without needing `--blacklist blacklist.txt` on every call (though that flag still
+works). Use `blacklist` to record an exclusion with a reason, keeping `blacklist.txt` and the
+registry in step:
+
+```bash
+metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"
+metaquest blacklist --list
+metaquest blacklist --remove SRR2517418
+```
 
 ### SRA Quality Profiling
 
@@ -280,6 +324,9 @@ metaquest sra_dashboard \
     --accessions-file accessions.txt \
     --dashboard-type quality
 ```
+
+Pass `--quality-profiles DIR` to reuse quality profiles already saved by `sra_profile_quality`
+instead of recomputing them.
 
 ### Comparative SRA Analysis
 
