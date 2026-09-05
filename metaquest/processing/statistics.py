@@ -138,7 +138,7 @@ def _create_binary_presence_matrix(summary_df, genome_columns, threshold):
     presence_df = pd.DataFrame(index=summary_df.index)
 
     for col in genome_columns:
-        presence_df[col] = (summary_df[col] > threshold).astype(int)
+        presence_df[col] = (summary_df[col] >= threshold).astype(int)
 
     return presence_df
 

@@ -143,7 +143,7 @@ class HeatmapPlugin(Plugin):
                     df = df.drop(col, axis=1)
 
             # Apply threshold
-            binary_df = (df > threshold).astype(int)
+            binary_df = (df >= threshold).astype(int)
 
             # Calculate clustering
             if cluster_rows or cluster_cols:

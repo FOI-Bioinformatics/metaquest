@@ -167,14 +167,14 @@ def _create_containment_summary_page(summary_data, threshold):
     ax.text(0.5, 0.95, "Containment Summary", fontsize=18, ha="center")
 
     # Filter by threshold
-    filtered_samples = summary_data[summary_data["max_containment"] > threshold]
+    filtered_samples = summary_data[summary_data["max_containment"] >= threshold]
 
     # Add summary statistics
     ax.text(0.1, 0.9, f"Total samples: {len(summary_data)}")
     ax.text(
         0.1,
         0.87,
-        f"Samples above threshold ({threshold}): {len(filtered_samples)}",
+        f"Samples at or above threshold ({threshold}): {len(filtered_samples)}",
     )
 
     # Get genome columns
@@ -407,7 +407,7 @@ def _prepare_template_data(
     # Summary statistics
     summary_stats = {
         "total_samples": len(summary_data),
-        "samples_above_threshold": len(summary_data[summary_data["max_containment"] > threshold]),
+        "samples_above_threshold": len(summary_data[summary_data["max_containment"] >= threshold]),
         "threshold": threshold,
     }
 
@@ -469,7 +469,7 @@ def _save_report_fig(fig, images_dir, filename):
 
 
 def _top_correlated_genome_columns(summary_data, threshold, limit=20):
-    """Return up to `limit` genome columns ranked by sample count above threshold.
+    """Return up to `limit` genome columns ranked by sample count at or above threshold.
 
     Returns an empty list when there are one or zero genome columns to correlate.
     """
@@ -479,7 +479,7 @@ def _top_correlated_genome_columns(summary_data, threshold, limit=20):
 
     ranked = []
     for col in genome_columns:
-        above = summary_data[summary_data[col] > threshold]
+        above = summary_data[summary_data[col] >= threshold]
         if not above.empty:
             ranked.append((col, len(above)))
 
@@ -634,7 +634,7 @@ def _create_default_template():
         <div class="section">
             <h2>Containment Summary</h2>
             <p>Total samples: {{ summary.total_samples }}</p>
-            <p>Samples above threshold ({{ summary.threshold }}): {{ summary.samples_above_threshold }}</p>
+            <p>Samples at or above threshold ({{ summary.threshold }}): {{ summary.samples_above_threshold }}</p>
             <p>Number of genomes: {{ summary.genome_count }}</p>
 
             {% if include_tables %}
