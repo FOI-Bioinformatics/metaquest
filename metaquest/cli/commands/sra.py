@@ -3,6 +3,8 @@ SRA-related CLI commands.
 """
 
 import argparse
+import csv
+import shutil
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
@@ -75,6 +77,14 @@ class DownloadSraCommand(BaseCommand):
             nargs="+",
             help="One or more files containing blacklisted accessions, one per line",
         )
+        parser.add_argument(
+            "--report-file",
+            default=None,
+            help=(
+                "Write a CSV of accession,status,message after the run "
+                "(statuses: downloaded, failed, already_present, blacklisted)"
+            ),
+        )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
         """Log the summary for a dry run."""
@@ -103,6 +113,7 @@ class DownloadSraCommand(BaseCommand):
         if not stats.get("failed_accessions"):
             return
         failed_file = Path(args.fastq_folder) / "failed_accessions.txt"
+        failed_file.parent.mkdir(parents=True, exist_ok=True)
         with open(failed_file, "w") as f:
             for acc in stats["failed_accessions"]:
                 f.write(f"{acc}\n")
@@ -113,8 +124,31 @@ class DownloadSraCommand(BaseCommand):
             f"--fastq-folder {args.fastq_folder}"
         )
 
+    @staticmethod
+    def _write_report(report_file: str, stats: dict) -> None:
+        """Write one row per accession with its outcome."""
+        failed = set(stats.get("failed_accessions", []))
+        rows = []
+        for accession, message in stats.get("results", {}).items():
+            rows.append((accession, "failed" if accession in failed else "downloaded", message))
+        rows.extend((acc, "already_present", "") for acc in stats.get("already_downloaded_accessions", []))
+        rows.extend((acc, "blacklisted", "") for acc in stats.get("blacklisted_accessions", []))
+        path = Path(report_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["accession", "status", "message"])
+            writer.writerows(sorted(rows))
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
+            if not args.dry_run and shutil.which("fasterq-dump") is None:
+                self.logger.error(
+                    "fasterq-dump not found on PATH. Install sra-tools, "
+                    "for example: conda install -c bioconda sra-tools"
+                )
+                return 1
+
             download_stats = download_sra(
                 fastq_folder=args.fastq_folder,
                 accessions_file=args.accessions_file,
@@ -132,6 +166,10 @@ class DownloadSraCommand(BaseCommand):
                 self._log_dry_run_summary(args, download_stats)
             else:
                 self._log_download_summary(download_stats)
+
+                if args.report_file:
+                    self._write_report(args.report_file, download_stats)
+                    self.logger.info("Download report written to %s", args.report_file)
 
             if not args.dry_run and download_stats["failed"] > 0:
                 self._report_failed_downloads(args, download_stats)

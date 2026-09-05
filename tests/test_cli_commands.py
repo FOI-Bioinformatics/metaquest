@@ -349,8 +349,9 @@ class TestDownloadSraCommand:
         assert args.dry_run is True
         assert args.force is True
 
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute(self, mock_command):
+    def test_execute(self, mock_command, _which):
         """Test command execution."""
         mock_command.return_value = {
             "total": 1,
@@ -373,6 +374,7 @@ class TestDownloadSraCommand:
             max_retries=1,
             temp_folder=None,
             blacklist=None,
+            report_file=None,
         )
 
         result = command.execute(args)
@@ -413,13 +415,15 @@ class TestDownloadSraCommand:
             max_retries=1,
             temp_folder=None,
             blacklist=["bl.txt"],
+            report_file=None,
         )
 
         result = command.execute(args)
         assert result == 0
 
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute_with_failures_writes_failed_file(self, mock_command, tmp_path):
+    def test_execute_with_failures_writes_failed_file(self, mock_command, _which, tmp_path):
         """Failed downloads return 1 and write failed_accessions.txt for retry."""
         mock_command.return_value = {
             "total": 3,
@@ -441,6 +445,7 @@ class TestDownloadSraCommand:
             max_retries=1,
             temp_folder=None,
             blacklist=None,
+            report_file=None,
         )
 
         result = command.execute(args)
@@ -449,8 +454,9 @@ class TestDownloadSraCommand:
         assert failed_file.exists()
         assert "SRR999" in failed_file.read_text()
 
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_execute_metaquest_error(self, mock_command):
+    def test_execute_metaquest_error(self, mock_command, _which):
         """A MetaQuestError from the backend is caught and returns 1."""
         mock_command.side_effect = MetaQuestError("backend boom")
         command = DownloadSraCommand()
@@ -465,10 +471,99 @@ class TestDownloadSraCommand:
             max_retries=1,
             temp_folder=None,
             blacklist=None,
+            report_file=None,
         )
 
         result = command.execute(args)
         assert result == 1
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value=None)
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_missing_fasterq_dump_exits_1(self, mock_download, _which, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            fastq_folder=str(tmp_path / "fastq"),
+            accessions_file=str(acc),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+        )
+        assert DownloadSraCommand().execute(args) == 1
+        mock_download.assert_not_called()
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value=None)
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_dry_run_skips_tool_check(self, mock_download, _which, tmp_path):
+        mock_download.return_value = {
+            "total": 1,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "to_download": 1,
+            "successful": 0,
+            "failed": 0,
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            fastq_folder=str(tmp_path / "fastq"),
+            accessions_file=str(acc),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=True,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+        )
+        assert DownloadSraCommand().execute(args) == 0
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_report_file_lists_every_status(self, mock_download, _which, tmp_path):
+        mock_download.return_value = {
+            "total": 4,
+            "already_downloaded": 1,
+            "blacklisted": 1,
+            "successful": 1,
+            "failed": 1,
+            "failed_accessions": ["SRR2"],
+            "results": {"SRR1": "Downloaded 2 files", "SRR2": "Download failed: timeout"},
+            "already_downloaded_accessions": ["SRR3"],
+            "blacklisted_accessions": ["SRR4"],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\nSRR3\nSRR4\n")
+        report = tmp_path / "reports" / "download_report.csv"
+        args = argparse.Namespace(
+            fastq_folder=str(tmp_path / "fastq"),
+            accessions_file=str(acc),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=str(report),
+        )
+        DownloadSraCommand().execute(args)
+        assert report.read_text().splitlines() == [
+            "accession,status,message",
+            "SRR1,downloaded,Downloaded 2 files",
+            "SRR2,failed,Download failed: timeout",
+            "SRR3,already_present,",
+            "SRR4,blacklisted,",
+        ]
 
 
 class TestSingleSampleCommand:

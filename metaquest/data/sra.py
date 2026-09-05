@@ -568,6 +568,8 @@ def download_sra(
                 "to_download": len(accessions_to_download),
                 "successful": 0,
                 "failed": 0,
+                "already_downloaded_accessions": sorted(str(a) for a in already_downloaded),
+                "blacklisted_accessions": sorted(str(a) for a in blacklisted),
             }
 
         # Limit number of downloads if specified
@@ -600,6 +602,8 @@ def download_sra(
             "failed": failed_count,
             "failed_accessions": failed_accessions,
             "results": download_results,
+            "already_downloaded_accessions": sorted(str(a) for a in already_downloaded),
+            "blacklisted_accessions": sorted(str(a) for a in blacklisted),
         }
 
         return download_stats

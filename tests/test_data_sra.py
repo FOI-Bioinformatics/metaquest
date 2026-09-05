@@ -602,9 +602,22 @@ class TestDownloadSra:
             "to_download": 2,
             "successful": 0,
             "failed": 0,
+            "already_downloaded_accessions": [],
+            "blacklisted_accessions": [],
         }
         assert result == expected_result
         mock_logger.info.assert_called_with("Dry run: would download 2 accessions")
+
+    def test_download_sra_returns_accession_lists(self, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        (tmp_path / "fastq" / "SRR2").mkdir(parents=True)
+        (tmp_path / "fastq" / "SRR2" / "SRR2_1.fastq").write_text("@r\nA\n+\nI\n")
+        black = tmp_path / "black.txt"
+        black.write_text("SRR1\n")
+        stats = download_sra(tmp_path / "fastq", acc, dry_run=True, blacklist=[black])
+        assert stats["already_downloaded_accessions"] == ["SRR2"]
+        assert stats["blacklisted_accessions"] == ["SRR1"]
 
 
 class TestFindPairedReads:
