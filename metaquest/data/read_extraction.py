@@ -13,6 +13,7 @@ to filter and export the mapped reads. External tools run through
 import gzip
 import logging
 import platform
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -314,3 +315,41 @@ def assemble_extracted_reads(
     SecureSubprocess.run_secure("megahit", args)
     logger.info("Assembly written to %s", out_dir)
     return out_dir
+
+
+def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, int]:
+    """Contig count, total length, N50 and largest contig of a FASTA file.
+
+    megahit headers carry ``len=<bp>``; when present that value is used, so the
+    scan reads only header lines. Otherwise sequence lengths are summed.
+    """
+    path = Path(contigs)
+    if not path.exists():
+        return {"contigs": 0, "total_bp": 0, "n50": 0, "largest": 0}
+    lengths: List[int] = []
+    current = 0
+    have_current = False
+    header_len = False
+    with open(path) as handle:
+        for line in handle:
+            if line.startswith(">"):
+                if have_current:
+                    lengths.append(current)
+                have_current = True
+                match = re.search(r"\blen=(\d+)", line)
+                current = int(match.group(1)) if match else 0
+                header_len = match is not None
+            elif have_current and not header_len:
+                current += len(line.strip())
+    if have_current:
+        lengths.append(current)
+    lengths.sort(reverse=True)
+    total = sum(lengths)
+    n50 = 0
+    running = 0
+    for length in lengths:
+        running += length
+        if running * 2 >= total:
+            n50 = length
+            break
+    return {"contigs": len(lengths), "total_bp": total, "n50": n50, "largest": lengths[0] if lengths else 0}
