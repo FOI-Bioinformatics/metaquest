@@ -10,6 +10,7 @@ import pytest
 from metaquest.core.exceptions import DataAccessError, ProcessingError
 from metaquest.data.read_extraction import (
     ExtractionResult,
+    _sample_reads,
     assemble_extracted_reads,
     extract_target_reads,
     resolve_assembly_threads,
@@ -49,6 +50,44 @@ class TestSelectSamples:
         df = pd.DataFrame({"GCF_1": [0.9]}, index=["SRR1"])
         with pytest.raises(ProcessingError):
             select_samples_for_genome(df, "GCF_missing", 0.1)
+
+
+class TestSampleReads:
+    """_sample_reads: which files of an accession folder are handed to minimap2."""
+
+    def _acc_dir(self, tmp_path, *names):
+        acc_dir = tmp_path / "fastq" / "SRR1"
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (acc_dir / name).write_text("@r\nACGT\n+\nIIII\n")
+        return tmp_path / "fastq"
+
+    def test_paired_folder_returns_mates_in_order(self, tmp_path):
+        folder = self._acc_dir(tmp_path, "SRR1_2.fastq.gz", "SRR1_1.fastq.gz")
+
+        assert [p.name for p in _sample_reads(folder, "SRR1")] == ["SRR1_1.fastq.gz", "SRR1_2.fastq.gz"]
+
+    def test_orphan_file_is_not_passed_to_the_aligner(self, tmp_path):
+        """--split-3 writes unpaired spots to a bare <acc>.fastq; minimap2 gets the mates only."""
+        folder = self._acc_dir(tmp_path, "SRR1.fastq", "SRR1_1.fastq", "SRR1_2.fastq")
+
+        assert [p.name for p in _sample_reads(folder, "SRR1")] == ["SRR1_1.fastq", "SRR1_2.fastq"]
+
+    def test_single_end_folder_returns_the_bare_file(self, tmp_path):
+        folder = self._acc_dir(tmp_path, "SRR1.fastq")
+
+        assert [p.name for p in _sample_reads(folder, "SRR1")] == ["SRR1.fastq"]
+
+    def test_partial_download_leftovers_are_ignored(self, tmp_path):
+        """Zero-byte files and .gz.tmp.<pid> leftovers are not reads."""
+        folder = self._acc_dir(tmp_path, "SRR1_1.fastq")
+        (folder / "SRR1" / "SRR1_2.fastq").write_text("")
+        (folder / "SRR1" / "SRR1_1.fastq.gz.tmp.4242").write_text("junk")
+
+        assert [p.name for p in _sample_reads(folder, "SRR1")] == ["SRR1_1.fastq"]
+
+    def test_missing_folder_returns_empty(self, tmp_path):
+        assert _sample_reads(tmp_path / "fastq", "SRR1") == []
 
 
 class TestExtractTargetReads:

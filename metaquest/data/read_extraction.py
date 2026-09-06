@@ -23,6 +23,7 @@ import pandas as pd
 
 from metaquest.core.exceptions import DataAccessError, ProcessingError
 from metaquest.data.file_io import ensure_directory
+from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -152,11 +153,36 @@ def _skipped_result(record: Dict[str, Any]) -> ExtractionResult:
 
 
 def _sample_reads(fastq_folder: Path, accession: str) -> List[Path]:
-    """Return the FASTQ files for one accession, sorted (R1 before R2)."""
+    """Return the FASTQ files for one accession that minimap2 should map, R1 before R2.
+
+    For paired data that is the mate pair alone: the bare ``<acc>.fastq`` file that
+    ``--split-3`` writes for unpaired spots would make minimap2 read three files as an
+    interleaved set and report mismatched mate counts, so it is left out. Single-end data
+    gives the bare file. Zero-byte files and ``.gz.tmp.<pid>`` leftovers of an interrupted
+    download are excluded by ``fastq_files``.
+    """
     acc_dir = fastq_folder / accession
-    if not acc_dir.is_dir():
+    files = fastq_files(acc_dir)
+    if not files:
         return []
-    return sorted(p for p in acc_dir.glob("*.fastq*") if p.is_file())
+
+    primary = primary_fastq(acc_dir)
+    if primary is None:
+        return files
+
+    stem = fastq_stem(primary)
+    for marker in MATE1_SUFFIXES:
+        if stem.endswith(marker):
+            mate_stem = stem[: -len(marker)] + marker[:-1] + "2"
+            mate_two = next((p for p in files if fastq_stem(p) == mate_stem), None)
+            if mate_two is None:
+                return files
+            orphan = orphan_fastq(acc_dir)
+            if orphan is not None:
+                logger.debug("%s: mapping the mate files only; %s holds unpaired reads", accession, orphan.name)
+            return [primary, mate_two]
+
+    return [primary]
 
 
 def _map_and_extract(

@@ -24,6 +24,8 @@ from metaquest.data.sra import (
     _find_paired_reads,
     accession_has_fastq,
     fastq_files,
+    primary_fastq,
+    orphan_fastq,
     count_fastq_reads,
     verify_download,
     parse_verdict_message,
@@ -349,6 +351,49 @@ class TestCountFastqReads:
         assert count_fastq_reads(path) == 0
 
 
+class TestPrimaryAndOrphanFastq:
+    """primary_fastq / orphan_fastq: which file in an accession folder holds the spots."""
+
+    def _write(self, acc_dir, *names):
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (acc_dir / name).write_text("@r\nACGT\n+\nIIII\n")
+
+    def test_primary_prefers_mate_one_over_bare_file(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        self._write(acc_dir, "SRR1.fastq", "SRR1_1.fastq", "SRR1_2.fastq")
+
+        assert primary_fastq(acc_dir) == acc_dir / "SRR1_1.fastq"
+
+    def test_primary_accepts_r1_naming(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        self._write(acc_dir, "SRR1_R1.fastq.gz", "SRR1_R2.fastq.gz")
+
+        assert primary_fastq(acc_dir) == acc_dir / "SRR1_R1.fastq.gz"
+
+    def test_primary_is_bare_file_for_single_end(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        self._write(acc_dir, "SRR1.fastq")
+
+        assert primary_fastq(acc_dir) == acc_dir / "SRR1.fastq"
+
+    def test_primary_none_for_empty_folder(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+
+        assert primary_fastq(acc_dir) is None
+        assert orphan_fastq(acc_dir) is None
+
+    def test_orphan_only_when_mates_present(self, tmp_path):
+        paired = tmp_path / "SRR1"
+        self._write(paired, "SRR1.fastq", "SRR1_1.fastq", "SRR1_2.fastq")
+        single = tmp_path / "SRR2"
+        self._write(single, "SRR2.fastq")
+
+        assert orphan_fastq(paired) == paired / "SRR1.fastq"
+        assert orphan_fastq(single) is None
+
+
 class TestVerifyDownload:
     """verify_download: reads_r1 against NCBI's expected spot count."""
 
@@ -402,6 +447,31 @@ class TestVerifyDownload:
         assert result["verdict"] == "unverified"
         assert result["ratio"] is None
         assert result["expected_spots"] is None
+
+    def test_counts_mate_one_plus_orphan_file(self, tmp_path):
+        """--split-3 writes unpaired spots to a bare <acc>.fastq; those spots count too."""
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        record = "@r\nACGT\n+\nIIII\n"
+        (acc_dir / "SRR1_1.fastq").write_text(record * 1000)
+        (acc_dir / "SRR1_2.fastq").write_text(record * 1000)
+        (acc_dir / "SRR1.fastq").write_text(record * 7)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=1007)
+
+        assert result["reads_r1"] == 1007
+        assert result["ratio"] == 1.0
+        assert result["verdict"] == "complete"
+
+    def test_single_end_counts_the_bare_file(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n" * 500)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=500)
+
+        assert result["reads_r1"] == 500
+        assert result["verdict"] == "complete"
 
     def test_bytes_total_sums_fastq_files(self, tmp_path):
         acc_dir = tmp_path / "SRR1"
@@ -796,6 +866,44 @@ class TestDownloadAccession:
         assert success is True, message
         assert (output_folder / ".sra-cache" / "SRR123" / "SRR123.sra").exists()
 
+    def test_download_accession_force_clears_cached_archive_before_prefetch(self, tmp_path):
+        """A forced download refetches the .sra instead of reusing a possibly truncated one."""
+        output_folder = tmp_path / "downloads"
+        cache_dir = output_folder / ".sra-cache" / "SRR123"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "SRR123.sra").write_bytes(b"stale archive")
+        acc_dir = output_folder / "SRR123"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR123_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        fake = _fake_tools({"reads": 4})
+        cache_present_at_prefetch = []
+
+        def run(executable, args, **kwargs):
+            if executable == "prefetch":
+                cache_present_at_prefetch.append(cache_dir.exists())
+            return fake(executable, args, **kwargs)
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=run):
+                success, message = download_accession("SRR123", output_folder, compress=False, force=True)
+
+        assert success is True, message
+        assert cache_present_at_prefetch == [False]
+
+    def test_download_accession_truncated_removes_cached_archive(self, tmp_path):
+        """A truncated verdict leaves no .sra behind, so the next attempt fetches it again."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False, expected_spots=1000)
+
+        assert success is True, message
+        assert "truncated" in message
+        assert not (output_folder / ".sra-cache" / "SRR123").exists()
+
     def test_download_accession_falls_back_without_prefetch_binary(self, tmp_path):
         """shutil.which('prefetch') is None: fall back to the direct fasterq-dump call."""
         output_folder = tmp_path / "downloads"
@@ -989,6 +1097,23 @@ class TestClassifyDownloadError:
             ("accession does not exist", "not-found"),
             ("Some completely unrelated failure", "unknown"),
             ("", "unknown"),
+            # Messages as sra-tools actually prints them.
+            (
+                "prefetch.3.1.1 err: name not found while resolving query within virtual file "
+                "system module - failed to resolve accession 'SRR1' - no data ( 404 )",
+                "not-found",
+            ),
+            (
+                "fasterq-dump.3.1.1 err: storage exhausted while writing file within file system module",
+                "disk-full",
+            ),
+            ("fasterq-dump.3.1.1 fatal: disk-limit exeeded!", "disk-full"),
+            # A class prefix classifies back to its own class, so a message that has already
+            # been prefixed once is not reclassified into a different class on the retry path.
+            ("disk-full: not attempted", "disk-full"),
+            ("not-found: Download failed: no data", "not-found"),
+            ("network: Download failed: connection reset by peer", "network"),
+            ("unknown: Download failed: something else entirely", "unknown"),
         ],
     )
     def test_classify_download_error_table(self, text, expected_class):

@@ -27,12 +27,22 @@ logger = logging.getLogger(__name__)
 # counts as complete rather than truncated.
 COMPLETE_RATIO_THRESHOLD = 0.99
 
+# FASTQ file-name suffixes marking a mate of a pair: fasterq-dump's --split-3 output uses
+# _1/_2, while files from other sources often use _R1/_R2.
+MATE1_SUFFIXES = ("_1", "_R1")
+MATE_SUFFIXES = ("_1", "_2", "_R1", "_R2")
+
 # Regexes used by classify_download_error to sort a failure message into a coarse class that
 # retry logic can act on: retry network/unknown failures, never retry not-found, and abort the
 # whole run on disk-full.
-_NETWORK_ERROR_RE = re.compile(r"timeout|timed out|connection|resolve|network|curl|ssl", re.IGNORECASE)
-_DISK_FULL_ERROR_RE = re.compile(r"no space left|enospc|disk full", re.IGNORECASE)
-_NOT_FOUND_ERROR_RE = re.compile(r"not found|invalid accession|cannot be found|403|404|does not exist", re.IGNORECASE)
+# "could not resolve host" rather than a bare "resolve": prefetch reports a missing accession
+# as "failed to resolve accession ... no data ( 404 )", which is a not-found, not a network error.
+_NETWORK_ERROR_RE = re.compile(r"timeout|timed out|connection|could not resolve host|network|curl|ssl", re.IGNORECASE)
+# "storage exhausted" and "disk-limit exeeded" (sic) are fasterq-dump's own out-of-space messages.
+_DISK_FULL_ERROR_RE = re.compile(r"no space left|enospc|disk[ -]full|storage exhausted|disk-limit", re.IGNORECASE)
+_NOT_FOUND_ERROR_RE = re.compile(
+    r"not[ -]found|invalid accession|cannot be found|403|404|does not exist", re.IGNORECASE
+)
 
 
 def classify_download_error(text: str) -> str:
@@ -42,15 +52,19 @@ def classify_download_error(text: str) -> str:
     function of the message text; used both to prefix ``download_accession``'s failure
     messages and to decide, in ``_retry_failed_downloads``, which accessions are worth
     retrying.
+
+    ``not-found`` is tested before ``network`` because a prefetch not-found message mentions
+    resolving a query, and each class name classifies back to its own class so an already
+    prefixed message (``"disk-full: not attempted"``) keeps its class on a second pass.
     """
     if not text:
         return "unknown"
-    if _NETWORK_ERROR_RE.search(text):
-        return "network"
-    if _DISK_FULL_ERROR_RE.search(text):
-        return "disk-full"
     if _NOT_FOUND_ERROR_RE.search(text):
         return "not-found"
+    if _DISK_FULL_ERROR_RE.search(text):
+        return "disk-full"
+    if _NETWORK_ERROR_RE.search(text):
+        return "network"
     return "unknown"
 
 
@@ -122,6 +136,45 @@ def fastq_files(acc_dir: Union[str, Path]) -> List[Path]:
     return sorted(found)
 
 
+def fastq_stem(path: Union[str, Path]) -> str:
+    """The file name of ``path`` without its FASTQ extension (``.fastq``/``.fq``, plain or gzipped)."""
+    name = Path(path).name
+    for suffix in (".fastq.gz", ".fq.gz", ".fastq", ".fq"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return Path(name).stem
+
+
+def primary_fastq(acc_dir: Union[str, Path]) -> Optional[Path]:
+    """The FASTQ file in ``acc_dir`` holding one record per sequenced spot, or None if there is none.
+
+    A mate-1 file (``_1``/``_R1``) is preferred, since for paired data it holds exactly one
+    record per spot; otherwise the bare ``<acc>.fastq`` file written for single-end data.
+    Sorting by name is not enough here: ``<acc>.fastq`` sorts before ``<acc>_1.fastq``, and
+    for paired data that bare file holds only the unpaired leftovers of ``--split-3``.
+    """
+    files = fastq_files(acc_dir)
+    if not files:
+        return None
+    mate_one = next((p for p in files if fastq_stem(p).endswith(MATE1_SUFFIXES)), None)
+    if mate_one is not None:
+        return mate_one
+    bare = next((p for p in files if not fastq_stem(p).endswith(MATE_SUFFIXES)), None)
+    return bare if bare is not None else files[0]
+
+
+def orphan_fastq(acc_dir: Union[str, Path]) -> Optional[Path]:
+    """The bare ``<acc>.fastq`` file of unpaired spots ``--split-3`` writes beside a mate pair.
+
+    Returns None when the folder holds no mate-1 file, since then the bare file is the
+    single-end data itself rather than a set of leftovers (``primary_fastq`` returns it).
+    """
+    files = fastq_files(acc_dir)
+    if not any(fastq_stem(p).endswith(MATE1_SUFFIXES) for p in files):
+        return None
+    return next((p for p in files if not fastq_stem(p).endswith(MATE_SUFFIXES)), None)
+
+
 def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
     """Return True if the per-accession directory holds at least one usable FASTQ file.
 
@@ -180,14 +233,19 @@ def verify_download(
 ) -> Dict[str, Any]:
     """Compare what actually downloaded for ``accession`` against NCBI's recorded spot count.
 
-    ``reads_r1`` is the read count of the first FASTQ file found (mate 1 for paired data, the
-    only file for single-end data). The verdict is ``"complete"`` when the ratio of
-    downloaded reads to ``expected_spots`` is at least ``COMPLETE_RATIO_THRESHOLD``,
-    ``"truncated"`` below that, and ``"unverified"`` when ``expected_spots`` is unknown
-    (e.g. NCBI metadata was never fetched for this accession).
+    ``reads_r1`` counts one record per sequenced spot: the mate-1 file (or the single-end
+    file) plus the bare ``<acc>.fastq`` file of unpaired spots that ``--split-3`` writes
+    beside a mate pair, since NCBI's ``total_spots`` covers those too. The verdict is
+    ``"complete"`` when the ratio of downloaded reads to ``expected_spots`` is at least
+    ``COMPLETE_RATIO_THRESHOLD``, ``"truncated"`` below that, and ``"unverified"`` when
+    ``expected_spots`` is unknown (e.g. NCBI metadata was never fetched for this accession).
     """
     files = fastq_files(acc_dir)
-    reads_r1 = count_fastq_reads(files[0]) if files else 0
+    primary = primary_fastq(acc_dir)
+    orphan = orphan_fastq(acc_dir)
+    reads_r1 = count_fastq_reads(primary) if primary is not None else 0
+    if orphan is not None:
+        reads_r1 += count_fastq_reads(orphan)
     bytes_total = sum(p.stat().st_size for p in files)
 
     ratio: Optional[float]
@@ -487,6 +545,44 @@ def _handle_download_output(
     return True, message
 
 
+def _fasterq_dump_args(
+    source: str,
+    temp_path: Path,
+    temp_folder_path: Optional[Path],
+    num_threads: int,
+    using_prefetch: bool,
+) -> List[str]:
+    """Build the fasterq-dump argument list.
+
+    ``source`` is the prefetched ``.sra`` archive when prefetch ran, otherwise the accession
+    itself, which fasterq-dump then resolves and downloads on its own.
+    """
+    if using_prefetch:
+        args = ["--split-3", "--skip-technical", "--threads", str(num_threads), "-O", str(temp_path)]
+        tail = [source]
+    else:
+        args = ["--threads", str(num_threads), "--progress", source, "-O", str(temp_path)]
+        tail = ["--split-3", "--skip-technical"]
+    if temp_folder_path:
+        args.extend(["--temp", str(temp_folder_path.absolute())])
+    return args + tail
+
+
+def _discard_cached_archive(cache_path: Path, accession: str, message: str) -> None:
+    """Remove the prefetched ``.sra`` archive once its FASTQ files are on disk.
+
+    A truncated download drops the archive too: keeping it would make the next attempt dump
+    the same short archive again rather than fetch the run afresh.
+    """
+    verdict = parse_verdict_message(message)
+    verdict_name = verdict.get("verdict") if verdict else None
+    if verdict_name not in ("complete", "unverified", "truncated"):
+        return
+    _safe_rmtree(cache_path / accession)
+    if verdict_name == "truncated":
+        logger.info(f"{accession}: archive removed so the next attempt fetches it again")
+
+
 def download_accession(
     accession: str,
     output_folder: Union[str, Path],
@@ -532,9 +628,16 @@ def download_accession(
     cache_path = Path(sra_cache) if sra_cache else Path(output_folder) / ".sra-cache"
 
     # Check if already downloaded
-    if _check_existing_download(output_path, force or redownload_truncated):
+    redownload = force or redownload_truncated
+    if _check_existing_download(output_path, redownload):
         logger.info(f"Skipping {accession}, FASTQ files already exist")
         return True, "already exists"
+
+    # A redownload must not reuse a cached archive: prefetch treats an existing <acc>.sra as
+    # already fetched, so a truncated archive would be dumped again and stay truncated.
+    if redownload and not keep_sra and (cache_path / accession).exists():
+        _safe_rmtree(cache_path / accession)
+        logger.info(f"Removed the cached archive for {accession} so the redownload fetches it again")
 
     # Create a fresh temporary folder for download
     temp_path = Path(output_folder) / f"{accession}_temp"
@@ -556,36 +659,15 @@ def download_accession(
                 "prefetch",
                 ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
             )
-
-            sra_file = cache_path / accession / f"{accession}.sra"
-            args = [
-                "--split-3",
-                "--skip-technical",
-                "--threads",
-                str(num_threads),
-                "-O",
-                str(temp_path),
-            ]
-            if temp_folder_path:
-                args.extend(["--temp", str(temp_folder_path.absolute())])
-            args.append(str(sra_file))
+            source = str(cache_path / accession / f"{accession}.sra")
         else:
             # Direct call against the accession, without going through prefetch's
             # on-disk .sra archive: used when use_prefetch is False, or prefetch is
             # not installed.
-            args = [
-                "--threads",
-                str(num_threads),
-                "--progress",
-                accession,
-                "-O",
-                str(temp_path),
-            ]
-            if temp_folder_path:
-                args.extend(["--temp", str(temp_folder_path.absolute())])
-            args.extend(["--split-3", "--skip-technical"])
+            source = accession
 
         # Run fasterq-dump command securely
+        args = _fasterq_dump_args(source, temp_path, temp_folder_path, num_threads, using_prefetch)
         SecureSubprocess.run_secure("fasterq-dump", args)
 
         # Handle download output
@@ -594,9 +676,7 @@ def download_accession(
         )
 
         if success and using_prefetch and not keep_sra:
-            verdict = parse_verdict_message(message)
-            if verdict and verdict.get("verdict") in ("complete", "unverified"):
-                _safe_rmtree(cache_path / accession)
+            _discard_cached_archive(cache_path, accession, message)
 
         return success, message
 
