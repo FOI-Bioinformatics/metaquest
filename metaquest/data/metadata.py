@@ -5,10 +5,11 @@ This module provides functions for downloading and processing metadata from NCBI
 """
 
 import logging
+import xml.etree.ElementTree as ET
 from pathlib import Path
 import time
 import pandas as pd
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from Bio import Entrez
 from lxml import etree
@@ -394,6 +395,26 @@ def _extract_sample_attributes(tree, unique_attributes):
             sample_attributes[tag] = value
 
     return sample_attributes
+
+
+def parse_metadata_xml(path: Union[str, Path]) -> Dict[str, Any]:
+    """Parse one NCBI efetch metadata XML file into the same fields ``parse_metadata`` extracts per record.
+
+    The single-file counterpart to ``parse_metadata``, used by the store sidecar to read one
+    already-downloaded metadata file rather than a whole folder. Returns ``{}`` with a logged
+    warning when the file is missing or cannot be parsed, rather than raising, since a missing
+    or corrupt metadata file should not stop the caller from building the rest of the sidecar.
+    """
+    xml_path = Path(path)
+    if not xml_path.is_file():
+        logger.warning(f"Metadata XML file not found: {xml_path}")
+        return {}
+    try:
+        tree = ET.parse(str(xml_path))
+    except ET.ParseError as e:
+        logger.warning(f"Could not parse metadata XML file {xml_path}: {e}")
+        return {}
+    return _extract_metadata_fields(tree, xml_path)
 
 
 def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Path]) -> pd.DataFrame:

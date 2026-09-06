@@ -22,6 +22,14 @@ from metaquest.store.resolve import (
     resolve_store_root,
     write_config_data_root,
 )
+from metaquest.store.sidecar import (
+    SIDECAR_SCHEMA,
+    Sidecar,
+    build_sidecar,
+    ncbi_from_metadata_xml,
+    read_sidecar,
+    write_sidecar,
+)
 
 __all__ = [
     "StorePaths",
@@ -35,4 +43,10 @@ __all__ = [
     "read_config",
     "resolve_store_root",
     "write_config_data_root",
+    "SIDECAR_SCHEMA",
+    "Sidecar",
+    "build_sidecar",
+    "ncbi_from_metadata_xml",
+    "read_sidecar",
+    "write_sidecar",
 ]

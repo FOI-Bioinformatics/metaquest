@@ -17,6 +17,7 @@ from metaquest.data.metadata import (
     _extract_metadata_fields,
     _extract_sample_attributes,
     parse_metadata,
+    parse_metadata_xml,
     get_unique_sample_attributes,
     check_metadata_attributes,
 )
@@ -695,6 +696,70 @@ class TestCheckMetadataAttributes:
         """Test handling nonexistent input file."""
         with pytest.raises(DataAccessError):
             check_metadata_attributes("/nonexistent/file.tsv", "/tmp/output.txt")
+
+
+class TestParseMetadataXml:
+    """Test parse_metadata_xml: single-file counterpart to parse_metadata used by the sidecar."""
+
+    NCBI_XML = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE_SET>
+            <EXPERIMENT_PACKAGE>
+                <EXPERIMENT>
+                    <IDENTIFIERS>
+                        <PRIMARY_ID>EXP1</PRIMARY_ID>
+                    </IDENTIFIERS>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_LAYOUT>
+                            <PAIRED/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                    <PLATFORM>
+                        <ILLUMINA>
+                            <INSTRUMENT_MODEL>Illumina HiSeq 2500</INSTRUMENT_MODEL>
+                        </ILLUMINA>
+                    </PLATFORM>
+                </EXPERIMENT>
+                <RUN_SET>
+                    <RUN accession="SRR1" total_spots="47964651" total_bases="14389395300" size="4744553813">
+                        <IDENTIFIERS>
+                            <PRIMARY_ID>SRR1</PRIMARY_ID>
+                        </IDENTIFIERS>
+                        <SRAFiles>
+                            <SRAFile filename="SRR1" md5="abc" semantic_name="run"/>
+                        </SRAFiles>
+                    </RUN>
+                </RUN_SET>
+            </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+
+    def test_parse_metadata_xml_reads_ncbi_attributes(self, tmp_path):
+        """A single metadata XML file parses to the same fields _extract_metadata_fields gives."""
+        xml_file = tmp_path / "SRR1.xml"
+        xml_file.write_text(self.NCBI_XML)
+
+        result = parse_metadata_xml(xml_file)
+
+        assert result["Run_Total_Spots"] == "47964651"
+        assert result["Run_Total_Bases"] == "14389395300"
+        assert result["Run_Size"] == "4744553813"
+        assert result["Run_MD5"] == "abc"
+        assert result["Run_Filename"] == "SRR1"
+        assert result["Experiment_Library_Layout"] == "PAIRED"
+
+    def test_parse_metadata_xml_missing_file_returns_empty_dict(self):
+        """A missing metadata file is not an error: parse_metadata_xml returns {} with a warning."""
+        result = parse_metadata_xml("/nonexistent/SRR1.xml")
+        assert result == {}
+
+    def test_parse_metadata_xml_unparsable_file_returns_empty_dict(self, tmp_path):
+        """A malformed XML file also returns {} rather than raising."""
+        xml_file = tmp_path / "bad.xml"
+        xml_file.write_text("not xml at all <<<")
+
+        result = parse_metadata_xml(xml_file)
+
+        assert result == {}
 
 
 if __name__ == "__main__":
