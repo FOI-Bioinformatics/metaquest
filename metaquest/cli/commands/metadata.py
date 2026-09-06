@@ -119,9 +119,14 @@ class ParseMetadataCommand(BaseCommand):
         for field, column in (
             ("run_size", "Run_Size"),
             ("run_md5", "Run_MD5"),
+            ("run_total_spots", "Run_Total_Spots"),
+            ("run_total_bases", "Run_Total_Bases"),
             ("assay_type", "Experiment_Library_Strategy"),
             ("organism", "Sample_Scientific_Name"),
             ("collection_date", "collection_date"),
+            ("library_layout", "Experiment_Library_Layout"),
+            ("platform", "Platform"),
+            ("library_strategy", "Experiment_Library_Strategy"),
         ):
             if column in row.index:
                 fields[field] = nan_to_none(row.get(column))

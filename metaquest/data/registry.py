@@ -393,10 +393,31 @@ def nan_to_none(value: Any) -> Any:
     return None if pd.isna(value) else value
 
 
+def _to_int_or_none(value: Any) -> Optional[int]:
+    """Convert a numeric value (int or numeric string) to ``int``; ``None`` otherwise."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
     record: Dict[str, Any] = {"xml": str(xml_path), "date": _now()}
-    for key in ("run_size", "run_md5", "assay_type", "organism", "collection_date"):
+    for key in (
+        "run_size",
+        "run_md5",
+        "assay_type",
+        "organism",
+        "collection_date",
+        "library_layout",
+        "platform",
+        "library_strategy",
+    ):
         record[key] = fields.get(key)
+    for key in ("run_total_spots", "run_total_bases"):
+        record[key] = _to_int_or_none(fields.get(key))
     upsert_dataset(registry, accession)["metadata"] = record
 
 

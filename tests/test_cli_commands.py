@@ -1013,6 +1013,68 @@ class TestParseMetadataCommand:
         assert metadata["run_size"] == "12345"
         assert metadata["run_md5"] == "abcdef0123456789"
 
+    def test_execute_records_ncbi_attribute_spots_in_registry(self, tmp_path):
+        """Real NCBI efetch XML holds spots/bases/md5 as attributes; parse_metadata must record them."""
+        metadata_folder = tmp_path / "metadata"
+        metadata_folder.mkdir()
+        xml_content = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE_SET>
+            <EXPERIMENT_PACKAGE>
+                <EXPERIMENT>
+                    <IDENTIFIERS>
+                        <PRIMARY_ID>EXP1</PRIMARY_ID>
+                    </IDENTIFIERS>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_LAYOUT>
+                            <PAIRED/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                    <PLATFORM>
+                        <ILLUMINA>
+                            <INSTRUMENT_MODEL>Illumina HiSeq 2500</INSTRUMENT_MODEL>
+                        </ILLUMINA>
+                    </PLATFORM>
+                </EXPERIMENT>
+                <SAMPLE>
+                    <IDENTIFIERS>
+                        <PRIMARY_ID>SAMN123</PRIMARY_ID>
+                    </IDENTIFIERS>
+                </SAMPLE>
+                <RUN_SET>
+                    <RUN accession="SRR1" total_spots="47964651" total_bases="14389395300" size="4744553813">
+                        <IDENTIFIERS>
+                            <PRIMARY_ID>SRR1</PRIMARY_ID>
+                        </IDENTIFIERS>
+                        <SRAFiles>
+                            <SRAFile filename="SRR1" md5="abc" semantic_name="run"/>
+                        </SRAFiles>
+                    </RUN>
+                </RUN_SET>
+            </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+        (metadata_folder / "SRR1_metadata.xml").write_text(xml_content)
+
+        command = ParseMetadataCommand()
+        args = argparse.Namespace(
+            metadata_folder=str(metadata_folder),
+            metadata_table_file=str(tmp_path / "metadata_table.txt"),
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        result = command.execute(args)
+        assert result == 0
+
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        metadata = registry["datasets"]["SRR1"]["metadata"]
+        assert metadata["run_total_spots"] == 47964651
+        assert metadata["run_total_bases"] == 14389395300
+        assert metadata["run_size"] == "4744553813"
+        assert metadata["run_md5"] == "abc"
+        assert metadata["library_layout"] == "PAIRED"
+        assert metadata["platform"] == "ILLUMINA"
+        assert metadata["library_strategy"] == "WGS"
+
 
 class TestCountMetadataCommand:
     """Test CountMetadataCommand."""

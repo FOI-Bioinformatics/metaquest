@@ -403,6 +403,75 @@ class TestExtractMetadataFields:
         assert result["Run_Total_Spots"] == "1000000"
         assert result["Run_Total_Bases"] == "150000000"
 
+    def test_extract_metadata_fields_ncbi_attributes(self):
+        """Real NCBI efetch XML holds spots, bases, size and md5 as attributes, not child text."""
+        xml_content = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE_SET>
+            <EXPERIMENT_PACKAGE>
+                <EXPERIMENT>
+                    <IDENTIFIERS>
+                        <PRIMARY_ID>EXP1</PRIMARY_ID>
+                    </IDENTIFIERS>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_LAYOUT>
+                            <PAIRED/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                    <PLATFORM>
+                        <ILLUMINA>
+                            <INSTRUMENT_MODEL>Illumina HiSeq 2500</INSTRUMENT_MODEL>
+                        </ILLUMINA>
+                    </PLATFORM>
+                </EXPERIMENT>
+                <RUN_SET>
+                    <RUN accession="SRR1" total_spots="47964651" total_bases="14389395300" size="4744553813">
+                        <IDENTIFIERS>
+                            <PRIMARY_ID>SRR1</PRIMARY_ID>
+                        </IDENTIFIERS>
+                        <SRAFiles>
+                            <SRAFile filename="SRR1" md5="abc" semantic_name="run"/>
+                        </SRAFiles>
+                    </RUN>
+                </RUN_SET>
+            </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+
+        tree = ET.fromstring(xml_content)
+
+        result = _extract_metadata_fields(tree, "test.xml")
+
+        assert result["Run_Total_Spots"] == "47964651"
+        assert result["Run_Total_Bases"] == "14389395300"
+        assert result["Run_Size"] == "4744553813"
+        assert result["Run_MD5"] == "abc"
+        assert result["Run_Filename"] == "SRR1"
+        assert result["Experiment_Library_Layout"] == "PAIRED"
+        assert result["Platform"] == "ILLUMINA"
+
+    def test_extract_metadata_fields_srafile_prefers_run_semantic_name(self):
+        """When multiple SRAFile entries exist, prefer the one marked semantic_name=run."""
+        xml_content = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE_SET>
+            <EXPERIMENT_PACKAGE>
+                <RUN_SET>
+                    <RUN accession="SRR2">
+                        <SRAFiles>
+                            <SRAFile filename="other" md5="wrong" semantic_name="other"/>
+                            <SRAFile filename="SRR2" md5="right" semantic_name="run"/>
+                        </SRAFiles>
+                    </RUN>
+                </RUN_SET>
+            </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+
+        tree = ET.fromstring(xml_content)
+
+        result = _extract_metadata_fields(tree, "test.xml")
+
+        assert result["Run_MD5"] == "right"
+        assert result["Run_Filename"] == "SRR2"
+
 
 class TestExtractSampleAttributes:
     """Test _extract_sample_attributes function."""

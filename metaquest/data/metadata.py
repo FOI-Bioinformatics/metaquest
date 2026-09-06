@@ -223,6 +223,55 @@ def _download_accessions_metadata(accessions_to_download, metadata_path, email, 
     return result_files
 
 
+def _run_attr(run_element, attr_name):
+    """Read an attribute off a ``<RUN>`` element, or ``None`` when absent or unset."""
+    if run_element is None:
+        return None
+    return run_element.get(attr_name)
+
+
+def _first_srafile(srafile_elements):
+    """Return the ``<SRAFile>`` element whose ``semantic_name`` is ``run``, else the first one.
+
+    NCBI's efetch XML lists every file associated with a run (the sequencing data plus any
+    reference or index files); the actual run data is the entry marked ``semantic_name="run"``.
+    """
+    for element in srafile_elements:
+        if element.get("semantic_name") == "run":
+            return element
+    return srafile_elements[0] if srafile_elements else None
+
+
+def _first_child_tag(element):
+    """Return the tag name of the first child of ``element``, or ``None``."""
+    if element is None:
+        return None
+    children = list(element)
+    return children[0].tag if children else None
+
+
+def _run_spot_length(tree):
+    """Sum the ``average`` read length reported for each read in ``Statistics/Read``.
+
+    Returns ``None`` when no such statistics are present, so the caller can fall back to
+    the older ``<RUN/spot_length>`` child-element read.
+    """
+    read_elements = tree.findall(".//RUN/Statistics/Read")
+    averages = []
+    for read_element in read_elements:
+        average = read_element.get("average")
+        if average is None:
+            continue
+        try:
+            averages.append(float(average))
+        except ValueError:
+            continue
+    if not averages:
+        return None
+    total = sum(averages)
+    return str(int(total)) if total.is_integer() else str(total)
+
+
 def _extract_metadata_fields(tree, xml_file):
     """
     Extract metadata fields from an XML tree.
@@ -247,15 +296,23 @@ def _extract_metadata_fields(tree, xml_file):
         sample_scientific_name = tree.findtext(".//SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME")
         sample_title = tree.findtext(".//SAMPLE/TITLE")
 
-        # Extract run information
+        # Extract run information.
+        # NCBI's efetch XML carries spots, bases, size and md5 as attributes on <RUN> and
+        # <SRAFile>, not as child elements; the old child-element reads are kept as a
+        # fallback for XML that predates this (or comes from a different source).
         run_id = tree.findtext(".//RUN/IDENTIFIERS/PRIMARY_ID")
-        run_total_spots = tree.findtext(".//RUN/Total_spots")
-        run_total_bases = tree.findtext(".//RUN/Total_bases")
-        run_size = tree.findtext(".//RUN/size")
+        run_element = tree.find(".//RUN")
+        run_total_spots = _run_attr(run_element, "total_spots") or tree.findtext(".//RUN/Total_spots")
+        run_total_bases = _run_attr(run_element, "total_bases") or tree.findtext(".//RUN/Total_bases")
+        run_size = _run_attr(run_element, "size") or tree.findtext(".//RUN/size")
         run_download_path = tree.findtext(".//RUN/download_path")
-        run_md5 = tree.findtext(".//RUN/md5")
-        run_filename = tree.findtext(".//RUN/filename")
-        run_spot_length = tree.findtext(".//RUN/spot_length")
+        srafile_elements = tree.findall(".//RUN/SRAFiles/SRAFile")
+        srafile_element = _first_srafile(srafile_elements)
+        run_md5 = (srafile_element.get("md5") if srafile_element is not None else None) or tree.findtext(".//RUN/md5")
+        run_filename = (srafile_element.get("filename") if srafile_element is not None else None) or tree.findtext(
+            ".//RUN/filename"
+        )
+        run_spot_length = _run_spot_length(tree) or tree.findtext(".//RUN/spot_length")
         run_reads = tree.findtext(".//RUN/reads")
         run_ftp = tree.findtext(".//RUN/ftp")
         run_aspera = tree.findtext(".//RUN/aspera")
@@ -269,9 +326,10 @@ def _extract_metadata_fields(tree, xml_file):
         experiment_library_strategy = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY")
         experiment_library_source = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE")
         experiment_library_selection = tree.findtext(".//EXPERIMENT/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION")
+        experiment_library_layout = _first_child_tag(tree.find(".//LIBRARY_LAYOUT"))
+        platform = _first_child_tag(tree.find(".//PLATFORM"))
 
         # Extract SRA URL
-        srafile_elements = tree.findall(".//RUN/SRAFiles/SRAFile")
         sra_normalized_url = None
         if len(srafile_elements) > 1:
             sra_normalized_url = srafile_elements[1].get("url")
@@ -305,6 +363,8 @@ def _extract_metadata_fields(tree, xml_file):
             "Experiment_Library_Strategy": experiment_library_strategy,
             "Experiment_Library_Source": experiment_library_source,
             "Experiment_Library_Selection": experiment_library_selection,
+            "Experiment_Library_Layout": experiment_library_layout,
+            "Platform": platform,
             "SRA_Normalized_URL": sra_normalized_url,
         }
 

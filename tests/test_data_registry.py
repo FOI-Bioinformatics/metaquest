@@ -297,6 +297,41 @@ class TestRecords:
         reg.record_extraction(r, "SRR1", "GCF_1", [], 0, True, {"genome_fasta": "g", "preset": "sr", "threshold": 0.1})
         assert reg.extraction_record(r, "SRR1", "GCF_1")["assembly"]["contigs"] == 188
 
+    def test_record_metadata_keeps_spots_bases_layout_platform_as_int(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_metadata(
+            r,
+            "SRR1",
+            tmp_path / "metadata" / "SRR1_metadata.xml",
+            {
+                "run_size": "4744553813",
+                "run_md5": "abc",
+                "run_total_spots": "47964651",
+                "run_total_bases": "14389395300",
+                "library_layout": "PAIRED",
+                "platform": "ILLUMINA",
+                "library_strategy": "WGS",
+            },
+        )
+        metadata = r.datasets["SRR1"]["metadata"]
+        assert metadata["run_total_spots"] == 47964651
+        assert isinstance(metadata["run_total_spots"], int)
+        assert metadata["run_total_bases"] == 14389395300
+        assert isinstance(metadata["run_total_bases"], int)
+        assert metadata["library_layout"] == "PAIRED"
+        assert metadata["platform"] == "ILLUMINA"
+        assert metadata["library_strategy"] == "WGS"
+
+    def test_record_metadata_spots_none_when_not_numeric(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_metadata(r, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {})
+        metadata = r.datasets["SRR1"]["metadata"]
+        assert metadata["run_total_spots"] is None
+        assert metadata["run_total_bases"] is None
+        assert metadata["library_layout"] is None
+        assert metadata["platform"] is None
+        assert metadata["library_strategy"] is None
+
     def test_query_and_stage_counts(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         for acc, cont in (("SRR1", 0.9), ("SRR2", 0.5), ("SRR3", 0.05)):
