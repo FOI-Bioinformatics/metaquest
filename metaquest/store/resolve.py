@@ -8,6 +8,7 @@ project registry's recorded root, or the user config file. This module
 resolves that precedence and reads/writes the user config.
 """
 
+import json
 import logging
 import os
 import tomllib
@@ -72,7 +73,10 @@ def write_config_data_root(root: Path) -> Path:
         remaining_text += "\n"
 
     root_posix = Path(root).as_posix()
-    new_block = f'[store]\ndata_root = "{root_posix}"\n'
+    # json.dumps produces a double-quoted string with '"' and '\' escaped the
+    # same way TOML basic strings require, so it doubles as a safe TOML
+    # string literal for a plain path (no control characters to worry about).
+    new_block = f"[store]\ndata_root = {json.dumps(root_posix)}\n"
 
     path.write_text(remaining_text + new_block)
     return path

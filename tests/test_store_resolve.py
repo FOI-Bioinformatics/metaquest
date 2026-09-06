@@ -5,6 +5,8 @@ Every test runs under tmp_path and monkeypatches HOME, XDG_CONFIG_HOME and
 METAQUEST_DATA so nothing here reads or writes the real user config.
 """
 
+import os
+
 import pytest
 
 from metaquest.core.constants import CONFIG_DIRNAME, CONFIG_FILENAME, STORE_ENV
@@ -90,6 +92,21 @@ def test_write_config_data_root_replaces_existing_store_table(tmp_path):
     assert config["store"]["data_root"] == second_root.as_posix()
 
 
+def test_write_config_data_root_escapes_quotes_and_backslashes(tmp_path):
+    # A path component containing a double quote and a backslash: both are
+    # legal filesystem characters on macOS/Linux, and a naive f-string write
+    # (`data_root = "{path}"`) would produce invalid, or worse silently
+    # truncated, TOML for a path like this.
+    tricky_name = 'weird"quote\\slash'
+    root = tmp_path / tricky_name
+    os.makedirs(root)
+
+    write_config_data_root(root)
+
+    config = read_config()
+    assert config["store"]["data_root"] == root.as_posix()
+
+
 # --- resolve_store_root precedence ------------------------------------------
 
 
@@ -130,6 +147,18 @@ def test_resolve_uses_env_over_registry_and_config(tmp_path, monkeypatch):
 
     resolved = resolve_store_root(explicit=None, registry_root=str(registry_root))
     assert resolved == env_root.resolve()
+
+
+def test_resolve_treats_empty_env_as_unset(tmp_path, monkeypatch):
+    # An empty METAQUEST_DATA (e.g. exported but never assigned) must not
+    # win over a real registry or config root, and must not itself raise.
+    monkeypatch.setenv(STORE_ENV, "")
+
+    registry_root = tmp_path / "registry"
+    init_store(registry_root)
+
+    resolved = resolve_store_root(explicit=None, registry_root=str(registry_root))
+    assert resolved == registry_root.resolve()
 
 
 def test_resolve_uses_registry_over_config(tmp_path):
