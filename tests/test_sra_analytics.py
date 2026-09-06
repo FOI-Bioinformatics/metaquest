@@ -15,17 +15,24 @@ from unittest.mock import Mock, patch, mock_open
 import pytest
 import pandas as pd
 
-# Mock Bio.SeqIO to avoid Biopython dependency in tests
-with patch.dict("sys.modules", {"Bio": Mock(), "Bio.SeqIO": Mock()}):
-    from metaquest.sra.analytics import (
-        SRADatasetAnalyzer,
-        SequenceQualityAnalyzer,
-        QualityProfile,
-        ComparativeAnalysis,
-        AnomalyReport,
-        ProcessingRecommendations,
-        load_quality_profiles,
-    )
+# Biopython is a hard project dependency (pyproject.toml), always installed alongside
+# numpy/scipy -- no need to fake it out at import time. A prior version of this file wrapped
+# this import in `with patch.dict("sys.modules", {"Bio": Mock(), ...}):`, which is actively
+# harmful: unittest.mock's dict-patching restores sys.modules to an exact snapshot on exit,
+# silently unregistering every module imported for the first time inside the block
+# (including numpy/scipy, transitively). A later fresh import of anything under metaquest.sra
+# in the same process then hits numpy's C extensions with "ImportError: cannot load module
+# more than once per process". Individual tests below still patch
+# metaquest.sra.analytics.SeqIO directly where they need to avoid touching real FASTQ files.
+from metaquest.sra.analytics import (
+    SRADatasetAnalyzer,
+    SequenceQualityAnalyzer,
+    QualityProfile,
+    ComparativeAnalysis,
+    AnomalyReport,
+    ProcessingRecommendations,
+    load_quality_profiles,
+)
 
 from metaquest.core.exceptions import DataAccessError
 
@@ -242,9 +249,20 @@ class TestLoadQualityProfiles:
         profiles = load_quality_profiles(tmp_path)
 
         assert "SRR_OLD" in profiles
-        # The legacy key is not surfaced through the new field; old data does not crash
-        # loading and the histogram field defaults to empty.
-        assert profiles["SRR_OLD"].gc_histogram == {}
+        # Old data is not discarded: the legacy per-read list is bucketed into the same
+        # 5-percent-wide histogram the new field holds.
+        assert profiles["SRR_OLD"].gc_histogram == {"40-45": 1, "50-55": 1, "60-65": 1}
+
+    def test_old_format_with_no_gc_distribution_defaults_to_empty_histogram(self, tmp_path):
+        import json
+
+        data = self._base_profile_json("SRR_OLD_EMPTY")
+        # Neither gc_histogram nor gc_distribution present at all.
+        (tmp_path / "SRR_OLD_EMPTY_quality_profile.json").write_text(json.dumps(data))
+
+        profiles = load_quality_profiles(tmp_path)
+
+        assert profiles["SRR_OLD_EMPTY"].gc_histogram == {}
 
     def test_reads_new_format_gc_histogram_key(self, tmp_path):
         import json
@@ -619,6 +637,89 @@ class TestSRADatasetAnalyzer:
         mock_profile.assert_not_called()
         assert isinstance(comparison, ComparativeAnalysis)
         assert "group1" in comparison.summary_statistics
+
+    def test_compare_datasets_profiles_a_group_accession_missing_from_supplied_profiles(self):
+        """A partial ``profiles`` dict must not silently drop the accessions it lacks:
+        the gap is profiled fresh, and the comparison holds every accession."""
+        groups = {"group1": ["SRR1", "SRR2"]}
+        profile_srr1 = QualityProfile(
+            accession="SRR1",
+            total_reads=10000,
+            total_bases=1500000,
+            avg_read_length=150,
+            read_length_distribution={},
+            gc_content=0.45,
+            gc_histogram={},
+            quality_distribution={},
+            n_content=0.01,
+            contamination_indicators={"adapter_contamination": 0.02},
+            complexity_score=0.7,
+            duplication_rate=None,
+            technology_confidence=0.9,
+            quality_grade="good",
+            recommendations=[],
+        )
+        profile_srr2 = QualityProfile(
+            accession="SRR2",
+            total_reads=20000,
+            total_bases=3000000,
+            avg_read_length=150,
+            read_length_distribution={},
+            gc_content=0.50,
+            gc_histogram={},
+            quality_distribution={},
+            n_content=0.01,
+            contamination_indicators={"adapter_contamination": 0.01},
+            complexity_score=0.8,
+            duplication_rate=None,
+            technology_confidence=0.9,
+            quality_grade="excellent",
+            recommendations=[],
+        )
+        # Only SRR1 is supplied; SRR2 is a gap that must still get profiled.
+        partial_profiles = {"SRR1": profile_srr1}
+
+        with patch.object(self.analyzer, "profile_dataset_quality", return_value=profile_srr2) as mock_profile:
+            comparison = self.analyzer.compare_datasets(groups, profiles=partial_profiles)
+
+        mock_profile.assert_called_once_with("SRR2")
+        assert "group1" in comparison.summary_statistics
+        # The mean total_reads over the group must reflect BOTH profiles (15000), not just
+        # the one that was supplied (10000) -- proof SRR2 was folded into the comparison.
+        assert comparison.summary_statistics["group1"]["total_reads"]["mean"] == pytest.approx(15000.0)
+
+    def test_compare_datasets_profiling_failure_for_missing_accession_is_logged_and_excluded(self):
+        """An accession that cannot be profiled either way is excluded, not silently
+        dropped without a trace: it is logged and noted in recommendations."""
+        groups = {"group1": ["SRR1", "SRR_MISSING"]}
+        profile_srr1 = QualityProfile(
+            accession="SRR1",
+            total_reads=10000,
+            total_bases=1500000,
+            avg_read_length=150,
+            read_length_distribution={},
+            gc_content=0.45,
+            gc_histogram={},
+            quality_distribution={},
+            n_content=0.01,
+            contamination_indicators={"adapter_contamination": 0.02},
+            complexity_score=0.7,
+            duplication_rate=None,
+            technology_confidence=0.9,
+            quality_grade="good",
+            recommendations=[],
+        )
+        partial_profiles = {"SRR1": profile_srr1}
+
+        with patch.object(
+            self.analyzer, "profile_dataset_quality", side_effect=DataAccessError("no FASTQ found")
+        ) as mock_profile:
+            comparison = self.analyzer.compare_datasets(groups, profiles=partial_profiles)
+
+        mock_profile.assert_called_once_with("SRR_MISSING")
+        assert any("SRR_MISSING" in note for note in comparison.recommendations)
+        # The group's stats still reflect the one profile that was available.
+        assert comparison.summary_statistics["group1"]["total_reads"]["mean"] == pytest.approx(10000.0)
 
     def test_detect_dataset_anomalies_with_profiles_does_not_call_profile_dataset_quality(self):
         """Supplying profiles reuses them; profile_dataset_quality must not be called."""

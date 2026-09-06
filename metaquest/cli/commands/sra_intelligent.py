@@ -606,7 +606,9 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             # Generate HTML report
             if args.generate_report:
                 reporter = SRAReportGenerator(output_dir=str(output_dir), fastq_dir=args.fastq_dir)
-                report_path = reporter.create_comparative_analysis(groups, title="SRA Comparative Analysis Report")
+                report_path = reporter.create_comparative_analysis(
+                    groups, title="SRA Comparative Analysis Report", profiles=profiles or None
+                )
                 print(f"Interactive report generated: {report_path}")
 
             return 0

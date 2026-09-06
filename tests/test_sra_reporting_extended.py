@@ -343,6 +343,25 @@ class TestComparativeAnalysisReports:
         assert "Group A" in html_content
         assert "Group B" in html_content
 
+    def test_create_comparative_analysis_forwards_supplied_profiles(self, tmp_output_dir, mock_comparative_analysis):
+        """profiles is threaded through to compare_datasets: the HTML report path must not
+        silently reprofile from FASTQ when the caller already has saved profiles."""
+        generator = SRAReportGenerator(tmp_output_dir)
+
+        groups = {"Group A": ["SRR001", "SRR002"]}
+        profiles = {"SRR001": Mock(), "SRR002": Mock()}
+
+        with patch.object(
+            generator.analyzer, "compare_datasets", return_value=mock_comparative_analysis
+        ) as mock_compare:
+            with patch.object(generator.analyzer, "profile_dataset_quality") as mock_profile:
+                with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
+                    with patch("metaquest.sra.reporting.JINJA2_AVAILABLE", False):
+                        generator.create_comparative_analysis(groups=groups, title="X", profiles=profiles)
+
+        mock_compare.assert_called_once_with(groups, profiles=profiles)
+        mock_profile.assert_not_called()
+
     def test_create_comparative_analysis_with_jinja2(self, tmp_output_dir, mock_comparative_analysis):
         """Test comparative analysis with Jinja2 templating."""
         generator = SRAReportGenerator(tmp_output_dir)

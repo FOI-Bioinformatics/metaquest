@@ -792,6 +792,79 @@ class TestSRAComparativeAnalysisCommand:
         _, kwargs = mock_analyzer.compare_datasets.call_args
         assert set(kwargs["profiles"].keys()) == {"SRR001", "SRR002"}
 
+    def test_execute_reuses_saved_quality_profiles_for_html_report_too(self, tmp_path):
+        """--quality-profiles must also reach the HTML report path (--generate-report),
+        not just the JSON comparison: profile_dataset_quality is never called."""
+        cmd = SRAComparativeAnalysisCommand()
+
+        groups_file = tmp_path / "groups.json"
+        groups_data = {"Group_A": ["SRR001"], "Group_B": ["SRR002"]}
+        groups_file.write_text(json.dumps(groups_data))
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        for acc in ("SRR001", "SRR002"):
+            profile = make_profile(acc)
+            (profiles_dir / f"{acc}_quality_profile.json").write_text(
+                json.dumps(
+                    {
+                        "accession": profile.accession,
+                        "total_reads": profile.total_reads,
+                        "total_bases": profile.total_bases,
+                        "avg_read_length": profile.avg_read_length,
+                        "read_length_distribution": profile.read_length_distribution,
+                        "gc_content": profile.gc_content,
+                        "gc_histogram": profile.gc_histogram,
+                        "quality_distribution": profile.quality_distribution,
+                        "n_content": profile.n_content,
+                        "contamination_indicators": profile.contamination_indicators,
+                        "complexity_score": profile.complexity_score,
+                        "duplication_rate": profile.duplication_rate,
+                        "technology_confidence": profile.technology_confidence,
+                        "quality_grade": profile.quality_grade,
+                        "recommendations": profile.recommendations,
+                    }
+                )
+            )
+
+        args = Namespace(
+            groups_file=str(groups_file),
+            quality_profiles=str(profiles_dir),
+            fastq_dir=str(tmp_path / "fastq"),  # never created: no FASTQ files exist on disk
+            output_dir=str(tmp_path / "output"),
+            statistical_tests=False,
+            generate_report=True,
+        )
+
+        mock_comparison = ComparativeAnalysis(
+            dataset_groups=groups_data,
+            summary_statistics={},
+            statistical_tests={},
+            outlier_datasets=[],
+            clustering_results=None,
+            batch_effects={},
+            recommendations=[],
+            visualization_data={},
+        )
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+                mock_analyzer = Mock()
+                mock_analyzer.find_fastq.return_value = None
+                mock_analyzer.compare_datasets.return_value = mock_comparison
+                mock_analyzer_class.return_value = mock_analyzer
+
+                mock_reporter = Mock()
+                mock_reporter.create_comparative_analysis.return_value = tmp_path / "output" / "report.html"
+                mock_reporter_class.return_value = mock_reporter
+
+                result = cmd.execute(args)
+
+        assert result == 0
+        mock_analyzer.profile_dataset_quality.assert_not_called()
+        _, kwargs = mock_reporter.create_comparative_analysis.call_args
+        assert set(kwargs["profiles"].keys()) == {"SRR001", "SRR002"}
+
 
 # ============================================================================
 # TEST CLASS: Integration against REAL backend dataclasses

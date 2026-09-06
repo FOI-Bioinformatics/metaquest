@@ -101,6 +101,15 @@ class ProcessingRecommendations:
 _QUALITY_PROFILE_SUFFIX = "_quality_profile.json"
 
 
+def _gc_histogram(gc_contents: List[float]) -> Dict[str, int]:
+    """Bucket per-read GC fractions into 5-percent-wide bins, e.g. ``{"40-45": 12, ...}``."""
+    histogram: Dict[str, int] = defaultdict(int)
+    for gc in gc_contents:
+        start = min(95, max(0, int((gc * 100) // 5) * 5))
+        histogram[f"{start}-{start + 5}"] += 1
+    return dict(histogram)
+
+
 def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityProfile"]:
     """Load previously saved per-accession quality profile JSONs (see ``_write_detailed_report``).
 
@@ -109,10 +118,10 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
     missing directory yields an empty mapping; a file that is not valid JSON
     is skipped with a warning rather than raising.
 
-    Reads both the current ``gc_histogram`` key and a profile JSON written before this
-    field existed (which held a ``gc_distribution`` per-read list instead): the old key is
-    never converted into a histogram, since the two are not the same statistic, so
-    ``gc_histogram`` defaults to ``{}`` for old-format data.
+    Reads the current ``gc_histogram`` key directly; a profile JSON written before this
+    field existed held a ``gc_distribution`` per-read list instead, which is bucketed into
+    the same 5-percent-wide histogram here so old data is not silently discarded.
+    ``gc_histogram`` is only ``{}`` when neither key is present.
     """
     profiles: Dict[str, QualityProfile] = {}
     directory = Path(profiles_dir)
@@ -133,7 +142,7 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
             avg_read_length=data.get("avg_read_length", 0.0),
             read_length_distribution=data.get("read_length_distribution", {}),
             gc_content=data.get("gc_content", 0.0),
-            gc_histogram=data.get("gc_histogram", {}),
+            gc_histogram=data.get("gc_histogram") or _gc_histogram(data.get("gc_distribution", [])),
             quality_distribution=data.get("quality_distribution", {}),
             n_content=data.get("n_content", 0.0),
             contamination_indicators=data.get("contamination_indicators", {}),
@@ -207,7 +216,7 @@ class SequenceQualityAnalyzer:
                 "std": statistics.stdev(gc_contents) if len(gc_contents) > 1 else 0,
                 # A histogram, not the raw per-read list: the list used to make every
                 # profile JSON grow with the dataset instead of staying a fixed size.
-                "histogram": self._gc_histogram(gc_contents),
+                "histogram": _gc_histogram(gc_contents),
             },
             "quality_stats": {
                 "mean": statistics.mean(quality_scores),
@@ -293,15 +302,6 @@ class SequenceQualityAnalyzer:
             sequences.append(seq)
 
         return read_lengths, gc_contents, quality_scores, n_contents, sequences
-
-    @staticmethod
-    def _gc_histogram(gc_contents: List[float]) -> Dict[str, int]:
-        """Bucket per-read GC fractions into 5-percent-wide bins, e.g. ``{"40-45": 12, ...}``."""
-        histogram: Dict[str, int] = defaultdict(int)
-        for gc in gc_contents:
-            start = min(95, max(0, int((gc * 100) // 5) * 5))
-            histogram[f"{start}-{start + 5}"] += 1
-        return dict(histogram)
 
     def _calculate_duplication_rate(self, sequences: List[str]) -> float:
         """Fraction of sampled reads that are exact duplicates of another read.
@@ -545,6 +545,32 @@ class SRADatasetAnalyzer:
                     logger.warning(f"Failed to profile {accession}: {e}")
         return all_profiles
 
+    def _merge_supplied_profiles(
+        self, groups: Dict[str, List[str]], profiles: Dict[str, QualityProfile]
+    ) -> Tuple[Dict[str, QualityProfile], List[str]]:
+        """Fill in any accession from ``groups`` missing from a supplied ``profiles`` dict.
+
+        A profile already in ``profiles`` is reused as-is; a gap is profiled fresh via
+        ``profile_dataset_quality`` so a partial ``profiles`` dict (e.g. only some
+        accessions had a saved quality profile) does not silently drop the rest of the
+        comparison. Returns ``(profiles, failures)``: a new dict holding every supplied
+        profile plus any freshly profiled one, and a human-readable "accession: reason"
+        entry for each accession that could not be profiled either way (logged here, the
+        same way ``detect_dataset_anomalies`` handles a profiling failure).
+        """
+        merged = dict(profiles)
+        failures: List[str] = []
+        all_accessions = [acc for accessions in groups.values() for acc in accessions]
+        for accession in all_accessions:
+            if accession in merged:
+                continue
+            try:
+                merged[accession] = self.profile_dataset_quality(accession)
+            except Exception as e:
+                logger.warning(f"Failed to profile {accession}: {e}")
+                failures.append(f"{accession}: {e}")
+        return merged, failures
+
     @staticmethod
     def _group_of(accession: str, groups: Dict[str, List[str]]) -> Optional[str]:
         """Return the first group name containing the accession, or None."""
@@ -610,16 +636,22 @@ class SRADatasetAnalyzer:
         Args:
             groups: Dictionary mapping group names to lists of accessions
             metadata_df: DataFrame with metadata for all datasets
-            profiles: Previously computed profiles keyed by accession. When given, these are
-                reused as-is instead of calling ``profile_dataset_quality`` again for every
-                accession in ``groups``.
+            profiles: Previously computed profiles keyed by accession. An accession in
+                ``groups`` covered here is reused as-is; one missing from ``profiles`` is
+                still profiled fresh via ``profile_dataset_quality`` (a partial ``profiles``
+                dict never silently drops accessions from the comparison), and a profiling
+                failure is logged and excluded, with a note in ``recommendations``.
 
         Returns:
             ComparativeAnalysis with statistical comparisons
         """
         logger.info(f"Comparing {len(groups)} dataset groups")
 
-        all_profiles = profiles if profiles is not None else self._collect_group_profiles(groups)
+        failures: List[str] = []
+        if profiles is not None:
+            all_profiles, failures = self._merge_supplied_profiles(groups, profiles)
+        else:
+            all_profiles = self._collect_group_profiles(groups)
         comparison_df = self._build_comparison_dataframe(all_profiles, groups)
 
         if comparison_df.empty:
@@ -631,7 +663,7 @@ class SRADatasetAnalyzer:
                 outlier_datasets=[],
                 clustering_results=None,
                 batch_effects={},
-                recommendations=["No data available for analysis"],
+                recommendations=["No data available for analysis"] + [f"Could not profile {f}" for f in failures],
                 visualization_data={},
             )
 
@@ -640,6 +672,7 @@ class SRADatasetAnalyzer:
         statistical_tests = self._perform_statistical_tests(comparison_df, groups)
         outliers = self._detect_outliers(comparison_df)
         recommendations = self._generate_comparative_recommendations(summary_stats, statistical_tests, outliers)
+        recommendations = recommendations + [f"Could not profile {f}" for f in failures]
 
         return ComparativeAnalysis(
             dataset_groups=groups,

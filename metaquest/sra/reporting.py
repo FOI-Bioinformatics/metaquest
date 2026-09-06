@@ -122,7 +122,10 @@ class SRAReportGenerator:
         return dashboard_path
 
     def create_comparative_analysis(
-        self, groups: Dict[str, List[str]], title: str = "Comparative Analysis Report"
+        self,
+        groups: Dict[str, List[str]],
+        title: str = "Comparative Analysis Report",
+        profiles: Optional[Dict[str, "QualityProfile"]] = None,
     ) -> Path:
         """
         Create comparative analysis report between dataset groups.
@@ -130,6 +133,10 @@ class SRAReportGenerator:
         Args:
             groups: Dictionary mapping group names to accession lists
             title: Report title
+            profiles: Previously computed profiles keyed by accession, passed straight
+                through to ``SRADatasetAnalyzer.compare_datasets`` so an accession already
+                profiled (e.g. by an earlier ``sra_profile_quality`` run) is not reprofiled
+                from FASTQ just to build this HTML report.
 
         Returns:
             Path to generated HTML report
@@ -137,7 +144,7 @@ class SRAReportGenerator:
         logger.info(f"Creating comparative analysis for {len(groups)} groups")
 
         # Perform comparative analysis
-        comparison = self.analyzer.compare_datasets(groups)
+        comparison = self.analyzer.compare_datasets(groups, profiles=profiles)
 
         report_data = {
             "title": title,
