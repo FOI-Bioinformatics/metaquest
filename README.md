@@ -458,6 +458,7 @@ metaquest taxonomic_summary --abundance-file abundance_matrix.csv --taxonomy-fil
 
 For comprehensive documentation including advanced features and technical details, see the [docs/](docs/) directory:
 
+- **[Pipeline Overview](docs/pipeline_overview.md)** - The six stages (screen, select, download, analyse, extract, assemble), the commands of each, and what the project registry records
 - **[SRA Information, Statistics and Validation](docs/SRA_ENHANCED_FEATURES.md)** - Dataset information, read statistics and validation commands supporting `download_sra`
 - **[Branchwater Workflow](docs/branchwater_workflow.md)** - Detailed workflow guide for branchwater functionality
 - **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions

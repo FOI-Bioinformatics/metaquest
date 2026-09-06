@@ -5,6 +5,7 @@ Welcome to the MetaQuest documentation! This directory contains comprehensive gu
 ## 📖 Documentation Index
 
 ### User Guides
+- **[Pipeline Overview](pipeline_overview.md)** - The six stages from screening to assembly, the commands of each, and what the project registry records
 - **[SRA Enhanced Features](SRA_ENHANCED_FEATURES.md)** - Comprehensive guide for downloading and analyzing SRA data with enhanced features
 - **[Branchwater Workflow](branchwater_workflow.md)** - Step-by-step workflow for using sourmash branchwater functionality
 
