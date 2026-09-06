@@ -382,6 +382,63 @@ class TestRecords:
         assert "source" not in screening and "query_threshold" not in screening
         assert screening["date"]
 
+    def test_record_extraction_stores_mapped_total(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {}, mapped_total=100)
+        assert r.datasets["SRR1"]["extractions"]["GCF_1"]["mapped_total"] == 100
+
+    def test_record_extraction_mapped_total_defaults_to_none(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {})
+        assert r.datasets["SRR1"]["extractions"]["GCF_1"]["mapped_total"] is None
+
+    def test_record_assembly_passes_the_whole_stats_dict_through(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 100, False, {})
+        reg.record_assembly(
+            r,
+            "SRR1",
+            "GCF_1",
+            tmp_path / "asm",
+            {
+                "contigs": 5,
+                "total_bp": 5000,
+                "n50": 800,
+                "largest": 1200,
+                "n90": 400,
+                "gc": 0.512,
+                "contigs_ge_1kb": 2,
+                "genome_fraction_estimate": 0.75,
+                "reads_mapped": 90,
+                "mapping_rate": 0.9,
+                "mean_depth_estimate": 12.3,
+            },
+            "v1.2.9",
+            {"preset": "meta-sensitive"},
+        )
+        assembly = r.datasets["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert assembly["contigs"] == 5 and isinstance(assembly["contigs"], int)
+        assert assembly["total_bp"] == 5000
+        assert assembly["n50"] == 800
+        assert assembly["largest"] == 1200
+        assert assembly["n90"] == 400
+        assert assembly["gc"] == 0.512
+        assert assembly["contigs_ge_1kb"] == 2
+        assert assembly["genome_fraction_estimate"] == 0.75
+        assert assembly["reads_mapped"] == 90
+        assert assembly["mapping_rate"] == 0.9
+        assert assembly["mean_depth_estimate"] == 12.3
+        assert assembly["params"]["preset"] == "meta-sensitive"
+
+    def test_record_assembly_defaults_the_four_required_keys(self, tmp_path):
+        """A stats dict missing some of the four required keys still gets them, defaulted to 0."""
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 0, False, {})
+        reg.record_assembly(r, "SRR1", "GCF_1", tmp_path / "asm", {"contigs": 1}, "v1.2.9", {})
+        assembly = r.datasets["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert assembly["contigs"] == 1
+        assert assembly["total_bp"] == 0 and assembly["n50"] == 0 and assembly["largest"] == 0
+
     def test_real_records_clear_the_inferred_flag(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_screening(r, "SRR1", "GCF_1", 0.5, None, "matches", 0.0, None)
@@ -551,10 +608,34 @@ class TestScanners:
         fa.write_text(
             ">k141_1 flag=1 multi=2.0 len=10\nACGTACGTAC\n>k141_2 flag=1 multi=2.0 len=4\nACGT\n>k141_3 len=6\nACGTAC\n"
         )
-        assert summarise_contigs(fa) == {"contigs": 3, "total_bp": 20, "n50": 10, "largest": 10}
+        assert summarise_contigs(fa) == {
+            "contigs": 3,
+            "total_bp": 20,
+            "n50": 10,
+            "n90": 4,
+            "largest": 10,
+            "gc": 0.5,
+            "contigs_ge_1kb": 0,
+        }
         fa.write_text(">a\nACGTACGT\n>b\nAC\n")
-        assert summarise_contigs(fa) == {"contigs": 2, "total_bp": 10, "n50": 8, "largest": 8}
-        assert summarise_contigs(tmp_path / "missing.fa") == {"contigs": 0, "total_bp": 0, "n50": 0, "largest": 0}
+        assert summarise_contigs(fa) == {
+            "contigs": 2,
+            "total_bp": 10,
+            "n50": 8,
+            "n90": 2,
+            "largest": 8,
+            "gc": 0.5,
+            "contigs_ge_1kb": 0,
+        }
+        assert summarise_contigs(tmp_path / "missing.fa") == {
+            "contigs": 0,
+            "total_bp": 0,
+            "n50": 0,
+            "n90": 0,
+            "largest": 0,
+            "gc": 0.0,
+            "contigs_ge_1kb": 0,
+        }
 
     def test_scan_downloads_ignores_transient_temp_folder(self, tmp_path):
         """A <acc>_temp folder holding a partial FASTQ must not count as a downloaded accession."""

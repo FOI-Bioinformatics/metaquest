@@ -1,5 +1,6 @@
 """Tests for targeted read extraction (metaquest.data.read_extraction)."""
 
+import gzip
 import os
 import tempfile
 from pathlib import Path
@@ -11,13 +12,17 @@ import pytest
 from metaquest.core.exceptions import DataAccessError, ProcessingError
 from metaquest.data.read_extraction import (
     ExtractionResult,
+    _run_minimap2,
     _sample_reads,
     assemble_extracted_reads,
+    assembly_coverage,
     build_index,
     extract_target_reads,
+    fasta_length,
     resolve_assembly_threads,
     resolve_index_path,
     select_samples_for_genome,
+    summarise_contigs,
 )
 from metaquest.data.registry import load_registry, record_extraction, resolve_project_path, save_registry
 from helpers_extraction import _fake_tools
@@ -763,6 +768,58 @@ class TestAssembleExtractedReads:
         with pytest.raises(ProcessingError):
             assemble_extracted_reads([], "asm")
 
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_default_preset_added_to_the_megahit_args(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        assemble_extracted_reads([Path("a.fastq.gz")], "asm")
+        args = mock_run.call_args.args[1]
+        assert args[args.index("--presets") + 1] == "meta-sensitive"
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_explicit_preset_added_to_the_megahit_args(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset="meta-large")
+        args = mock_run.call_args.args[1]
+        assert args[args.index("--presets") + 1] == "meta-large"
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_default_and_none_preset_omit_the_flag(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset="default")
+        assert "--presets" not in mock_run.call_args.args[1]
+        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset=None)
+        assert "--presets" not in mock_run.call_args.args[1]
+
+    def test_preset_with_explicit_k_values_raises(self):
+        with pytest.raises(ProcessingError, match="cannot be combined"):
+            assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset="meta-sensitive", k_flags={"k-min": 21})
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_explicit_k_values_used_without_a_preset(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset=None, k_flags={"k-min": 21, "k-max": 141})
+        args = mock_run.call_args.args[1]
+        assert args[args.index("--k-min") + 1] == "21"
+        assert args[args.index("--k-max") + 1] == "141"
+        assert "--presets" not in args
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_intermediate_contigs_removed_by_default(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "asm"
+            assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out)
+            assert (out / "final.contigs.fa").exists()
+            assert not (out / "intermediate_contigs").exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_intermediate_contigs_kept_when_requested(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "asm"
+            assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, keep_intermediate=True)
+            assert (out / "intermediate_contigs").exists()
+
 
 class TestResolveAssemblyThreads:
     def test_explicit_request_wins(self, monkeypatch):
@@ -776,3 +833,126 @@ class TestResolveAssemblyThreads:
     def test_non_macos_uses_fallback(self, monkeypatch):
         monkeypatch.setattr("metaquest.data.read_extraction.platform.system", lambda: "Linux")
         assert resolve_assembly_threads(None, 4) == 4
+
+
+class TestRunMinimap2Retry:
+    """_run_minimap2 retries once against the FASTA when the prebuilt index fails."""
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_index_failure_retries_against_the_fasta_and_warns(self, mock_run, tmp_path, caplog):
+        genome = tmp_path / "g.fna"
+        genome.write_text(">s\nACGT\n")
+        index_path = tmp_path / "g.sr.mmi"
+        sam_path = tmp_path / "out.sam"
+        reads = [tmp_path / "r1.fastq.gz"]
+        ok_result = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [RuntimeError("index built by an incompatible minimap2 version"), ok_result]
+
+        with caplog.at_level("WARNING"):
+            result = _run_minimap2("SRR1", "sr", 4, sam_path, index_path, genome, reads)
+
+        assert result is ok_result
+        assert mock_run.call_count == 2
+        first_call, second_call = mock_run.call_args_list
+        assert first_call.args[0] == "minimap2" and str(index_path) in first_call.args[1]
+        assert second_call.args[0] == "minimap2" and str(genome) in second_call.args[1]
+        assert str(index_path) not in second_call.args[1]
+        assert "retrying against the FASTA directly" in caplog.text
+
+
+class TestSummariseContigsRicherStats:
+    def test_n90_gc_and_size_bucket_from_real_sequence(self, tmp_path):
+        contigs = tmp_path / "contigs.fa"
+        # One 1000 bp contig, all G/C, and one 100 bp contig, all A/T.
+        contigs.write_text(">c1\n" + "GC" * 500 + "\n>c2\n" + "AT" * 50 + "\n")
+
+        stats = summarise_contigs(contigs)
+
+        assert stats["contigs"] == 2
+        assert stats["total_bp"] == 1100
+        assert stats["largest"] == 1000
+        assert stats["n50"] == 1000
+        assert stats["n90"] == 1000
+        assert stats["gc"] == round(1000 / 1100, 4)
+        assert stats["contigs_ge_1kb"] == 1
+
+    def test_missing_file_returns_a_zeroed_dict_with_the_new_keys(self, tmp_path):
+        stats = summarise_contigs(tmp_path / "missing.fa")
+        assert stats == {
+            "contigs": 0,
+            "total_bp": 0,
+            "n50": 0,
+            "n90": 0,
+            "largest": 0,
+            "gc": 0.0,
+            "contigs_ge_1kb": 0,
+        }
+
+    def test_header_length_is_still_honoured_for_total_bp(self, tmp_path):
+        """megahit's len= header value still wins for length even though gc is read from the
+        (here deliberately short) sequence lines."""
+        contigs = tmp_path / "contigs.fa"
+        contigs.write_text(">c1 len=100\nACGT\n>c2 len=50\nACGT\n")
+        stats = summarise_contigs(contigs)
+        assert stats["total_bp"] == 150
+        assert stats["largest"] == 100
+
+
+class TestFastaLength:
+    def test_counts_sequence_bases_only(self, tmp_path):
+        fasta = tmp_path / "g.fna"
+        fasta.write_text(">chr1 some description\nACGTACGT\nACGT\n>chr2\nTTTT\n")
+        assert fasta_length(fasta) == 16
+
+
+class TestAssemblyCoverage:
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_coverage_numbers_from_faked_counts(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({"coverage_mapped": 8})
+        contigs = tmp_path / "final.contigs.fa"
+        contigs.write_text(">c1 len=100\nACGT\n>c2 len=50\nACGT\n")
+        reads_file = tmp_path / "r_1.fastq.gz"
+        with gzip.open(reads_file, "wt") as handle:
+            handle.write("@r\nACGTACGTAC\n+\nIIIIIIIIII\n" * 5)
+
+        result = assembly_coverage(contigs, [reads_file], "sr", 4, tmp_path, mapped_reads=40)
+
+        assert result["reads_mapped"] == 8
+        assert result["mapping_rate"] == pytest.approx(0.2)
+        assert result["mean_depth_estimate"] == pytest.approx(8 * 10 / 150)
+        assert not (tmp_path / "coverage.sam").exists()
+        assert not (tmp_path / "coverage.bam").exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_mapping_rate_is_none_when_mapped_reads_is_unknown_or_zero(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        contigs = tmp_path / "final.contigs.fa"
+        contigs.write_text(">c1 len=10\nACGT\n")
+        reads_file = tmp_path / "r.fastq.gz"
+        with gzip.open(reads_file, "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+
+        assert assembly_coverage(contigs, [reads_file], "sr", 2, tmp_path, mapped_reads=None)["mapping_rate"] is None
+        assert assembly_coverage(contigs, [reads_file], "sr", 2, tmp_path, mapped_reads=0)["mapping_rate"] is None
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_minimap2_and_samtools_args_shape(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        contigs = tmp_path / "final.contigs.fa"
+        contigs.write_text(">c1 len=10\nACGT\n")
+        reads_file = tmp_path / "r.fastq.gz"
+        with gzip.open(reads_file, "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+
+        assembly_coverage(contigs, [reads_file], "map-ont", 3, tmp_path, mapped_reads=10)
+
+        minimap2_call = next(c for c in mock_run.call_args_list if c.args[0] == "minimap2")
+        args = minimap2_call.args[1]
+        assert args[:3] == ["-a", "-x", "map-ont"]
+        assert args[args.index("-t") + 1] == "3"
+        assert str(contigs) in args and str(reads_file) in args
+
+        filter_call = next(c for c in mock_run.call_args_list if c.args[0] == "samtools" and c.args[1][0] == "view")
+        fargs = filter_call.args[1]
+        assert fargs[fargs.index("-F") + 1] == "0x904"
+        assert fargs[fargs.index("-@") + 1] == "3"

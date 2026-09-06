@@ -31,6 +31,9 @@ def _args(tmp, **kwargs):
         assemble=False,
         assembly_threads=None,
         min_contig_len=None,
+        assembly_preset="meta-sensitive",
+        keep_intermediate=False,
+        no_coverage=False,
         dry_run=False,
         force=False,
         registry=str(Path(tmp) / "registry.json"),
@@ -776,3 +779,155 @@ class TestExtractTargetReadsCommand:
             )
             assert rc == 0
             assert list((root / "targeted" / "SRR1").glob("*.sam"))
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_records_mapped_total(self, mock_run):
+        mock_run.side_effect = _fake_tools({"mapped_total": 100, "mapped": 80})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        assert data["datasets"]["SRR1"]["extractions"]["GCF_1"]["mapped_total"] == 100
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_assembly_preset_recorded_and_passed_to_megahit(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                    assembly_preset="meta-large",
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        megahit_call = next(c for c in mock_run.call_args_list if c.args[0] == "megahit" and "-o" in c.args[1])
+        args = megahit_call.args[1]
+        assert args[args.index("--presets") + 1] == "meta-large"
+        assembly = data["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert assembly["params"]["preset"] == "meta-large"
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_intermediate_contigs_removed_by_default(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                )
+            )
+            assert rc == 0
+            asm_dir = root / "targeted" / "SRR1" / "GCF_1_assembly"
+            assert not (asm_dir / "intermediate_contigs").exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_keep_intermediate_flag_keeps_the_folder(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                    keep_intermediate=True,
+                )
+            )
+            assert rc == 0
+            asm_dir = root / "targeted" / "SRR1" / "GCF_1_assembly"
+            assert (asm_dir / "intermediate_contigs").exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_records_coverage_stats(self, mock_run):
+        mock_run.side_effect = _fake_tools({"coverage_mapped": 7})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        assembly = data["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert assembly["reads_mapped"] == 7
+        assert assembly["mapping_rate"] is not None
+        assert "mean_depth_estimate" in assembly
+        assert "genome_fraction_estimate" in assembly
+        assert "n90" in assembly and "gc" in assembly and "contigs_ge_1kb" in assembly
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_no_coverage_skips_the_mapping_calls(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                    no_coverage=True,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        coverage_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args[0] == "minimap2" and any(str(a).endswith("final.contigs.fa") for a in c.args[1])
+        ]
+        assert coverage_calls == []
+        assembly = data["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert "reads_mapped" not in assembly

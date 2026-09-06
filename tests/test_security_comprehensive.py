@@ -129,6 +129,10 @@ class TestParameterValidation:
     def test_megahit_version_flag_allowed(self):
         assert SecureSubprocess._build_validated_command("megahit", ["--version"]) == ["megahit", "--version"]
 
+    def test_megahit_presets_flag_allowed(self):
+        cmd = SecureSubprocess._build_validated_command("megahit", ["--presets", "meta-sensitive"])
+        assert cmd == ["megahit", "--presets", "meta-sensitive"]
+
 
 class TestPathValidation:
     """Test file path validation and security."""

@@ -17,7 +17,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -662,6 +662,9 @@ def assemble_extracted_reads(
     threads: int = 4,
     min_contig_len: Optional[int] = None,
     force: bool = False,
+    preset: Optional[str] = "meta-sensitive",
+    keep_intermediate: bool = False,
+    k_flags: Optional[Dict[str, int]] = None,
 ) -> Tuple[Path, bool]:
     """Assemble a set of extracted FASTQ files with megahit.
 
@@ -679,14 +682,24 @@ def assemble_extracted_reads(
         threads: CPU threads.
         min_contig_len: Optional minimum contig length.
         force: If True, redo the assembly even if it already ran.
+        preset: megahit ``--presets`` value (e.g. ``meta-sensitive``, ``meta-large``).
+            ``None`` or ``"default"`` omits the flag and uses megahit's own defaults.
+        keep_intermediate: If True, keep megahit's ``intermediate_contigs/`` folder
+            instead of removing it once the assembly succeeds (useful for debugging a
+            specific k-mer step, at the cost of extra disk space).
+        k_flags: Explicit ``--k-min``/``--k-max``/``--k-step`` values (keys without the
+            leading dashes, e.g. ``{"k-min": 21}``), used instead of a preset. Combining
+            this with a preset is rejected, since megahit's own k-mer choices for a
+            preset and an explicit k-mer schedule cannot both apply.
 
     Returns:
         The megahit output directory and whether megahit actually ran (False when the
         assembly was already there), so the caller can leave an existing record alone.
 
     Raises:
-        ProcessingError: If the number of reads is unsupported, or the output
-            directory exists without contigs and ``force`` is not set.
+        ProcessingError: If the number of reads is unsupported, the output directory
+            exists without contigs and ``force`` is not set, or ``k_flags`` is given
+            together with a preset.
     """
     out_dir = Path(output_dir)
     contigs_path = out_dir / "final.contigs.fa"
@@ -698,6 +711,10 @@ def assemble_extracted_reads(
             raise ProcessingError("Assembly folder exists but holds no contigs (interrupted run?); rerun with --force")
         if force:
             shutil.rmtree(out_dir, ignore_errors=True)
+
+    preset_active = preset not in (None, "default")
+    if k_flags and preset_active:
+        raise ProcessingError("megahit presets and explicit k values cannot be combined")
 
     SecureSubprocess.add_allowed_root(out_dir.parent)
     args: List[str] = []
@@ -712,24 +729,47 @@ def assemble_extracted_reads(
     if min_contig_len is not None:
         args += ["--min-contig-len", str(min_contig_len)]
 
+    if k_flags:
+        for key, value in k_flags.items():
+            args += [f"--{key}", str(value)]
+    elif preset_active:
+        args += ["--presets", str(preset)]
+
     SecureSubprocess.run_secure("megahit", args)
     logger.info("Assembly written to %s", out_dir)
+
+    if not keep_intermediate:
+        shutil.rmtree(out_dir / "intermediate_contigs", ignore_errors=True)
+
     return out_dir, True
 
 
-def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, int]:
-    """Contig count, total length, N50 and largest contig of a FASTA file.
+def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, Any]:
+    """Contig count, total length, N50/N90, largest contig, GC fraction and the number of
+    contigs at least 1 kb long, for a FASTA file.
 
-    megahit headers carry ``len=<bp>``; when present that value is used, so the
-    scan reads only header lines. Otherwise sequence lengths are summed.
+    megahit headers carry ``len=<bp>``; when present that value is used for contig length,
+    so the scan reads only header lines for length. GC content is always computed from the
+    actual sequence lines, regardless of whether a header length is present.
     """
     path = Path(contigs)
+    empty: Dict[str, Any] = {
+        "contigs": 0,
+        "total_bp": 0,
+        "n50": 0,
+        "n90": 0,
+        "largest": 0,
+        "gc": 0.0,
+        "contigs_ge_1kb": 0,
+    }
     if not path.exists():
-        return {"contigs": 0, "total_bp": 0, "n50": 0, "largest": 0}
+        return empty
     lengths: List[int] = []
     current = 0
     have_current = False
     header_len = False
+    gc_count = 0
+    bases_seen = 0
     with open(path) as handle:
         for line in handle:
             if line.startswith(">"):
@@ -739,20 +779,118 @@ def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, int]:
                 match = re.search(r"\blen=(\d+)", line)
                 current = int(match.group(1)) if match else 0
                 header_len = match is not None
-            elif have_current and not header_len:
-                current += len(line.strip())
+            elif have_current:
+                seq = line.strip()
+                if not header_len:
+                    current += len(seq)
+                bases_seen += len(seq)
+                gc_count += sum(1 for base in seq.upper() if base in "GC")
     if have_current:
         lengths.append(current)
     lengths.sort(reverse=True)
     total = sum(lengths)
-    n50 = 0
-    running = 0
-    for length in lengths:
-        running += length
-        if running * 2 >= total:
-            n50 = length
-            break
-    return {"contigs": len(lengths), "total_bp": total, "n50": n50, "largest": lengths[0] if lengths else 0}
+
+    def _n_stat(fraction: float) -> int:
+        running = 0
+        for length in lengths:
+            running += length
+            if running * 100 >= total * fraction * 100:
+                return length
+        return 0
+
+    n50 = _n_stat(0.5)
+    n90 = _n_stat(0.9)
+    gc = round(gc_count / bases_seen, 4) if bases_seen else 0.0
+    contigs_ge_1kb = sum(1 for length in lengths if length >= 1000)
+    return {
+        "contigs": len(lengths),
+        "total_bp": total,
+        "n50": n50,
+        "n90": n90,
+        "largest": lengths[0] if lengths else 0,
+        "gc": gc,
+        "contigs_ge_1kb": contigs_ge_1kb,
+    }
+
+
+def fasta_length(path: Union[str, Path]) -> int:
+    """Total base count of a FASTA file (sequence lines only, headers excluded)."""
+    total = 0
+    with open(path) as handle:
+        for line in handle:
+            if not line.startswith(">"):
+                total += len(line.strip())
+    return total
+
+
+def _average_read_length(path: Union[str, Path], sample_size: int = 1000) -> float:
+    """Average sequence length over the first ``sample_size`` records of a FASTQ file.
+
+    Gzip aware; returns 0.0 for a file with no records.
+    """
+    opener = gzip.open if Path(path).suffix == ".gz" else open
+    total = 0
+    count = 0
+    with opener(path, "rt") as handle:
+        for i, line in enumerate(handle):
+            if i % 4 == 1:
+                total += len(line.strip())
+                count += 1
+                if count >= sample_size:
+                    break
+    return total / count if count else 0.0
+
+
+def assembly_coverage(
+    contigs: Union[str, Path],
+    reads: Sequence[Union[str, Path]],
+    preset: str,
+    threads: int,
+    work_dir: Union[str, Path],
+    mapped_reads: Optional[int],
+) -> Dict[str, Any]:
+    """Estimate assembly coverage by mapping the extracted reads back onto its contigs.
+
+    Aligns ``reads`` against ``contigs`` with minimap2, filters unmapped/secondary/
+    supplementary alignments the same way extraction does, and counts what remains.
+    ``mapped_reads`` is the sample's mapped-read count from extraction, used to compute
+    what fraction of those reads the assembly recruits; pass ``None`` (or 0) when that
+    count is not known, and ``mapping_rate`` comes back ``None``.
+
+    The SAM and BAM written under ``work_dir`` are removed before returning, whether or
+    not the caller ever reads them.
+
+    Returns:
+        ``{"reads_mapped": int, "mapping_rate": Optional[float], "mean_depth_estimate": float}``
+    """
+    work_root = Path(work_dir)
+    sam_path = work_root / "coverage.sam"
+    bam_path = work_root / "coverage.bam"
+    read_args = [str(r) for r in reads]
+    try:
+        SecureSubprocess.run_secure(
+            "minimap2",
+            ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(contigs), *read_args],
+        )
+        SecureSubprocess.run_secure(
+            "samtools",
+            ["view", "-b", "-F", FILTER_FLAGS, "-@", str(threads), "-o", str(bam_path), str(sam_path)],
+        )
+        reads_mapped = _count_records(bam_path)
+    finally:
+        sam_path.unlink(missing_ok=True)
+        bam_path.unlink(missing_ok=True)
+
+    mapping_rate = reads_mapped / mapped_reads if mapped_reads else None
+    avg_read_len = _average_read_length(reads[0]) if reads else 0.0
+    total_bp = summarise_contigs(contigs)["total_bp"]
+    mean_depth_estimate = (reads_mapped * avg_read_len / total_bp) if total_bp else 0.0
+
+    return {
+        "reads_mapped": reads_mapped,
+        "mapping_rate": mapping_rate,
+        "mean_depth_estimate": mean_depth_estimate,
+    }
 
 
 def megahit_version() -> str:

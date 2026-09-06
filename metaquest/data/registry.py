@@ -554,6 +554,7 @@ def record_extraction(
     mapped_reads: int,
     unequal_mates: bool,
     params: Dict[str, Any],
+    mapped_total: Optional[int] = None,
 ) -> None:
     root = project_root(registry)
     extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
@@ -568,6 +569,7 @@ def record_extraction(
         "min_mapq": params.get("min_mapq"),
         "index": params.get("index"),
         "mapped_reads": int(mapped_reads),
+        "mapped_total": int(mapped_total) if mapped_total is not None else None,
         "unequal_mates": bool(unequal_mates),
         "files": [_project_relative(p, root) for p in files],
         "assembly": previous.get("assembly"),
@@ -575,29 +577,45 @@ def record_extraction(
     registry.genomes.setdefault(genome_id, {})
 
 
+# The four assembly stats every assembly block is guaranteed to carry, forced to int so a
+# caller can always rely on their type regardless of what ``stats`` provides.
+_REQUIRED_ASSEMBLY_STATS = ("contigs", "total_bp", "n50", "largest")
+
+
 def record_assembly(
     registry: Registry,
     accession: str,
     genome_id: str,
     assembly_dir: Union[str, Path],
-    stats: Dict[str, int],
+    stats: Dict[str, Any],
     tool_version: str,
     params: Dict[str, Any],
 ) -> None:
+    """Record one assembly's stats, provenance and parameters.
+
+    ``stats`` is recorded in full (contig-level metrics such as N90, GC content and
+    contigs_ge_1kb, and read-mapping metrics such as reads_mapped, mapping_rate,
+    mean_depth_estimate and genome_fraction_estimate, when the caller computed them), so a
+    caller need not enumerate every field this function knows about. The four keys every
+    caller has always been able to rely on (``contigs``, ``total_bp``, ``n50``, ``largest``)
+    are still guaranteed present as ints, defaulting to 0 when ``stats`` omits them.
+    """
     extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
     entry = extractions.setdefault(genome_id, {"files": [], "mapped_reads": None})
     entry.pop("inferred", None)
-    entry["assembly"] = {
+    assembly: Dict[str, Any] = {
         "date": _now(),
         "dir": _project_relative(assembly_dir, project_root(registry)),
-        "contigs": int(stats.get("contigs", 0)),
-        "total_bp": int(stats.get("total_bp", 0)),
-        "n50": int(stats.get("n50", 0)),
-        "largest": int(stats.get("largest", 0)),
         "tool": "megahit",
         "version": tool_version,
         "params": dict(params),
     }
+    for key, value in stats.items():
+        if key not in _REQUIRED_ASSEMBLY_STATS:
+            assembly[key] = value
+    for key in _REQUIRED_ASSEMBLY_STATS:
+        assembly[key] = int(stats.get(key, 0))
+    entry["assembly"] = assembly
 
 
 def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:

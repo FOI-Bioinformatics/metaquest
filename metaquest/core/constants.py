@@ -107,6 +107,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "--k-step",
             "--no-mercy",
             "--bubble-level",
+            "--presets",
             "--version",
         },
         "description": "Illumina assembly tool",

@@ -70,6 +70,8 @@ def _fake_tools(state):
             target = args[-1]
             if str(target).endswith(".sam"):
                 result.stdout = f"{state.get('mapped_total', state.get('mapped', 10))}\n"
+            elif Path(target).name == "coverage.bam":
+                result.stdout = f"{state.get('coverage_mapped', 5)}\n"
             else:
                 result.stdout = f"{state.get('mapped', 10)}\n"
         if executable == "samtools" and args[0] == "view" and "-b" in args:
@@ -95,6 +97,7 @@ def _fake_tools(state):
                 out_dir = Path(args[args.index("-o") + 1])
                 out_dir.mkdir(parents=True, exist_ok=True)
                 (out_dir / "final.contigs.fa").write_text(">c1 len=100\nACGT\n>c2 len=50\nACGT\n")
+                (out_dir / "intermediate_contigs").mkdir(parents=True, exist_ok=True)
         if executable == "prefetch":
             accession = _positional(args)
             cache_dir = Path(args[args.index("-O") + 1])

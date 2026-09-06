@@ -12,7 +12,9 @@ from metaquest.data.read_extraction import (
     ExtractionResult,
     _sample_reads,
     assemble_extracted_reads,
+    assembly_coverage,
     extract_target_reads,
+    fasta_length,
     megahit_version,
     resolve_assembly_threads,
     resolve_index_path,
@@ -107,6 +109,22 @@ class ExtractTargetReadsCommand(BaseCommand):
         )
         parser.add_argument("--min-contig-len", type=int, default=None, help="megahit minimum contig length")
         parser.add_argument(
+            "--assembly-preset",
+            choices=["default", "meta-sensitive", "meta-large"],
+            default="meta-sensitive",
+            help="megahit --presets value ('default' omits the flag)",
+        )
+        parser.add_argument(
+            "--keep-intermediate",
+            action="store_true",
+            help="Keep megahit's intermediate_contigs/ folder instead of removing it after a successful assembly",
+        )
+        parser.add_argument(
+            "--no-coverage",
+            action="store_true",
+            help="Skip mapping the extracted reads back onto the assembled contigs for coverage stats",
+        )
+        parser.add_argument(
             "--dry-run", action="store_true", help="List the qualifying samples without running any tool"
         )
         parser.add_argument(
@@ -197,6 +215,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                     "min_mapq": args.min_mapq,
                     "index": str(resolve_index_path(args.genome_fasta, args.preset, index_dir)),
                 },
+                mapped_total=outcome.mapped_total,
             )
             record_usage_safe(
                 store, reg, accession, args.genome_id, "extracted", detail=f"{outcome.mapped_records} mapped reads"
@@ -253,7 +272,11 @@ class ExtractTargetReadsCommand(BaseCommand):
             self.logger.error("No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id)
 
     def _assemble(
-        self, args: argparse.Namespace, with_reads: Dict[str, List[Path]], store: Optional[StorePaths] = None
+        self,
+        args: argparse.Namespace,
+        with_reads: Dict[str, List[Path]],
+        results: Dict[str, ExtractionResult],
+        store: Optional[StorePaths] = None,
     ) -> None:
         """Assemble every sample that has mapped reads, recording each assembly as it lands."""
         asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
@@ -263,16 +286,35 @@ class ExtractTargetReadsCommand(BaseCommand):
                 "override with --assembly-threads"
             )
         version = megahit_version()
+        genome_length = fasta_length(args.genome_fasta)
         for accession, reads in with_reads.items():
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
             _, ran = assemble_extracted_reads(
-                reads, out_dir, threads=asm_threads, min_contig_len=args.min_contig_len, force=args.force
+                reads,
+                out_dir,
+                threads=asm_threads,
+                min_contig_len=args.min_contig_len,
+                force=args.force,
+                preset=args.assembly_preset,
+                keep_intermediate=args.keep_intermediate,
             )
             if not ran and self._has_assembly_record(args, accession):
                 # megahit did not run, so the recorded version and parameters still describe
                 # the assembly on disk; leave them alone.
                 continue
-            stats = summarise_contigs(out_dir / "final.contigs.fa")
+            contigs_path = out_dir / "final.contigs.fa"
+            stats: Dict[str, Any] = dict(summarise_contigs(contigs_path))
+            stats["genome_fraction_estimate"] = (stats["total_bp"] / genome_length) if genome_length else None
+            if not args.no_coverage:
+                coverage = assembly_coverage(
+                    contigs_path,
+                    reads,
+                    args.preset,
+                    asm_threads,
+                    out_dir,
+                    mapped_reads=results[accession].mapped_records,
+                )
+                stats.update(coverage)
             with registry_transaction(args.registry) as reg:
                 record_assembly(
                     reg,
@@ -281,7 +323,11 @@ class ExtractTargetReadsCommand(BaseCommand):
                     out_dir,
                     stats,
                     version,
-                    {"threads": asm_threads, "min_contig_len": args.min_contig_len},
+                    {
+                        "threads": asm_threads,
+                        "min_contig_len": args.min_contig_len,
+                        "preset": args.assembly_preset,
+                    },
                 )
                 record_usage_safe(
                     store, reg, accession, args.genome_id, "assembled", detail=f"{stats.get('contigs', 0)} contigs"
@@ -338,7 +384,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 return 1
 
             if args.assemble:
-                self._assemble(args, with_reads, store)
+                self._assemble(args, with_reads, results, store)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error extracting target reads: %s", e)
