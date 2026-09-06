@@ -1,4 +1,8 @@
-"""Shared test double for minimap2/samtools, used by read-extraction tests."""
+"""Shared test double for minimap2/samtools/megahit/prefetch/fasterq-dump/pigz.
+
+Used by read-extraction tests and by the download tests for the prefetch/split-3/
+compression sequence in ``download_accession``.
+"""
 
 import gzip
 from pathlib import Path
@@ -6,12 +10,42 @@ from unittest.mock import MagicMock
 
 UNEQUAL_WARNING = "[W::mm_bseq_read_frag2] query files have different number of records; extra records skipped."
 
+# Flags (across the tools this fake stands in for) whose next token is a value, not
+# another flag or the positional argument.
+_VALUE_FLAGS = frozenset({"-O", "--temp", "--threads", "--max-size", "-p"})
+
+
+def _positional(args):
+    """Return the first token in ``args`` that is neither a flag nor a flag's value.
+
+    Works regardless of where the positional argument (an SRA accession, or a path to
+    a ``.sra``/FASTQ file) sits in the list, since real callers order it differently
+    for the prefetch and the direct fasterq-dump command shapes.
+    """
+    skip_next = False
+    for token in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in _VALUE_FLAGS:
+            skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
 
 def _fake_tools(state):
-    """Stand in for minimap2/samtools: record calls and create the FASTQ files samtools would write.
+    """Stand in for minimap2/samtools/megahit/prefetch/fasterq-dump/pigz.
 
-    state keys: mapped (int, default 10), nonempty (flags whose output file gets a read,
-    default ("-1", "-2")), unequal (bool, emit minimap2's mate-count warning).
+    Records every call and creates the files each real tool would write.
+
+    state keys: mapped (int, default 10), nonempty (flags whose output file gets a
+    read, default ("-1", "-2")), unequal (bool, emit minimap2's mate-count warning),
+    single (bool, fasterq-dump writes a single ``<acc>.fastq`` instead of a
+    ``<acc>_1.fastq``/``<acc>_2.fastq`` pair), reads (int, records per FASTQ file
+    fasterq-dump writes, default 4).
     """
 
     def run(executable, args, **kwargs):
@@ -35,6 +69,29 @@ def _fake_tools(state):
                 out_dir = Path(args[args.index("-o") + 1])
                 out_dir.mkdir(parents=True, exist_ok=True)
                 (out_dir / "final.contigs.fa").write_text(">c1 len=100\nACGT\n>c2 len=50\nACGT\n")
+        if executable == "prefetch":
+            accession = _positional(args)
+            cache_dir = Path(args[args.index("-O") + 1])
+            acc_dir = cache_dir / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}.sra").write_bytes(b"")
+        if executable == "fasterq-dump":
+            positional = _positional(args)
+            accession = Path(positional).stem if positional.endswith(".sra") else positional
+            out_dir = Path(args[args.index("-O") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            record = "@r\nACGT\n+\nIIII\n" * state.get("reads", 4)
+            if state.get("single"):
+                (out_dir / f"{accession}.fastq").write_text(record)
+            else:
+                (out_dir / f"{accession}_1.fastq").write_text(record)
+                (out_dir / f"{accession}_2.fastq").write_text(record)
+        if executable == "pigz":
+            path = Path(_positional(args))
+            target = path.with_suffix(path.suffix + ".gz")
+            with open(path, "rb") as src, gzip.open(target, "wb") as dst:
+                dst.write(src.read())
+            path.unlink()
         return result
 
     return run

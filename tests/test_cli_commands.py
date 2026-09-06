@@ -421,6 +421,34 @@ class TestDownloadSraCommand:
         args = parser.parse_args(["--accessions-file", "a.txt", "--redownload-truncated"])
         assert args.redownload_truncated is True
 
+    def test_configure_parser_prefetch_and_compress_flags(self):
+        """--sra-cache, --keep-sra, --no-prefetch, --no-compress default sensibly and parse."""
+        command = DownloadSraCommand()
+        parser = argparse.ArgumentParser()
+        command.configure_parser(parser)
+
+        args = parser.parse_args(["--accessions-file", "a.txt"])
+        assert args.sra_cache is None
+        assert args.use_prefetch is True
+        assert args.keep_sra is False
+        assert args.compress is True
+
+        args = parser.parse_args(
+            [
+                "--accessions-file",
+                "a.txt",
+                "--sra-cache",
+                "/tmp/cache",
+                "--keep-sra",
+                "--no-prefetch",
+                "--no-compress",
+            ]
+        )
+        assert args.sra_cache == "/tmp/cache"
+        assert args.keep_sra is True
+        assert args.use_prefetch is False
+        assert args.compress is False
+
     def test_configure_parser_with_options(self):
         """Test parser with optional arguments."""
         command = DownloadSraCommand()
@@ -500,7 +528,52 @@ class TestDownloadSraCommand:
             "expected_spots": {},
             "redownload_truncated": False,
             "truncated_accessions": set(),
+            "sra_cache": None,
+            "use_prefetch": True,
+            "keep_sra": False,
+            "compress": True,
         }
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_forwards_prefetch_and_compress_flags(self, mock_command, _which, tmp_path):
+        """--sra-cache, --keep-sra, --no-prefetch and --no-compress reach download_sra unchanged."""
+        mock_command.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        command = DownloadSraCommand()
+
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            sra_cache="/tmp/custom-cache",
+            use_prefetch=False,
+            keep_sra=True,
+            compress=False,
+        )
+
+        result = command.execute(args)
+        assert result == 0
+        call_kwargs = mock_command.call_args.kwargs
+        assert call_kwargs["sra_cache"] == "/tmp/custom-cache"
+        assert call_kwargs["use_prefetch"] is False
+        assert call_kwargs["keep_sra"] is True
+        assert call_kwargs["compress"] is False
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")

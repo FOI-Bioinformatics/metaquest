@@ -356,7 +356,38 @@ def _check_existing_download(output_path, force):
     return False
 
 
-def _handle_download_output(temp_path, output_path, expected_spots: Optional[int] = None):
+def compress_fastq(path: Path, threads: int) -> Path:
+    """Gzip-compress ``path`` in place, returning the path to the compressed file.
+
+    Uses ``pigz`` (parallel gzip) when it is on PATH, since it is substantially faster
+    than single-threaded gzip on the multi-core machines this tool typically runs on;
+    otherwise falls back to Python's ``gzip`` module, streaming the file through in
+    1 MiB blocks so a large FASTQ file is never fully loaded into memory. Either way
+    the uncompressed source is removed and only the ``.gz`` file remains.
+    """
+    if shutil.which("pigz"):
+        SecureSubprocess.run_secure("pigz", ["-p", str(threads), "-f", str(path)])
+        return path.with_suffix(path.suffix + ".gz")
+
+    target = path.with_suffix(path.suffix + ".gz")
+    block_size = 1024 * 1024
+    with open(path, "rb") as source, gzip.open(target, "wb", compresslevel=6) as dest:
+        while True:
+            block = source.read(block_size)
+            if not block:
+                break
+            dest.write(block)
+    path.unlink()
+    return target
+
+
+def _handle_download_output(
+    temp_path,
+    output_path,
+    expected_spots: Optional[int] = None,
+    compress: bool = False,
+    num_threads: int = 4,
+):
     """
     Move downloaded files from temp path to output path, then verify completeness.
 
@@ -364,6 +395,9 @@ def _handle_download_output(temp_path, output_path, expected_spots: Optional[int
         temp_path: Path to temporary folder
         output_path: Path to output directory
         expected_spots: NCBI's recorded total_spots for this accession, if known
+        compress: If True, gzip each downloaded FASTQ file (via ``compress_fastq``)
+            after the completeness verdict has been computed on the plain files
+        num_threads: Thread count passed to ``compress_fastq`` (for pigz's ``-p``)
 
     Returns:
         Tuple of (success, message); the message carries the completeness verdict
@@ -382,8 +416,11 @@ def _handle_download_output(temp_path, output_path, expected_spots: Optional[int
     # First ensure the output directory exists
     output_path.mkdir(parents=True, exist_ok=True)
 
+    moved = []
     for file in found:
-        shutil.move(str(file), str(output_path / file.name))
+        dest = output_path / file.name
+        shutil.move(str(file), str(dest))
+        moved.append(dest)
 
     # Remove the temporary directory
     try:
@@ -393,7 +430,17 @@ def _handle_download_output(temp_path, output_path, expected_spots: Optional[int
 
     logger.info(f"Successfully downloaded: {len(found)} files")
 
+    # Compute the verdict on the plain files first: counting reads in an uncompressed
+    # file is cheaper, and the verdict message format must stay stable either way.
     verdict = verify_download(output_path.name, output_path, expected_spots=expected_spots)
+
+    if compress:
+        for file in moved:
+            try:
+                compress_fastq(file, num_threads)
+            except Exception as e:
+                logger.warning(f"Could not compress {file}: {e}")
+
     if verdict["verdict"] == "unverified":
         return True, f"Downloaded {len(found)} files, unverified"
 
@@ -415,9 +462,13 @@ def download_accession(
     temp_folder: Optional[Union[str, Path]] = None,
     expected_spots: Optional[int] = None,
     redownload_truncated: bool = False,
+    sra_cache: Optional[Union[str, Path]] = None,
+    use_prefetch: bool = True,
+    keep_sra: bool = False,
+    compress: bool = True,
 ) -> Tuple[bool, str]:
     """
-    Download a single SRA accession using fasterq-dump.
+    Download a single SRA accession using prefetch + fasterq-dump --split-3.
 
     Args:
         accession: SRA accession to download
@@ -430,12 +481,22 @@ def download_accession(
         redownload_truncated: If True, treat an existing on-disk copy the same as ``force``
             (i.e. wipe it and redownload) rather than skipping it as already present; used
             for an accession whose registry verdict was "truncated"
+        sra_cache: Directory prefetch downloads the ``.sra`` archive into; defaults to
+            ``<output_folder>/.sra-cache``
+        use_prefetch: If True and ``prefetch`` is on PATH, download the ``.sra`` archive
+            first and run fasterq-dump against it; otherwise fasterq-dump is run directly
+            against the accession, as before this became configurable
+        keep_sra: If True, keep the downloaded ``.sra`` archive after a successful,
+            verified download rather than deleting it
+        compress: If True, gzip each downloaded FASTQ file once the completeness verdict
+            has been computed
 
     Returns:
         Tuple of (success, message)
     """
     output_path = Path(output_folder) / accession
     SecureSubprocess.add_allowed_root(Path(output_folder))
+    cache_path = Path(sra_cache) if sra_cache else Path(output_folder) / ".sra-cache"
 
     # Check if already downloaded
     if _check_existing_download(output_path, force or redownload_truncated):
@@ -454,25 +515,57 @@ def download_accession(
         # Handle temp folder for fasterq-dump
         temp_folder_path = _prepare_temp_folder(temp_folder)
 
-        # Build fasterq-dump arguments
-        args = [
-            "--threads",
-            str(num_threads),
-            "--progress",
-            accession,
-            "-O",
-            str(temp_path),
-        ]
+        using_prefetch = use_prefetch and shutil.which("prefetch") is not None
 
-        # Add temp folder if available
-        if temp_folder_path:
-            args.extend(["--temp", str(temp_folder_path.absolute())])
+        if using_prefetch:
+            SecureSubprocess.add_allowed_root(cache_path)
+            SecureSubprocess.run_secure(
+                "prefetch",
+                ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
+            )
+
+            sra_file = cache_path / accession / f"{accession}.sra"
+            args = [
+                "--split-3",
+                "--skip-technical",
+                "--threads",
+                str(num_threads),
+                "-O",
+                str(temp_path),
+            ]
+            if temp_folder_path:
+                args.extend(["--temp", str(temp_folder_path.absolute())])
+            args.append(str(sra_file))
+        else:
+            # Direct call against the accession, without going through prefetch's
+            # on-disk .sra archive: used when use_prefetch is False, or prefetch is
+            # not installed.
+            args = [
+                "--threads",
+                str(num_threads),
+                "--progress",
+                accession,
+                "-O",
+                str(temp_path),
+            ]
+            if temp_folder_path:
+                args.extend(["--temp", str(temp_folder_path.absolute())])
+            args.extend(["--split-3", "--skip-technical"])
 
         # Run fasterq-dump command securely
         SecureSubprocess.run_secure("fasterq-dump", args)
 
         # Handle download output
-        return _handle_download_output(temp_path, output_path, expected_spots=expected_spots)
+        success, message = _handle_download_output(
+            temp_path, output_path, expected_spots=expected_spots, compress=compress, num_threads=num_threads
+        )
+
+        if success and using_prefetch and not keep_sra:
+            verdict = parse_verdict_message(message)
+            if verdict and verdict.get("verdict") in ("complete", "unverified"):
+                _safe_rmtree(cache_path / accession)
+
+        return success, message
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
@@ -595,6 +688,10 @@ def _retry_failed_downloads(
     on_result: Optional[Callable[[str, bool, str], None]] = None,
     expected_spots: Optional[Dict[str, int]] = None,
     redownload_truncated: bool = False,
+    sra_cache: Optional[Union[str, Path]] = None,
+    use_prefetch: bool = True,
+    keep_sra: bool = False,
+    compress: bool = True,
 ):
     """
     Retry failed downloads.
@@ -609,6 +706,10 @@ def _retry_failed_downloads(
         on_result: Optional callback invoked with (accession, success, message) after each retry
         expected_spots: Per-accession NCBI total_spots, used to verify completeness
         redownload_truncated: Forwarded to ``download_accession`` for each retry
+        sra_cache: Forwarded to ``download_accession`` for each retry
+        use_prefetch: Forwarded to ``download_accession`` for each retry
+        keep_sra: Forwarded to ``download_accession`` for each retry
+        compress: Forwarded to ``download_accession`` for each retry
 
     Returns:
         Tuple of (retried_successful, failed_accessions, abort_reason). ``abort_reason`` is
@@ -660,6 +761,10 @@ def _retry_failed_downloads(
                     temp_folder=temp_folder,
                     expected_spots=expected_spots.get(accession),
                     redownload_truncated=redownload_truncated,
+                    sra_cache=sra_cache,
+                    use_prefetch=use_prefetch,
+                    keep_sra=keep_sra,
+                    compress=compress,
                 )
             except Exception as e:
                 failed_accessions.append(accession)
@@ -735,6 +840,10 @@ def _execute_parallel_downloads(
     on_result: Optional[Callable[[str, bool, str], None]] = None,
     expected_spots: Optional[Dict[str, int]] = None,
     redownload_truncated: bool = False,
+    sra_cache: Optional[Union[str, Path]] = None,
+    use_prefetch: bool = True,
+    keep_sra: bool = False,
+    compress: bool = True,
 ):
     """Download accessions concurrently and tally results. Returns (successful, failed)."""
     expected_spots = expected_spots or {}
@@ -750,6 +859,10 @@ def _execute_parallel_downloads(
                 temp_folder,
                 expected_spots=expected_spots.get(acc),
                 redownload_truncated=redownload_truncated,
+                sra_cache=sra_cache,
+                use_prefetch=use_prefetch,
+                keep_sra=keep_sra,
+                compress=compress,
             ): acc
             for acc in accessions
         }
@@ -796,6 +909,10 @@ def _download_with_retries(
     on_result: Optional[Callable[[str, bool, str], None]] = None,
     expected_spots: Optional[Dict[str, int]] = None,
     redownload_truncated: bool = False,
+    sra_cache: Optional[Union[str, Path]] = None,
+    use_prefetch: bool = True,
+    keep_sra: bool = False,
+    compress: bool = True,
 ) -> Tuple[int, int, List[str], Dict[str, Any], Optional[str]]:
     """Run the parallel downloads and optional retry pass.
 
@@ -818,6 +935,10 @@ def _download_with_retries(
         on_result,
         expected_spots,
         redownload_truncated,
+        sra_cache,
+        use_prefetch,
+        keep_sra,
+        compress,
     )
 
     if max_retries > 0 and failed_accessions:
@@ -831,6 +952,10 @@ def _download_with_retries(
             on_result,
             expected_spots,
             redownload_truncated,
+            sra_cache,
+            use_prefetch,
+            keep_sra,
+            compress,
         )
         successful_count += retried_successful
         failed_count -= retried_successful
@@ -856,6 +981,10 @@ def download_sra(
     expected_spots: Optional[Dict[str, int]] = None,
     redownload_truncated: bool = False,
     truncated_accessions: Optional[Set[str]] = None,
+    sra_cache: Optional[Union[str, Path]] = None,
+    use_prefetch: bool = True,
+    keep_sra: bool = False,
+    compress: bool = True,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -883,6 +1012,14 @@ def download_sra(
             reused
         truncated_accessions: Accessions whose registry verdict is "truncated"; excluded from
             ``already_downloaded`` so they are redownloaded even though files exist on disk
+        sra_cache: Forwarded to every ``download_accession`` call; directory prefetch downloads
+            the ``.sra`` archive into (defaults to ``<fastq_folder>/.sra-cache`` per accession)
+        use_prefetch: Forwarded to every ``download_accession`` call; download via prefetch then
+            fasterq-dump when True and prefetch is on PATH, else fasterq-dump directly
+        keep_sra: Forwarded to every ``download_accession`` call; keep the ``.sra`` archive
+            after a successful, verified download instead of deleting it
+        compress: Forwarded to every ``download_accession`` call; gzip each downloaded FASTQ
+            file once its completeness verdict has been computed
 
     Returns:
         Dictionary with download statistics
@@ -953,6 +1090,10 @@ def download_sra(
             on_result,
             expected_spots,
             redownload_truncated,
+            sra_cache,
+            use_prefetch,
+            keep_sra,
+            compress,
         )
 
         # Log final summary

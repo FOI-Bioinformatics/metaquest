@@ -113,6 +113,36 @@ class DownloadSraCommand(BaseCommand):
             action="store_true",
             help="Redownload accessions whose registry verdict is 'truncated' rather than skipping them",
         )
+        parser.add_argument(
+            "--sra-cache",
+            default=None,
+            help="Directory for prefetch's downloaded .sra archives (default: <fastq-folder>/.sra-cache)",
+        )
+        parser.add_argument(
+            "--no-prefetch",
+            dest="use_prefetch",
+            action="store_false",
+            default=True,
+            help="Run fasterq-dump directly against the accession instead of prefetch then fasterq-dump",
+        )
+        parser.add_argument(
+            "--keep-sra",
+            action="store_true",
+            help="Keep the downloaded .sra archive after a successful, verified download",
+        )
+        parser.add_argument(
+            "--compress",
+            dest="compress",
+            action="store_true",
+            default=True,
+            help="Gzip each downloaded FASTQ file (default: on)",
+        )
+        parser.add_argument(
+            "--no-compress",
+            dest="compress",
+            action="store_false",
+            help="Leave downloaded FASTQ files uncompressed",
+        )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
         """Log the summary for a dry run."""
@@ -214,6 +244,10 @@ class DownloadSraCommand(BaseCommand):
 
             verify_downloads = getattr(args, "verify_downloads", True)
             redownload_truncated = getattr(args, "redownload_truncated", False)
+            sra_cache = getattr(args, "sra_cache", None)
+            use_prefetch = getattr(args, "use_prefetch", True)
+            keep_sra = getattr(args, "keep_sra", False)
+            compress = getattr(args, "compress", True)
             max_workers = self._resolve_max_workers(args)
 
             excluded: set = set()
@@ -269,6 +303,10 @@ class DownloadSraCommand(BaseCommand):
                 expected_spots=expected_spots if verify_downloads else None,
                 redownload_truncated=redownload_truncated,
                 truncated_accessions=truncated,
+                sra_cache=sra_cache,
+                use_prefetch=use_prefetch,
+                keep_sra=keep_sra,
+                compress=compress,
             )
 
             if args.dry_run:

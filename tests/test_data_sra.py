@@ -30,7 +30,9 @@ from metaquest.data.sra import (
     classify_download_error,
     default_max_workers,
     is_transient_folder,
+    compress_fastq,
 )
+from helpers_extraction import _fake_tools
 
 
 class TestReadBlacklistFiles:
@@ -620,7 +622,11 @@ class TestDownloadAccession:
         assert "8" in args
 
     def test_download_accession_command_passes_validation(self, tmp_path, monkeypatch):
-        """The command download_accession builds must survive SecureSubprocess validation unmocked."""
+        """The command download_accession builds must survive SecureSubprocess validation unmocked.
+
+        No prefetch on PATH in this test environment, so this exercises the direct
+        fasterq-dump fallback with --split-3/--skip-technical appended.
+        """
         monkeypatch.chdir(tmp_path)
         with patch("metaquest.utils.security.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
@@ -633,6 +639,8 @@ class TestDownloadAccession:
         assert cmd[0] == "fasterq-dump"
         assert cmd[1:4] == ["--threads", "4", "--progress"]
         assert cmd[4] == "SRR2517620"
+        assert "--split-3" in cmd
+        assert "--skip-technical" in cmd
 
     def test_download_accession_registers_output_and_temp_roots(self, tmp_path, monkeypatch):
         from metaquest.utils.security import SecureSubprocess
@@ -730,6 +738,166 @@ class TestDownloadAccession:
         temp_path = output_folder / "SRR123_temp"
         assert temp_path.exists()
         assert message.startswith("unknown:")
+
+    def test_download_accession_prefetch_then_fasterq_dump_sequence(self, tmp_path):
+        """With prefetch on PATH: prefetch runs first, then fasterq-dump --split-3 on the .sra file."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False)
+
+        assert success is True, message
+        executables = [c[0] for c in state["calls"]]
+        assert executables == ["prefetch", "fasterq-dump"]
+
+        prefetch_args = state["calls"][0][1]
+        assert prefetch_args[:2] == ["-O", str(output_folder / ".sra-cache")]
+        assert "--max-size" in prefetch_args and "100G" in prefetch_args
+        assert "--progress" in prefetch_args
+        assert prefetch_args[-1] == "SRR123"
+
+        dump_args = state["calls"][1][1]
+        assert dump_args[0] == "--split-3"
+        assert dump_args[1] == "--skip-technical"
+        assert dump_args[-1] == str(output_folder / ".sra-cache" / "SRR123" / "SRR123.sra")
+
+        assert accession_has_fastq(output_folder / "SRR123")
+        # The .sra archive is removed after a successful, verified download.
+        assert not (output_folder / ".sra-cache" / "SRR123").exists()
+
+    def test_download_accession_keep_sra_preserves_cache(self, tmp_path):
+        """keep_sra=True leaves the downloaded .sra archive in place after success."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False, keep_sra=True)
+
+        assert success is True, message
+        assert (output_folder / ".sra-cache" / "SRR123" / "SRR123.sra").exists()
+
+    def test_download_accession_falls_back_without_prefetch_binary(self, tmp_path):
+        """shutil.which('prefetch') is None: fall back to the direct fasterq-dump call."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False)
+
+        assert success is True, message
+        executables = [c[0] for c in state["calls"]]
+        assert executables == ["fasterq-dump"]
+
+        dump_args = state["calls"][0][1]
+        assert "SRR123" in dump_args
+        assert "--split-3" in dump_args
+        assert "--skip-technical" in dump_args
+        # No cache directory was ever created.
+        assert not (output_folder / ".sra-cache").exists()
+        assert accession_has_fastq(output_folder / "SRR123")
+
+    def test_download_accession_use_prefetch_false_skips_prefetch(self, tmp_path):
+        """use_prefetch=False falls back to the direct call even when prefetch is on PATH."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False, use_prefetch=False)
+
+        assert success is True, message
+        executables = [c[0] for c in state["calls"]]
+        assert executables == ["fasterq-dump"]
+
+    def test_download_accession_single_end_output(self, tmp_path):
+        """fasterq-dump --split-3 on a single-end run writes <acc>.fastq; that must be recognized."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4, "single": True}
+
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False)
+
+        assert success is True, message
+        assert (output_folder / "SRR123" / "SRR123.fastq").exists()
+        assert accession_has_fastq(output_folder / "SRR123")
+
+    def test_download_accession_compresses_with_python_gzip_fallback(self, tmp_path):
+        """No pigz on PATH: compression falls back to Python gzip; read count survives."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=True)
+
+        assert success is True, message
+        acc_dir = output_folder / "SRR123"
+        r1 = acc_dir / "SRR123_1.fastq.gz"
+        r2 = acc_dir / "SRR123_2.fastq.gz"
+        assert r1.exists() and r2.exists()
+        assert not (acc_dir / "SRR123_1.fastq").exists()
+        assert count_fastq_reads(r1) == 4
+        assert accession_has_fastq(acc_dir)
+
+    def test_download_accession_compresses_with_pigz_when_available(self, tmp_path):
+        """pigz on PATH: compress_fastq shells out to pigz -p N -f <file> instead of Python gzip."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4}
+
+        def which(tool):
+            return None if tool == "prefetch" else f"/usr/bin/{tool}"
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=which):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=True, num_threads=4)
+
+        assert success is True, message
+        pigz_calls = [c for c in state["calls"] if c[0] == "pigz"]
+        assert len(pigz_calls) == 2
+        for _, args in pigz_calls:
+            assert args[0] == "-p"
+            assert args[1] == "4"
+            assert "-f" in args
+
+        acc_dir = output_folder / "SRR123"
+        assert (acc_dir / "SRR123_1.fastq.gz").exists()
+        assert (acc_dir / "SRR123_2.fastq.gz").exists()
+
+
+class TestCompressFastq:
+    """Test the module-level compress_fastq helper directly."""
+
+    def test_compress_fastq_python_fallback(self, tmp_path):
+        path = tmp_path / "SRR1_1.fastq"
+        path.write_text("@r\nACGT\n+\nIIII\n" * 3)
+
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            result = compress_fastq(path, threads=4)
+
+        assert result == tmp_path / "SRR1_1.fastq.gz"
+        assert result.exists()
+        assert not path.exists()
+        assert count_fastq_reads(result) == 3
+
+    def test_compress_fastq_uses_pigz_when_available(self, tmp_path):
+        path = tmp_path / "SRR1_1.fastq"
+        path.write_text("@r\nACGT\n+\nIIII\n")
+        state = {}
+
+        with patch("metaquest.data.sra.shutil.which", return_value="/usr/bin/pigz"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)) as mock_run:
+                result = compress_fastq(path, threads=8)
+
+        assert result == tmp_path / "SRR1_1.fastq.gz"
+        mock_run.assert_called_once()
+        executable, args = mock_run.call_args[0][0], mock_run.call_args[0][1]
+        assert executable == "pigz"
+        assert args == ["-p", "8", "-f", str(path)]
 
 
 class TestClassifyDownloadError:
@@ -1016,6 +1184,10 @@ class TestRetryFailedDownloads:
             temp_folder=None,
             expected_spots=None,
             redownload_truncated=False,
+            sra_cache=None,
+            use_prefetch=True,
+            keep_sra=False,
+            compress=True,
         )
         assert updated_failed == ["SRR404"]
         assert retried_successful == 1
