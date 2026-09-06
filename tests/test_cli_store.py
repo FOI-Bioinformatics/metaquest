@@ -6,18 +6,27 @@ tests/test_store_resolve.py.
 """
 
 import argparse
+import gzip
 import json
 import subprocess
 from unittest.mock import patch
 
 import pytest
 
-from metaquest.cli.commands.store import StoreInitCommand, StoreReindexCommand, StoreStatusCommand
+from metaquest.cli.commands.store import (
+    StoreAdoptCommand,
+    StoreInitCommand,
+    StoreLinkCommand,
+    StoreReindexCommand,
+    StoreStatusCommand,
+    StoreUnlinkCommand,
+    StoreVerifyCommand,
+)
 from metaquest.core.constants import STORE_ENV
 from metaquest.data.registry import load_registry
 from metaquest.store.catalog import Catalog, catalog_write
-from metaquest.store.layout import init_store, read_marker, sidecar_path, store_paths
-from metaquest.store.sidecar import Sidecar, write_sidecar
+from metaquest.store.layout import init_store, read_marker, sidecar_path, sra_dir, store_paths
+from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
 from metaquest.utils.security import SecureSubprocess
 
 
@@ -55,6 +64,40 @@ def _status_args(**overrides):
 
 def _reindex_args(**overrides):
     base = dict(data_root=None, registry=None)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _adopt_args(**overrides):
+    base = dict(
+        fastq_folder="fastq",
+        data_root=None,
+        registry=None,
+        move=True,
+        dry_run=False,
+        compress=True,
+        metadata_folder="metadata",
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _verify_args(accessions=None, **overrides):
+    base = dict(
+        accessions=list(accessions or []), data_root=None, registry=None, md5=False, spots=False, fix_state=False
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _link_args(accessions, **overrides):
+    base = dict(accessions=list(accessions), fastq_folder="fastq", registry=None, data_root=None, link_mode="auto")
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _unlink_args(accessions, **overrides):
+    base = dict(accessions=list(accessions), fastq_folder="fastq", registry=None)
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -358,3 +401,299 @@ class TestStoreReindexCommand:
         with Catalog(paths) as cat:
             assert cat.get_dataset("SRR-stale") is None
             assert cat.get_dataset("SRR1") is not None
+
+
+def _write_fastq_gz(path, text="@r\nACGT\n+\nIIII\n"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt") as handle:
+        handle.write(text)
+
+
+def _sidecar_matching_disk(acc_dir, accession, state="complete", reads=5):
+    """A sidecar whose one file record has the accession's real on-disk size, so a plain
+    `store_verify` (no --md5) reports it as healthy."""
+    file_path = acc_dir / f"{accession}.fastq.gz"
+    sidecar = _sidecar(accession, state=state)
+    sidecar.files = [{"name": file_path.name, "bytes": file_path.stat().st_size, "md5": "ignored", "reads": reads}]
+    return sidecar
+
+
+class TestStoreAdoptCommand:
+    def test_command_properties(self):
+        cmd = StoreAdoptCommand()
+        assert cmd.name == "store_adopt"
+        assert cmd.group == "Store"
+
+    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreAdoptCommand().execute(_adopt_args(registry=str(project_dir / "metaquest_registry.json")))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "store_init" in out
+
+    def test_adopts_moves_links_and_records_registry(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+
+        registry_path = project_dir / "metaquest_registry.json"
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path)))
+
+        assert rc == 0
+        assert (project_dir / "fastq" / "SRR1").is_symlink()
+
+        paths = store_paths(root)
+        assert sra_dir(paths, "SRR1").is_dir()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
+        registry = load_registry(registry_path)
+        assert registry.datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert registry.datasets["SRR1"]["download"]["source"] == "store"
+        assert registry.store["linked"] == ["SRR1"]
+
+    def test_dry_run_changes_nothing(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+
+        registry_path = project_dir / "metaquest_registry.json"
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path), dry_run=True))
+
+        assert rc == 0
+        assert (project_dir / "fastq" / "SRR1" / "SRR1.fastq").is_file()
+        assert not (project_dir / "fastq" / "SRR1").is_symlink()
+        assert not registry_path.exists()
+
+    def test_copy_mode_leaves_registry_updated(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+
+        registry_path = project_dir / "metaquest_registry.json"
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path), move=False))
+
+        assert rc == 0
+        assert (project_dir / "fastq" / "SRR1").is_symlink()
+
+
+class TestStoreVerifyCommand:
+    def test_command_properties(self):
+        cmd = StoreVerifyCommand()
+        assert cmd.name == "store_verify"
+        assert cmd.group == "Store"
+
+    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(_verify_args(registry=str(project_dir / "metaquest_registry.json")))
+        assert rc == 1
+
+    def test_verify_healthy_dataset_reports_ok(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+        sidecar = _sidecar_matching_disk(acc_dir, "SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(root)))
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "SRR1" in out
+        assert "ok" in out
+
+    def test_verify_flags_truncated_dataset_and_fix_state_updates_sidecar(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        # Only 1 read on disk, but the sidecar's recorded NCBI spot count says there should be 5.
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(root), spots=True, fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "truncated" in out
+
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "partial"
+        assert fixed.completeness["verdict"] == "truncated"
+
+        with Catalog(paths) as cat:
+            row = cat.get_dataset("SRR1")
+            assert row["state"] == "partial"
+
+    def test_verify_specific_accessions_only(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        for acc in ("SRR1", "SRR2"):
+            acc_dir = sra_dir(paths, acc)
+            _write_fastq_gz(acc_dir / f"{acc}.fastq.gz")
+            sidecar = _sidecar_matching_disk(acc_dir, acc)
+            write_sidecar(sidecar_path(paths, acc), sidecar)
+            with catalog_write(paths) as cat:
+                cat.upsert_dataset(sidecar)
+
+        rc = StoreVerifyCommand().execute(_verify_args(accessions=["SRR2"], data_root=str(root)))
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "SRR2" in out
+        assert "SRR1" not in out
+
+    def test_missing_dataset_fails(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        init_store(root)
+
+        rc = StoreVerifyCommand().execute(_verify_args(accessions=["SRR-ghost"], data_root=str(root)))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "missing" in out
+
+
+class TestStoreLinkCommand:
+    def test_command_properties(self):
+        cmd = StoreLinkCommand()
+        assert cmd.name == "store_link"
+        assert cmd.group == "Store"
+
+    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreLinkCommand().execute(_link_args(["SRR1"], registry=str(project_dir / "metaquest_registry.json")))
+        assert rc == 1
+
+    def test_links_accession_and_updates_registry(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+        sidecar = _sidecar("SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        rc = StoreLinkCommand().execute(
+            _link_args(
+                ["SRR1"], data_root=str(root), registry=str(registry_path), fastq_folder=str(project_dir / "fastq")
+            )
+        )
+
+        assert rc == 0
+        assert (project_dir / "fastq" / "SRR1").is_symlink()
+
+        registry = load_registry(registry_path)
+        assert registry.datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert registry.datasets["SRR1"]["download"]["source"] == "store"
+        assert registry.store["linked"] == ["SRR1"]
+
+    def test_link_failure_reports_nonzero(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        init_store(root)  # no SRR1 dataset in the store
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        rc = StoreLinkCommand().execute(
+            _link_args(
+                ["SRR1"], data_root=str(root), registry=str(registry_path), fastq_folder=str(project_dir / "fastq")
+            )
+        )
+
+        assert rc == 1
+        assert not registry_path.exists()
+
+
+class TestStoreUnlinkCommand:
+    def test_command_properties(self):
+        cmd = StoreUnlinkCommand()
+        assert cmd.name == "store_unlink"
+        assert cmd.group == "Store"
+
+    def test_unlinks_symlink_and_updates_registry(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+        sidecar = _sidecar("SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+        fastq_dir = project_dir / "fastq"
+
+        StoreLinkCommand().execute(
+            _link_args(["SRR1"], data_root=str(root), registry=str(registry_path), fastq_folder=str(fastq_dir))
+        )
+
+        rc = StoreUnlinkCommand().execute(
+            _unlink_args(["SRR1"], registry=str(registry_path), fastq_folder=str(fastq_dir))
+        )
+
+        assert rc == 0
+        assert not (fastq_dir / "SRR1").exists()
+
+        registry = load_registry(registry_path)
+        assert registry.datasets["SRR1"]["download"]["state"] == "missing"
+        assert registry.store["linked"] == []
+
+    def test_refuses_a_real_directory(self, tmp_path, monkeypatch):
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+        fastq_dir = project_dir / "fastq"
+
+        rc = StoreUnlinkCommand().execute(
+            _unlink_args(["SRR1"], registry=str(registry_path), fastq_folder=str(fastq_dir))
+        )
+
+        assert rc == 1
+        assert (fastq_dir / "SRR1").is_dir() and not (fastq_dir / "SRR1").is_symlink()
+        assert (fastq_dir / "SRR1" / "SRR1.fastq").is_file()

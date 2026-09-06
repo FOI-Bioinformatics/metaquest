@@ -502,3 +502,73 @@ class TestStatusStorePlumbing:
 
         assert rc == 0
         assert out["store"]["root"] == str(store_root.resolve())
+
+
+class TestStatusReconcileVerdict:
+    def test_reconcile_fills_missing_download_verdict(self, tmp_path, capsys):
+        """A download recorded before completeness verification existed (no `download.complete`)
+        gets a verdict computed from what is on disk, once the registry records NCBI's spot count."""
+        from metaquest.data.registry import record_metadata
+
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        capsys.readouterr()
+
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {"run_total_spots": 100})
+        save_registry(registry)
+
+        StatusCommand().execute(_status_args(tmp_path, reconcile=True))
+        capsys.readouterr()
+
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        complete = data["datasets"]["SRR1"]["download"]["complete"]
+        assert complete["verdict"] == "truncated"
+
+    def test_reconcile_leaves_existing_verdict_alone(self, tmp_path, capsys):
+        """A verdict already on file (e.g. from a fresh download run) is never recomputed."""
+        from metaquest.data.registry import record_download, record_metadata
+
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        capsys.readouterr()
+
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {"run_total_spots": 100})
+        record_download(
+            registry,
+            "SRR1",
+            "downloaded",
+            tmp_path / "fastq",
+            attempt=False,
+            complete={"method": "spots", "ratio": 1.0, "verdict": "complete"},
+        )
+        save_registry(registry)
+
+        StatusCommand().execute(_status_args(tmp_path, reconcile=True))
+        capsys.readouterr()
+
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        assert data["datasets"]["SRR1"]["download"]["complete"]["verdict"] == "complete"
+
+    def test_reconcile_skips_store_sourced_downloads(self, tmp_path, capsys):
+        """A download whose reads came from the shared store already has its own verdict
+        pipeline; reconcile must not overwrite it."""
+        from metaquest.data.registry import record_download, record_metadata
+
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        capsys.readouterr()
+
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {"run_total_spots": 100})
+        record_download(
+            registry, "SRR1", "downloaded", tmp_path / "fastq", attempt=False, source="store", store_name="SRR1"
+        )
+        save_registry(registry)
+
+        StatusCommand().execute(_status_args(tmp_path, reconcile=True))
+        capsys.readouterr()
+
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        assert "complete" not in data["datasets"]["SRR1"]["download"]

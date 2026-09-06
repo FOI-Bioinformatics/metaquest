@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
-from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder
+from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -886,7 +886,33 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
                     _infer_assembly(registry, acc, genome_id, asm_dir)
     report.empty_assembly_dirs = empty_assembly_dirs(paths.targeted, genome_ids)
     report.dangling_links = dangling_links(paths.fastq)
+    _fill_missing_download_verdicts(registry, paths)
     return report
+
+
+def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> None:
+    """Compute a completeness verdict for a downloaded accession that never got one.
+
+    A project downloaded before completeness verification existed (or with
+    ``--no-verify-downloads``) has metadata recorded but no ``download.complete`` verdict.
+    When NCBI's recorded spot count is on file, this recomputes it the same way a fresh
+    download would have, against the accession's files on disk. A download whose reads came
+    from the shared store already carries a verdict from the store's own pipeline, so those
+    are left untouched.
+    """
+    for acc, record in registry.datasets.items():
+        download = record.get("download") or {}
+        if download.get("state") != "downloaded" or download.get("source") == "store" or download.get("complete"):
+            continue
+        spots = (record.get("metadata") or {}).get("run_total_spots")
+        if not spots:
+            continue
+        acc_dir = paths.fastq / acc
+        if not acc_dir.is_dir():
+            continue
+        verify = verify_download(acc, acc_dir, spots)
+        complete = {"method": "spots", "ratio": verify["ratio"], "verdict": verify["verdict"]}
+        record_download(registry, acc, "downloaded", paths.fastq, attempt=False, complete=complete)
 
 
 def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:

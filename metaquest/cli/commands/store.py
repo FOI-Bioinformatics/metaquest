@@ -15,15 +15,18 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
-from metaquest.data.registry import load_registry, registry_transaction
+from metaquest.data.registry import load_registry, record_download, registry_transaction
+from metaquest.data.sra import verify_download
+from metaquest.store.adopt import adopt
 from metaquest.store.catalog import Catalog, catalog_write
-from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, store_paths
+from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, sra_dir, store_paths
+from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
-from metaquest.store.sidecar import Sidecar, read_sidecar
+from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
 
 logger = logging.getLogger(__name__)
 
@@ -332,3 +335,411 @@ class StoreReindexCommand(BaseCommand):
 
         print(f"Reindexed {count} dataset(s)")
         return 0
+
+
+class StoreAdoptCommand(BaseCommand):
+    """Command to fold a project's own downloaded FASTQ folders into the shared store."""
+
+    @property
+    def name(self) -> str:
+        return "store_adopt"
+
+    @property
+    def help(self) -> str:
+        return "Move or copy project-owned FASTQ folders into the shared store, then link them back"
+
+    @property
+    def group(self) -> str:
+        return "Store"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument(
+            "--move",
+            dest="move",
+            action="store_true",
+            default=True,
+            help="Move each accession's folder into the store when the two share a filesystem (default)",
+        )
+        mode.add_argument(
+            "--copy",
+            dest="move",
+            action="store_false",
+            help="Copy each accession's folder into the store instead of moving it",
+        )
+        parser.add_argument(
+            "--dry-run", action="store_true", help="Report what would be adopted without changing anything"
+        )
+        parser.add_argument(
+            "--compress",
+            dest="compress",
+            action="store_true",
+            default=True,
+            help="Gzip-compress plain FASTQ files while adopting them (default: on)",
+        )
+        parser.add_argument(
+            "--no-compress", dest="compress", action="store_false", help="Leave FASTQ files uncompressed"
+        )
+        parser.add_argument(
+            "--metadata-folder",
+            default="metadata",
+            help="Folder holding NCBI metadata XML, consulted for each accession's recorded spot count",
+        )
+
+    def execute(self, args: argparse.Namespace) -> int:
+        try:
+            registry = load_registry(args.registry)
+            root = resolve_store_root(args.data_root, registry.store.get("root"))
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if root is None:
+            _no_store_hint()
+            return 1
+
+        try:
+            paths = store_paths(root)
+            report = adopt(
+                args.fastq_folder,
+                paths,
+                move=args.move,
+                dry_run=args.dry_run,
+                compress=args.compress,
+                metadata_folders=[Path(args.metadata_folder), paths.metadata],
+            )
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if args.dry_run:
+            print(f"Would adopt {len(report.planned)} dataset(s)")
+            if report.planned:
+                print("  " + ", ".join(sorted(report.planned)))
+            if report.conflicts:
+                print(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
+            return 0
+
+        newly_linked = sorted(set(report.adopted) | set(report.deduplicated))
+        if newly_linked:
+            with registry_transaction(args.registry) as reg:
+                for acc in newly_linked:
+                    record_download(
+                        reg, acc, "downloaded", args.fastq_folder, attempt=False, source="store", store_name=acc
+                    )
+                linked = set(reg.store.get("linked") or [])
+                linked.update(newly_linked)
+                reg.store["linked"] = sorted(linked)
+
+        print(
+            f"Adopted {len(report.adopted)}, deduplicated {len(report.deduplicated)}, "
+            f"conflicts {len(report.conflicts)}, skipped {len(report.skipped)}"
+        )
+        if report.conflicts:
+            self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
+        return 0
+
+
+def _md5_file(path: Path) -> str:
+    """MD5 hex digest of ``path``, read in 1 MiB chunks."""
+    import hashlib
+
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class StoreVerifyCommand(BaseCommand):
+    """Command to verify store datasets against their sidecars, optionally by md5 or spot count."""
+
+    @property
+    def name(self) -> str:
+        return "store_verify"
+
+    @property
+    def help(self) -> str:
+        return "Verify store datasets against their sidecars (bytes, optionally md5 and NCBI spot counts)"
+
+    @property
+    def group(self) -> str:
+        return "Store"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("accessions", nargs="*", help="Accessions to verify (default: every dataset in the store)")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+        parser.add_argument("--md5", action="store_true", help="Recompute and compare each file's md5 checksum")
+        parser.add_argument(
+            "--spots", action="store_true", help="Compare the read count against NCBI's recorded spot count"
+        )
+        parser.add_argument(
+            "--fix-state",
+            action="store_true",
+            help="Rewrite the sidecar state and catalogue entry when a check finds a mismatch",
+        )
+
+    @staticmethod
+    def _accessions_to_check(args: argparse.Namespace, paths: StorePaths) -> List[str]:
+        if args.accessions:
+            return list(args.accessions)
+        if not paths.sra.is_dir():
+            return []
+        return sorted(p.name for p in paths.sra.iterdir() if p.is_dir())
+
+    @staticmethod
+    def _check_bytes_and_md5(accession: str, store_dir: Path, sidecar: Sidecar, check_md5: bool):
+        bytes_ok = True
+        md5_ok: Optional[bool] = True if check_md5 else None
+        for entry in sidecar.files:
+            file_path = store_dir / str(entry.get("name"))
+            if not file_path.is_file():
+                bytes_ok = False
+                if check_md5:
+                    md5_ok = False
+                continue
+            if file_path.stat().st_size != entry.get("bytes"):
+                bytes_ok = False
+            if check_md5 and _md5_file(file_path) != entry.get("md5"):
+                md5_ok = False
+        return bytes_ok, md5_ok
+
+    def _verify_one(self, accession: str, paths: StorePaths, check_md5: bool, check_spots: bool) -> Dict[str, Any]:
+        store_dir = sra_dir(paths, accession)
+        sc_path = sidecar_path(paths, accession)
+        sidecar = read_sidecar(sc_path)
+        if sidecar is None:
+            return {
+                "accession": accession,
+                "state": "missing",
+                "bytes_ok": False,
+                "md5_ok": None,
+                "verdict": "missing",
+                "sidecar": None,
+                "spots_verdict": None,
+                "spots_ratio": None,
+            }
+
+        bytes_ok, md5_ok = self._check_bytes_and_md5(accession, store_dir, sidecar, check_md5)
+
+        spots_verdict = None
+        spots_ratio = None
+        if check_spots:
+            verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
+            spots_verdict = verify["verdict"]
+            spots_ratio = verify["ratio"]
+
+        if not bytes_ok or (check_md5 and md5_ok is False):
+            verdict = "corrupt"
+        elif check_spots and spots_verdict == "truncated":
+            verdict = "truncated"
+        elif check_spots and spots_verdict == "unverified":
+            verdict = "unverified"
+        else:
+            verdict = "ok"
+
+        return {
+            "accession": accession,
+            "state": sidecar.state,
+            "bytes_ok": bytes_ok,
+            "md5_ok": md5_ok,
+            "verdict": verdict,
+            "sidecar": sidecar,
+            "spots_verdict": spots_verdict,
+            "spots_ratio": spots_ratio,
+        }
+
+    def _fix_state(self, result: Dict[str, Any], paths: StorePaths) -> None:
+        sidecar = result.get("sidecar")
+        spots_verdict = result.get("spots_verdict")
+        if sidecar is None or spots_verdict is None:
+            return
+        new_state = {"complete": "complete", "truncated": "partial", "unverified": sidecar.state}[spots_verdict]
+        if new_state == sidecar.state and sidecar.completeness.get("verdict") == spots_verdict:
+            return
+        sidecar.state = new_state
+        sidecar.completeness = {"method": "spots", "ratio": result.get("spots_ratio"), "verdict": spots_verdict}
+        write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
+        with catalog_write(paths) as catalog:
+            catalog.upsert_dataset(sidecar)
+        result["state"] = new_state
+
+    @staticmethod
+    def _print_table(results: List[Dict[str, Any]]) -> None:
+        print(f"{'accession':<15s} {'state':<10s} {'bytes_ok':<9s} {'md5_ok':<7s} verdict")
+        for r in results:
+            md5_col = "-" if r["md5_ok"] is None else str(r["md5_ok"])
+            print(f"{r['accession']:<15s} {r['state']:<10s} {str(r['bytes_ok']):<9s} {md5_col:<7s} {r['verdict']}")
+
+    def execute(self, args: argparse.Namespace) -> int:
+        try:
+            registry = load_registry(args.registry)
+            root = resolve_store_root(args.data_root, registry.store.get("root"))
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if root is None:
+            _no_store_hint()
+            return 1
+
+        try:
+            paths = store_paths(root)
+            accessions = self._accessions_to_check(args, paths)
+            results = []
+            for accession in accessions:
+                result = self._verify_one(accession, paths, args.md5, args.spots)
+                if args.fix_state:
+                    self._fix_state(result, paths)
+                results.append(result)
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        self._print_table(results)
+        failed = any(r["verdict"] in ("corrupt", "truncated", "missing") for r in results)
+        return 1 if failed else 0
+
+
+class StoreLinkCommand(BaseCommand):
+    """Command to link project accessions to the shared store's copies."""
+
+    @property
+    def name(self) -> str:
+        return "store_link"
+
+    @property
+    def help(self) -> str:
+        return "Link project accessions to the shared store's copies"
+
+    @property
+    def group(self) -> str:
+        return "Store"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("accessions", nargs="+", help="Accessions to link from the store")
+        parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument(
+            "--link-mode",
+            choices=list(LINK_MODES),
+            default="auto",
+            help=(
+                "How this project points at the store's copy: a relative or absolute symlink, "
+                "a copy of the folder, or auto (relative when the store and the project share a "
+                "parent folder)"
+            ),
+        )
+
+    def execute(self, args: argparse.Namespace) -> int:
+        try:
+            registry = load_registry(args.registry)
+            root = resolve_store_root(args.data_root, registry.store.get("root"))
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if root is None:
+            _no_store_hint()
+            return 1
+
+        paths = store_paths(root)
+        linked: List[str] = []
+        failed: List[str] = []
+        for accession in args.accessions:
+            try:
+                link_dataset(args.fastq_folder, accession, paths, mode=args.link_mode)
+                linked.append(accession)
+            except DataAccessError as e:
+                self.logger.error("%s: %s", accession, e)
+                failed.append(accession)
+
+        if linked:
+            with registry_transaction(args.registry) as reg:
+                for accession in linked:
+                    record_download(
+                        reg,
+                        accession,
+                        "downloaded",
+                        args.fastq_folder,
+                        attempt=False,
+                        source="store",
+                        store_name=accession,
+                    )
+                reg_linked = set(reg.store.get("linked") or [])
+                reg_linked.update(linked)
+                reg.store["linked"] = sorted(reg_linked)
+
+        print(f"Linked {len(linked)} of {len(args.accessions)} accession(s)")
+        return 1 if failed else 0
+
+
+class StoreUnlinkCommand(BaseCommand):
+    """Command to remove a project's store link, without touching the store's copy."""
+
+    @property
+    def name(self) -> str:
+        return "store_unlink"
+
+    @property
+    def help(self) -> str:
+        return "Remove a project's link to the store (never removes a real directory)"
+
+    @property
+    def group(self) -> str:
+        return "Store"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("accessions", nargs="+", help="Accessions to unlink")
+        parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+
+    def execute(self, args: argparse.Namespace) -> int:
+        removed: List[str] = []
+        refused: List[str] = []
+        for accession in args.accessions:
+            link_path = Path(args.fastq_folder) / accession
+            if link_path.exists() and not link_path.is_symlink():
+                self.logger.error("%s is a real directory, not a store link; refusing to remove it", accession)
+                refused.append(accession)
+                continue
+            try:
+                was_removed = unlink_dataset(args.fastq_folder, accession)
+            except DataAccessError as e:
+                self.logger.error(str(e))
+                refused.append(accession)
+                continue
+            if was_removed:
+                removed.append(accession)
+
+        if removed:
+            with registry_transaction(args.registry) as reg:
+                for accession in removed:
+                    record_download(reg, accession, "missing", args.fastq_folder, attempt=False)
+                reg_linked = set(reg.store.get("linked") or [])
+                reg_linked.difference_update(removed)
+                reg.store["linked"] = sorted(reg_linked)
+
+        print(f"Unlinked {len(removed)} of {len(args.accessions)} accession(s)")
+        return 1 if refused else 0
