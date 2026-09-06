@@ -26,8 +26,8 @@ from metaquest.data.registry import (
     registry_transaction,
     resolve_project_path,
 )
-from metaquest.store.layout import StorePaths, store_paths
-from metaquest.store.resolve import resolve_store_root
+from metaquest.store.layout import StorePaths
+from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.usage import record_usage_safe
 
 
@@ -89,11 +89,11 @@ class ExtractTargetReadsCommand(BaseCommand):
 
     @staticmethod
     def _resolve_store(args: argparse.Namespace, registry: Registry) -> Optional[StorePaths]:
-        """Resolve the shared data store (if any); returns None without one."""
-        store_root = resolve_store_root(getattr(args, "data_root", None), registry.store.get("root"))
-        if store_root is None:
-            return None
-        return store_paths(store_root)
+        """Resolve the shared data store (if any); returns None without one.
+
+        Extraction reads the project's own ``fastq/`` folder either way, so a store that
+        cannot be reached is a warning, not a reason to stop."""
+        return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
 
     def _record_result(
         self,

@@ -417,7 +417,9 @@ class TestStoreStatusCommand:
 
     def test_text_output_includes_store_header(self, tmp_path, capsys):
         root = tmp_path / "store"
-        init_store(root)
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
 
         rc = StoreStatusCommand().execute(_status_args(data_root=str(root)))
         out = capsys.readouterr().out
@@ -1313,3 +1315,52 @@ class TestStoreAdoptGitignoreGuard:
             assert StoreAdoptCommand().execute(_adopt_args(data_root=str(root))) == 0
 
         assert "fastq/" in (project_dir / ".gitignore").read_text()
+
+
+class TestStoreReindexNeverLosesHistory:
+    """A reindex rebuilds from what it reads, so it must read everything or stop."""
+
+    def _store_with_dataset(self, tmp_path):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        with gzip.open(acc_dir / "SRR1.fastq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+        write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state="complete"))
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "P1", str(tmp_path / "p1"), str(tmp_path / "p1" / "metaquest_registry.json"))
+            cat.upsert_dataset(read_sidecar(sidecar_path(paths, "SRR1")))
+            cat.record_usage("SRR1", "p1", "wMel", "downloaded")
+        return root, paths
+
+    def test_an_unreadable_sidecar_aborts_the_reindex(self, tmp_path, caplog):
+        import logging
+
+        root, paths = self._store_with_dataset(tmp_path)
+        sidecar_path(paths, "SRR1").write_text("{ this is not json")
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 1
+        assert any("SRR1" in record.message for record in caplog.records)
+        # The usage history, which lives only in the catalogue, is untouched.
+        with Catalog(paths) as catalog:
+            assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
+
+
+class TestCorruptStoreMarker:
+    def test_a_corrupt_marker_reads_as_missing_with_a_warning(self, tmp_path, caplog):
+        import logging
+
+        from metaquest.store.layout import store_paths as _store_paths
+
+        root = tmp_path / "store"
+        init_store(root)
+        _store_paths(root).marker.write_text("{ truncated")
+
+        with caplog.at_level(logging.WARNING):
+            assert read_marker(root) is None
+
+        assert any("marker" in record.message for record in caplog.records)

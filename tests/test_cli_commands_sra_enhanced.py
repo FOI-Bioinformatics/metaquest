@@ -302,7 +302,6 @@ class TestSRAStatsCommand:
 
         assert result == 0
         with Catalog(store_paths(store_root)) as catalog:
-            catalog.migrate()
             row = catalog.conn.execute(
                 "SELECT stage FROM usage WHERE accession = ? AND project_id = ?", ("SRR1", "proj1")
             ).fetchone()
@@ -691,7 +690,6 @@ class TestSRAValidateCommand:
 
         assert result == 0
         with Catalog(store_paths(store_root)) as catalog:
-            catalog.migrate()
             row = catalog.conn.execute(
                 "SELECT stage FROM usage WHERE accession = ? AND project_id = ?", ("SRR123", "proj1")
             ).fetchone()
@@ -797,3 +795,41 @@ class TestSRAValidateCommand:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+class TestAnalysisWithoutAReachableStore:
+    """A store that cannot be read costs the usage record, never the analysis."""
+
+    @patch("builtins.print")
+    def test_sra_stats_warns_and_completes_when_the_store_root_is_gone(self, mock_print, tmp_path, caplog):
+        import logging
+
+        command = SRAStatsCommand()
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        report_path = tmp_path / "stats.csv"
+        registry_path = tmp_path / "metaquest_registry.json"
+        gone = tmp_path / "unmounted"
+
+        def fake_generate_report(folder, output_report):
+            pd_module.DataFrame(
+                [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
+            ).to_csv(output_report, index=False)
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            output_report=str(report_path),
+            accessions=None,
+            registry=str(registry_path),
+            data_root=str(gone),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            with patch(
+                "metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report
+            ):
+                result = command.execute(args)
+
+        assert result == 0
+        assert report_path.is_file()
+        assert any("store unavailable" in record.message for record in caplog.records)

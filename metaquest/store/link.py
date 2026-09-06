@@ -25,19 +25,43 @@ logger = logging.getLogger(__name__)
 LINK_MODES = ("auto", "relative", "absolute", "copy")
 
 
+# Directories that hold one mounted volume each, so two paths sharing only one of these are
+# on separate volumes rather than in one tree: macOS mounts under /Volumes/<name>, Linux under
+# /mnt/<name> and /media/<user>/<name>.
+_MOUNT_PARENTS = (Path("/Volumes"), Path("/mnt"), Path("/media"))
+
+
+def _is_a_volume_root(common: Path) -> bool:
+    """True when ``common`` is only the directory that separate volumes mount into.
+
+    ``/Volumes/A/store`` and ``/Volumes/B/project`` share ``/Volumes``, but they sit on two
+    volumes that mount and unmount independently: a relative link between them breaks as soon
+    as either moves, so that counts as sharing nothing, the same as sharing only ``/``. Two
+    paths inside one volume (``/Volumes/lab/store`` and ``/Volumes/lab/project``) do share a
+    tree, and a relative link there is what survives that volume being mounted elsewhere.
+    """
+    if common in _MOUNT_PARENTS:
+        return True
+    # /media/<user> holds one directory per volume, the same way /Volumes does.
+    return common.parent == Path("/media")
+
+
 def _shares_a_parent(store_root: Path, project_fastq: Path) -> bool:
-    """True when both paths sit under a common directory other than the filesystem root.
+    """True when both paths sit under a common directory other than a filesystem or volume root.
 
     A relative symlink only survives moving the project if the store moves with it, which is
     the case when both live under one shared parent (a lab directory, a scratch mount). Two
-    trees whose only common ancestor is ``/`` are unrelated, so an absolute link is safer.
-    ``os.path.commonpath`` raises for paths on different drives, which is the same answer.
+    trees whose only common ancestor is ``/``, or a mount directory holding one volume each,
+    are unrelated, so an absolute link is safer. ``os.path.commonpath`` raises for paths on
+    different drives, which is the same answer.
     """
     try:
         common = Path(os.path.commonpath([str(store_root), str(project_fastq)]))
     except ValueError:
         return False
-    return str(common) != common.anchor
+    if str(common) == common.anchor:
+        return False
+    return not _is_a_volume_root(common)
 
 
 def _symlink_target(store_dataset: Path, link_parent: Path, mode: str) -> str:

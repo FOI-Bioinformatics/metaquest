@@ -44,7 +44,7 @@ def paths(tmp_path):
 
 
 def test_migrate_creates_schema_and_is_idempotent(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.migrate()  # idempotent, no error
 
@@ -58,7 +58,7 @@ def test_migrate_creates_schema_and_is_idempotent(paths):
 
 
 def test_upsert_dataset_then_get(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_dataset(_sidecar())
 
@@ -79,13 +79,13 @@ def test_upsert_dataset_then_get(paths):
 
 
 def test_get_dataset_returns_none_when_absent(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         assert catalog.get_dataset("SRR-missing") is None
 
 
 def test_upsert_dataset_replaces_files_and_totals(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_dataset(_sidecar(bytes_r1=1000, bytes_r2=1000))
         catalog.upsert_dataset(_sidecar(state="partial", bytes_r1=500, bytes_r2=500))
@@ -101,7 +101,7 @@ def test_upsert_dataset_replaces_files_and_totals(paths):
 
 
 def test_record_usage_keeps_first_used_updates_last_used(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
         catalog.upsert_dataset(_sidecar())
@@ -129,7 +129,7 @@ def test_record_usage_keeps_first_used_updates_last_used(paths):
 
 
 def test_record_usage_inserts_placeholder_dataset_when_missing(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
 
@@ -142,7 +142,7 @@ def test_record_usage_inserts_placeholder_dataset_when_missing(paths):
 
 
 def test_upsert_project_keeps_created_updates_last_seen(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
         created_first = catalog._conn.execute("SELECT created FROM projects WHERE project_id=?", ("proj1",)).fetchone()[
@@ -159,7 +159,7 @@ def test_upsert_project_keeps_created_updates_last_seen(paths):
 
 
 def test_projects_for_and_datasets_for_project(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "Wolbachia", "/p1", "reg1")
         catalog.upsert_project("proj2", "Anopheles", "/p2", "reg2")
@@ -178,7 +178,7 @@ def test_projects_for_and_datasets_for_project(paths):
 
 
 def test_unused_lists_datasets_without_usage(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "Wolbachia", "/p1", "reg1")
         catalog.upsert_dataset(_sidecar("SRR1"))
@@ -191,7 +191,7 @@ def test_unused_lists_datasets_without_usage(paths):
 
 
 def test_bytes_by_genome_sums_distinct_accession_genome_pairs(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "P1", "/p1", "reg1")
         catalog.upsert_project("proj2", "P2", "/p2", "reg2")
@@ -210,7 +210,7 @@ def test_bytes_by_genome_sums_distinct_accession_genome_pairs(paths):
 
 
 def test_datasets_for_genome_returns_accession_project_tuples(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "P1", "/p1", "reg1")
         catalog.upsert_project("proj2", "P2", "/p2", "reg2")
@@ -227,7 +227,7 @@ def test_datasets_for_genome_returns_accession_project_tuples(paths):
 
 
 def test_reindex_rebuilds_datasets_and_keeps_usage(paths):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "P1", "/p1", "reg1")
         catalog.upsert_dataset(_sidecar("SRR1", state="partial"))
@@ -249,36 +249,15 @@ def test_reindex_rebuilds_datasets_and_keeps_usage(paths):
     assert [p["project_id"] for p in projects_still_there] == ["proj1"]
 
 
-def test_wal_fallback_logs_and_continues(paths, monkeypatch, caplog):
-    # sqlite3.Connection is an immutable C type, so it cannot be monkeypatched
-    # directly; instead, wrap sqlite3.connect to hand back a plain Python
-    # subclass whose execute() fakes only the WAL pragma's answer.
-    real_connect = sqlite3.connect
+def test_journal_mode_is_delete_never_wal(paths):
+    """SQLite documents WAL as unsafe over NFS and SMB, and the pragma succeeds there anyway,
+    so a store on a NAS would run in an unsupported mode without saying so. Writes are already
+    serialised by catalog.sqlite.lock, so DELETE costs nothing here."""
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+        mode = catalog.conn.execute("PRAGMA journal_mode").fetchone()[0]
 
-    class _FakeCursor:
-        def fetchone(self):
-            return ("delete",)
-
-    class _FallbackConnection(sqlite3.Connection):
-        def execute(self, sql, *args, **kwargs):
-            if sql.strip().upper().startswith("PRAGMA JOURNAL_MODE"):
-                return _FakeCursor()
-            return super().execute(sql, *args, **kwargs)
-
-    def fake_connect(database, *args, **kwargs):
-        kwargs["factory"] = _FallbackConnection
-        return real_connect(database, *args, **kwargs)
-
-    monkeypatch.setattr(sqlite3, "connect", fake_connect)
-
-    with caplog.at_level("INFO"):
-        with Catalog(paths) as catalog:
-            catalog.migrate()
-            catalog.upsert_dataset(_sidecar())
-            row = catalog.get_dataset("SRR1")
-
-    assert row is not None
-    assert any("wal" in message.lower() for message in caplog.messages)
+    assert str(mode).lower() == "delete"
 
 
 def test_catalog_write_commits_and_releases_lock(paths):
@@ -287,7 +266,7 @@ def test_catalog_write_commits_and_releases_lock(paths):
 
     assert not paths.catalog_lock.exists()
 
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         row = catalog.get_dataset("SRR1")
     assert row is not None
 
@@ -300,7 +279,7 @@ def test_catalog_write_rolls_back_and_releases_lock_on_exception(paths):
 
     assert not paths.catalog_lock.exists()
 
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         row = catalog.get_dataset("SRR1")
     assert row is None
@@ -344,7 +323,7 @@ def test_catalog_write_raises_when_lock_never_released(paths, monkeypatch):
 
 def test_record_usage_unknown_project_raises(paths):
     """record_usage never fabricates a project row for an id it does not recognise."""
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         with pytest.raises(DataAccessError, match="Unknown project_id"):
             catalog.record_usage("SRR1", "no-such-project", "wMel", "downloaded")
@@ -411,7 +390,7 @@ def flag_connect(monkeypatch):
 )
 def test_public_methods_wrap_sqlite_errors(paths, flag_connect, method_name, call_args):
     """A raw sqlite3.Error out of the connection surfaces as DataAccessError, never raw."""
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.conn._boom = True
 
@@ -421,7 +400,7 @@ def test_public_methods_wrap_sqlite_errors(paths, flag_connect, method_name, cal
 
 
 def test_record_usage_wraps_sqlite_error(paths, flag_connect):
-    with Catalog(paths) as catalog:
+    with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "P1", "/p1", "reg1")
         catalog.conn._boom = True
@@ -445,3 +424,43 @@ def test_catalog_write_wraps_commit_sqlite_error(paths, flag_connect):
         with catalog_write(paths) as catalog:
             catalog.upsert_dataset(_sidecar())
             catalog.conn._boom = True
+
+
+def test_reindex_keeps_a_row_whose_folder_is_still_in_the_store(paths):
+    """A sidecar missed by one reading must not take the dataset's usage history with it.
+
+    The cascade from ``datasets`` removes ``files`` and ``usage`` too, and usage is the one
+    record that exists nowhere but the catalogue.
+    """
+    (paths.sra / "SRR2").mkdir(parents=True)
+    (paths.sra / "SRR2" / "SRR2.fastq.gz").write_bytes(b"x")
+
+    with catalog_write(paths) as catalog:
+        catalog.upsert_project("p1", "P1", "/p1", "reg1")
+        catalog.upsert_dataset(_sidecar("SRR1"))
+        catalog.upsert_dataset(_sidecar("SRR2"))
+        catalog.record_usage("SRR2", "p1", "wMel", "downloaded")
+
+    with catalog_write(paths) as catalog:
+        catalog.reindex([_sidecar("SRR1")])
+        accessions = [
+            row["accession"] for row in catalog.conn.execute("SELECT accession FROM datasets ORDER BY accession")
+        ]
+        usage = catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"]
+
+    assert accessions == ["SRR1", "SRR2"]
+    assert usage == 1
+
+
+def test_reindex_drops_a_row_whose_folder_is_gone(paths):
+    with catalog_write(paths) as catalog:
+        catalog.upsert_dataset(_sidecar("SRR1"))
+        catalog.upsert_dataset(_sidecar("SRR2"))
+
+    with catalog_write(paths) as catalog:
+        catalog.reindex([_sidecar("SRR1")])
+        accessions = [
+            row["accession"] for row in catalog.conn.execute("SELECT accession FROM datasets ORDER BY accession")
+        ]
+
+    assert accessions == ["SRR1"]

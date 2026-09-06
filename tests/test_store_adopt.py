@@ -47,7 +47,7 @@ class TestAdoptFresh:
         assert sidecar.compression == "gzip"
         assert (sra_dir(paths, "SRR1") / "SRR1.fastq.gz").is_file()
 
-        with Catalog(paths) as cat:
+        with Catalog(paths, create=True) as cat:
             cat.migrate()
             assert cat.get_dataset("SRR1") is not None
 
@@ -210,9 +210,8 @@ class TestAdoptDryRun:
         # Nothing moved, nothing created in the store.
         assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
         assert not sra_dir(paths, "SRR1").exists()
-        with Catalog(paths) as cat:
-            cat.migrate()
-            assert cat.get_dataset("SRR1") is None
+        # Not even the catalogue was created: a dry run opens nothing for writing.
+        assert not paths.catalog.exists()
 
     def test_dry_run_still_reports_conflicts(self, tmp_path):
         store_root = tmp_path / "store"
@@ -269,7 +268,7 @@ class TestAdoptRestart:
         assert report.adopted == ["SRR1"]
         assert sidecar_path(paths, "SRR1").exists()
         assert (project_fastq / "SRR1").is_symlink()
-        with Catalog(paths) as cat:
+        with Catalog(paths, create=True) as cat:
             cat.migrate()
             assert cat.get_dataset("SRR1") is not None
 

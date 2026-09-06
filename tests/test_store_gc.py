@@ -182,6 +182,8 @@ class TestStoreGcCommand:
     def test_leftovers_listed_with_sizes(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
+        with catalog_write(paths):
+            pass
         (paths.tmp / "SRR9_temp").mkdir(parents=True)
         (paths.tmp / "SRR9_temp" / "partial.fastq").write_bytes(b"x" * 50)
         (paths.tmp / "SRR8_adopt").mkdir(parents=True)
@@ -340,6 +342,8 @@ class TestStoreGcRespectsLocksAndPlaceholders:
     def test_leftovers_of_a_locked_accession_are_kept(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
+        with catalog_write(paths):
+            pass
         building = paths.tmp / "SRR1_temp"
         building.mkdir(parents=True)
         (building / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")

@@ -19,8 +19,8 @@ from metaquest.data.sra_metadata import (
     save_metadata_report,
     generate_statistics_report,
 )
-from metaquest.store.layout import StorePaths, store_paths
-from metaquest.store.resolve import resolve_store_root
+from metaquest.store.layout import StorePaths
+from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.usage import record_usage_safe
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,11 @@ def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
     """Resolve the shared data store (if any) for a command's ``--data-root``/registry.
 
     ``getattr`` guards ``args.data_root`` so a namespace built without that attribute (an
-    older test, or a caller that never reaches this code path) is never broken by it.
+    older test, or a caller that never reaches this code path) is never broken by it. A store
+    that cannot be reached only costs the usage record, so it is logged and skipped rather
+    than failing an analysis the project can run on its own files.
     """
-    store_root = resolve_store_root(getattr(args, "data_root", None), registry.store.get("root"))
-    if store_root is None:
-        return None
-    return store_paths(store_root)
+    return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
 
 
 class SRAInfoCommand(BaseCommand):

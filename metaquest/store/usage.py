@@ -155,23 +155,23 @@ def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
     like from here) and ``project id differs`` (a registry is there, but it now belongs to a
     different project).
     """
-    rows = catalog.conn.execute(
-        "SELECT project_id, name, path, registry, hostname FROM projects ORDER BY project_id"
-    ).fetchall()
+    # SELECT *, not a named column list: a catalogue created before ``hostname`` existed has
+    # no such column, and a read path must not run DDL to add one.
+    rows = [dict(row) for row in catalog.conn.execute("SELECT * FROM projects ORDER BY project_id").fetchall()]
     stale: List[Dict[str, Any]] = []
     for row in rows:
-        registry_path = row["registry"]
+        registry_path = row.get("registry")
         try:
             if not registry_path or not Path(registry_path).is_file():
-                stale.append({**dict(row), "reason": "registry missing"})
+                stale.append({**row, "reason": "registry missing"})
                 continue
             registry = load_registry(registry_path)
         except (OSError, DataAccessError, ValueError) as e:
             logger.warning("Could not check registry %s while checking staleness: %s", registry_path, e)
-            stale.append({**dict(row), "reason": "registry unreadable"})
+            stale.append({**row, "reason": "registry unreadable"})
             continue
         if (registry.project or {}).get("id") != row["project_id"]:
-            stale.append({**dict(row), "reason": "project id differs"})
+            stale.append({**row, "reason": "project id differs"})
     return stale
 
 

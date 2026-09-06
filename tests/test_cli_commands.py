@@ -2391,3 +2391,46 @@ class TestDownloadSraMintsAProjectIdentity:
         rows = self._usage_rows(store_root)
         assert [(r["accession"], r["stage"]) for r in rows] == [("SRR1", "downloaded")]
         assert rows[0]["project_id"] == registry.project["id"]
+
+
+class TestDownloadMetadataSharesWithTheStore:
+    """NCBI's spot count is what makes a store dataset verifiable, so the store gets a copy."""
+
+    def _args(self, tmp_path, store_root=None):
+        return argparse.Namespace(
+            email="test@example.com",
+            matches_folder=str(tmp_path / "matches"),
+            metadata_folder=str(tmp_path / "metadata"),
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=str(store_root) if store_root else None,
+        )
+
+    def test_fetched_xml_is_copied_into_the_store(self, tmp_path):
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        metadata_dir = tmp_path / "metadata"
+        metadata_dir.mkdir()
+        xml = metadata_dir / "SRR1_metadata.xml"
+        xml.write_text('<RunSet><RUN total_spots="10"/></RunSet>')
+
+        with patch("metaquest.cli.commands.metadata.download_metadata", return_value={"SRR1": xml}):
+            rc = DownloadMetadataCommand().execute(self._args(tmp_path, store_root))
+
+        assert rc == 0
+        assert (paths.metadata / "SRR1_metadata.xml").is_file()
+        # The project keeps its own copy too.
+        assert xml.is_file()
+
+    def test_without_a_store_nothing_is_copied(self, tmp_path):
+        metadata_dir = tmp_path / "metadata"
+        metadata_dir.mkdir()
+        xml = metadata_dir / "SRR1_metadata.xml"
+        xml.write_text('<RunSet><RUN total_spots="10"/></RunSet>')
+
+        with patch("metaquest.cli.commands.metadata.download_metadata", return_value={"SRR1": xml}):
+            assert DownloadMetadataCommand().execute(self._args(tmp_path)) == 0

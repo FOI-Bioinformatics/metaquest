@@ -28,7 +28,7 @@ from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.locks import lock_holder, lock_is_held
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
-from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
+from metaquest.store.sidecar import Sidecar, md5_file, read_sidecar, sidecar_completeness, write_sidecar
 from metaquest.store.usage import ensure_project_identity, linked_by, record_usage_many, stale_projects
 
 logger = logging.getLogger(__name__)
@@ -59,17 +59,8 @@ def _stale_project_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sidecar_completeness(paths: StorePaths, accession: str) -> Optional[Dict[str, Any]]:
-    """The completeness verdict recorded in the store's sidecar for ``accession``, or None
-    when there is no sidecar yet (``read_sidecar`` already logs a warning in that case)."""
-    sidecar = read_sidecar(sidecar_path(paths, accession))
-    if sidecar is None:
-        return None
-    return {
-        "verdict": sidecar.completeness.get("verdict"),
-        "ratio": sidecar.completeness.get("ratio"),
-        "expected_spots": sidecar.ncbi.get("spots"),
-        "reads_r1": sidecar.reads_per_mate,
-    }
+    """The completeness verdict recorded in the store's sidecar for ``accession``, or None."""
+    return sidecar_completeness(sidecar_path(paths, accession))
 
 
 def _gitignore_guard(cwd: Path, log: logging.Logger) -> None:
@@ -291,7 +282,6 @@ class StoreStatusCommand(BaseCommand):
         paths = store_paths(root)
         marker = read_marker(root) or {}
         with Catalog(paths) as catalog:
-            catalog.migrate()
             counts, bytes_total = self._dataset_counts_and_bytes(catalog)
             project_count = catalog.conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"]
             stale = self._stale_project_rows(catalog)
@@ -379,17 +369,26 @@ class StoreReindexCommand(BaseCommand):
         )
 
     @staticmethod
-    def _read_all_sidecars(paths: StorePaths) -> List[Sidecar]:
+    def _read_all_sidecars(paths: StorePaths) -> Tuple[List[Sidecar], List[str]]:
+        """Every dataset's sidecar, plus the accessions whose sidecar could not be read.
+
+        A reindex rebuilds ``datasets`` from exactly what it reads, so a sidecar missed here
+        would look like a dataset that no longer exists. The caller stops rather than acting
+        on a partial reading.
+        """
         sidecars: List[Sidecar] = []
+        unreadable: List[str] = []
         if not paths.sra.is_dir():
-            return sidecars
+            return sidecars, unreadable
         for acc_dir in sorted(paths.sra.iterdir()):
-            if not acc_dir.is_dir():
+            if not acc_dir.is_dir() or acc_dir.name == ".sra-cache":
                 continue
             sidecar = read_sidecar(sidecar_path(paths, acc_dir.name))
-            if sidecar is not None:
-                sidecars.append(sidecar)
-        return sidecars
+            if sidecar is None:
+                unreadable.append(acc_dir.name)
+                continue
+            sidecars.append(sidecar)
+        return sidecars, unreadable
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -405,7 +404,15 @@ class StoreReindexCommand(BaseCommand):
 
         try:
             paths = store_paths(root)
-            sidecars = self._read_all_sidecars(paths)
+            sidecars, unreadable = self._read_all_sidecars(paths)
+            if unreadable:
+                self.logger.error(
+                    "Not reindexing: %d sidecar(s) could not be read, and rebuilding from a "
+                    "partial reading would drop those datasets and their usage history: %s",
+                    len(unreadable),
+                    ", ".join(unreadable),
+                )
+                return 1
             with catalog_write(paths) as catalog:
                 count = catalog.reindex(sidecars)
         except DataAccessError as e:
@@ -572,17 +579,6 @@ class StoreAdoptCommand(BaseCommand):
         return 0
 
 
-def _md5_file(path: Path) -> str:
-    """MD5 hex digest of ``path``, read in 1 MiB chunks."""
-    import hashlib
-
-    digest = hashlib.md5()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 class StoreVerifyCommand(BaseCommand):
     """Command to verify store datasets against their sidecars, optionally by md5 or spot count."""
 
@@ -646,7 +642,7 @@ class StoreVerifyCommand(BaseCommand):
                     bytes_ok = False
                     detail = detail or f"{name}: size mismatch ({actual_bytes} vs {entry.get('bytes')} bytes)"
                 if check_md5:
-                    actual_md5 = _md5_file(file_path)
+                    actual_md5 = md5_file(file_path)
                     if actual_md5 != entry.get("md5"):
                         md5_ok = False
                         detail = detail or f"{name}: md5 mismatch"
@@ -1137,7 +1133,6 @@ class StoreUsageCommand(BaseCommand):
         try:
             paths = store_paths(root)
             with Catalog(paths) as catalog:
-                catalog.migrate()
                 if args.accession:
                     selector = "accession"
                     rows = self._rows_for_accession(catalog, args.accession)
@@ -1453,7 +1448,6 @@ class StoreGcCommand(BaseCommand):
         paths = store_paths(root)
         try:
             with Catalog(paths) as catalog:
-                catalog.migrate()
                 stale = stale_projects(catalog)
                 buckets = self._dataset_candidates(
                     catalog, paths, stale, args.older_than, args.keep_partial, getattr(args, "include_stale", False)

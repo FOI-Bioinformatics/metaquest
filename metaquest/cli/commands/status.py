@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
-from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import write_csv
 from metaquest.data.registry import (
     ProjectPaths,
@@ -301,9 +301,34 @@ class StatusCommand(BaseCommand):
         """Dataset counts by state from the shared data store's catalogue at ``root``."""
         paths = store_paths(root)
         with Catalog(paths) as catalog:
-            catalog.migrate()
-            rows = catalog.conn.execute("SELECT state, COUNT(*) AS n FROM datasets GROUP BY state").fetchall()
-        return {"root": str(root), "datasets": {row["state"]: row["n"] for row in rows}}
+            rows = catalog.conn.execute(
+                "SELECT state, COUNT(*) AS n FROM datasets WHERE state IS NOT 'unknown' GROUP BY state"
+            ).fetchall()
+        return {"root": str(root), "available": True, "datasets": {row["state"]: row["n"] for row in rows}}
+
+    def _resolve_store_root(self, args, registry) -> Tuple[Optional[Path], bool]:
+        """``(root, available)``: the store this project points at, and whether it can be read.
+
+        A status report is about the project, so an unmounted volume or a root that has moved
+        must not stop it: the block still names the root, marked unavailable, and everything
+        else in the report (dangling links above all, which is exactly what a missing store
+        produces) is reported as usual.
+        """
+        try:
+            return resolve_store_root(args.data_root, registry.store.get("root")), True
+        except DataAccessError as e:
+            self.logger.warning("store unavailable: %s; continuing without it", e)
+            return resolve_store_root(args.data_root, registry.store.get("root"), require_marker=False), False
+
+    def _store_block(self, root: Path, available: bool) -> Dict[str, Any]:
+        """The report's store block: dataset counts when readable, else root and a flag."""
+        if not available:
+            return {"root": str(root), "available": False, "datasets": {}}
+        try:
+            return self._store_report(root)
+        except DataAccessError as e:
+            self.logger.warning("store unavailable: %s; continuing without it", e)
+            return {"root": str(root), "available": False, "datasets": {}}
 
     # ---------------------------------------------------------------- printing
 
@@ -312,6 +337,9 @@ class StatusCommand(BaseCommand):
         print("\nStore")
         print("=====")
         print(f"  Root : {store['root']}")
+        if not store.get("available", True):
+            print("  Unavailable: the store could not be read from here")
+            return
         for state, count in sorted(store["datasets"].items()):
             print(f"  {state:<10s}: {count}")
 
@@ -523,8 +551,8 @@ class StatusCommand(BaseCommand):
                 drift = reconcile(registry, paths)
                 save_registry(registry)
 
-            store_root = resolve_store_root(args.data_root, registry.store.get("root"))
-            if store_root is not None:
+            store_root, store_available = self._resolve_store_root(args, registry)
+            if store_root is not None and store_available:
                 self.logger.info("Using shared data store at %s", store_root)
 
             report = self._inventory_report(args, registry)
@@ -535,7 +563,7 @@ class StatusCommand(BaseCommand):
                 "updated": registry.updated,
             }
             if store_root is not None:
-                report["store"] = self._store_report(store_root)
+                report["store"] = self._store_block(store_root, store_available)
             counts = stage_counts(registry)
             report["stages"] = {s: {"count": counts["stages"][s], "accessions": query(registry, s)} for s in STAGES}
             report["downloads"] = self._download_verdicts(registry)

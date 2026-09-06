@@ -74,11 +74,20 @@ def init_store(root: Path) -> StorePaths:
 
 
 def read_marker(root: Path) -> Optional[dict]:
-    """Read the store marker at ``root``, or return None if it does not exist."""
+    """Read the store marker at ``root``, or None when it is missing or unreadable.
+
+    A truncated or corrupt marker answers the same way a missing one does: the caller cannot
+    trust this folder to be a store, and its message already says "missing or invalid". A
+    warning names the file so the reason is not lost.
+    """
     marker_path = store_paths(root).marker
     if not marker_path.exists():
         return None
-    return json.loads(marker_path.read_text())
+    try:
+        return json.loads(marker_path.read_text())
+    except (OSError, ValueError) as e:
+        logger.warning("Store marker %s could not be read: %s", marker_path, e)
+        return None
 
 
 def sra_dir(paths: StorePaths, acc: str) -> Path:

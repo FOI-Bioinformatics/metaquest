@@ -275,3 +275,21 @@ def test_link_dataset_relative_link_for_a_relative_project_folder(tmp_path, path
     assert not os.path.isabs(os.readlink(link))
     assert link.resolve() == (paths.sra / "SRR1").resolve()
     assert (link / "SRR1_1.fastq").is_file()
+
+
+class TestLinkModeAcrossVolumes:
+    """Two mounted volumes are not one tree, whatever their paths look like."""
+
+    def test_two_volumes_get_an_absolute_link(self):
+        from metaquest.store.link import _shares_a_parent
+
+        # /Volumes/A and /Volumes/B mount and unmount independently: a relative link between
+        # them (../../A/store/...) breaks the moment either moves.
+        assert _shares_a_parent(Path("/Volumes/A/store"), Path("/Volumes/B/project/fastq")) is False
+        assert _shares_a_parent(Path("/mnt/data/store"), Path("/mnt/scratch/project/fastq")) is False
+        assert _shares_a_parent(Path("/media/alex/disk1/store"), Path("/media/alex/disk2/proj")) is False
+
+    def test_one_volume_still_gets_a_relative_link(self):
+        from metaquest.store.link import _shares_a_parent
+
+        assert _shares_a_parent(Path("/Volumes/lab/store"), Path("/Volumes/lab/project/fastq")) is True

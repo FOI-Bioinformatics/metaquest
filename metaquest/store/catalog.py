@@ -138,8 +138,9 @@ class Catalog:
     against a catalogue that already exists.
     """
 
-    def __init__(self, paths: StorePaths):
+    def __init__(self, paths: StorePaths, create: bool = False):
         self.paths = paths
+        self.create = create
         self._conn: Optional[sqlite3.Connection] = None
 
     @property
@@ -151,19 +152,19 @@ class Catalog:
 
     @_wrap_sqlite_errors
     def __enter__(self) -> "Catalog":
+        if not self.create and not self.paths.catalog.is_file():
+            raise DataAccessError(
+                f"No store catalogue at {self.paths.catalog}; build one with: metaquest store_reindex"
+            )
         self.paths.root.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.paths.catalog))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
-        cursor = conn.execute("PRAGMA journal_mode = WAL")
-        mode = cursor.fetchone()[0]
-        if str(mode).lower() != "wal":
-            logger.info(
-                "Catalog at %s did not enable WAL journalling (got %r); continuing with the "
-                "default journal mode. This is expected on some network filesystems.",
-                self.paths.catalog,
-                mode,
-            )
+        # DELETE, never WAL: SQLite documents WAL as unsafe over NFS and SMB (its shared-memory
+        # index needs coherent mmap across hosts) and the pragma succeeds there anyway, so a
+        # shared store on a NAS would silently run in an unsupported mode. Every write here is
+        # already serialised by catalog.sqlite.lock, so WAL would buy nothing.
+        conn.execute("PRAGMA journal_mode = DELETE")
         self._conn = conn
         return self
 
@@ -428,6 +429,12 @@ class Catalog:
 
         existing = {row["accession"] for row in self.conn.execute("SELECT accession FROM datasets").fetchall()}
         for accession in existing - keep:
+            if (self.paths.sra / accession).is_dir():
+                # The folder is there; only its sidecar is missing or unreadable. Dropping the
+                # row would take the cross-project usage history with it (the foreign key
+                # cascades), and that history exists nowhere else.
+                logger.warning("%s: keeping its catalogue row, the files are still in the store", accession)
+                continue
             self.conn.execute("DELETE FROM datasets WHERE accession = ?", (accession,))
 
         for sidecar in sidecar_list:
@@ -454,7 +461,7 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     paths.root.mkdir(parents=True, exist_ok=True)
     _acquire_lock(paths.catalog_lock)
     try:
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             yield catalog
             try:

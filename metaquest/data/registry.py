@@ -907,13 +907,19 @@ def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> 
     A project downloaded before completeness verification existed (or with
     ``--no-verify-downloads``) has metadata recorded but no ``download.complete`` verdict.
     When NCBI's recorded spot count is on file, this recomputes it the same way a fresh
-    download would have, against the accession's files on disk. A download whose reads came
-    from the shared store already carries a verdict from the store's own pipeline, so those
-    are left untouched.
+    download would have, against the accession's files on disk. A record whose reads came from
+    the shared store is filled in from that dataset's sidecar instead: the store already
+    verified it when it was downloaded, and counting the reads again through a link would
+    repeat work another project has done.
     """
     for acc, record in registry.datasets.items():
         download = record.get("download") or {}
-        if download.get("state") != "downloaded" or download.get("source") == "store" or download.get("complete"):
+        if download.get("state") != "downloaded" or download.get("complete"):
+            continue
+        if download.get("source") == "store":
+            complete = _store_verdict(registry, acc)
+            if complete is not None:
+                set_download_verdict(registry, acc, complete)
             continue
         spots = (record.get("metadata") or {}).get("run_total_spots")
         if not spots:
@@ -924,6 +930,26 @@ def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> 
         verify = verify_download(acc, acc_dir, spots)
         complete = {"method": "spots", "ratio": verify["ratio"], "verdict": verify["verdict"]}
         set_download_verdict(registry, acc, complete)
+
+
+def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any]]:
+    """The completeness verdict the store's sidecar records for ``accession``, or None.
+
+    Reads the store root the registry itself recorded; a project whose store has moved or is
+    not mounted simply gets no verdict this time round, exactly as before.
+    """
+    root = (registry.store or {}).get("root")
+    if not root:
+        return None
+    # Imported here, not at module level: metaquest.store imports this module.
+    from metaquest.store.layout import sidecar_path, store_paths
+    from metaquest.store.sidecar import sidecar_completeness
+
+    try:
+        return sidecar_completeness(sidecar_path(store_paths(Path(root)), accession))
+    except (OSError, DataAccessError) as e:
+        logger.warning("Could not read the store sidecar for %s: %s", accession, e)
+        return None
 
 
 def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:

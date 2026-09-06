@@ -43,7 +43,7 @@ class TestRecordUsageSafe:
         with caplog.at_level("WARNING"):
             result = record_usage_safe(paths, registry, "SRR1", "GCF_1", "downloaded")
         assert result is False
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             rows = catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()
         assert rows["n"] == 0
@@ -52,7 +52,7 @@ class TestRecordUsageSafe:
         registry = _registry(tmp_path)
         assert record_usage_safe(paths, registry, "SRR1", "GCF_1", "downloaded", detail="stored") is True
 
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             row = catalog.conn.execute(
                 "SELECT * FROM usage WHERE accession = ? AND project_id = ?", ("SRR1", "proj1")
@@ -65,7 +65,7 @@ class TestRecordUsageSafe:
         registry = _registry(tmp_path)
         assert record_usage_safe(paths, registry, "SRR1", "", "linked") is True
 
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             row = catalog.conn.execute("SELECT genome_id FROM usage WHERE accession = ?", ("SRR1",)).fetchone()
         assert row["genome_id"] == ""
@@ -74,7 +74,7 @@ class TestRecordUsageSafe:
         registry = _registry(tmp_path, name="my-project", path=str(tmp_path / "proj"))
         record_usage_safe(paths, registry, "SRR1", "GCF_1", "extracted")
 
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             row = catalog.conn.execute("SELECT * FROM projects WHERE project_id = ?", ("proj1",)).fetchone()
         assert row["name"] == "my-project"
@@ -88,7 +88,7 @@ class TestRecordUsageSafe:
         registry.project["path"] = str(tmp_path / "new")
         record_usage_safe(paths, registry, "SRR2", "GCF_1", "downloaded")
 
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             row = catalog.conn.execute("SELECT path FROM projects WHERE project_id = ?", ("proj1",)).fetchone()
         assert row["path"] == str(tmp_path / "new")
@@ -105,14 +105,14 @@ class TestRecordUsageSafe:
     def test_second_call_updates_last_used_not_first_used(self, paths, tmp_path):
         registry = _registry(tmp_path)
         record_usage_safe(paths, registry, "SRR1", "GCF_1", "downloaded", detail="first")
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             first = catalog.conn.execute(
                 "SELECT first_used, last_used FROM usage WHERE accession = ?", ("SRR1",)
             ).fetchone()
 
         record_usage_safe(paths, registry, "SRR1", "GCF_1", "downloaded", detail="second")
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             second = catalog.conn.execute(
                 "SELECT first_used, last_used, detail FROM usage WHERE accession = ?", ("SRR1",)
@@ -144,7 +144,7 @@ class TestRecordUsageMany:
         ]
         assert record_usage_many(paths, registry, rows) is True
 
-        with Catalog(paths) as catalog:
+        with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             recorded = catalog.conn.execute(
                 "SELECT accession, genome_id, stage FROM usage ORDER BY accession"
@@ -208,7 +208,7 @@ class TestStaleProjects:
 
 class TestLinkedBy:
     def test_no_projects_returns_empty(self, paths):
-        with Catalog(paths) as cat:
+        with Catalog(paths, create=True) as cat:
             cat.migrate()
             assert linked_by(paths, cat, "SRR1") == []
 
@@ -226,7 +226,7 @@ class TestLinkedBy:
         with catalog_write(paths) as cat:
             cat.upsert_project("proj1", "Live", str(project_dir), str(registry_file))
 
-        with Catalog(paths) as cat:
+        with Catalog(paths, create=True) as cat:
             cat.migrate()
             assert linked_by(paths, cat, "SRR1") == ["Live"]
 
@@ -241,7 +241,7 @@ class TestLinkedBy:
         with catalog_write(paths) as cat:
             cat.upsert_project("proj1", "Gone", str(project_dir), str(project_dir / "metaquest_registry.json"))
 
-        with Catalog(paths) as cat:
+        with Catalog(paths, create=True) as cat:
             cat.migrate()
             assert linked_by(paths, cat, "SRR1") == []
 
@@ -260,6 +260,6 @@ class TestLinkedBy:
         with catalog_write(paths) as cat:
             cat.upsert_project("proj1", "Live", str(project_dir), str(registry_file))
 
-        with Catalog(paths) as cat:
+        with Catalog(paths, create=True) as cat:
             cat.migrate()
             assert linked_by(paths, cat, "SRR1") == []

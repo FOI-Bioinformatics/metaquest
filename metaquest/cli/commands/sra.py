@@ -25,7 +25,7 @@ from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_
 from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
-from metaquest.store.sidecar import read_sidecar
+from metaquest.store.sidecar import sidecar_completeness
 from metaquest.store.usage import ensure_project_identity, record_usage_many, record_usage_safe
 
 # Markers the data layer puts in a result message for a dataset the shared store provided
@@ -389,15 +389,7 @@ class DownloadSraCommand(BaseCommand):
         """
         if store is None:
             return None
-        sidecar = read_sidecar(sidecar_path(store, accession))
-        if sidecar is None:
-            return None
-        return {
-            "verdict": sidecar.completeness.get("verdict"),
-            "ratio": sidecar.completeness.get("ratio"),
-            "expected_spots": sidecar.ncbi.get("spots"),
-            "reads_r1": sidecar.reads_per_mate,
-        }
+        return sidecar_completeness(sidecar_path(store, accession))
 
     @staticmethod
     def _mark_linked(reg: Registry, accession: str) -> None:

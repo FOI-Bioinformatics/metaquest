@@ -76,9 +76,12 @@ class Sidecar:
         return cls(**filtered)
 
 
-def _md5_file(path: Union[str, Path]) -> str:
+def md5_file(path: Union[str, Path]) -> str:
     """MD5 hex digest of the file at ``path``, read in 1 MiB chunks so a large file is never
-    loaded into memory at once."""
+    loaded into memory at once.
+
+    The one home for this: adoption's dedup check, ``store_verify`` and sidecar building all
+    compare against the same digest, so they must compute it the same way."""
     digest = hashlib.md5()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -134,7 +137,7 @@ def build_sidecar(
         {
             "name": file_path.name,
             "bytes": file_path.stat().st_size,
-            "md5": _md5_file(file_path),
+            "md5": md5_file(file_path),
             "reads": reads_by_path[file_path],
         }
         for file_path in files
@@ -234,3 +237,21 @@ def read_sidecar(path: Union[str, Path]) -> Optional[Sidecar]:
         logger.warning(f"Could not read sidecar {sidecar_path}: {e}")
         return None
     return Sidecar.from_dict(data)
+
+
+def sidecar_completeness(path: Union[str, Path]) -> Optional[Dict[str, Any]]:
+    """The completeness verdict a store sidecar records, shaped for a registry download record.
+
+    Returns None when there is no sidecar to read (``read_sidecar`` logs the reason). Shared by
+    every command that points a project's download record at the store's copy: ``download_sra``,
+    ``store_link`` and ``store_adopt`` must all record the same verdict for the same dataset.
+    """
+    sidecar = read_sidecar(path)
+    if sidecar is None:
+        return None
+    return {
+        "verdict": sidecar.completeness.get("verdict"),
+        "ratio": sidecar.completeness.get("ratio"),
+        "expected_spots": sidecar.ncbi.get("spots"),
+        "reads_r1": sidecar.reads_per_mate,
+    }

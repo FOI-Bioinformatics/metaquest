@@ -3,6 +3,7 @@ Metadata-related CLI commands.
 """
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,6 +19,7 @@ from metaquest.data.metadata import (
 )
 from metaquest.data.registry import load_registry, nan_to_none, record_metadata, save_registry
 from metaquest.processing.counts import count_metadata
+from metaquest.store.resolve import resolve_optional_store
 from metaquest.visualization.plots import plot_metadata_counts
 
 
@@ -61,6 +63,27 @@ class DownloadMetadataCommand(BaseCommand):
             help="File of accessions to fetch metadata for; replaces the matches folder scan",
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+
+    def _share_with_store(self, args: argparse.Namespace, registry, downloaded: dict) -> None:
+        """Copy each fetched XML into the store's ``metadata/`` folder, when a store resolves.
+
+        NCBI's spot count for a run is what makes a store dataset's sidecar verifiable, and the
+        store branch of ``download_sra`` already reads that folder. Copying is best effort: a
+        store that cannot be written to costs the sharing, never the metadata this project just
+        fetched.
+        """
+        paths = resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
+        if paths is None:
+            return
+        try:
+            paths.metadata.mkdir(parents=True, exist_ok=True)
+            for xml_path in downloaded.values():
+                shutil.copy2(xml_path, paths.metadata / Path(xml_path).name)
+        except OSError as e:
+            self.logger.warning("Could not copy metadata into the store at %s: %s", paths.metadata, e)
+            return
+        self.logger.info("Copied %d metadata file(s) into the store at %s", len(downloaded), paths.metadata)
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -77,6 +100,7 @@ class DownloadMetadataCommand(BaseCommand):
                 for accession, xml_path in downloaded.items():
                     record_metadata(registry, accession, xml_path, {})
                 save_registry(registry)
+                self._share_with_store(args, registry, downloaded)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error downloading metadata: {e}")

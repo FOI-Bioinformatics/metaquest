@@ -593,3 +593,49 @@ class TestStatusReconcileVerdict:
 
         data = json.loads((tmp_path / "metaquest_registry.json").read_text())
         assert "complete" not in data["datasets"]["SRR1"]["download"]
+
+
+class TestStatusWithoutAReachableStore:
+    """An unmounted or moved store must not stop a report about the project."""
+
+    def test_status_reports_the_store_as_unavailable_and_still_lists_dangling_links(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        # The link points into a store that is not there: exactly what an unmounted volume
+        # leaves behind, and exactly the thing status exists to report.
+        gone = tmp_path / "unmounted"
+        (tmp_path / "fastq" / "SRR3").symlink_to(gone / "sra" / "SRR3")
+
+        assert StatusCommand().execute(_status_args(tmp_path, init=True)) == 0
+        capsys.readouterr()
+
+        rc = StatusCommand().execute(_status_args(tmp_path, data_root=str(gone), reconcile=True))
+        out = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert out["store"]["available"] is False
+        assert out["store"]["root"] == str(gone.resolve())
+        assert "SRR3" in out["drift"]["dangling_links"]
+
+    def test_text_report_says_the_store_could_not_be_read(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        gone = tmp_path / "unmounted"
+
+        rc = StatusCommand().execute(_status_args(tmp_path, data_root=str(gone), json=False))
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "Unavailable" in out
+
+    def test_a_store_root_with_no_catalogue_is_reported_as_unavailable(self, tmp_path, capsys):
+        from metaquest.store.layout import init_store
+
+        _project_tree(tmp_path)
+        store_root = tmp_path / "store"
+        init_store(store_root)
+        # A store folder that has never been written to has no catalog.sqlite yet.
+
+        rc = StatusCommand().execute(_status_args(tmp_path, data_root=str(store_root)))
+        out = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert out["store"]["available"] is False

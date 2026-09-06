@@ -782,3 +782,48 @@ class TestStoreLinksInTheRegistry:
 
         assert report.dangling_links == []
         assert report.untracked_fastq == ["SRR1"]
+
+
+class TestStoreBackedVerdictBackfill:
+    """A record linked from the store gets its verdict from the store's own sidecar."""
+
+    def test_a_store_backed_record_is_filled_in_from_the_sidecar(self, tmp_path):
+        from metaquest.data.registry import ProjectPaths, Registry, _fill_missing_download_verdicts
+        from metaquest.store.layout import init_store, sidecar_path
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        paths_store = init_store(tmp_path / "store")
+        write_sidecar(
+            sidecar_path(paths_store, "SRR1"),
+            Sidecar(
+                accession="SRR1",
+                state="complete",
+                reads_per_mate=100,
+                ncbi={"spots": 100},
+                completeness={"method": "spots", "ratio": 1.0, "verdict": "complete"},
+            ),
+        )
+
+        registry = Registry(path=tmp_path / "metaquest_registry.json")
+        registry.store = {"root": str(tmp_path / "store")}
+        registry.datasets = {"SRR1": {"download": {"state": "downloaded", "source": "store"}}}
+
+        _fill_missing_download_verdicts(registry, ProjectPaths(fastq=tmp_path / "fastq"))
+
+        complete = registry.datasets["SRR1"]["download"]["complete"]
+        assert complete["verdict"] == "complete"
+        assert complete["expected_spots"] == 100
+        assert complete["reads_r1"] == 100
+
+    def test_a_store_backed_record_without_a_sidecar_is_left_alone(self, tmp_path):
+        from metaquest.data.registry import ProjectPaths, Registry, _fill_missing_download_verdicts
+        from metaquest.store.layout import init_store
+
+        init_store(tmp_path / "store")
+        registry = Registry(path=tmp_path / "metaquest_registry.json")
+        registry.store = {"root": str(tmp_path / "store")}
+        registry.datasets = {"SRR1": {"download": {"state": "downloaded", "source": "store"}}}
+
+        _fill_missing_download_verdicts(registry, ProjectPaths(fastq=tmp_path / "fastq"))
+
+        assert "complete" not in registry.datasets["SRR1"]["download"]

@@ -48,7 +48,14 @@ from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
 from metaquest.store.locks import dataset_lock, lock_holder, lock_is_held
-from metaquest.store.sidecar import Sidecar, build_sidecar, ncbi_from_metadata_xml, read_sidecar, write_sidecar
+from metaquest.store.sidecar import (
+    Sidecar,
+    build_sidecar,
+    md5_file,
+    ncbi_from_metadata_xml,
+    read_sidecar,
+    write_sidecar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,15 +103,6 @@ def _notify(on_progress: Optional[Callable[[str, str], None]], accession: str, e
         logger.warning("Progress callback failed for %s: %s", accession, e)
 
 
-def _md5_file(path: Union[str, Path]) -> str:
-    """MD5 hex digest of ``path``, read in 1 MiB chunks so a large file is never loaded whole."""
-    digest = hashlib.md5()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _decompressed_md5(path: Union[str, Path]) -> str:
     """MD5 of ``path``'s decompressed content: gunzips on the fly for a ``.gz`` path, else reads
     plain bytes, so a plain file and a gzipped file holding the same reads compare equal."""
@@ -135,7 +133,7 @@ def _files_match(project_dir: Path, store_dir: Path, sidecar: Sidecar) -> bool:
         if str(path).endswith(".gz") == record_name.endswith(".gz"):
             if path.stat().st_size != record.get("bytes"):
                 return False
-            if _md5_file(path) != record.get("md5"):
+            if md5_file(path) != record.get("md5"):
                 return False
             continue
         # Compression differs: sizes are never comparable, so decompress both sides and compare

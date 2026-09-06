@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from metaquest.core.constants import CONFIG_DIRNAME, CONFIG_FILENAME, STORE_ENV
 from metaquest.core.exceptions import DataAccessError
-from metaquest.store.layout import read_marker
+from metaquest.store.layout import StorePaths, read_marker, store_paths
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -120,3 +120,22 @@ def resolve_store_root(
         return root
 
     return None
+
+
+def resolve_optional_store(explicit: Optional[str], registry_root: Optional[str]) -> Optional["StorePaths"]:
+    """The store's layout for a step that can run without one, or None.
+
+    Reporting and analysis steps read the store when it is there and work from the project's
+    own folders when it is not, so an unreachable one (an unmounted volume, a root that has
+    moved, a marker that cannot be read) must not stop them: the reason is logged and the step
+    continues storeless. Commands that exist to operate on the store itself, and the download
+    path that writes into it, keep letting the error through.
+    """
+    try:
+        root = resolve_store_root(explicit, registry_root)
+    except DataAccessError as e:
+        logger.warning("store unavailable: %s; continuing without it", e)
+        return None
+    if root is None:
+        return None
+    return store_paths(root)
