@@ -30,6 +30,7 @@ def _args(tmp, **kwargs):
         dry_run=False,
         force=False,
         registry=str(Path(tmp) / "registry.json"),
+        data_root=None,
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -311,6 +312,87 @@ class TestExtractTargetReadsCommand:
                     registry=str(registry_file),
                 )
             )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        extraction = data["datasets"]["SRR1"]["extractions"]["GCF_1"]
+        assert extraction["mapped_reads"] > 0
+        assert extraction["assembly"]["contigs"] == 2
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_records_usage_for_extraction_and_assembly(self, mock_run):
+        """Extraction and assembly are recorded as store catalogue usage for this genome."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.catalog import Catalog
+        from metaquest.store.layout import init_store, store_paths
+
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            store_root = root / "store"
+            init_store(store_root)
+            registry_file = root / "registry.json"
+
+            registry = _load(registry_file)
+            registry.project = {"id": "proj1", "name": "demo", "path": str(root), "created": "now"}
+            _save(registry)
+
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                    registry=str(registry_file),
+                    data_root=str(store_root),
+                )
+            )
+            assert rc == 0
+
+            with Catalog(store_paths(store_root)) as catalog:
+                catalog.migrate()
+                rows = {
+                    (r["accession"], r["genome_id"], r["stage"])
+                    for r in catalog.conn.execute("SELECT accession, genome_id, stage FROM usage").fetchall()
+                }
+        assert ("SRR1", "GCF_1", "extracted") in rows
+        assert ("SRR1", "GCF_1", "assembled") in rows
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_catalog_failure_leaves_extraction_outcome_unchanged(self, mock_run):
+        """A broken catalogue write never changes the extraction's exit code or registry record."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.layout import init_store
+
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            store_root = root / "store"
+            init_store(store_root)
+            registry_file = root / "registry.json"
+
+            registry = _load(registry_file)
+            registry.project = {"id": "proj1", "name": "demo", "path": str(root), "created": "now"}
+            _save(registry)
+
+            with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
+                rc = cmd.execute(
+                    _args(
+                        tmp,
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                        assemble=True,
+                        registry=str(registry_file),
+                        data_root=str(store_root),
+                    )
+                )
             assert rc == 0
             data = json.loads(registry_file.read_text())
         extraction = data["datasets"]["SRR1"]["extractions"]["GCF_1"]

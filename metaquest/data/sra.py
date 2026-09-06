@@ -95,6 +95,33 @@ def is_transient_folder(name: str) -> bool:
     return name.endswith("_temp") or name == ".sra-cache"
 
 
+def transient_bytes(folder: Union[str, Path]) -> int:
+    """Total bytes held by every transient artifact directly under ``folder``.
+
+    Sums the size of every file under each entry of ``folder`` whose name
+    ``is_transient_folder`` accepts (an ``<acc>_temp`` build directory kept after a failed
+    download, or a ``.sra-cache`` archive cache), recursing into their contents. Used to warn
+    when a download run has left large temporary artifacts on disk. Returns 0 when
+    ``folder`` does not exist or holds no such entry; a file that disappears mid-scan (a
+    concurrent cleanup) is simply skipped rather than raising.
+    """
+    path = Path(folder)
+    if not path.is_dir():
+        return 0
+    total = 0
+    for entry in path.iterdir():
+        if not entry.is_dir() or not is_transient_folder(entry.name):
+            continue
+        for sub in entry.rglob("*"):
+            if not sub.is_file():
+                continue
+            try:
+                total += sub.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
 def _safe_rmtree(path: Path) -> None:
     """Remove a directory tree if present, logging on failure instead of raising."""
     try:

@@ -8,19 +8,34 @@ analysis, comparative dataset analysis, and interactive reporting dashboards.
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from metaquest.cli.base import BaseCommand
-from metaquest.data.registry import load_registry, record_analysis, save_registry
+from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
 from metaquest.sra import (
     SRADatasetAnalyzer,
     SRAReportGenerator,
     QualityProfile,
     load_quality_profiles,
 )
+from metaquest.store.layout import StorePaths, store_paths
+from metaquest.store.resolve import resolve_store_root
+from metaquest.store.usage import record_usage_safe
 from metaquest.utils.browser import open_in_browser
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
+    """Resolve the shared data store (if any) for a command's ``--data-root``/registry.
+
+    ``getattr`` guards ``args.data_root`` so a namespace built without that attribute (an
+    older test, or a caller that never reaches this code path) is never broken by it.
+    """
+    store_root = resolve_store_root(getattr(args, "data_root", None), registry.store.get("root"))
+    if store_root is None:
+        return None
+    return store_paths(store_root)
 
 
 def _read_accession_file(filename: str) -> List[str]:
@@ -92,6 +107,7 @@ class SRAQualityProfileCommand(BaseCommand):
             help="Generate only summary statistics",
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
@@ -252,6 +268,7 @@ class SRAQualityProfileCommand(BaseCommand):
 
             if profiles:
                 registry = load_registry(args.registry)
+                store = _resolve_command_store(args, registry)
                 for profile in profiles:
                     output = (
                         output_dir / f"{profile.accession}_quality_profile.json"
@@ -269,6 +286,7 @@ class SRAQualityProfileCommand(BaseCommand):
                             "gc_content": profile.gc_content,
                         },
                     )
+                    record_usage_safe(store, registry, profile.accession, "", "analysed", detail="quality")
                 save_registry(registry)
 
             print("\nQuality analysis complete!")

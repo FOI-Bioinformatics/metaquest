@@ -7,10 +7,11 @@ previewing NCBI metadata, computing statistics, and validating downloaded datase
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.data.defaults import read_records
-from metaquest.data.registry import load_registry, nan_to_none, record_analysis, save_registry
+from metaquest.data.registry import Registry, load_registry, nan_to_none, record_analysis, save_registry
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
     create_download_preview,
@@ -18,8 +19,23 @@ from metaquest.data.sra_metadata import (
     save_metadata_report,
     generate_statistics_report,
 )
+from metaquest.store.layout import StorePaths, store_paths
+from metaquest.store.resolve import resolve_store_root
+from metaquest.store.usage import record_usage_safe
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
+    """Resolve the shared data store (if any) for a command's ``--data-root``/registry.
+
+    ``getattr`` guards ``args.data_root`` so a namespace built without that attribute (an
+    older test, or a caller that never reaches this code path) is never broken by it.
+    """
+    store_root = resolve_store_root(getattr(args, "data_root", None), registry.store.get("root"))
+    if store_root is None:
+        return None
+    return store_paths(store_root)
 
 
 class SRAInfoCommand(BaseCommand):
@@ -168,6 +184,7 @@ class SRAStatsCommand(BaseCommand):
             help="Specific accessions to analyze (default: all)",
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
     def _record_statistics(self, args, report_path: Path) -> None:
         """Record an sra_stats analysis for every accession in the statistics report.
@@ -189,13 +206,16 @@ class SRAStatsCommand(BaseCommand):
             return
 
         registry = load_registry(args.registry)
+        store = _resolve_command_store(args, registry)
         for _, row in df.iterrows():
+            accession = str(row["accession"])
             summary = {
                 "total_reads": nan_to_none(row.get("total_reads")),
                 "gc_content": nan_to_none(row.get("gc_content")),
                 "avg_read_length": nan_to_none(row.get("avg_read_length")),
             }
-            record_analysis(registry, str(row["accession"]), "sra_stats", report_path, summary)
+            record_analysis(registry, accession, "sra_stats", report_path, summary)
+            record_usage_safe(store, registry, accession, "", "analysed", detail="sra_stats")
         save_registry(registry)
 
     def execute(self, args):
@@ -254,6 +274,7 @@ class SRAValidateCommand(BaseCommand):
             help="Check that paired-end files have matching read counts",
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
     def _find_accession_dirs(self, fastq_folder, specific_accessions=None):
         """Find accession directories to validate."""
@@ -350,6 +371,7 @@ class SRAValidateCommand(BaseCommand):
                 return 1
 
             registry = load_registry(args.registry)
+            store = _resolve_command_store(args, registry)
             validation_results = []
             for acc_dir in accession_dirs:
                 result = self._validate_directory(acc_dir, args.check_pairs)
@@ -361,6 +383,7 @@ class SRAValidateCommand(BaseCommand):
                     "",
                     {"passed": result["status"] == "PASSED", "files": result.get("num_files", 0)},
                 )
+                record_usage_safe(store, registry, result["accession"], "", "analysed", detail="validate")
             save_registry(registry)
 
             success = self._print_validation_results(validation_results)

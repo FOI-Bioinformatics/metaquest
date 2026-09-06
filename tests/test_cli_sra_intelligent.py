@@ -108,6 +108,7 @@ class TestSRAQualityProfileCommand:
             include_contamination=False,
             summary_only=False,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
@@ -151,6 +152,7 @@ class TestSRAQualityProfileCommand:
             include_contamination=True,
             summary_only=False,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         def profile_for(accession, fastq_path):
@@ -180,6 +182,95 @@ class TestSRAQualityProfileCommand:
             analysis = registry["datasets"][acc]["analyses"]["quality"]
             # Same project-relative recording as above.
             assert analysis["output"] == f"output/{acc}_quality_profile.json"
+
+    def test_execute_records_usage_in_store_catalogue(self, tmp_path):
+        """Each profiled accession is also recorded as 'analysed' usage in the store catalogue."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.catalog import Catalog
+        from metaquest.store.layout import init_store, store_paths
+
+        cmd = SRAQualityProfileCommand()
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        (fastq_dir / "SRR001.fastq.gz").touch()
+        registry_path = tmp_path / "metaquest_registry.json"
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        registry = _load(registry_path)
+        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
+        _save(registry)
+
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+            registry=str(registry_path),
+            data_root=str(store_root),
+        )
+
+        mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer.profile_dataset_quality.return_value = mock_profile
+            mock_analyzer_class.return_value = mock_analyzer
+            result = cmd.execute(args)
+
+        assert result == 0
+        with Catalog(store_paths(store_root)) as catalog:
+            catalog.migrate()
+            row = catalog.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?", ("SRR001", "proj1")
+            ).fetchone()
+        assert row["stage"] == "analysed"
+
+    def test_catalog_failure_leaves_quality_outcome_unchanged(self, tmp_path):
+        """A broken catalogue write never changes the quality analysis's registry outcome or exit code."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.layout import init_store
+
+        cmd = SRAQualityProfileCommand()
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        (fastq_dir / "SRR001.fastq.gz").touch()
+        registry_path = tmp_path / "metaquest_registry.json"
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        registry = _load(registry_path)
+        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
+        _save(registry)
+
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+            registry=str(registry_path),
+            data_root=str(store_root),
+        )
+
+        mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer.profile_dataset_quality.return_value = mock_profile
+            mock_analyzer_class.return_value = mock_analyzer
+            with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
+                result = cmd.execute(args)
+
+        assert result == 0
+        registry_after = json.loads(registry_path.read_text())
+        analysis = registry_after["datasets"]["SRR001"]["analyses"]["quality"]
+        assert analysis["summary"] == {"grade": "good", "total_reads": 1000, "gc_content": 0.45}
 
     def test_execute_missing_fastq_marks_failed(self, tmp_path):
         """Accessions with no FASTQ files are recorded as failed and yield exit 1."""
@@ -243,6 +334,7 @@ class TestSRAQualityProfileCommand:
             include_contamination=False,
             summary_only=True,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         mock_profile = make_profile("SRR", n_content=0.01, duplication_rate=0.15, adapter=0.02)

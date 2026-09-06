@@ -26,6 +26,9 @@ from metaquest.data.registry import (
     registry_transaction,
     resolve_project_path,
 )
+from metaquest.store.layout import StorePaths, store_paths
+from metaquest.store.resolve import resolve_store_root
+from metaquest.store.usage import record_usage_safe
 
 
 class ExtractTargetReadsCommand(BaseCommand):
@@ -82,8 +85,23 @@ class ExtractTargetReadsCommand(BaseCommand):
             help="Redo extraction and assembly even when the registry says they are done",
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
-    def _record_result(self, args: argparse.Namespace, accession: str, outcome: ExtractionResult) -> None:
+    @staticmethod
+    def _resolve_store(args: argparse.Namespace, registry: Registry) -> Optional[StorePaths]:
+        """Resolve the shared data store (if any); returns None without one."""
+        store_root = resolve_store_root(getattr(args, "data_root", None), registry.store.get("root"))
+        if store_root is None:
+            return None
+        return store_paths(store_root)
+
+    def _record_result(
+        self,
+        args: argparse.Namespace,
+        accession: str,
+        outcome: ExtractionResult,
+        store: Optional[StorePaths] = None,
+    ) -> None:
         """Checkpoint one extraction result; skipped samples are already recorded."""
         if outcome.skipped:
             return
@@ -100,6 +118,9 @@ class ExtractTargetReadsCommand(BaseCommand):
                     "preset": args.preset,
                     "threshold": args.threshold,
                 },
+            )
+            record_usage_safe(
+                store, reg, accession, args.genome_id, "extracted", detail=f"{outcome.mapped_records} mapped reads"
             )
 
     @staticmethod
@@ -152,7 +173,9 @@ class ExtractTargetReadsCommand(BaseCommand):
         else:
             self.logger.error("No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id)
 
-    def _assemble(self, args: argparse.Namespace, with_reads: Dict[str, List[Path]]) -> None:
+    def _assemble(
+        self, args: argparse.Namespace, with_reads: Dict[str, List[Path]], store: Optional[StorePaths] = None
+    ) -> None:
         """Assemble every sample that has mapped reads, recording each assembly as it lands."""
         asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
         if args.assembly_threads is None and asm_threads < args.threads:
@@ -170,21 +193,26 @@ class ExtractTargetReadsCommand(BaseCommand):
                 # megahit did not run, so the recorded version and parameters still describe
                 # the assembly on disk; leave them alone.
                 continue
+            stats = summarise_contigs(out_dir / "final.contigs.fa")
             with registry_transaction(args.registry) as reg:
                 record_assembly(
                     reg,
                     accession,
                     args.genome_id,
                     out_dir,
-                    summarise_contigs(out_dir / "final.contigs.fa"),
+                    stats,
                     version,
                     {"threads": asm_threads, "min_contig_len": args.min_contig_len},
+                )
+                record_usage_safe(
+                    store, reg, accession, args.genome_id, "assembled", detail=f"{stats.get('contigs', 0)} contigs"
                 )
         self.logger.info("Assembled %d sample(s)", len(with_reads))
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
             registry = load_registry(args.registry)
+            store = self._resolve_store(args, registry)
             already_done = {
                 acc: rec
                 for acc in registry.datasets
@@ -203,7 +231,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 dry_run=args.dry_run,
                 force=args.force,
                 already_done=already_done,
-                on_result=lambda accession, outcome: self._record_result(args, accession, outcome),
+                on_result=lambda accession, outcome: self._record_result(args, accession, outcome, store),
             )
 
             if args.dry_run:
@@ -219,7 +247,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 return 1
 
             if args.assemble:
-                self._assemble(args, with_reads)
+                self._assemble(args, with_reads, store)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error extracting target reads: %s", e)

@@ -203,6 +203,21 @@ class TestStoreInitCommand:
 
         assert first_id == second_id
 
+    def test_store_status_counts_project_after_init(self, tmp_path, monkeypatch, capsys):
+        root = tmp_path / "store"
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        rc = StoreStatusCommand().execute(_status_args(data_root=str(root), json=True, registry=str(registry_path)))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["projects"] == 1
+
     def test_execute_set_default_writes_config(self, tmp_path, monkeypatch):
         from metaquest.store.resolve import read_config
 
@@ -454,6 +469,60 @@ class TestStoreAdoptCommand:
         with Catalog(paths) as cat:
             assert cat.get_dataset("SRR1") is not None
 
+        registry = load_registry(registry_path)
+        assert registry.datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert registry.datasets["SRR1"]["download"]["source"] == "store"
+        assert registry.store["linked"] == ["SRR1"]
+
+    def test_adopt_copies_sidecar_completeness_and_records_usage(self, tmp_path, monkeypatch):
+        """A newly adopted accession's registry record carries its sidecar's completeness
+        verdict, and the store catalogue gets a 'linked' usage row for this project."""
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path)))
+        assert rc == 0
+
+        registry = load_registry(registry_path)
+        complete = registry.datasets["SRR1"]["download"]["complete"]
+        # No metadata XML is present, so the sidecar's own verify against NCBI's spot count
+        # is unverified; the registry record must carry exactly that verdict, not silently
+        # invent one.
+        assert complete["verdict"] == "unverified"
+        assert complete["expected_spots"] is None
+        assert complete["reads_r1"] == 1
+
+        paths = store_paths(root)
+        with Catalog(paths) as cat:
+            row = cat.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?",
+                ("SRR1", registry.project["id"]),
+            ).fetchone()
+        assert row["stage"] == "linked"
+
+    def test_catalog_failure_leaves_adopt_outcome_unchanged(self, tmp_path, monkeypatch):
+        """A broken catalogue write never changes store_adopt's registry outcome or exit code."""
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
+            rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path)))
+
+        assert rc == 0
         registry = load_registry(registry_path)
         assert registry.datasets["SRR1"]["download"]["state"] == "downloaded"
         assert registry.datasets["SRR1"]["download"]["source"] == "store"
@@ -736,6 +805,77 @@ class TestStoreLinkCommand:
         assert rc == 0
         assert (project_dir / "fastq" / "SRR1").is_symlink()
 
+        registry = load_registry(registry_path)
+        assert registry.datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert registry.datasets["SRR1"]["download"]["source"] == "store"
+        assert registry.store["linked"] == ["SRR1"]
+
+    def test_link_copies_sidecar_completeness_and_records_usage(self, tmp_path, monkeypatch):
+        """A linked accession's registry record carries the store sidecar's completeness
+        verdict, and the store catalogue gets a 'linked' usage row for this project."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+        sidecar = _sidecar("SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        rc = StoreLinkCommand().execute(
+            _link_args(
+                ["SRR1"], data_root=str(root), registry=str(registry_path), fastq_folder=str(project_dir / "fastq")
+            )
+        )
+        assert rc == 0
+
+        registry = load_registry(registry_path)
+        complete = registry.datasets["SRR1"]["download"]["complete"]
+        assert complete == {"verdict": "complete", "ratio": 1.0, "expected_spots": 5, "reads_r1": 5}
+
+        with Catalog(paths) as cat:
+            row = cat.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?",
+                ("SRR1", registry.project["id"]),
+            ).fetchone()
+        assert row["stage"] == "linked"
+
+    def test_catalog_failure_leaves_link_outcome_unchanged(self, tmp_path, monkeypatch):
+        """A broken catalogue write never changes store_link's registry outcome or exit code."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+        sidecar = _sidecar("SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
+            rc = StoreLinkCommand().execute(
+                _link_args(
+                    ["SRR1"],
+                    data_root=str(root),
+                    registry=str(registry_path),
+                    fastq_folder=str(project_dir / "fastq"),
+                )
+            )
+
+        assert rc == 0
         registry = load_registry(registry_path)
         assert registry.datasets["SRR1"]["download"]["state"] == "downloaded"
         assert registry.datasets["SRR1"]["download"]["source"] == "store"

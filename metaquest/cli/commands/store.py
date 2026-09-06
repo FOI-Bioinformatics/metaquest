@@ -27,6 +27,7 @@ from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
+from metaquest.store.usage import record_usage_safe
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,20 @@ def _now() -> str:
 
 def _no_store_hint() -> None:
     print("No store configured; run: metaquest store_init --data-root PATH")
+
+
+def _sidecar_completeness(paths: StorePaths, accession: str) -> Optional[Dict[str, Any]]:
+    """The completeness verdict recorded in the store's sidecar for ``accession``, or None
+    when there is no sidecar yet (``read_sidecar`` already logs a warning in that case)."""
+    sidecar = read_sidecar(sidecar_path(paths, accession))
+    if sidecar is None:
+        return None
+    return {
+        "verdict": sidecar.completeness.get("verdict"),
+        "ratio": sidecar.completeness.get("ratio"),
+        "expected_spots": sidecar.ncbi.get("spots"),
+        "reads_r1": sidecar.reads_per_mate,
+    }
 
 
 class StoreInitCommand(BaseCommand):
@@ -140,6 +155,12 @@ class StoreInitCommand(BaseCommand):
                     "linked": [],
                 }
                 project_snapshot = dict(registry.project)
+                registry_path_str = str(registry.path)
+
+            with catalog_write(paths) as catalog:
+                catalog.upsert_project(
+                    project_snapshot["id"], project_snapshot["name"], project_snapshot["path"], registry_path_str
+                )
 
             if args.set_default:
                 write_config_data_root(root.resolve())
@@ -442,9 +463,18 @@ class StoreAdoptCommand(BaseCommand):
         if newly_linked:
             with registry_transaction(args.registry) as reg:
                 for acc in newly_linked:
+                    complete = _sidecar_completeness(paths, acc)
                     record_download(
-                        reg, acc, "downloaded", args.fastq_folder, attempt=False, source="store", store_name=acc
+                        reg,
+                        acc,
+                        "downloaded",
+                        args.fastq_folder,
+                        attempt=False,
+                        complete=complete,
+                        source="store",
+                        store_name=acc,
                     )
+                    record_usage_safe(paths, reg, acc, "", "linked", detail="store_adopt")
                 linked = set(reg.store.get("linked") or [])
                 linked.update(newly_linked)
                 reg.store["linked"] = sorted(linked)
@@ -741,15 +771,18 @@ class StoreLinkCommand(BaseCommand):
         if linked:
             with registry_transaction(args.registry) as reg:
                 for accession in linked:
+                    complete = _sidecar_completeness(paths, accession)
                     record_download(
                         reg,
                         accession,
                         "downloaded",
                         args.fastq_folder,
                         attempt=False,
+                        complete=complete,
                         source="store",
                         store_name=accession,
                     )
+                    record_usage_safe(paths, reg, accession, "", "linked", detail="store_link")
                 reg_linked = set(reg.store.get("linked") or [])
                 reg_linked.update(linked)
                 reg.store["linked"] = sorted(reg_linked)

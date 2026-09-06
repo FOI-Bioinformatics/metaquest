@@ -35,6 +35,7 @@ from metaquest.data.sra import (
     fasterq_dump_version,
     is_transient_folder,
     compress_fastq,
+    transient_bytes,
 )
 from helpers_extraction import _fake_tools
 
@@ -1222,6 +1223,51 @@ class TestIsTransientFolder:
     )
     def test_is_transient_folder(self, name, expected):
         assert is_transient_folder(name) == expected
+
+
+class TestTransientBytes:
+    """Test transient_bytes: total size of .sra-cache and <ACC>_temp folders under one folder."""
+
+    def test_missing_folder_is_zero(self, tmp_path):
+        assert transient_bytes(tmp_path / "does-not-exist") == 0
+
+    def test_empty_folder_is_zero(self, tmp_path):
+        assert transient_bytes(tmp_path) == 0
+
+    def test_sums_sra_cache_contents(self, tmp_path):
+        cache = tmp_path / ".sra-cache"
+        cache.mkdir()
+        (cache / "SRR1.sra").write_bytes(b"x" * 100)
+        (cache / "SRR2.sra").write_bytes(b"x" * 50)
+        assert transient_bytes(tmp_path) == 150
+
+    def test_sums_acc_temp_contents(self, tmp_path):
+        temp = tmp_path / "SRR1_temp"
+        temp.mkdir()
+        (temp / "SRR1.fastq").write_bytes(b"x" * 200)
+        assert transient_bytes(tmp_path) == 200
+
+    def test_sums_across_multiple_transient_folders(self, tmp_path):
+        cache = tmp_path / ".sra-cache"
+        cache.mkdir()
+        (cache / "SRR1.sra").write_bytes(b"x" * 100)
+        temp = tmp_path / "SRR2_temp"
+        temp.mkdir()
+        (temp / "SRR2.fastq").write_bytes(b"x" * 200)
+        assert transient_bytes(tmp_path) == 300
+
+    def test_ignores_non_transient_entries(self, tmp_path):
+        real = tmp_path / "SRR1"
+        real.mkdir()
+        (real / "SRR1_1.fastq").write_bytes(b"x" * 999)
+        assert transient_bytes(tmp_path) == 0
+
+    def test_recurses_into_subdirectories(self, tmp_path):
+        cache = tmp_path / ".sra-cache"
+        nested = cache / "nested"
+        nested.mkdir(parents=True)
+        (nested / "SRR1.sra").write_bytes(b"x" * 42)
+        assert transient_bytes(tmp_path) == 42
 
 
 class TestCheckExistingDownloads:

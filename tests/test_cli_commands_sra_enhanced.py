@@ -249,6 +249,7 @@ class TestSRAStatsCommand:
             output_report=str(report_path),
             accessions=None,
             registry=str(registry_path),
+            data_root=None,
         )
 
         with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
@@ -262,6 +263,91 @@ class TestSRAStatsCommand:
             # registry records it relative to it, which keeps the project movable.
             assert analysis["output"] == "stats.csv"
             assert analysis["summary"]["total_reads"] == total_reads
+
+    @patch("builtins.print")
+    def test_execute_records_usage_in_store_catalogue(self, mock_print, tmp_path):
+        """Each accession is also recorded as 'analysed' usage in the store catalogue."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.catalog import Catalog
+        from metaquest.store.layout import init_store, store_paths
+
+        command = SRAStatsCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        report_path = tmp_path / "stats.csv"
+        registry_path = tmp_path / "metaquest_registry.json"
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        registry = _load(registry_path)
+        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
+        _save(registry)
+
+        def fake_generate_report(folder, output_report):
+            pd_module.DataFrame(
+                [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
+            ).to_csv(output_report, index=False)
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            output_report=str(report_path),
+            accessions=None,
+            registry=str(registry_path),
+            data_root=str(store_root),
+        )
+
+        with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
+            result = command.execute(args)
+
+        assert result == 0
+        with Catalog(store_paths(store_root)) as catalog:
+            catalog.migrate()
+            row = catalog.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?", ("SRR1", "proj1")
+            ).fetchone()
+        assert row["stage"] == "analysed"
+
+    @patch("builtins.print")
+    def test_catalog_failure_leaves_analysis_outcome_unchanged(self, mock_print, tmp_path):
+        """A broken catalogue write never changes the sra_stats registry outcome or exit code."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.layout import init_store
+
+        command = SRAStatsCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        report_path = tmp_path / "stats.csv"
+        registry_path = tmp_path / "metaquest_registry.json"
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        registry = _load(registry_path)
+        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
+        _save(registry)
+
+        def fake_generate_report(folder, output_report):
+            pd_module.DataFrame(
+                [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
+            ).to_csv(output_report, index=False)
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            output_report=str(report_path),
+            accessions=None,
+            registry=str(registry_path),
+            data_root=str(store_root),
+        )
+
+        with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
+            with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
+                result = command.execute(args)
+
+        assert result == 0
+        registry_after = json.loads(registry_path.read_text())
+        analysis = registry_after["datasets"]["SRR1"]["analyses"]["sra_stats"]
+        assert analysis["summary"]["total_reads"] == 1000
 
     @patch("builtins.print")
     def test_execute_folder_not_exists(self, mock_print):
@@ -511,6 +597,7 @@ class TestSRAValidateCommand:
             accessions=None,
             check_pairs=False,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         # Mock _validate_directory to return success
@@ -544,6 +631,7 @@ class TestSRAValidateCommand:
             accessions=None,
             check_pairs=False,
             registry=str(registry_path),
+            data_root=None,
         )
 
         with patch.object(command, "_validate_directory") as mock_validate:
@@ -558,6 +646,99 @@ class TestSRAValidateCommand:
         assert result == 0
         registry = json.loads(registry_path.read_text())
         assert registry["datasets"]["SRR123"]["analyses"]["validate"]["summary"] == {
+            "passed": True,
+            "files": 1,
+        }
+
+    @patch("builtins.print")
+    def test_execute_records_usage_in_store_catalogue(self, mock_print, tmp_path):
+        """A validated accession is also recorded as 'analysed' usage in the store catalogue."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.catalog import Catalog
+        from metaquest.store.layout import init_store, store_paths
+
+        command = SRAValidateCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "test.fastq").write_text("@r\nACGT\n+\n!!!!\n")
+        registry_path = tmp_path / "metaquest_registry.json"
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        registry = _load(registry_path)
+        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
+        _save(registry)
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accessions=None,
+            check_pairs=False,
+            registry=str(registry_path),
+            data_root=str(store_root),
+        )
+
+        with patch.object(command, "_validate_directory") as mock_validate:
+            mock_validate.return_value = {
+                "accession": "SRR123",
+                "status": "PASSED",
+                "issues": "None",
+                "num_files": 1,
+            }
+            result = command.execute(args)
+
+        assert result == 0
+        with Catalog(store_paths(store_root)) as catalog:
+            catalog.migrate()
+            row = catalog.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?", ("SRR123", "proj1")
+            ).fetchone()
+        assert row["stage"] == "analysed"
+
+    @patch("builtins.print")
+    def test_catalog_failure_leaves_validate_outcome_unchanged(self, mock_print, tmp_path):
+        """A broken catalogue write never changes validate's registry outcome or exit code."""
+        from metaquest.data.registry import load_registry as _load, save_registry as _save
+        from metaquest.store.layout import init_store
+
+        command = SRAValidateCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "test.fastq").write_text("@r\nACGT\n+\n!!!!\n")
+        registry_path = tmp_path / "metaquest_registry.json"
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        registry = _load(registry_path)
+        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
+        _save(registry)
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accessions=None,
+            check_pairs=False,
+            registry=str(registry_path),
+            data_root=str(store_root),
+        )
+
+        with patch.object(command, "_validate_directory") as mock_validate:
+            mock_validate.return_value = {
+                "accession": "SRR123",
+                "status": "PASSED",
+                "issues": "None",
+                "num_files": 1,
+            }
+            with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
+                result = command.execute(args)
+
+        assert result == 0
+        registry_after = json.loads(registry_path.read_text())
+        assert registry_after["datasets"]["SRR123"]["analyses"]["validate"]["summary"] == {
             "passed": True,
             "files": 1,
         }
@@ -603,6 +784,7 @@ class TestSRAValidateCommand:
             accessions=None,
             check_pairs=False,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         # Mock _validate_directory to raise an exception

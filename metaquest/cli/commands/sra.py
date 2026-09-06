@@ -6,7 +6,7 @@ import argparse
 import csv
 import os
 import shutil
-from typing import Callable, Optional
+from typing import Callable, Optional, Set
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
@@ -21,15 +21,22 @@ from metaquest.data.registry import (
     record_download,
     registry_transaction,
 )
-from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_message
-from metaquest.store.layout import StorePaths, store_paths
+from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_message, transient_bytes
+from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
+from metaquest.store.sidecar import read_sidecar
+from metaquest.store.usage import record_usage_many, record_usage_safe
 
 # Markers the data layer puts in a result message for a dataset the shared store provided
 # (linked from a copy already there) or received (downloaded into it by this run).
 STORE_LINKED_PREFIX = "linked from store"
 STORE_SAVED_SUFFIX = "; stored"
+
+# Kept .sra-cache archives and <ACC>_temp build folders bigger than this, summed across a
+# run's candidate folders, are worth a warning: they are easy to forget about and can
+# quietly use up a lot of disk.
+TRANSIENT_BYTES_WARN_THRESHOLD = 1024**3
 
 
 class DownloadSraCommand(BaseCommand):
@@ -247,22 +254,35 @@ class DownloadSraCommand(BaseCommand):
     def _record_run_outcomes(
         self, args: argparse.Namespace, stats: dict, fastq_dir: Path, store: Optional[StorePaths] = None
     ) -> None:
-        """Record the outcomes the download loop could not report, one transaction per accession."""
+        """Record the outcomes the download loop could not report, one transaction per accession.
+
+        Every already-downloaded accession the shared store backs is also recorded as
+        ``"linked"`` usage in the store catalogue, in one batched write after the loop
+        (``record_usage_many``) rather than one lock per accession.
+        """
+        usage_rows = []
         for acc in stats.get("already_downloaded_accessions", []):
             from_store = store is not None and is_store_link(fastq_dir / acc, store)
             with registry_transaction(args.registry) as reg:
                 if reg.datasets.get(acc, {}).get("download", {}).get("state") != "downloaded":
+                    complete = self._sidecar_completeness(store, acc) if from_store else None
                     record_download(
                         reg,
                         acc,
                         "downloaded",
                         fastq_dir,
                         attempt=False,
+                        complete=complete,
                         source="store" if from_store else None,
                         store_name=acc if from_store else None,
                     )
                     if from_store:
                         self._mark_linked(reg, acc)
+            if from_store:
+                usage_rows.append((acc, "", "linked", "already downloaded"))
+        if usage_rows:
+            usage_registry = load_registry(args.registry)
+            record_usage_many(store, usage_registry, usage_rows)
         for acc in stats.get("blacklisted_accessions", []):
             with registry_transaction(args.registry) as reg:
                 self._record_skip(reg, acc, "blacklisted", fastq_dir)
@@ -299,13 +319,16 @@ class DownloadSraCommand(BaseCommand):
         self.logger.info("Using shared data store at %s", store_root)
         return store_paths(store_root)
 
-    def _result_recorder(self, args: argparse.Namespace, fastq_dir: Path) -> Callable[[str, bool, str], None]:
+    def _result_recorder(
+        self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths] = None
+    ) -> Callable[[str, bool, str], None]:
         """The callback the download loop uses to record each accession's outcome.
 
         A dataset linked from the shared store is recorded as downloaded without counting an
         attempt against it, since no download ran; one this run downloaded into the store
         counts as an attempt like any other. Both are added to the project's list of linked
-        datasets.
+        datasets, and recorded as store catalogue usage: ``"linked"`` for a dataset the store
+        already held, ``"downloaded"`` for one this run saved into it.
         """
 
         def _record_result(accession: str, success: bool, message: str) -> None:
@@ -313,6 +336,11 @@ class DownloadSraCommand(BaseCommand):
             from_store = linked or (bool(success) and message.endswith(STORE_SAVED_SUFFIX))
             with registry_transaction(args.registry) as reg:
                 complete = parse_verdict_message(message) if success else None
+                if complete is None and from_store:
+                    # "linked from store" carries no verify-download message of its own; the
+                    # store's sidecar already has the completeness verdict from when the
+                    # dataset was originally downloaded.
+                    complete = self._sidecar_completeness(store, accession)
                 record_download(
                     reg,
                     accession,
@@ -326,8 +354,29 @@ class DownloadSraCommand(BaseCommand):
                 )
                 if from_store:
                     self._mark_linked(reg, accession)
+                    stage = "linked" if linked else "downloaded"
+                    record_usage_safe(store, reg, accession, "", stage, detail=message)
 
         return _record_result
+
+    @staticmethod
+    def _sidecar_completeness(store: Optional[StorePaths], accession: str) -> Optional[dict]:
+        """The completeness verdict recorded in the store's sidecar for ``accession``, or None.
+
+        None when there is no store, or no sidecar (not yet catalogued, or unreadable);
+        ``read_sidecar`` already logs a warning for the latter case.
+        """
+        if store is None:
+            return None
+        sidecar = read_sidecar(sidecar_path(store, accession))
+        if sidecar is None:
+            return None
+        return {
+            "verdict": sidecar.completeness.get("verdict"),
+            "ratio": sidecar.completeness.get("ratio"),
+            "expected_spots": sidecar.ncbi.get("spots"),
+            "reads_r1": sidecar.reads_per_mate,
+        }
 
     @staticmethod
     def _mark_linked(reg: Registry, accession: str) -> None:
@@ -335,6 +384,42 @@ class DownloadSraCommand(BaseCommand):
         linked = set(reg.store.get("linked") or [])
         linked.add(accession)
         reg.store["linked"] = sorted(linked)
+
+    def _transient_folders(self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths]) -> Set[Path]:
+        """Folders where ``download_accession`` can leave ``.sra-cache`` archives or
+        ``<ACC>_temp`` build directories behind: the FASTQ output folder (always, since
+        that is where ``<ACC>_temp`` lands and, without a store, ``.sra-cache`` too), any
+        explicit ``--temp-folder`` or ``--sra-cache``, and, with a shared store, the
+        store's own ``tmp`` folder (the default home for ``.sra-cache`` when downloading
+        through a store)."""
+        folders = {fastq_dir}
+        temp_folder = getattr(args, "temp_folder", None)
+        if temp_folder:
+            folders.add(Path(temp_folder))
+        sra_cache = getattr(args, "sra_cache", None)
+        if sra_cache:
+            folders.add(Path(sra_cache).parent)
+        if store is not None:
+            folders.add(store.tmp)
+        return folders
+
+    def _warn_if_transient_bytes_large(
+        self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths]
+    ) -> None:
+        """Warn, naming each folder and its size, when kept transient artifacts add up."""
+        sized = [(folder, transient_bytes(folder)) for folder in self._transient_folders(args, fastq_dir, store)]
+        sized = [(folder, size) for folder, size in sized if size > 0]
+        total = sum(size for _, size in sized)
+        if total <= TRANSIENT_BYTES_WARN_THRESHOLD:
+            return
+        detail = ", ".join(f"{folder} ({size} bytes)" for folder, size in sorted(sized, key=lambda item: str(item[0])))
+        self.logger.warning(
+            "Kept .sra-cache archives and <ACC>_temp build folders total %d bytes, over the "
+            "%d byte warning threshold: %s",
+            total,
+            TRANSIENT_BYTES_WARN_THRESHOLD,
+            detail,
+        )
 
     def _store_options(self, args: argparse.Namespace, store: Optional[StorePaths], registry: Registry) -> dict:
         """The store-related keyword arguments for ``download_sra``, empty without a store.
@@ -395,7 +480,7 @@ class DownloadSraCommand(BaseCommand):
                         if (record.get("download") or {}).get("complete", {}).get("verdict") == "truncated"
                     }
 
-                on_result = self._result_recorder(args, fastq_dir)
+                on_result = self._result_recorder(args, fastq_dir, store)
 
             download_stats = download_sra(
                 fastq_folder=args.fastq_folder,
@@ -425,6 +510,7 @@ class DownloadSraCommand(BaseCommand):
             else:
                 self._log_download_summary(download_stats)
                 self._record_run_outcomes(args, download_stats, fastq_dir, store)
+                self._warn_if_transient_bytes_large(args, fastq_dir, store)
 
                 if args.report_file:
                     self._write_report(args.report_file, download_stats)
