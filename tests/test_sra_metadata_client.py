@@ -234,6 +234,65 @@ class TestReadStatistics:
             # Total bases: 1000, so N50 should be 300 (cumulative reaches 500 at 300)
             assert stats.n50 == 300
 
+    def test_default_result_is_not_sampled(self):
+        """A file smaller than max_reads is read in full: sampled is False."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fastq_file = self.create_test_fastq_file(temp_path, ["ACGT"] * 5)
+
+            stats = calculate_read_statistics([fastq_file])
+
+            assert stats.total_reads == 5
+            assert stats.sampled is False
+
+    def test_max_reads_caps_the_stream_and_marks_sampled(self):
+        """max_reads stops the stream early and marks the result as sampled."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fastq_file = self.create_test_fastq_file(temp_path, ["ACGT"] * 10)
+
+            stats = calculate_read_statistics([fastq_file], max_reads=4)
+
+            assert stats.total_reads == 4
+            assert stats.sampled is True
+
+    def test_max_reads_zero_means_exact(self):
+        """max_reads=0 reads every record, however many there are."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fastq_file = self.create_test_fastq_file(temp_path, ["ACGT"] * 10)
+
+            stats = calculate_read_statistics([fastq_file], max_reads=0)
+
+            assert stats.total_reads == 10
+            assert stats.sampled is False
+
+    def test_cached_dict_builds_read_statistics_without_file_io(self):
+        """When ``cached`` is given, the result comes straight from it: no FASTQ is read."""
+        cached = {
+            "reads_total": 12345,
+            "bases_total": 1850000,
+            "avg_read_length": 150.0,
+            "min_read_length": 100,
+            "max_read_length": 200,
+            "n50": 150,
+            "gc_content": 0.45,
+            "quality_summary": {"mean": 30.0, "median": 31.0, "q25": 25.0, "q75": 35.0},
+            "sampled": True,
+        }
+
+        stats = calculate_read_statistics([Path("/nonexistent/does-not-matter.fastq")], cached=cached)
+
+        assert stats.total_reads == 12345
+        assert stats.total_bases == 1850000
+        assert stats.avg_read_length == 150.0
+        assert stats.min_read_length == 100
+        assert stats.max_read_length == 200
+        assert stats.n50 == 150
+        assert stats.gc_content == pytest.approx(45.0)  # cache holds a 0-1 fraction
+        assert stats.sampled is True
+        assert stats.quality_scores["mean"] == pytest.approx(30.0)
+
 
 class TestSRAIntegration:
     """Integration tests for SRA functionality."""

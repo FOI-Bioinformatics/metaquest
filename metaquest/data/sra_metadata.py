@@ -14,9 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import requests
-from Bio import SeqIO
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.sra import iter_fastq_records
+from metaquest.store.stats import cached_stats
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class ReadStatistics:
     n50: int
     gc_content: float
     quality_scores: Optional[Dict[str, float]] = None
+    sampled: bool = False
 
 
 class SRAMetadataClient:
@@ -327,21 +329,69 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
     return "unknown"
 
 
-def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
+def _read_statistics_from_cache(cached: Dict[str, Any]) -> ReadStatistics:
+    """Build a ``ReadStatistics`` from a ``compute_dataset_stats``-shaped cache dict.
+
+    The cache's ``gc_content`` is a 0-1 fraction (the convention used across the shared
+    store and ``metaquest.sra.analytics``); ``ReadStatistics.gc_content`` is a percentage, so
+    it is converted here. ``quality_scores`` here holds mean/q25/q75 of the cache's flattened
+    per-base ``quality_summary`` as a best-effort stand-in for the legacy mean/min/max of
+    per-read average quality, since the cache does not keep per-read values.
     """
-    Calculate comprehensive statistics for FASTQ files.
+    quality_summary = cached.get("quality_summary") or {}
+    qual_stats = None
+    if quality_summary:
+        mean = quality_summary.get("mean", 0.0)
+        qual_stats = {
+            "mean": mean,
+            "min": quality_summary.get("q25", mean),
+            "max": quality_summary.get("q75", mean),
+        }
+    return ReadStatistics(
+        total_reads=cached.get("reads_total", 0),
+        total_bases=cached.get("bases_total", 0) or 0,
+        avg_read_length=cached.get("avg_read_length", 0.0) or 0.0,
+        min_read_length=cached.get("min_read_length", 0) or 0,
+        max_read_length=cached.get("max_read_length", 0) or 0,
+        n50=cached.get("n50", 0) or 0,
+        gc_content=(cached.get("gc_content", 0.0) or 0.0) * 100,
+        quality_scores=qual_stats,
+        sampled=bool(cached.get("sampled", False)),
+    )
+
+
+def calculate_read_statistics(
+    fastq_files: List[Path], max_reads: int = 100000, cached: Optional[Dict[str, Any]] = None
+) -> ReadStatistics:
+    """
+    Calculate statistics for FASTQ files, either from a supplied cache or by streaming.
+
+    When ``cached`` is given (typically ``metaquest.store.stats.cached_stats``'s result for
+    an accession backed by the shared store), the returned ``ReadStatistics`` is built
+    directly from it with no file I/O, and ``sampled`` reflects whatever the cache recorded.
+
+    Otherwise this streams at most ``max_reads`` records per file with a raw four-line FASTQ
+    reader (``metaquest.data.sra.iter_fastq_records``, no Biopython), so a large file is
+    never fully parsed record-by-record. ``max_reads=0`` means read every record exactly;
+    otherwise ``sampled`` is True when any file held more records than were read.
 
     Args:
         fastq_files: List of FASTQ file paths
+        max_reads: Maximum records read per file (0 = exact, read every record)
+        cached: A ``compute_dataset_stats``-shaped dict to build the result from directly
 
     Returns:
         ReadStatistics object with computed statistics
     """
+    if cached is not None:
+        return _read_statistics_from_cache(cached)
+
     total_reads = 0
     total_bases = 0
     read_lengths = []
     gc_count = 0
     quality_scores = []
+    sampled = False
 
     logger.info(f"Calculating statistics for {len(fastq_files)} FASTQ files")
 
@@ -349,25 +399,26 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
         logger.debug(f"Processing {fastq_file.name}")
 
         try:
-            # Determine if file is gzipped
-            open_func = _get_file_opener(fastq_file)
+            file_reads = 0
+            for seq, qual in iter_fastq_records(fastq_file):
+                if max_reads and file_reads >= max_reads:
+                    # A further record exists beyond the cutoff: this file's stats are a
+                    # sample, not the exact total.
+                    sampled = True
+                    break
+                file_reads += 1
+                total_reads += 1
+                seq_len = len(seq)
+                total_bases += seq_len
+                read_lengths.append(seq_len)
 
-            with open_func(fastq_file, "rt") as handle:
-                for record in SeqIO.parse(handle, "fastq"):
-                    total_reads += 1
-                    seq_len = len(record.seq)
-                    total_bases += seq_len
-                    read_lengths.append(seq_len)
+                # Calculate GC content
+                gc_count += seq.count("G") + seq.count("C")
 
-                    # Calculate GC content
-                    gc_count += record.seq.count("G") + record.seq.count("C")
-
-                    # Calculate average quality score
-                    if hasattr(record, "letter_annotations") and "phred_quality" in record.letter_annotations:
-                        quals = record.letter_annotations["phred_quality"]
-                        if quals:
-                            avg_qual = sum(quals) / len(quals)
-                            quality_scores.append(avg_qual)
+                # Calculate average quality score
+                if qual:
+                    quals = [ord(c) - 33 for c in qual]
+                    quality_scores.append(sum(quals) / len(quals))
 
         except Exception as e:
             logger.error(f"Error processing {fastq_file}: {e}")
@@ -375,7 +426,7 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
 
     if total_reads == 0:
         logger.warning("No reads found in FASTQ files")
-        return ReadStatistics(0, 0, 0.0, 0, 0, 0, 0.0)
+        return ReadStatistics(0, 0, 0.0, 0, 0, 0, 0.0, sampled=sampled)
 
     # Calculate statistics
     avg_read_length = total_bases / total_reads
@@ -406,17 +457,8 @@ def calculate_read_statistics(fastq_files: List[Path]) -> ReadStatistics:
         n50=n50,
         gc_content=gc_content,
         quality_scores=qual_stats,
+        sampled=sampled,
     )
-
-
-def _get_file_opener(file_path: Path):
-    """Get appropriate file opener based on file extension."""
-    import gzip
-
-    if file_path.suffix.lower() in [".gz", ".gzip"]:
-        return gzip.open
-    else:
-        return open
 
 
 def _calculate_n50(read_lengths: List[int]) -> int:
@@ -512,6 +554,19 @@ def save_metadata_report(metadata: Dict[str, SRADatasetInfo], output_file: Union
     logger.info(f"Metadata report saved to {output_file}")
 
 
+def _resolved_sidecar_path(acc_dir: Path) -> Optional[Path]:
+    """Sidecar next to ``acc_dir``'s resolved target, when ``acc_dir`` is a store link.
+
+    Returns None for a plain directory (nothing to resolve to) or when the resolved
+    directory holds no sidecar of its own.
+    """
+    if not acc_dir.is_symlink():
+        return None
+    resolved = acc_dir.resolve()
+    candidate = resolved / f"{resolved.name}.json"
+    return candidate if candidate.is_file() else None
+
+
 def _dataset_stats_row(acc_dir: Path) -> Optional[Dict[str, Any]]:
     """Compute a statistics row for one accession directory, or None if unavailable."""
     logger.info(f"Processing {acc_dir.name}")
@@ -521,8 +576,10 @@ def _dataset_stats_row(acc_dir: Path) -> Optional[Dict[str, Any]]:
         logger.warning(f"No FASTQ files found in {acc_dir}")
         return None
 
+    cached = cached_stats(acc_dir, _resolved_sidecar_path(acc_dir))
+
     try:
-        stats = calculate_read_statistics(fastq_files)
+        stats = calculate_read_statistics(fastq_files, cached=cached)
     except Exception as e:
         logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
         return None
@@ -540,6 +597,7 @@ def _dataset_stats_row(acc_dir: Path) -> Optional[Dict[str, Any]]:
         "n50": stats.n50,
         "gc_content": stats.gc_content,
         "avg_quality": (stats.quality_scores["mean"] if stats.quality_scores else None),
+        "sampled": stats.sampled,
     }
 
 

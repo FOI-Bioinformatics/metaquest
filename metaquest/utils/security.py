@@ -35,6 +35,7 @@ BOOLEAN_FLAGS: Dict[str, FrozenSet[str]] = {
     "minimap2": frozenset({"-a", "--version"}),
     "samtools": frozenset({"-b", "-c", "--version"}),
     "megahit": frozenset({"--no-mercy", "--version"}),
+    "seqkit": frozenset({"-T", "--version"}),
 }
 # Kept for backward compatibility with any caller importing the old name.
 FASTERQ_DUMP_BOOLEAN_FLAGS = BOOLEAN_FLAGS["fasterq-dump"]

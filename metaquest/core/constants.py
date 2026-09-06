@@ -177,6 +177,15 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
         },
         "description": "SAM/BAM utilities (filter and export mapped reads)",
     },
+    "seqkit": {
+        "safe_params": {
+            "stats",
+            "-T",
+            "-j",
+            "--version",
+        },
+        "description": "FASTQ/FASTA statistics (fast exact per-file counts for the shared stats cache)",
+    },
 }
 
 # URL Constants

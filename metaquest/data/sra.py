@@ -255,6 +255,32 @@ def count_fastq_reads(path: Union[str, Path]) -> int:
     return total_newlines // 4
 
 
+def iter_fastq_records(path: Union[str, Path]):
+    """Yield ``(sequence, quality)`` string pairs for each record in ``path``, streaming.
+
+    Works for both gzip-compressed and plain files. This is the one raw four-line reader
+    shared by every caller that needs read-level content without Biopython's slower
+    per-record parser: ``metaquest.store.stats.compute_dataset_stats``'s reservoir sampler,
+    ``metaquest.data.sra_metadata.calculate_read_statistics``'s streaming pass, and
+    ``metaquest.sra.analytics.SequenceQualityAnalyzer``'s uniform sampler.
+
+    Raises ``ValueError`` when a header line is not followed by a complete
+    sequence/plus/quality triplet, since a truncated trailing record cannot be trusted.
+    """
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt") as handle:
+        while True:
+            header = handle.readline()
+            if not header:
+                return
+            seq = handle.readline().rstrip("\r\n")
+            plus = handle.readline()
+            qual = handle.readline().rstrip("\r\n")
+            if not plus or not qual:
+                raise ValueError(f"Truncated FASTQ record after header: {header.strip()!r}")
+            yield seq, qual
+
+
 def verify_download(
     accession: str,
     acc_dir: Union[str, Path],

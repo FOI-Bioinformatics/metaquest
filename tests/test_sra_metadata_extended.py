@@ -27,6 +27,8 @@ from metaquest.data.sra_metadata import (
     generate_statistics_report,
 )
 from metaquest.core.exceptions import DataAccessError
+from metaquest.store.sidecar import Sidecar, write_sidecar
+from metaquest.store.stats import compute_dataset_stats
 
 # Mock XML responses for testing
 MOCK_SRA_XML = """<?xml version="1.0"?>
@@ -602,6 +604,55 @@ class TestGenerateStatisticsReport:
 
         # Check that error was logged (actual message: "Error processing {file}: {error}")
         assert "Error processing" in caplog.text
+
+    def test_generate_statistics_reports_sampled_column(self, tmp_path):
+        """The CSV gains a 'sampled' column reflecting whether a file was read in full."""
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+
+        acc_dir = fastq_folder / "SRR001"
+        acc_dir.mkdir()
+        fastq_file = acc_dir / "SRR001.fastq"
+        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file)
+
+        import pandas as pd
+
+        df = pd.read_csv(output_file)
+        assert "sampled" in df.columns
+        assert bool(df.loc[0, "sampled"]) is False
+
+    def test_generate_statistics_reuses_cached_stats_for_store_link(self, tmp_path):
+        """An accession folder that is a store link with a matching sidecar reuses its cache
+        instead of re-parsing the FASTQ files."""
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        fastq_file = store_acc_dir / "SRR001.fastq"
+        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
+
+        real_stats = compute_dataset_stats([fastq_file], use_seqkit=False)
+        # Deliberately different from the real file's read count, so a row that shows this
+        # value proves the cache was used rather than recomputed from the FASTQ.
+        cached_stats_record = dict(real_stats)
+        cached_stats_record["reads_total"] = 999999
+
+        sidecar_path = store_acc_dir / "SRR001.json"
+        write_sidecar(sidecar_path, Sidecar(accession="SRR001", stats=cached_stats_record))
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_link = fastq_folder / "SRR001"
+        acc_link.symlink_to(store_acc_dir)
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file)
+
+        import pandas as pd
+
+        df = pd.read_csv(output_file)
+        assert df.loc[0, "total_reads"] == 999999
 
 
 # ============================================================================

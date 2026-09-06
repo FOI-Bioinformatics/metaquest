@@ -476,6 +476,18 @@ class TestArgumentParsing:
         cmd = SecureSubprocess._build_validated_command("samtools", ["cat", "-o", "out.bam", "a.bam", "b.bam"])
         assert cmd[:2] == ["samtools", "cat"]
 
+    def test_seqkit_stats_command_allowed(self):
+        """seqkit stats -T -j <threads> <files...> is the shared stats cache's exact-count path."""
+        cmd = SecureSubprocess._build_validated_command(
+            "seqkit", ["stats", "-T", "-j", "4", "reads_1.fastq", "reads_2.fastq"]
+        )
+        assert cmd == ["seqkit", "stats", "-T", "-j", "4", "reads_1.fastq", "reads_2.fastq"]
+
+    def test_seqkit_stats_boolean_t_does_not_swallow_j_flag(self):
+        """-T is boolean (tabular output); the following -j flag must not be consumed as its value."""
+        cmd = SecureSubprocess._build_validated_command("seqkit", ["-T", "-j", "2"])
+        assert cmd == ["seqkit", "-T", "-j", "2"]
+
     def test_prefetch_unknown_positional_rejected(self):
         """A positional for prefetch that is neither an accession nor a .sra path is rejected."""
         with pytest.raises(SecurityError):
