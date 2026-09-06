@@ -16,7 +16,15 @@ own folder is never touched until the store's copy and its sidecar both exist,
 so a crash mid-compression (or anywhere before that point) leaves the project's
 data exactly as it was, with nothing to recover beyond removing the stale
 staging copy. ``--move`` only ever removes the project's folder, and only
-after that point.
+after that point. Peak disk use for one accession is therefore up to three
+copies at once: the project's original folder, its staging copy, and (briefly,
+during the final move) the store's copy.
+
+Staging one accession runs under that accession's own lock
+(``<store>/locks/<ACC>.lock``), same as a store download: two adopts of
+different accessions never touch each other's staging folder, and two adopts
+of the same accession serialise on this lock rather than trampling one
+another's ``<ACC>_adopt`` copy.
 
 A dataset whose files already made it into ``<store>/sra/<ACC>`` but whose
 sidecar was never written (the process died between the final move and
@@ -61,9 +69,9 @@ class AdoptReport:
     skipped: List[str] = field(default_factory=list)
     # Populated instead of acting, when dry_run is True.
     planned: List[str] = field(default_factory=list)
-    # A stale <ACC>_adopt staging folder from an interrupted run, swept at the start of this
-    # call; the project's own folder was untouched by the interruption, so the accession is
-    # simply re-adopted within this same call.
+    # A stale <ACC>_adopt staging folder from an earlier, interrupted run of this same
+    # accession, removed (under this accession's lock) right before staging; the project's own
+    # folder was untouched by that interruption, so the accession is simply re-adopted here.
     resumed: List[str] = field(default_factory=list)
 
 
@@ -169,55 +177,59 @@ def _finish_sidecar(
     return sidecar
 
 
-def _sweep_stale_staging(paths: StorePaths) -> List[str]:
-    """Remove any ``<store>/tmp/<ACC>_adopt`` leftover from an interrupted staging copy.
-
-    Staging always copies the project's original folder (see ``_adopt_fresh``), so an
-    interruption here never touches that folder; the accession is simply re-adopted from
-    scratch by this same call. Returns the accessions swept, so the caller can report them.
-    """
-    resumed: List[str] = []
-    if not paths.tmp.is_dir():
-        return resumed
-    for entry in sorted(paths.tmp.iterdir()):
-        if entry.is_dir() and entry.name.endswith(_STAGING_SUFFIX):
-            shutil.rmtree(entry)
-            resumed.append(entry.name[: -len(_STAGING_SUFFIX)])
-    return resumed
-
-
 def _adopt_fresh(
     entry: Path,
     accession: str,
     paths: StorePaths,
     compress: bool,
     metadata_folders: Sequence[Union[str, Path]],
+    report: AdoptReport,
 ) -> None:
     """Copy ``entry``'s files into ``<store>/sra/<accession>``, compressing plain files on the way.
 
     Always stages through a *copy* into ``paths.tmp`` first, regardless of ``--move``/``--copy``:
     the project's original folder is only ever removed (for ``--move``, by the caller, after this
     returns) once the store's copy and its sidecar both exist. A crash anywhere in this function
-    leaves ``entry`` untouched; the stale staging copy it made is cleaned up by
-    ``_sweep_stale_staging`` on the next call.
+    leaves ``entry`` untouched; a stale ``<ACC>_adopt`` staging copy left by such a crash is
+    removed here, under this accession's lock, right before staging starts again, and reported in
+    ``report.resumed``.
+
+    The whole operation (sweep, copy, compress, move, sidecar) runs under this accession's own
+    lock (``<store>/locks/<ACC>.lock``, acquired with ``metaquest.data.registry._acquire_lock``,
+    same as a store download): a concurrent adopt of this same accession blocks here until this
+    one finishes, rather than racing it for the same staging folder.
     """
+    # Imported here rather than at module level, matching the same pairing's other call site in
+    # metaquest.data.sra: the store package's own modules import the data layer, so importing
+    # metaquest.data.registry back at module level here risks a cycle.
+    from metaquest.data.registry import _acquire_lock
+    from metaquest.store.layout import lock_path
+
     store_dir = sra_dir(paths, accession)
     staged = paths.tmp / f"{accession}{_STAGING_SUFFIX}"
     paths.tmp.mkdir(parents=True, exist_ok=True)
-    if staged.exists():
-        shutil.rmtree(staged)
+    paths.locks.mkdir(parents=True, exist_ok=True)
 
-    shutil.copytree(entry, staged)
+    lock = lock_path(paths, accession)
+    _acquire_lock(lock)
+    try:
+        if staged.exists():
+            shutil.rmtree(staged)
+            report.resumed.append(accession)
 
-    if compress:
-        for file_path in fastq_files(staged):
-            if not str(file_path).endswith(".gz"):
-                compress_fastq(file_path, _ADOPT_COMPRESS_THREADS)
+        shutil.copytree(entry, staged)
 
-    store_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staged), str(store_dir))
+        if compress:
+            for file_path in fastq_files(staged):
+                if not str(file_path).endswith(".gz"):
+                    compress_fastq(file_path, _ADOPT_COMPRESS_THREADS)
 
-    _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
+        store_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staged), str(store_dir))
+
+        _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]:
@@ -328,7 +340,7 @@ def _adopt_new_or_restart(
         # A fresh accession always comes from real_dirs (interrupted ones are handled by the
         # branch above), so entry is never None here.
         assert entry is not None
-        _adopt_fresh(entry, accession, paths, compress, metadata_folders)
+        _adopt_fresh(entry, accession, paths, compress, metadata_folders, report)
 
     if not move:
         report.copied.append(accession)
@@ -363,21 +375,19 @@ def adopt(
 
     Also finishes any dataset already sitting in ``<store>/sra/<ACC>`` without a sidecar, from an
     earlier run interrupted after the files reached their final location but before the sidecar
-    was written, and sweeps (removes) any stale ``<store>/tmp/<ACC>_adopt`` staging copy left by a
-    run interrupted earlier than that (the project's own folder is untouched in that case, so the
-    accession is simply re-adopted within this same call; swept accessions are reported in
-    ``resumed``).
+    was written, and removes (under that accession's own lock, right before re-staging) any stale
+    ``<store>/tmp/<ACC>_adopt`` copy left by a run interrupted earlier than that (the project's
+    own folder is untouched in that case, so the accession is simply re-adopted; such accessions
+    are reported in ``resumed``). Peak disk use for one accession adopted this way is up to three
+    copies at once: see the module docstring.
 
-    ``dry_run`` performs no filesystem changes and no database changes (including no sweep of
-    stale staging copies); every accession that would otherwise be dedup'd, adopted or restarted
-    is instead listed in ``planned``. Conflicts are still detected and reported in ``conflicts``
-    even during a dry run, since detecting one never writes anything.
+    ``dry_run`` performs no filesystem changes and no database changes (including no sweep of a
+    stale staging copy); every accession that would otherwise be dedup'd, adopted or restarted is
+    instead listed in ``planned``. Conflicts are still detected and reported in ``conflicts`` even
+    during a dry run, since detecting one never writes anything.
     """
     report = AdoptReport()
     project_dir = Path(project_fastq)
-
-    if not dry_run:
-        report.resumed = _sweep_stale_staging(paths)
 
     real_dirs = _scan_project_dir(project_dir, report)
     interrupted = _scan_interrupted(paths, project_dir, real_dirs)

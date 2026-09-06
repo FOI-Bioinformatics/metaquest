@@ -338,7 +338,12 @@ class StoreReindexCommand(BaseCommand):
 
 
 class StoreAdoptCommand(BaseCommand):
-    """Command to fold a project's own downloaded FASTQ folders into the shared store."""
+    """Command to fold a project's own downloaded FASTQ folders into the shared store.
+
+    Each accession is staged and moved under its own per-accession lock (see
+    ``metaquest.store.adopt``), so running this command concurrently against the same store from
+    two projects is safe: a shared accession simply serialises rather than racing.
+    """
 
     @property
     def name(self) -> str:
@@ -346,7 +351,10 @@ class StoreAdoptCommand(BaseCommand):
 
     @property
     def help(self) -> str:
-        return "Move or copy project-owned FASTQ folders into the shared store, then link them back"
+        return (
+            "Move or copy project-owned FASTQ folders into the shared store, then link them back "
+            "(each accession is locked, so this is safe to run concurrently from several projects)"
+        )
 
     @property
     def group(self) -> str:

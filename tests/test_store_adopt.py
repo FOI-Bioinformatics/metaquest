@@ -6,9 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
+from metaquest.core.exceptions import DataAccessError
 from metaquest.store.adopt import adopt
 from metaquest.store.catalog import Catalog, catalog_write
-from metaquest.store.layout import init_store, sidecar_path, sra_dir
+from metaquest.store.layout import init_store, lock_path, sidecar_path, sra_dir
 from metaquest.store.sidecar import build_sidecar, read_sidecar, write_sidecar
 
 
@@ -348,3 +349,78 @@ class TestAdoptStagingCrashSafety:
         assert (project_fastq / "SRR1").is_symlink()
         sidecar = read_sidecar(sidecar_path(paths, "SRR1"))
         assert sidecar is not None
+
+
+class TestAdoptPerAccessionLocking:
+    """The sweep of a stale staging folder is scoped to one accession's own lock, not a
+    store-wide sweep: two concurrent adopts must never touch each other's staging folder."""
+
+    def test_stale_staging_for_the_adopted_accession_is_removed_and_reported(self, tmp_path):
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        stale = paths.tmp / "SRR1_adopt"
+        _write_fastq_gz(stale / "SRR1.fastq.gz")
+
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+
+        report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.resumed == ["SRR1"]
+        assert report.adopted == ["SRR1"]
+        assert not stale.exists()
+        assert (project_fastq / "SRR1").is_symlink()
+
+    def test_stale_staging_for_a_different_accession_is_left_untouched(self, tmp_path):
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        other_stale = paths.tmp / "SRR-OTHER_adopt"
+        _write_fastq_gz(other_stale / "SRR-OTHER.fastq.gz")
+
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+
+        report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.resumed == []
+        assert report.adopted == ["SRR1"]
+        # A stale staging folder for an accession this run never touches survives untouched.
+        assert other_stale.is_dir()
+        assert (other_stale / "SRR-OTHER.fastq.gz").is_file()
+
+    def test_lock_file_is_created_and_released_on_success(self, tmp_path):
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+
+        report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.adopted == ["SRR1"]
+        assert not lock_path(paths, "SRR1").exists()
+
+    def test_a_lock_already_held_by_another_process_makes_adopt_fail_fast(self, tmp_path, monkeypatch):
+        import metaquest.data.registry as registry_module
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+
+        # A short wait so the test does not hang, without touching LOCK_STALE_SECONDS: the
+        # pre-created lock below must still look fresh (not stale) so _acquire_lock hits the
+        # wait deadline rather than reclaiming it.
+        monkeypatch.setattr(registry_module, "LOCK_WAIT_SECONDS", 0.1)
+        lock = lock_path(paths, "SRR1")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("999999")
+
+        with pytest.raises(DataAccessError, match="locked"):
+            adopt(project_fastq, paths, move=True, dry_run=False)
+
+        # The lock was held by "another process": adopt() must not remove a lock it did not
+        # create itself.
+        assert lock.exists()
+        # Nothing was staged or moved, since the lock was never acquired.
+        assert not sra_dir(paths, "SRR1").exists()
+        assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
