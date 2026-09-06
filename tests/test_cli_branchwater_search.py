@@ -4,7 +4,7 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED
@@ -22,6 +22,9 @@ def _args(tmp_path=None, **kwargs):
         server="https://s",
         registry=str(registry_dir / "metaquest_registry.json"),
         registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        no_cache=False,
+        refresh=False,
+        max_cache_age_days=None,
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -39,12 +42,23 @@ class TestBranchwaterSearchCommand:
         args = parser.parse_args(["--genome-fasta", "g.fna"])
         assert args.threshold == 0.1 and args.branchwater_folder == "branchwater" and args.output is None
         assert args.registry_max_screened == DEFAULT_REGISTRY_MAX_SCREENED
+        assert args.no_cache is False
+        assert args.refresh is False
+        assert args.max_cache_age_days is None
         try:
             parser.parse_args([])
         except SystemExit as e:
             assert e.code == 2
         else:
             raise AssertionError("one of --genome-fasta/--signature must be required")
+
+    def test_parser_accepts_cache_flags(self):
+        parser = argparse.ArgumentParser()
+        BranchwaterSearchCommand().configure_parser(parser)
+        args = parser.parse_args(["--genome-fasta", "g.fna", "--no-cache", "--refresh", "--max-cache-age-days", "7"])
+        assert args.no_cache is True
+        assert args.refresh is True
+        assert args.max_cache_age_days == 7
 
     @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
     @patch("metaquest.cli.commands.branchwater_search.search_index")
@@ -55,7 +69,14 @@ class TestBranchwaterSearchCommand:
         mock_search.return_value = [("SRR1", 0.9)]
         rc = BranchwaterSearchCommand().execute(_args(tmp_path, genome_fasta="genomes/GCF_000008025.1.fna"))
         assert rc == 0
-        mock_search.assert_called_once_with({"signatures": []}, 0.1, server="https://s")
+        mock_search.assert_called_once_with(
+            {"signatures": []},
+            0.1,
+            server="https://s",
+            cache_dir=Path("branchwater") / ".branchwater-cache",
+            refresh=False,
+            max_cache_age_days=None,
+        )
         mock_write.assert_called_once_with([("SRR1", 0.9)], Path("branchwater") / "GCF_000008025.1.csv")
         data = json.loads((tmp_path / "metaquest_registry.json").read_text())
         screening = data["datasets"]["SRR1"]["screening"]
@@ -85,15 +106,20 @@ class TestBranchwaterSearchCommand:
     def test_error_returns_1(self, _load):
         assert BranchwaterSearchCommand().execute(_args(signature="wmel.sig")) == 1
 
-    @patch("metaquest.data.branchwater_search.requests.post")
+    @patch("metaquest.data.branchwater_search._session")
     @patch("metaquest.cli.commands.branchwater_search.load_signature", return_value={"signatures": []})
-    def test_server_ignoring_threshold_is_filtered_locally(self, _load, mock_post, tmp_path, caplog):
-        mock_post.return_value = Mock(
-            status_code=200, text="SRA accession,containment\nSRR1,0.0009\nSRR2,0.001\nSRR3,0.0005\n"
-        )
+    def test_server_ignoring_threshold_is_filtered_locally(self, _load, mock_session_factory, tmp_path, caplog):
+        text = "SRA accession,containment\nSRR1,0.0009\nSRR2,0.001\nSRR3,0.0005\n"
+        session = MagicMock()
+        response = Mock(status_code=200, text=text)
+        response.iter_lines.side_effect = lambda *args, **kwargs: iter(text.splitlines())
+        session.post.return_value = response
+        mock_session_factory.return_value = session
         output = tmp_path / "out.csv"
         with caplog.at_level("WARNING"):
-            rc = BranchwaterSearchCommand().execute(_args(tmp_path, signature="wmel.sig", output=str(output)))
+            rc = BranchwaterSearchCommand().execute(
+                _args(tmp_path, signature="wmel.sig", output=str(output), no_cache=True)
+            )
         assert rc == 0
         assert "control genome" in caplog.text
         assert output.read_text().splitlines() == [
@@ -116,6 +142,35 @@ class TestBranchwaterSearchCommand:
         datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
         assert sorted(datasets) == ["SRR1", "SRR2"]
         assert "2" in caplog.text
+
+    @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
+    @patch("metaquest.cli.commands.branchwater_search.search_index")
+    @patch("metaquest.cli.commands.branchwater_search.sketch_fasta")
+    def test_no_cache_flag_disables_cache_dir(self, mock_sketch, mock_search, mock_write, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        mock_sketch.return_value = {"signatures": []}
+        mock_search.return_value = []
+        rc = BranchwaterSearchCommand().execute(_args(tmp_path, genome_fasta="g.fna", no_cache=True))
+        assert rc == 0
+        _, kwargs = mock_search.call_args
+        assert kwargs["cache_dir"] is None
+
+    @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
+    @patch("metaquest.cli.commands.branchwater_search.search_index")
+    @patch("metaquest.cli.commands.branchwater_search.sketch_fasta")
+    def test_refresh_and_max_cache_age_passed_through(
+        self, mock_sketch, mock_search, mock_write, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        mock_sketch.return_value = {"signatures": []}
+        mock_search.return_value = []
+        rc = BranchwaterSearchCommand().execute(
+            _args(tmp_path, genome_fasta="g.fna", refresh=True, max_cache_age_days=3)
+        )
+        assert rc == 0
+        _, kwargs = mock_search.call_args
+        assert kwargs["refresh"] is True
+        assert kwargs["max_cache_age_days"] == 3
 
     def test_registered(self):
         from metaquest.cli.main import create_parser, register_all_commands

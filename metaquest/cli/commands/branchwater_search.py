@@ -42,6 +42,16 @@ class BranchwaterSearchCommand(BaseCommand):
             "--output", default=None, help="Output CSV (default: <branchwater-folder>/<input stem>.csv)"
         )
         parser.add_argument("--server", default=DEFAULT_SERVER, help="Branchwater search API base URL")
+        parser.add_argument(
+            "--no-cache", action="store_true", help="Do not read or write the Branchwater response cache"
+        )
+        parser.add_argument("--refresh", action="store_true", help="Bypass a cached result and query the server again")
+        parser.add_argument(
+            "--max-cache-age-days",
+            type=int,
+            default=None,
+            help="Refetch if the cached result is older than this many days (default: no age limit)",
+        )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument(
             "--registry-max-screened",
@@ -60,7 +70,15 @@ class BranchwaterSearchCommand(BaseCommand):
                 source = Path(args.signature)
 
             output = Path(args.output) if args.output else Path(args.branchwater_folder) / f"{source.stem}.csv"
-            matches = search_index(signature, args.threshold, server=args.server)
+            cache_dir = None if args.no_cache else output.parent / ".branchwater-cache"
+            matches = search_index(
+                signature,
+                args.threshold,
+                server=args.server,
+                cache_dir=cache_dir,
+                refresh=args.refresh,
+                max_cache_age_days=args.max_cache_age_days,
+            )
             write_branchwater_csv(matches, output)
 
             if matches:

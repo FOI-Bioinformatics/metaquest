@@ -10,13 +10,17 @@ MetaQuest reads (see ``use_branchwater``). The metadata columns are left empty;
 """
 
 import csv
+import hashlib
 import io
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from metaquest.core.exceptions import DataAccessError
 
@@ -25,6 +29,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_SERVER = "https://api.branchwater.sourmash.bio"
 KSIZE = 21
 SCALED = 1000
+RETRY_TOTAL = 4
+RETRY_BACKOFF_FACTOR = 2
+RETRY_STATUS_FORCELIST = [429, 500, 502, 503, 504]
 BRANCHWATER_COLUMNS = [
     "acc",
     "containment",
@@ -123,38 +130,159 @@ def _select_sketch(signature: Dict[str, Any], path: Path) -> Dict[str, Any]:
     raise DataAccessError(f"Branchwater needs k={KSIZE}, scaled={SCALED}; {path.name} has k={ksize}, scaled={scaled}")
 
 
-def search_index(
-    signature: Dict[str, Any], threshold: float, server: str = DEFAULT_SERVER, timeout: int = 600
-) -> List[Tuple[str, float]]:
-    """Post a signature to the Branchwater search API and return (accession, containment) pairs, best first."""
-    url = f"{server.rstrip('/')}/search"
+def _session() -> requests.Session:
+    """Build a requests.Session that retries transient Branchwater failures with backoff.
+
+    A 429 or 5xx response is retried up to ``RETRY_TOTAL`` times with exponential
+    backoff; any other status (a 4xx client error, for example) is returned as-is
+    and left for the caller to raise on.
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=RETRY_TOTAL,
+        backoff_factor=RETRY_BACKOFF_FACTOR,
+        status_forcelist=RETRY_STATUS_FORCELIST,
+        allowed_methods=["POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def _sketch_mins(signature: Dict[str, Any]) -> List[int]:
+    """Return the sorted mins of signature's k=21, scaled=1000 sketch, used as the cache key input."""
+    sketch = _select_sketch(signature, Path("signature"))
+    return sorted(sketch.get("mins", []))
+
+
+def _cache_key(signature: Dict[str, Any], threshold: float, server: str) -> str:
+    """Derive a stable cache key from the sketch content and the search parameters."""
+    payload = {
+        "mins": _sketch_mins(signature),
+        "ksize": KSIZE,
+        "scaled": SCALED,
+        "threshold": threshold,
+        "server": server,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _cache_read(cache_dir: Path, key: str, max_cache_age_days: Optional[int]) -> Optional[str]:
+    """Return the cached CSV text for ``key``, or None if there is no usable cache entry."""
+    csv_path = cache_dir / f"{key}.csv"
+    meta_path = cache_dir / f"{key}.json"
+    if not csv_path.exists() or not meta_path.exists():
+        return None
     try:
-        response = requests.post(url, json={"threshold": threshold, "signature": signature}, timeout=timeout)
-    except requests.exceptions.RequestException as e:
-        raise DataAccessError(f"Branchwater search failed: {e}") from e
-    if response.status_code != 200:
-        raise DataAccessError(f"Branchwater search returned HTTP {response.status_code}: {response.text[:200]}")
-    matches = _parse_search_csv(response.text)
+        meta = json.loads(meta_path.read_text())
+        fetched = datetime.fromisoformat(meta["fetched"])
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+    if max_cache_age_days is not None:
+        age_days = (datetime.now(timezone.utc) - fetched).total_seconds() / 86400.0
+        if age_days > max_cache_age_days:
+            return None
+    try:
+        text = csv_path.read_text()
+    except OSError:
+        return None
+    logger.info("using cached Branchwater result from %s", fetched.date().isoformat())
+    return text
+
+
+def _cache_write(cache_dir: Path, key: str, text: str, server: str, threshold: float, rows: int) -> None:
+    """Write a cache entry; a failure (for example a read-only cache directory) is logged, not raised."""
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / f"{key}.csv").write_text(text)
+        meta = {
+            "fetched": datetime.now(timezone.utc).isoformat(),
+            "server": server,
+            "threshold": threshold,
+            "rows": rows,
+        }
+        (cache_dir / f"{key}.json").write_text(json.dumps(meta))
+    except OSError as e:
+        logger.warning("Could not write Branchwater cache entry %s: %s", key, e)
+
+
+def search_index(
+    signature: Dict[str, Any],
+    threshold: float,
+    server: str = DEFAULT_SERVER,
+    timeout: int = 600,
+    cache_dir: Optional[Union[str, Path]] = None,
+    refresh: bool = False,
+    max_cache_age_days: Optional[int] = None,
+) -> List[Tuple[str, float]]:
+    """Post a signature to the Branchwater search API and return (accession, containment) pairs, best first.
+
+    When ``cache_dir`` is given, a prior result for the same sketch, threshold and
+    server is reused instead of querying the server again, unless ``refresh`` is set
+    or the cached entry is older than ``max_cache_age_days``.
+    """
+    cache_path = Path(cache_dir) if cache_dir is not None else None
+    cache_key = _cache_key(signature, threshold, server) if cache_path is not None else None
+
+    text: Optional[str] = None
+    if cache_path is not None and not refresh:
+        text = _cache_read(cache_path, cache_key, max_cache_age_days)
+
+    fetched_now = False
+    if text is None:
+        url = f"{server.rstrip('/')}/search"
+        session = _session()
+        try:
+            response = session.post(
+                url, json={"threshold": threshold, "signature": signature}, timeout=timeout, stream=True
+            )
+        except requests.exceptions.RequestException as e:
+            raise DataAccessError(f"Branchwater search failed: {e}") from e
+        if response.status_code != 200:
+            raise DataAccessError(f"Branchwater search returned HTTP {response.status_code}: {response.text[:200]}")
+        lines = list(response.iter_lines(decode_unicode=True))
+        matches = _parse_search_rows(lines)
+        text = "\n".join(lines)
+        fetched_now = True
+    else:
+        matches = _parse_search_rows(text.splitlines())
+
     kept = [match for match in matches if match[1] >= threshold]
     n_dropped = len(matches) - len(kept)
     if n_dropped:
         logger.info("Dropped %d match(es) below containment %.2f reported by the server", n_dropped, threshold)
+
+    if fetched_now and cache_path is not None:
+        _cache_write(cache_path, cache_key, text, server, threshold, len(kept))
+
     return kept
 
 
-def _parse_search_csv(text: str) -> List[Tuple[str, float]]:
-    reader = csv.DictReader(io.StringIO(text))
-    fields = reader.fieldnames or []
-    if "SRA accession" not in fields or "containment" not in fields:
-        raise DataAccessError(f"Unexpected Branchwater response header: {fields}")
+def _parse_search_rows(lines) -> List[Tuple[str, float]]:
+    """Parse Branchwater search result lines (a header row plus data rows) into (accession, containment) pairs."""
+    reader = csv.reader(lines)
+    header = next(reader, [])
+    if "SRA accession" not in header or "containment" not in header:
+        raise DataAccessError(f"Unexpected Branchwater response header: {header}")
+    acc_idx = header.index("SRA accession")
+    cont_idx = header.index("containment")
     matches: List[Tuple[str, float]] = []
     for row in reader:
+        if not row:
+            continue
         try:
-            matches.append((row["SRA accession"].strip(), float(row["containment"])))
-        except (TypeError, ValueError, AttributeError):
+            matches.append((row[acc_idx].strip(), float(row[cont_idx])))
+        except (IndexError, ValueError, AttributeError):
             logger.warning("Skipping malformed Branchwater row: %s", row)
     matches.sort(key=lambda match: match[1], reverse=True)
     return matches
+
+
+def _parse_search_csv(text: str) -> List[Tuple[str, float]]:
+    """Parse a full Branchwater CSV response body (kept for a cached result read back as one string)."""
+    return _parse_search_rows(text.splitlines())
 
 
 def write_branchwater_csv(matches: List[Tuple[str, float]], output_path: Union[str, Path], ksize: int = KSIZE) -> Path:
