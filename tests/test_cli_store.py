@@ -582,6 +582,26 @@ class TestStoreVerifyCommand:
         assert rc == 1
         assert "missing" in out
 
+    def test_corrupt_gzip_reported_as_corrupt_without_crashing(self, tmp_path, capsys):
+        """A truncated/corrupt gzip file makes read-count verification raise inside the data
+        layer; --spots must catch that and report it, not crash the whole command."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True)
+        # Looks like a gzip file (magic bytes) but is not valid gzip data.
+        (acc_dir / "SRR1.fastq.gz").write_bytes(b"\x1f\x8b\x00not-really-gzip")
+        sidecar = _sidecar_matching_disk(acc_dir, "SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(root), spots=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "corrupt" in out
+
 
 class TestStoreLinkCommand:
     def test_command_properties(self):

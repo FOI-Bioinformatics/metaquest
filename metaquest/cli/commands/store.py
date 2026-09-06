@@ -510,10 +510,16 @@ class StoreVerifyCommand(BaseCommand):
                 if check_md5:
                     md5_ok = False
                 continue
-            if file_path.stat().st_size != entry.get("bytes"):
+            try:
+                if file_path.stat().st_size != entry.get("bytes"):
+                    bytes_ok = False
+                if check_md5 and _md5_file(file_path) != entry.get("md5"):
+                    md5_ok = False
+            except OSError as e:
+                logger.warning("%s: could not read %s: %s", accession, file_path, e)
                 bytes_ok = False
-            if check_md5 and _md5_file(file_path) != entry.get("md5"):
-                md5_ok = False
+                if check_md5:
+                    md5_ok = False
         return bytes_ok, md5_ok
 
     def _verify_one(self, accession: str, paths: StorePaths, check_md5: bool, check_spots: bool) -> Dict[str, Any]:
@@ -537,9 +543,14 @@ class StoreVerifyCommand(BaseCommand):
         spots_verdict = None
         spots_ratio = None
         if check_spots:
-            verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
-            spots_verdict = verify["verdict"]
-            spots_ratio = verify["ratio"]
+            try:
+                verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
+                spots_verdict = verify["verdict"]
+                spots_ratio = verify["ratio"]
+            except (EOFError, OSError) as e:
+                self.logger.warning("%s: could not verify read counts: %s", accession, e)
+                bytes_ok = False
+                spots_verdict = "corrupt"
 
         if not bytes_ok or (check_md5 and md5_ok is False):
             verdict = "corrupt"
@@ -566,7 +577,12 @@ class StoreVerifyCommand(BaseCommand):
         spots_verdict = result.get("spots_verdict")
         if sidecar is None or spots_verdict is None:
             return
-        new_state = {"complete": "complete", "truncated": "partial", "unverified": sidecar.state}[spots_verdict]
+        state_for_verdict = {"complete": "complete", "truncated": "partial"}
+        if spots_verdict not in state_for_verdict:
+            # "unverified" (no recorded spot count) or "corrupt" (the files could not be read):
+            # neither is a state this check can confidently rewrite.
+            return
+        new_state = state_for_verdict[spots_verdict]
         if new_state == sidecar.state and sidecar.completeness.get("verdict") == spots_verdict:
             return
         sidecar.state = new_state
