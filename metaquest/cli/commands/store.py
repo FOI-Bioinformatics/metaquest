@@ -113,8 +113,10 @@ class StoreInitCommand(BaseCommand):
         try:
             root = Path(args.data_root)
             paths = init_store(root)
-            with catalog_write(paths) as catalog:
-                catalog.migrate()
+            # catalog_write migrates the schema itself; opening (and closing) it here is
+            # enough to make sure catalog.sqlite exists before anything else touches it.
+            with catalog_write(paths):
+                pass
 
             cwd = Path.cwd()
             with registry_transaction(args.registry) as registry:
