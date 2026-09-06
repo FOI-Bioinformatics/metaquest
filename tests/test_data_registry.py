@@ -682,3 +682,81 @@ class TestScanners:
         datasets, extractions = reg.to_dataframes(r)
         assert list(datasets.index) == ["SRR1"] and bool(datasets.loc["SRR1", "selected"]) is True
         assert extractions.loc[0, "genome_id"] == "GCF_1" and int(extractions.loc[0, "mapped_reads"]) == 7
+
+
+class TestStoreLinksInTheRegistry:
+    """Store-backed downloads: recorded source, and dangling links reported as drift."""
+
+    def _store_dataset(self, tmp_path, accession="SRR1"):
+        from metaquest.store.layout import init_store
+
+        paths = init_store(tmp_path / "store")
+        _fastq(paths.sra / accession / f"{accession}_1.fastq")
+        return paths
+
+    def test_record_download_keeps_source_and_store_name(self, tmp_path):
+        paths = self._store_dataset(tmp_path)
+        project = _project(tmp_path)
+        from metaquest.store.link import link_dataset
+
+        link_dataset(project.fastq, "SRR1", paths)
+
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_download(
+            r,
+            "SRR1",
+            "downloaded",
+            project.fastq,
+            "linked from store, 1 files",
+            attempt=False,
+            source="store",
+            store_name="SRR1",
+        )
+
+        download = r.datasets["SRR1"]["download"]
+        assert download["source"] == "store"
+        assert download["store_name"] == "SRR1"
+        assert download["attempts"] == 0
+        # The link resolves into the store, so the recorded path is the store's file.
+        assert reg.resolve_project_path(r, download["files"][0]["path"]) == paths.sra / "SRR1" / "SRR1_1.fastq"
+
+    def test_record_download_without_a_source_clears_a_stale_one(self, tmp_path):
+        project = _project(tmp_path)
+        _fastq(project.fastq / "SRR1" / "SRR1_1.fastq")
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_download(r, "SRR1", "downloaded", project.fastq, source="store", store_name="SRR1")
+
+        reg.record_download(r, "SRR1", "downloaded", project.fastq)
+
+        assert "source" not in r.datasets["SRR1"]["download"]
+        assert "store_name" not in r.datasets["SRR1"]["download"]
+
+    def test_reconcile_reports_dangling_links(self, tmp_path):
+        import shutil
+
+        from metaquest.store.link import link_dataset
+
+        paths = self._store_dataset(tmp_path)
+        project = _project(tmp_path)
+        link_dataset(project.fastq, "SRR1", paths)
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_download(r, "SRR1", "downloaded", project.fastq, source="store", store_name="SRR1")
+        shutil.rmtree(paths.sra / "SRR1")
+
+        report = reg.reconcile(r, project)
+
+        assert report.dangling_links == ["SRR1"]
+        assert report.recorded_missing == ["SRR1"]
+
+    def test_reconcile_reports_no_dangling_links_for_a_healthy_link(self, tmp_path):
+        from metaquest.store.link import link_dataset
+
+        paths = self._store_dataset(tmp_path)
+        project = _project(tmp_path)
+        link_dataset(project.fastq, "SRR1", paths)
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+
+        report = reg.reconcile(r, project)
+
+        assert report.dangling_links == []
+        assert report.untracked_fastq == ["SRR1"]

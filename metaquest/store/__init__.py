@@ -31,6 +31,13 @@ from metaquest.store.sidecar import (
     write_sidecar,
 )
 from metaquest.store.catalog import Catalog, catalog_write
+from metaquest.store.link import (
+    LINK_MODES,
+    dangling_links,
+    is_store_link,
+    link_dataset,
+    unlink_dataset,
+)
 
 __all__ = [
     "StorePaths",
@@ -52,4 +59,9 @@ __all__ = [
     "write_sidecar",
     "Catalog",
     "catalog_write",
+    "LINK_MODES",
+    "dangling_links",
+    "is_store_link",
+    "link_dataset",
+    "unlink_dataset",
 ]

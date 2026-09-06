@@ -216,6 +216,7 @@ class StatusCommand(BaseCommand):
             "untracked_fastq": list(drift.untracked_fastq),
             "untracked_extractions": [[acc, genome_id] for acc, genome_id in drift.untracked_extractions],
             "empty_assembly_dirs": [[acc, genome_id] for acc, genome_id in drift.empty_assembly_dirs],
+            "dangling_links": list(drift.dangling_links),
         }
 
     @staticmethod
@@ -451,6 +452,8 @@ class StatusCommand(BaseCommand):
         if drift["empty_assembly_dirs"]:
             pairs = ", ".join(f"{acc}/{genome_id}" for acc, genome_id in drift["empty_assembly_dirs"])
             print(f"  Empty assembly directories               : {pairs}")
+        if drift.get("dangling_links"):
+            print("  Store links with a missing target       : " + ", ".join(drift["dangling_links"]))
 
     @staticmethod
     def _print_next(steps: List[Dict[str, Any]]) -> None:

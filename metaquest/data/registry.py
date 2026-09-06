@@ -123,6 +123,9 @@ class ReconcileReport:
     untracked_fastq: List[str] = field(default_factory=list)
     untracked_extractions: List[Tuple[str, str]] = field(default_factory=list)
     empty_assembly_dirs: List[Tuple[str, str]] = field(default_factory=list)
+    # Accessions whose project folder is a symlink with nothing at the other end, i.e. a
+    # dataset the project reads from a shared store that is unmounted or has lost the copy.
+    dangling_links: List[str] = field(default_factory=list)
 
 
 # ----------------------------------------------------------------- persistence
@@ -433,6 +436,8 @@ def record_download(
     message: str = "",
     attempt: bool = True,
     complete: Optional[Dict[str, Any]] = None,
+    source: Optional[str] = None,
+    store_name: Optional[str] = None,
 ) -> None:
     """Record a download outcome; ``state`` is downloaded, failed, missing or skipped.
 
@@ -440,6 +445,10 @@ def record_download(
     state without an actual download attempt (e.g. a file found already present on disk).
     ``complete`` is the completeness verdict from ``metaquest.data.sra.verify_download``
     (via ``parse_verdict_message``); when omitted, any verdict already on file is left as is.
+    ``source`` says where the reads came from (``"store"`` for a dataset the shared store
+    holds and the project only links to) and ``store_name`` is the dataset's name inside
+    that store. Both describe this outcome, so a call that names neither clears whatever
+    an earlier outcome recorded rather than leaving a stale claim behind.
     """
     download = upsert_dataset(registry, accession).setdefault("download", {"attempts": 0})
     if attempt and state in ("downloaded", "failed"):
@@ -458,6 +467,13 @@ def record_download(
     )
     if complete is not None:
         download["complete"] = complete
+    if source is None:
+        download.pop("source", None)
+        download.pop("store_name", None)
+    else:
+        download["source"] = source
+        if store_name is not None:
+            download["store_name"] = store_name
     download.pop("inferred", None)
 
 
@@ -836,7 +852,14 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
     Untracked FASTQ and extractions are recorded the way ``bootstrap_from_disk`` records
     them, with ``"inferred": true``, so a project worked on outside MetaQuest lands in the
     journal instead of being reported as drift on every run. They stay in the report.
+
+    A link into a shared store whose target has gone (an unmounted store, a dataset removed
+    from it) is reported as well, and is not repaired here: removing the link would lose the
+    record of which datasets this project uses.
     """
+    # Imported here rather than at module level: the store package imports the data layer.
+    from metaquest.store.link import dangling_links
+
     report = ReconcileReport()
     on_disk = scan_downloads(paths.fastq)
     for acc, record in registry.datasets.items():
@@ -862,6 +885,7 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
                 if asm_dir is not None:
                     _infer_assembly(registry, acc, genome_id, asm_dir)
     report.empty_assembly_dirs = empty_assembly_dirs(paths.targeted, genome_ids)
+    report.dangling_links = dangling_links(paths.fastq)
     return report
 
 
