@@ -41,7 +41,7 @@ FASTERQ_DUMP_BOOLEAN_FLAGS = BOOLEAN_FLAGS["fasterq-dump"]
 # fasterq-dump flags whose value must be a non-negative integer.
 FASTERQ_DUMP_INTEGER_FLAGS = frozenset({"--threads"})
 # Flags (any tool) whose value is a filesystem path and must pass validate_path.
-PATH_VALUE_FLAGS = frozenset({"-O", "-o", "--out-dir", "--temp", "-1", "-2", "-0", "-s"})
+PATH_VALUE_FLAGS = frozenset({"-O", "-o", "-d", "--out-dir", "--temp", "-1", "-2", "-0", "-s"})
 # Tools whose positional argument is either an SRA accession or a .sra file path.
 SRA_POSITIONAL_TOOLS = frozenset({"fasterq-dump", "prefetch"})
 

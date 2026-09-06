@@ -39,6 +39,10 @@ MINIMAP2_PRESETS = {
 # minimap2 prints this when the two mate files differ in length; it then maps single-end.
 UNEQUAL_MATES_MARKER = "different number of records"
 
+# samtools -F flags dropped by the alignment filter: unmapped (0x4), secondary (0x100)
+# and supplementary (0x800) alignments.
+FILTER_FLAGS = "0x904"
+
 
 @dataclass
 class ExtractionResult:
@@ -48,6 +52,8 @@ class ExtractionResult:
     mapped_records: int
     unequal_mates: bool = False
     skipped: bool = False
+    # Mapped records before the secondary/supplementary/MAPQ filter (0 for a skipped result).
+    mapped_total: int = 0
 
 
 def _notify_result(
@@ -67,11 +73,62 @@ def _notify_result(
         logger.warning("Recording the extraction result for %s failed: %s", accession, e)
 
 
-def _count_bam_records(bam_path: Path) -> int:
-    """Number of records in a BAM file, via ``samtools view -c``."""
-    result = SecureSubprocess.run_secure("samtools", ["view", "-c", str(bam_path)])
+def _count_records(path: Path, *filter_args: str) -> int:
+    """Number of records in a SAM/BAM file, via ``samtools view -c``.
+
+    ``filter_args`` are extra ``samtools view`` flags (e.g. ``"-F", "4"``) applied before
+    the count; with none, every record in the file is counted.
+    """
+    result = SecureSubprocess.run_secure("samtools", ["view", "-c", *filter_args, str(path)])
     text = (result.stdout or "").strip()
     return int(text) if text.isdigit() else 0
+
+
+def resolve_index_path(genome_fasta: Union[str, Path], preset: str, index_dir: Union[str, Path]) -> Path:
+    """The minimap2 index path ``build_index`` reads or writes for this genome and preset."""
+    return Path(index_dir) / f"{Path(genome_fasta).stem}.{preset}.mmi"
+
+
+def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[str, Path]) -> Path:
+    """Build (or reuse) a minimap2 index for the target genome, shared across every sample.
+
+    The index lives at ``resolve_index_path(genome_fasta, preset, index_dir)`` and is
+    rebuilt only when the FASTA's mtime is newer than the index (or the index does not
+    exist yet), so a genome replaced between runs is picked up automatically.
+    """
+    genome_path = Path(genome_fasta)
+    index_root = ensure_directory(index_dir)
+    index_path = resolve_index_path(genome_path, preset, index_root)
+    if index_path.exists() and index_path.stat().st_mtime >= genome_path.stat().st_mtime:
+        return index_path
+    SecureSubprocess.run_secure("minimap2", ["-x", preset, "-d", str(index_path), str(genome_path)])
+    return index_path
+
+
+def _run_minimap2(
+    accession: str,
+    preset: str,
+    threads: int,
+    sam_path: Path,
+    reference: Path,
+    genome_fasta: Path,
+    reads: List[Path],
+) -> Any:
+    """Align ``reads`` against the prebuilt index, retrying once against the FASTA directly
+    if the index fails (e.g. it was built by an incompatible minimap2 version)."""
+    read_args = [str(r) for r in reads]
+    args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(reference), *read_args]
+    try:
+        return SecureSubprocess.run_secure("minimap2", args)
+    except Exception as exc:
+        logger.warning(
+            "%s: minimap2 failed against the prebuilt index %s (%s); retrying against the FASTA directly",
+            accession,
+            reference,
+            exc,
+        )
+        fallback_args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(genome_fasta), *read_args]
+        return SecureSubprocess.run_secure("minimap2", fallback_args)
 
 
 def _fastq_is_empty(path: Path) -> bool:
@@ -185,77 +242,270 @@ def _sample_reads(fastq_folder: Path, accession: str) -> List[Path]:
     return [primary]
 
 
+def _align_and_count_mapped(
+    accession: str,
+    preset: str,
+    threads: int,
+    reference: Path,
+    genome_fasta: Path,
+    sam_paths: List[Path],
+    mate_groups: List[List[Path]],
+) -> Tuple[int, bool]:
+    """Align each read group to its own SAM and return (total mapped records, saw the
+    stderr marker). Mapped records are counted with ``-F 4`` (drops unmapped), before any
+    other filtering."""
+    mapped_total = 0
+    stderr_marker_seen = False
+    for sam_path, group in zip(sam_paths, mate_groups):
+        aligned = _run_minimap2(accession, preset, threads, sam_path, reference, genome_fasta, group)
+        if UNEQUAL_MATES_MARKER in (aligned.stderr or ""):
+            stderr_marker_seen = True
+        mapped_total += _count_records(sam_path, "-F", "4")
+    return mapped_total, stderr_marker_seen
+
+
+def _filter_and_merge_bam(
+    sam_paths: List[Path], filter_args: List[str], threads: int, out_dir: Path, genome_id: str, bam_path: Path
+) -> None:
+    """Filter each SAM into a BAM (``-F 0x904 [-q min_mapq]``); merge with ``samtools cat``
+    when there is more than one (the deliberate per-mate single-end fallback)."""
+    if len(sam_paths) == 1:
+        SecureSubprocess.run_secure(
+            "samtools", ["view", "-b", *filter_args, "-@", str(threads), "-o", str(bam_path), str(sam_paths[0])]
+        )
+        return
+    part_bams = [out_dir / f"{genome_id}.mate{i}.bam" for i in range(1, len(sam_paths) + 1)]
+    for sam_path, part_bam in zip(sam_paths, part_bams):
+        SecureSubprocess.run_secure(
+            "samtools", ["view", "-b", *filter_args, "-@", str(threads), "-o", str(part_bam), str(sam_path)]
+        )
+    SecureSubprocess.run_secure("samtools", ["cat", "-o", str(bam_path), *(str(p) for p in part_bams)])
+    for part_bam in part_bams:
+        part_bam.unlink(missing_ok=True)
+
+
+def _export_mapped_fastq(reads: List[Path], bam_path: Path, out_dir: Path, genome_id: str, threads: int) -> List[Path]:
+    """Export a filtered BAM back to FASTQ. Reads without a mate flag (single-end mapping,
+    or the unequal-mates fallback) go to the ``-0`` file."""
+    if len(reads) < 2:
+        out0 = out_dir / f"{genome_id}.fastq.gz"
+        SecureSubprocess.run_secure("samtools", ["fastq", "-@", str(threads), "-0", str(out0), str(bam_path)])
+        return [] if _fastq_is_empty(out0) else [out0]
+
+    out1 = out_dir / f"{genome_id}_1.fastq.gz"
+    out2 = out_dir / f"{genome_id}_2.fastq.gz"
+    singles = out_dir / f"{genome_id}_s.fastq.gz"
+    orphans = out_dir / f"{genome_id}_0.fastq.gz"
+    SecureSubprocess.run_secure(
+        "samtools",
+        [
+            "fastq",
+            "-@",
+            str(threads),
+            "-1",
+            str(out1),
+            "-2",
+            str(out2),
+            "-s",
+            str(singles),
+            "-0",
+            str(orphans),
+            str(bam_path),
+        ],
+    )
+    for path in (out1, out2, singles, orphans):
+        if _fastq_is_empty(path):
+            path.unlink(missing_ok=True)
+    if out1.exists() and out2.exists():
+        return [out1, out2]
+    if orphans.exists():
+        return [orphans]
+    return [singles] if singles.exists() else []
+
+
 def _map_and_extract(
     accession: str,
     reads: List[Path],
+    reference: Path,
     genome_fasta: Path,
     out_dir: Path,
     genome_id: str,
     preset: str,
     threads: int,
+    min_mapq: int = 0,
+    sam_dir: Optional[Path] = None,
+    keep_sam: bool = False,
+    force_single_end: bool = False,
 ) -> ExtractionResult:
     """Map one sample's reads to the target genome and write the mapped reads.
 
+    ``reference`` is the prebuilt minimap2 index shared across every sample of this
+    ``extract_target_reads`` call; ``genome_fasta`` is the FASTA it was built from, used as
+    a one-time fallback if aligning against the index fails. ``force_single_end`` (set when
+    the caller already knows the two mate files disagree in read count) maps each mate file
+    in its own minimap2 run and merges the two alignments afterwards, deliberately as
+    single-end, rather than relying on minimap2's own after-the-fact stderr warning.
+
     Returns the FASTQ files written (two for paired input, one otherwise, none when
-    nothing mapped) together with the mapped-record count. Intermediate SAM/BAM
-    files are removed.
+    nothing mapped) together with the mapped-record counts. The SAM alignment(s) live under
+    ``sam_dir`` (or ``out_dir`` when not given) and are removed once the filtered BAM exists,
+    unless ``keep_sam``; the BAM is always removed once the FASTQ export is written.
     """
     ensure_directory(out_dir)
-    sam_path = out_dir / f"{genome_id}.sam"
+    sam_root = ensure_directory(sam_dir) if sam_dir is not None else out_dir
     bam_path = out_dir / f"{genome_id}.mapped.bam"
+    filter_args = ["-F", FILTER_FLAGS]
+    if min_mapq:
+        filter_args += ["-q", str(min_mapq)]
 
-    # 1. Align reads to the reference (SAM output).
-    minimap_args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(genome_fasta)]
-    minimap_args.extend(str(r) for r in reads)
-    aligned = SecureSubprocess.run_secure("minimap2", minimap_args)
-    unequal = UNEQUAL_MATES_MARKER in (aligned.stderr or "")
+    unequal = force_single_end and len(reads) >= 2
     if unequal:
+        mate_groups: List[List[Path]] = [[read] for read in reads[:2]]
+        sam_paths = [sam_root / f"{genome_id}.mate1.sam", sam_root / f"{genome_id}.mate2.sam"]
+        logger.warning(
+            "%s: the mate files are recorded with different read counts, so each is mapped "
+            "independently as single-end reads; re-download with fasterq-dump (which keeps mates "
+            "in step) for paired extraction",
+            accession,
+        )
+    else:
+        mate_groups = [reads]
+        sam_paths = [sam_root / f"{genome_id}.sam"]
+
+    mapped_total, stderr_marker_seen = _align_and_count_mapped(
+        accession, preset, threads, reference, genome_fasta, sam_paths, mate_groups
+    )
+    if stderr_marker_seen and not unequal:
+        unequal = True
         logger.warning(
             "%s: the mate files have different read counts, so minimap2 mapped them as single-end reads; "
             "re-download with fasterq-dump (which keeps mates in step) for paired extraction",
             accession,
         )
 
-    # 2. Keep only mapped records (-F 4 drops the unmapped flag) and count them.
-    SecureSubprocess.run_secure(
-        "samtools", ["view", "-b", "-F", "4", "-@", str(threads), "-o", str(bam_path), str(sam_path)]
-    )
-    mapped = _count_bam_records(bam_path)
+    if mapped_total == 0:
+        logger.warning("No reads from %s mapped to %s; nothing written", accession, genome_id)
+        if not keep_sam:
+            for sam_path in sam_paths:
+                sam_path.unlink(missing_ok=True)
+        return ExtractionResult([], 0, unequal, mapped_total=0)
+
+    _filter_and_merge_bam(sam_paths, filter_args, threads, out_dir, genome_id, bam_path)
+    if not keep_sam:
+        for sam_path in sam_paths:
+            sam_path.unlink(missing_ok=True)
+
+    mapped = _count_records(bam_path)
     if mapped == 0:
         logger.warning("No reads from %s mapped to %s; nothing written", accession, genome_id)
-        for tmp in (sam_path, bam_path):
-            tmp.unlink(missing_ok=True)
-        return ExtractionResult([], 0, unequal)
+        bam_path.unlink(missing_ok=True)
+        return ExtractionResult([], 0, unequal, mapped_total=mapped_total)
+    logger.info(
+        "%s: kept %d of %d mapped records (secondary/supplementary and MAPQ below %d removed: %d)",
+        accession,
+        mapped,
+        mapped_total,
+        min_mapq,
+        mapped_total - mapped,
+    )
 
-    # 3. Export mapped reads back to FASTQ. Reads without a mate flag (single-end
-    #    mapping, or a fallback after unequal mates) go to the -0 file.
-    if len(reads) >= 2:
-        out1 = out_dir / f"{genome_id}_1.fastq.gz"
-        out2 = out_dir / f"{genome_id}_2.fastq.gz"
-        singles = out_dir / f"{genome_id}_s.fastq.gz"
-        orphans = out_dir / f"{genome_id}_0.fastq.gz"
-        SecureSubprocess.run_secure(
-            "samtools",
-            ["fastq", "-1", str(out1), "-2", str(out2), "-s", str(singles), "-0", str(orphans), str(bam_path)],
+    written = _export_mapped_fastq(reads, bam_path, out_dir, genome_id, threads)
+    bam_path.unlink(missing_ok=True)
+
+    return ExtractionResult(written, mapped, unequal, mapped_total=mapped_total)
+
+
+def _skip_if_truncated(accession: str, verdict: Optional[Dict[str, Any]], allow_truncated: bool) -> bool:
+    """True (after logging) when this sample's truncated download should be skipped."""
+    if not verdict or allow_truncated:
+        return False
+    logger.warning(
+        "skipped %s: download truncated (%d of %d spots); use --allow-truncated",
+        accession,
+        verdict.get("reads_r1", 0),
+        verdict.get("expected_spots", 0),
+    )
+    return True
+
+
+def _extract_one_sample(
+    accession: str,
+    record: Optional[Dict[str, Any]],
+    genome_path: Path,
+    preset: str,
+    threshold: float,
+    force: bool,
+    dry_run: bool,
+    fastq_root: Path,
+    genome_id: str,
+    output_root: Path,
+    threads: int,
+    min_mapq: int,
+    sam_dir: Optional[Path],
+    keep_sam: bool,
+    mate_counts: Dict[str, Tuple[int, int]],
+    reference_holder: Dict[str, Path],
+) -> Optional[ExtractionResult]:
+    """Handle one selected sample: an already-done skip, missing reads, dry-run reporting,
+    or a real mapping run. Returns None when the sample contributes nothing to ``results``
+    (no FASTQ files found for it). The shared minimap2 index is built on first use here and
+    cached in ``reference_holder["reference"]`` for every later sample of this call.
+    """
+    done = bool(record) and not force and _record_matches(record or {}, genome_path, preset, threshold)
+    if done and not dry_run:
+        result = _skipped_result(record or {})
+        logger.info(
+            "%s already extracted against %s (%d mapped reads); use --force to redo",
+            accession,
+            genome_id,
+            result.mapped_records,
         )
-        for path in (out1, out2, singles, orphans):
-            if _fastq_is_empty(path):
-                path.unlink(missing_ok=True)
-        if out1.exists() and out2.exists():
-            written = [out1, out2]
-        elif orphans.exists():
-            written = [orphans]
-        else:
-            written = [singles] if singles.exists() else []
-    else:
-        out0 = out_dir / f"{genome_id}.fastq.gz"
-        SecureSubprocess.run_secure("samtools", ["fastq", "-0", str(out0), str(bam_path)])
-        written = [] if _fastq_is_empty(out0) else [out0]
+        return result
 
-    for tmp in (sam_path, bam_path):
-        tmp.unlink(missing_ok=True)
+    reads = _sample_reads(fastq_root, accession)
+    if not reads:
+        logger.warning("No FASTQ files found for %s under %s; skipping", accession, fastq_root)
+        return None
 
-    return ExtractionResult(written, mapped, unequal)
+    if dry_run:
+        result = _skipped_result(record or {}) if done else ExtractionResult([], 0)
+        if done:
+            logger.info(
+                "would skip %s (already extracted, %d mapped reads); use --force to redo",
+                accession,
+                result.mapped_records,
+            )
+        return result
+
+    if "reference" not in reference_holder:
+        index_dir = output_root / ".index"
+        SecureSubprocess.add_allowed_root(index_dir)
+        reference_holder["reference"] = build_index(genome_path, preset, index_dir)
+
+    counts = mate_counts.get(accession)
+    force_single_end = bool(counts is not None and len(reads) >= 2 and counts[0] != counts[1])
+    outcome = _map_and_extract(
+        accession,
+        reads,
+        reference_holder["reference"],
+        genome_path,
+        output_root / accession,
+        genome_id,
+        preset,
+        threads,
+        min_mapq=min_mapq,
+        sam_dir=sam_dir,
+        keep_sam=keep_sam,
+        force_single_end=force_single_end,
+    )
+    if outcome.files:
+        logger.info(
+            "Extracted %d mapped records for %s -> %s",
+            outcome.mapped_records,
+            accession,
+            ", ".join(str(p) for p in outcome.files),
+        )
+    return outcome
 
 
 def extract_target_reads(
@@ -271,6 +521,12 @@ def extract_target_reads(
     force: bool = False,
     already_done: Optional[Dict[str, Dict[str, Any]]] = None,
     on_result: Optional[Callable[[str, ExtractionResult], None]] = None,
+    min_mapq: int = 0,
+    temp_folder: Optional[Union[str, Path]] = None,
+    allow_truncated: bool = False,
+    mate_counts: Optional[Dict[str, Tuple[int, int]]] = None,
+    truncated_downloads: Optional[Dict[str, Dict[str, Any]]] = None,
+    keep_sam: bool = False,
 ) -> Dict[str, ExtractionResult]:
     """Extract reads mapping to a target genome for every qualifying sample.
 
@@ -292,6 +548,22 @@ def extract_target_reads(
             real run, skipped samples included, so the caller can checkpoint each result as it
             lands. A callback that raises is logged and does not stop the run. Dry runs never
             call it.
+        min_mapq: Minimum mapping quality (samtools ``-q``) a record must meet to be kept, in
+            addition to dropping secondary/supplementary alignments. 0 keeps every mapped
+            record regardless of quality; a divergent strain of the target genome can map with
+            a genuinely low MAPQ, so a nonzero value is best reserved for close relatives.
+        temp_folder: Where the intermediate SAM alignment(s) are written; defaults to the
+            sample's own output folder when not given.
+        allow_truncated: If True, extract even for a sample whose registry download verdict is
+            "truncated" (via ``truncated_downloads``); otherwise that sample is skipped.
+        mate_counts: Accession -> (mate 1 reads, mate 2 reads). When the two counts differ,
+            the sample's mate files are mapped independently as single-end reads rather than
+            as a pair, deliberately rather than relying on minimap2's own stderr warning.
+        truncated_downloads: Accession -> the registry's download completeness verdict, for
+            samples whose verdict is "truncated". Such a sample is skipped unless
+            ``allow_truncated``.
+        keep_sam: If True, keep the intermediate SAM alignment(s) instead of removing them
+            once the filtered BAM exists (for debugging).
 
     Returns:
         Mapping of accession to an ``ExtractionResult`` (empty files in dry-run).
@@ -319,43 +591,45 @@ def extract_target_reads(
     output_root = Path(output_folder)
     SecureSubprocess.add_allowed_root(output_root)
     already_done = already_done or {}
+    mate_counts = mate_counts or {}
+    truncated_downloads = truncated_downloads or {}
+
+    # The index is built lazily, the first time a sample actually needs mapping, so a run
+    # where every sample is already done (or dry) never touches minimap2 at all. Held in a
+    # dict (rather than a local reassigned across the loop) so the helper below can cache
+    # it too.
+    reference_holder: Dict[str, Path] = {}
+    sam_dir: Optional[Path] = None
+    if temp_folder is not None:
+        sam_dir = Path(temp_folder)
+        SecureSubprocess.add_allowed_root(sam_dir)
 
     for accession in samples:
-        record = already_done.get(accession)
-        done = bool(record) and not force and _record_matches(record or {}, genome_path, preset, threshold)
-        if done and not dry_run:
-            results[accession] = _skipped_result(record or {})
-            logger.info(
-                "%s already extracted against %s (%d mapped reads); use --force to redo",
-                accession,
-                genome_id,
-                results[accession].mapped_records,
-            )
-            _notify_result(on_result, accession, results[accession])
+        if _skip_if_truncated(accession, truncated_downloads.get(accession), allow_truncated):
             continue
-        reads = _sample_reads(fastq_root, accession)
-        if not reads:
-            logger.warning("No FASTQ files found for %s under %s; skipping", accession, fastq_root)
+        result = _extract_one_sample(
+            accession,
+            already_done.get(accession),
+            genome_path,
+            preset,
+            threshold,
+            force,
+            dry_run,
+            fastq_root,
+            genome_id,
+            output_root,
+            threads,
+            min_mapq,
+            sam_dir,
+            keep_sam,
+            mate_counts,
+            reference_holder,
+        )
+        if result is None:
             continue
-        if dry_run:
-            results[accession] = _skipped_result(record or {}) if done else ExtractionResult([], 0)
-            if done:
-                logger.info(
-                    "would skip %s (already extracted, %d mapped reads); use --force to redo",
-                    accession,
-                    results[accession].mapped_records,
-                )
-            continue
-        outcome = _map_and_extract(accession, reads, genome_path, output_root / accession, genome_id, preset, threads)
-        results[accession] = outcome
-        _notify_result(on_result, accession, outcome)
-        if outcome.files:
-            logger.info(
-                "Extracted %d mapped records for %s -> %s",
-                outcome.mapped_records,
-                accession,
-                ", ".join(str(p) for p in outcome.files),
-            )
+        results[accession] = result
+        if not dry_run:
+            _notify_result(on_result, accession, result)
 
     return results
 

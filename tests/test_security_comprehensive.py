@@ -454,6 +454,24 @@ class TestArgumentParsing:
         cmd = SecureSubprocess._build_validated_command("minimap2", ["-a", "-x", "sr"])
         assert cmd == ["minimap2", "-a", "-x", "sr"]
 
+    def test_minimap2_index_flag_is_path_validated(self, tmp_path, monkeypatch):
+        """minimap2 -d <index> builds an index file; the path is validated like -o."""
+        monkeypatch.chdir(tmp_path)
+        cmd = SecureSubprocess._build_validated_command(
+            "minimap2", ["-x", "sr", "-d", "idx/genome.sr.mmi", "genome.fna"]
+        )
+        assert cmd == ["minimap2", "-x", "sr", "-d", str((tmp_path / "idx" / "genome.sr.mmi").resolve()), "genome.fna"]
+
+    def test_samtools_min_mapq_flag_allowed(self):
+        """samtools view -q <n> (minimum MAPQ) is an allowed parameter."""
+        cmd = SecureSubprocess._build_validated_command("samtools", ["view", "-b", "-q", "20", "in.sam"])
+        assert cmd == ["samtools", "view", "-b", "-q", "20", "in.sam"]
+
+    def test_samtools_cat_subcommand_allowed(self):
+        """samtools cat merges two BAM files (unequal-mates single-end fallback)."""
+        cmd = SecureSubprocess._build_validated_command("samtools", ["cat", "-o", "out.bam", "a.bam", "b.bam"])
+        assert cmd[:2] == ["samtools", "cat"]
+
     def test_prefetch_unknown_positional_rejected(self):
         """A positional for prefetch that is neither an accession nor a .sra path is rejected."""
         with pytest.raises(SecurityError):

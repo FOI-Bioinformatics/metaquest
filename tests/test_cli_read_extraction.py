@@ -24,6 +24,10 @@ def _args(tmp, **kwargs):
         threshold=0.1,
         preset="sr",
         threads=4,
+        min_mapq=0,
+        temp_folder=None,
+        allow_truncated=False,
+        debug_keep_sam=False,
         assemble=False,
         assembly_threads=None,
         min_contig_len=None,
@@ -91,6 +95,21 @@ def _status_args(root, **overrides):
     )
     base.update(overrides)
     return argparse.Namespace(**base)
+
+
+def _gzip_tree(tmp, mate1_reads=3, mate2_reads=3):
+    """Like _tree, but with real gzip FASTQ content so count_fastq_reads can read it."""
+    root = Path(tmp)
+    table = root / "parsed_containment.txt"
+    table.write_text("\tGCF_1\nSRR1\t0.9\nSRR2\t0.05\n")
+    d = root / "fastq" / "SRR1"
+    d.mkdir(parents=True)
+    for name, n in (("SRR1_1.fastq.gz", mate1_reads), ("SRR1_2.fastq.gz", mate2_reads)):
+        with gzip.open(d / name, "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n" * n)
+    genome = root / "GCF_1.fna"
+    genome.write_text(">s\nACGT\n")
+    return root, table, genome
 
 
 def _two_sample_tree(tmp):
@@ -635,3 +654,125 @@ class TestExtractTargetReadsCommand:
         tools_after_rename = [c.args[0] for c in mock_run.call_args_list[calls_before:]]
         assert "minimap2" not in tools_after_rename
         assert "samtools" not in tools_after_rename
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_records_filter_flags_min_mapq_and_index(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    min_mapq=20,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        extraction = data["datasets"]["SRR1"]["extractions"]["GCF_1"]
+        assert extraction["filter_flags"] == "0x904"
+        assert extraction["min_mapq"] == 20
+        assert extraction["index"].endswith("GCF_1.sr.mmi")
+        assert ".index" in extraction["index"]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_caches_mate_read_counts_in_the_registry(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _gzip_tree(tmp, mate1_reads=3, mate2_reads=3)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+        assert data["datasets"]["SRR1"]["download"]["mate_reads"] == [3, 3]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_skips_a_truncated_download_unless_allowed(self, mock_run, caplog):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            registry = load_registry(registry_file)
+            registry.datasets["SRR1"] = {
+                "download": {"complete": {"verdict": "truncated", "reads_r1": 5, "expected_spots": 20}}
+            }
+            save_registry(registry)
+
+            with caplog.at_level("WARNING"):
+                rc = cmd.execute(
+                    _args(
+                        tmp,
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                        registry=str(registry_file),
+                    )
+                )
+        assert rc == 1
+        assert "skipped SRR1: download truncated (5 of 20 spots); use --allow-truncated" in caplog.text
+        assert not mock_run.called
+
+        mock_run.reset_mock()
+        with tempfile.TemporaryDirectory() as tmp2:
+            root, table, genome = _tree(tmp2)
+            registry_file = root / "registry.json"
+            registry = load_registry(registry_file)
+            registry.datasets["SRR1"] = {
+                "download": {"complete": {"verdict": "truncated", "reads_r1": 5, "expected_spots": 20}}
+            }
+            save_registry(registry)
+            rc = cmd.execute(
+                _args(
+                    tmp2,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    registry=str(registry_file),
+                    allow_truncated=True,
+                )
+            )
+        assert rc == 0
+        assert mock_run.called
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_debug_keep_sam_leaves_the_sam_on_disk(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    debug_keep_sam=True,
+                )
+            )
+            assert rc == 0
+            assert list((root / "targeted" / "SRR1").glob("*.sam"))

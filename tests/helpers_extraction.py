@@ -41,20 +41,46 @@ def _fake_tools(state):
 
     Records every call and creates the files each real tool would write.
 
-    state keys: mapped (int, default 10), nonempty (flags whose output file gets a
-    read, default ("-1", "-2")), unequal (bool, emit minimap2's mate-count warning),
-    single (bool, fasterq-dump writes a single ``<acc>.fastq`` instead of a
-    ``<acc>_1.fastq``/``<acc>_2.fastq`` pair), reads (int, records per FASTQ file
-    fasterq-dump writes, default 4).
+    state keys: mapped (int, default 10, the post-filter/kept count reported for a BAM
+    count), mapped_total (int, the pre-filter mapped count reported for a SAM count;
+    defaults to ``mapped``), nonempty (flags whose output file gets a read, default
+    ("-1", "-2")), unequal (bool, emit minimap2's mate-count warning), single (bool,
+    fasterq-dump writes a single ``<acc>.fastq`` instead of a ``<acc>_1.fastq``/
+    ``<acc>_2.fastq`` pair), reads (int, records per FASTQ file fasterq-dump writes,
+    default 4).
     """
 
     def run(executable, args, **kwargs):
         state.setdefault("calls", []).append((executable, list(args)))
         result = MagicMock(returncode=0, stdout="", stderr="")
-        if executable == "minimap2" and state.get("unequal"):
-            result.stderr = UNEQUAL_WARNING
+        if executable == "minimap2":
+            if "-d" in args:
+                # Building an index: create the .mmi the real tool would write.
+                index_path = Path(args[args.index("-d") + 1])
+                index_path.parent.mkdir(parents=True, exist_ok=True)
+                index_path.write_bytes(b"")
+            elif "-o" in args:
+                # Aligning: create the SAM output the real tool would write.
+                sam_path = Path(args[args.index("-o") + 1])
+                sam_path.parent.mkdir(parents=True, exist_ok=True)
+                sam_path.write_text("")
+                if state.get("unequal"):
+                    result.stderr = UNEQUAL_WARNING
         if executable == "samtools" and args[:2] == ["view", "-c"]:
-            result.stdout = f"{state.get('mapped', 10)}\n"
+            target = args[-1]
+            if str(target).endswith(".sam"):
+                result.stdout = f"{state.get('mapped_total', state.get('mapped', 10))}\n"
+            else:
+                result.stdout = f"{state.get('mapped', 10)}\n"
+        if executable == "samtools" and args[0] == "view" and "-b" in args:
+            state.setdefault("view_filter_calls", []).append(list(args))
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"")
+        if executable == "samtools" and args[0] == "cat":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"")
         if executable == "samtools" and args[0] == "fastq":
             for flag in ("-1", "-2", "-0", "-s"):
                 if flag in args and flag in state.get("nonempty", ("-1", "-2")):

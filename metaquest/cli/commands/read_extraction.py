@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
@@ -10,10 +10,12 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     ExtractionResult,
+    _sample_reads,
     assemble_extracted_reads,
     extract_target_reads,
     megahit_version,
     resolve_assembly_threads,
+    resolve_index_path,
     selected_samples,
     summarise_contigs,
 )
@@ -25,7 +27,9 @@ from metaquest.data.registry import (
     record_extraction,
     registry_transaction,
     resolve_project_path,
+    upsert_dataset,
 )
+from metaquest.data.sra import count_fastq_reads
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.usage import record_usage_safe
@@ -67,6 +71,32 @@ class ExtractTargetReadsCommand(BaseCommand):
         )
         parser.add_argument("--threads", type=int, default=4, help="Threads for minimap2 and samtools")
         parser.add_argument(
+            "--min-mapq",
+            type=int,
+            default=0,
+            help=(
+                "Minimum mapping quality kept, in addition to dropping secondary/supplementary "
+                "alignments (default: 0, keep every mapped record). Try 20 for a close relative of "
+                "the target genome; a divergent strain can genuinely map with a low MAPQ, so raising "
+                "this can discard real matches."
+            ),
+        )
+        parser.add_argument(
+            "--temp-folder",
+            default=None,
+            help="Where the intermediate SAM alignment(s) are written (default: alongside each sample's output)",
+        )
+        parser.add_argument(
+            "--allow-truncated",
+            action="store_true",
+            help="Extract even for a sample whose registry download verdict is 'truncated'",
+        )
+        parser.add_argument(
+            "--debug-keep-sam",
+            action="store_true",
+            help="Keep the intermediate SAM alignment(s) instead of removing them once the BAM exists",
+        )
+        parser.add_argument(
             "--assemble", action="store_true", help="Assemble each sample's extracted reads with megahit"
         )
         parser.add_argument(
@@ -95,6 +125,51 @@ class ExtractTargetReadsCommand(BaseCommand):
         cannot be reached is a warning, not a reason to stop."""
         return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
 
+    def _mate_counts(
+        self, args: argparse.Namespace, registry: Registry, selected: List[str]
+    ) -> Dict[str, Tuple[int, int]]:
+        """Accession -> (mate 1 reads, mate 2 reads) for every selected sample with both mate
+        files present on disk.
+
+        A pair already recorded on the registry's download entry (``download.mate_reads``,
+        from an earlier run) is reused as is; otherwise the files are counted now and the
+        pair is cached there so a later run does not recount them. Counting is best-effort:
+        a file that cannot be read (e.g. corrupted, or not really gzip despite its name) is
+        logged and skipped rather than stopping the extraction.
+        """
+        counts: Dict[str, Tuple[int, int]] = {}
+        for accession in selected:
+            download = registry.datasets.get(accession, {}).get("download") or {}
+            cached = download.get("mate_reads")
+            if cached is not None and len(cached) == 2:
+                counts[accession] = (int(cached[0]), int(cached[1]))
+                continue
+            reads = _sample_reads(Path(args.fastq_folder), accession)
+            if len(reads) != 2:
+                continue
+            try:
+                n1, n2 = count_fastq_reads(reads[0]), count_fastq_reads(reads[1])
+            except Exception as e:
+                self.logger.warning(
+                    "Could not count reads in %s's mate files (%s); skipping the pre-count", accession, e
+                )
+                continue
+            counts[accession] = (n1, n2)
+            with registry_transaction(args.registry) as reg:
+                upsert_dataset(reg, accession).setdefault("download", {"attempts": 0})["mate_reads"] = [n1, n2]
+        return counts
+
+    @staticmethod
+    def _truncated_downloads(registry: Registry) -> Dict[str, Dict[str, Any]]:
+        """Accession -> download completeness verdict, for every accession whose verdict is
+        ``"truncated"``."""
+        truncated = {}
+        for accession, record in registry.datasets.items():
+            verdict = (record.get("download") or {}).get("complete") or {}
+            if verdict.get("verdict") == "truncated":
+                truncated[accession] = verdict
+        return truncated
+
     def _record_result(
         self,
         args: argparse.Namespace,
@@ -105,6 +180,7 @@ class ExtractTargetReadsCommand(BaseCommand):
         """Checkpoint one extraction result; skipped samples are already recorded."""
         if outcome.skipped:
             return
+        index_dir = Path(args.output_folder) / ".index"
         with registry_transaction(args.registry) as reg:
             record_extraction(
                 reg,
@@ -117,6 +193,9 @@ class ExtractTargetReadsCommand(BaseCommand):
                     "genome_fasta": str(Path(args.genome_fasta)),
                     "preset": args.preset,
                     "threshold": args.threshold,
+                    "filter_flags": "0x904",
+                    "min_mapq": args.min_mapq,
+                    "index": str(resolve_index_path(args.genome_fasta, args.preset, index_dir)),
                 },
             )
             record_usage_safe(
@@ -219,6 +298,12 @@ class ExtractTargetReadsCommand(BaseCommand):
                 if (rec := self._resolved_extraction_record(registry, acc, args.genome_id)) is not None
             }
 
+            mate_counts: Dict[str, Any] = {}
+            if not args.dry_run:
+                selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
+                mate_counts = self._mate_counts(args, registry, selected)
+            truncated_downloads = self._truncated_downloads(registry)
+
             results = extract_target_reads(
                 parsed_containment=args.parsed_containment,
                 genome_id=args.genome_id,
@@ -232,6 +317,12 @@ class ExtractTargetReadsCommand(BaseCommand):
                 force=args.force,
                 already_done=already_done,
                 on_result=lambda accession, outcome: self._record_result(args, accession, outcome, store),
+                min_mapq=args.min_mapq,
+                temp_folder=args.temp_folder,
+                allow_truncated=args.allow_truncated,
+                mate_counts=mate_counts,
+                truncated_downloads=truncated_downloads,
+                keep_sam=args.debug_keep_sam,
             )
 
             if args.dry_run:

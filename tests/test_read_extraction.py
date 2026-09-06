@@ -1,5 +1,6 @@
 """Tests for targeted read extraction (metaquest.data.read_extraction)."""
 
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,8 +13,10 @@ from metaquest.data.read_extraction import (
     ExtractionResult,
     _sample_reads,
     assemble_extracted_reads,
+    build_index,
     extract_target_reads,
     resolve_assembly_threads,
+    resolve_index_path,
     select_samples_for_genome,
 )
 from metaquest.data.registry import load_registry, record_extraction, resolve_project_path, save_registry
@@ -112,11 +115,16 @@ class TestExtractTargetReads:
             assert not (root / "targeted" / "SRR1" / "GCF_1_0.fastq.gz").exists()
 
         tools = [c[0] for c in state["calls"]]
-        assert tools == ["minimap2", "samtools", "samtools", "samtools"]
+        # First minimap2 call builds the shared index (-d); the second aligns the sample.
+        assert tools == ["minimap2", "minimap2", "samtools", "samtools", "samtools", "samtools"]
+        assert "-d" in state["calls"][0][1]
+        assert state["calls"][1][1][:2] == ["-a", "-x"]
         assert state["calls"][2][1][:2] == ["view", "-c"]
-        fastq_args = state["calls"][3][1]
+        assert state["calls"][3][1][:4] == ["view", "-b", "-F", "0x904"]
+        assert state["calls"][4][1][:2] == ["view", "-c"]
+        fastq_args = state["calls"][5][1]
         assert fastq_args[0] == "fastq"
-        assert all(flag in fastq_args for flag in ("-1", "-2", "-s", "-0"))
+        assert all(flag in fastq_args for flag in ("-1", "-2", "-s", "-0", "-@"))
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_single_end_uses_flag_0(self, mock_run):
@@ -133,8 +141,9 @@ class TestExtractTargetReads:
                 threshold=0.5,
             )
             assert [p.name for p in results["SRR1"].files] == ["GCF_1.fastq.gz"]
-        fastq_args = state["calls"][3][1]
+        fastq_args = state["calls"][5][1]
         assert "-0" in fastq_args
+        assert "-@" in fastq_args
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_zero_mapped_records_writes_nothing(self, mock_run, caplog):
@@ -154,8 +163,9 @@ class TestExtractTargetReads:
             assert results == {"SRR1": ExtractionResult([], 0)}
             assert list((root / "targeted" / "SRR1").glob("*.fastq.gz")) == []
         assert "No reads from SRR1 mapped to GCF_1" in caplog.text
-        # samtools fastq is never run when nothing mapped.
-        assert [c[0] for c in state["calls"]] == ["minimap2", "samtools", "samtools"]
+        # Nothing mapped (per the SAM count), so filtering/counting the BAM and running
+        # samtools fastq are all skipped.
+        assert [c[0] for c in state["calls"]] == ["minimap2", "minimap2", "samtools"]
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_unequal_mates_fall_back_to_orphan_file(self, mock_run, caplog):
@@ -255,6 +265,250 @@ class TestExtractTargetReads:
             root, table, _ = _make_tree(tmp)
             with pytest.raises(DataAccessError):
                 extract_target_reads(table, "GCF_1", root / "absent.fna", fastq_folder=root / "fastq")
+
+
+class TestBuildIndex:
+    """build_index/resolve_index_path: one shared minimap2 index per genome/preset."""
+
+    def test_index_built_once_and_reused(self, tmp_path):
+        genome = tmp_path / "g.fna"
+        genome.write_text(">s\nACGT\n")
+        index_dir = tmp_path / ".index"
+        state = {}
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+            first = build_index(genome, "sr", index_dir)
+            assert len(state["calls"]) == 1
+            assert state["calls"][0] == ("minimap2", ["-x", "sr", "-d", str(first), str(genome)])
+            again = build_index(genome, "sr", index_dir)
+        assert again == first
+        assert len(state["calls"]) == 1  # the FASTA has not changed, so the index is reused
+
+    def test_index_rebuilt_when_fasta_touched_newer(self, tmp_path):
+        genome = tmp_path / "g.fna"
+        genome.write_text(">s\nACGT\n")
+        index_dir = tmp_path / ".index"
+        state = {}
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+            index_path = build_index(genome, "sr", index_dir)
+            assert len(state["calls"]) == 1
+
+            newer = index_path.stat().st_mtime + 10
+            os.utime(genome, (newer, newer))
+
+            build_index(genome, "sr", index_dir)
+        assert len(state["calls"]) == 2
+
+    def test_resolve_index_path_names_the_file_by_genome_stem_and_preset(self, tmp_path):
+        path = resolve_index_path(tmp_path / "genomes" / "GCF_1.fna", "map-ont", tmp_path / ".index")
+        assert path == tmp_path / ".index" / "GCF_1.map-ont.mmi"
+
+
+class TestIndexReuseAcrossSamples:
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_index_built_once_for_three_samples_and_reused(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            results = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.05,
+            )
+            assert set(results) == {"SRR1", "SRR2", "SRR3"}
+        index_calls = [c for c in state["calls"] if c[0] == "minimap2" and "-d" in c[1]]
+        assert len(index_calls) == 1
+
+
+class TestMapqAndSamLifetime:
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_min_mapq_passed_to_the_filter_and_logged(self, mock_run, caplog):
+        state = {"mapped_total": 100, "mapped": 80}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            with caplog.at_level("INFO"):
+                extract_target_reads(
+                    parsed_containment=table,
+                    genome_id="GCF_1",
+                    genome_fasta=genome,
+                    fastq_folder=root / "fastq",
+                    output_folder=root / "targeted",
+                    threshold=0.5,
+                    min_mapq=20,
+                )
+        filter_call = next(c for c in state["calls"] if c[0] == "samtools" and c[1][:2] == ["view", "-b"])
+        args = filter_call[1]
+        assert args[args.index("-F") + 1] == "0x904"
+        assert args[args.index("-q") + 1] == "20"
+        assert "kept 80 of 100 mapped records (secondary/supplementary and MAPQ below 20 removed: 20)" in caplog.text
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_no_min_mapq_omits_the_q_flag(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+            )
+        filter_call = next(c for c in state["calls"] if c[0] == "samtools" and c[1][:2] == ["view", "-b"])
+        assert "-q" not in filter_call[1]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_sam_is_removed_after_the_run(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+            )
+            assert list((root / "targeted" / "SRR1").glob("*.sam")) == []
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_sam_is_kept_with_the_debug_flag(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                keep_sam=True,
+            )
+            assert len(list((root / "targeted" / "SRR1").glob("*.sam"))) == 1
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_sam_written_under_temp_folder_when_given(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            temp_folder = root / "scratch"
+            extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                temp_folder=temp_folder,
+                keep_sam=True,
+            )
+            assert list(temp_folder.glob("*.sam"))
+            assert list((root / "targeted" / "SRR1").glob("*.sam")) == []
+
+
+class TestTruncatedDownloadSkip:
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_truncated_sample_is_skipped_by_default(self, mock_run, caplog):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            truncated = {"SRR1": {"verdict": "truncated", "reads_r1": 5, "expected_spots": 20}}
+            with caplog.at_level("WARNING"):
+                results = extract_target_reads(
+                    parsed_containment=table,
+                    genome_id="GCF_1",
+                    genome_fasta=genome,
+                    fastq_folder=root / "fastq",
+                    output_folder=root / "targeted",
+                    threshold=0.5,
+                    truncated_downloads=truncated,
+                )
+        assert "SRR1" not in results
+        assert not mock_run.called
+        assert "skipped SRR1: download truncated (5 of 20 spots); use --allow-truncated" in caplog.text
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_allow_truncated_extracts_anyway(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            truncated = {"SRR1": {"verdict": "truncated", "reads_r1": 5, "expected_spots": 20}}
+            results = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                truncated_downloads=truncated,
+                allow_truncated=True,
+            )
+        assert "SRR1" in results
+        assert mock_run.called
+
+
+class TestMateCountMismatch:
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_mismatched_mate_counts_map_single_end_without_the_stderr_marker(self, mock_run, caplog):
+        """mate_counts alone (no minimap2 stderr marker) is enough to trigger the fallback."""
+        state = {"nonempty": ("-0",)}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            with caplog.at_level("WARNING"):
+                results = extract_target_reads(
+                    parsed_containment=table,
+                    genome_id="GCF_1",
+                    genome_fasta=genome,
+                    fastq_folder=root / "fastq",
+                    output_folder=root / "targeted",
+                    threshold=0.5,
+                    mate_counts={"SRR1": (100, 80)},
+                )
+        assert results["SRR1"].unequal_mates is True
+        assert [p.name for p in results["SRR1"].files] == ["GCF_1_0.fastq.gz"]
+        assert "mapped independently as single-end" in caplog.text
+
+        minimap2_calls = [c for c in state["calls"] if c[0] == "minimap2"]
+        # one shared index build, plus one alignment per mate file
+        assert len(minimap2_calls) == 3
+        alignment_calls = [c for c in minimap2_calls if "-a" in c[1]]
+        assert all(len([r for r in c[1] if str(r).endswith(".fastq.gz")]) == 1 for c in alignment_calls)
+
+        cat_calls = [c for c in state["calls"] if c[0] == "samtools" and c[1][:1] == ["cat"]]
+        assert len(cat_calls) == 1
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_matching_mate_counts_map_as_a_pair(self, mock_run):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            results = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                mate_counts={"SRR1": (100, 100)},
+            )
+        assert results["SRR1"].unequal_mates is False
+        alignment_calls = [c for c in state["calls"] if c[0] == "minimap2" and "-a" in c[1]]
+        assert len(alignment_calls) == 1
 
 
 class TestExtractionIdempotency:
