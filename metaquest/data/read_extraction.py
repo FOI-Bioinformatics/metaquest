@@ -790,16 +790,20 @@ def summarise_contigs(contigs: Union[str, Path]) -> Dict[str, Any]:
     lengths.sort(reverse=True)
     total = sum(lengths)
 
-    def _n_stat(fraction: float) -> int:
+    def _n_stat(numerator: int, denominator: int) -> int:
+        """The shortest contig in the sorted-by-length prefix whose cumulative length is at
+        least ``numerator/denominator`` of the total (N50 is numerator=1, denominator=2;
+        N90 is numerator=9, denominator=10). Integer arithmetic only, to avoid floating-point
+        error on a large total."""
         running = 0
         for length in lengths:
             running += length
-            if running * 100 >= total * fraction * 100:
+            if running * denominator >= total * numerator:
                 return length
         return 0
 
-    n50 = _n_stat(0.5)
-    n90 = _n_stat(0.9)
+    n50 = _n_stat(1, 2)
+    n90 = _n_stat(9, 10)
     gc = round(gc_count / bases_seen, 4) if bases_seen else 0.0
     contigs_ge_1kb = sum(1 for length in lengths if length >= 1000)
     return {
