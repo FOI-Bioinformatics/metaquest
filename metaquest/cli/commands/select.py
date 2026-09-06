@@ -41,7 +41,7 @@ class SelectDatasetsCommand(BaseCommand):
             "--require",
             choices=["any", "all"],
             default="any",
-            help="With --genome-ids, require any or all columns to meet the threshold (default: any)",
+            help="With --genome-ids, require any or all columns to meet the threshold",
         )
         parser.add_argument(
             "--threshold", type=float, default=DEFAULT_CONTAINMENT_THRESHOLD, help="Minimum containment, inclusive"
@@ -65,7 +65,7 @@ class SelectDatasetsCommand(BaseCommand):
             "--skip-excluded",
             action=argparse.BooleanOptionalAction,
             default=True,
-            help="Drop accessions already marked excluded in the registry (default: on)",
+            help="Drop accessions already marked excluded in the registry",
         )
         parser.add_argument(
             "--skip-downloaded",
