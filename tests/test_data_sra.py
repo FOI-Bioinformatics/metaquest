@@ -532,6 +532,23 @@ class TestHandleDownloadOutput:
         assert success is True
         assert message == "Downloaded 1 files, unverified"
 
+    def test_handle_download_output_reports_compression_failure_in_message(self, tmp_path):
+        """A per-file compression failure must not fail the download, but must be visible."""
+        temp_path = tmp_path / "temp"
+        output_path = tmp_path / "output" / "SRR123"
+        temp_path.mkdir()
+        (temp_path / "SRR123_1.fastq").write_text("@seq1\nACGT\n+\nIIII\n")
+
+        with patch("metaquest.data.sra.compress_fastq", side_effect=OSError("disk full")):
+            with patch("metaquest.data.sra.logger") as mock_logger:
+                success, message = _handle_download_output(temp_path, output_path, compress=True)
+
+        assert success is True
+        assert "compression failed for SRR123_1.fastq" in message
+        # The verdict text itself (parseable by parse_verdict_message) must still be present.
+        assert message.startswith("Downloaded 1 files, unverified")
+        mock_logger.warning.assert_called()
+
 
 class TestDownloadAccession:
     """Test download_accession function."""
@@ -898,6 +915,57 @@ class TestCompressFastq:
         executable, args = mock_run.call_args[0][0], mock_run.call_args[0][1]
         assert executable == "pigz"
         assert args == ["-p", "8", "-f", str(path)]
+
+    def test_compress_fastq_python_fallback_atomic_on_mid_write_failure(self, tmp_path):
+        """A write failure partway through must not leave a truncated .gz beside the plain file."""
+        path = tmp_path / "SRR1_1.fastq"
+        path.write_text("@r\nACGT\n+\nIIII\n" * 3)
+
+        real_gzip_open = gzip.open
+        write_calls = {"n": 0}
+
+        def flaky_open(*args, **kwargs):
+            handle = real_gzip_open(*args, **kwargs)
+            real_write = handle.write
+
+            def flaky_write(data):
+                write_calls["n"] += 1
+                if write_calls["n"] == 1:
+                    raise OSError("disk full")
+                return real_write(data)
+
+            handle.write = flaky_write
+            return handle
+
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra.gzip.open", side_effect=flaky_open):
+                with pytest.raises(OSError):
+                    compress_fastq(path, threads=4)
+
+        # The plain file survives untouched, no partial .gz and no leftover temp file.
+        assert path.exists()
+        assert fastq_files(tmp_path) == [path]
+        assert not (tmp_path / "SRR1_1.fastq.gz").exists()
+        assert not any(p.name.startswith("SRR1_1.fastq.gz.tmp.") for p in tmp_path.iterdir())
+
+    def test_compress_fastq_pigz_failure_leaves_no_partial_gz(self, tmp_path):
+        """If pigz (via run_secure) raises, any partial .gz it left behind is removed."""
+        path = tmp_path / "SRR1_1.fastq"
+        path.write_text("@r\nACGT\n+\nIIII\n")
+        target = tmp_path / "SRR1_1.fastq.gz"
+
+        def failing_run(executable, args, **kwargs):
+            # Simulate pigz having written a partial .gz before dying mid-compression.
+            target.write_bytes(b"partial-garbage")
+            raise SecurityError("pigz failed")
+
+        with patch("metaquest.data.sra.shutil.which", return_value="/usr/bin/pigz"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=failing_run):
+                with pytest.raises(SecurityError):
+                    compress_fastq(path, threads=4)
+
+        assert path.exists()
+        assert not target.exists()
 
 
 class TestClassifyDownloadError:

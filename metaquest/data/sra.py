@@ -364,19 +364,44 @@ def compress_fastq(path: Path, threads: int) -> Path:
     otherwise falls back to Python's ``gzip`` module, streaming the file through in
     1 MiB blocks so a large FASTQ file is never fully loaded into memory. Either way
     the uncompressed source is removed and only the ``.gz`` file remains.
-    """
-    if shutil.which("pigz"):
-        SecureSubprocess.run_secure("pigz", ["-p", str(threads), "-f", str(path)])
-        return path.with_suffix(path.suffix + ".gz")
 
+    On failure, no partial ``.gz`` is left behind and the uncompressed source survives
+    untouched: the Python fallback writes to a process-unique temp file and only
+    ``os.replace``s it onto the final ``.gz`` name (and only then unlinks the source)
+    once the gzip stream has closed cleanly; a failing ``pigz`` invocation has any
+    ``.gz`` it managed to write before dying removed. Either way the original
+    exception propagates to the caller.
+    """
     target = path.with_suffix(path.suffix + ".gz")
+
+    if shutil.which("pigz"):
+        try:
+            SecureSubprocess.run_secure("pigz", ["-p", str(threads), "-f", str(path)])
+        except Exception:
+            if target.exists():
+                try:
+                    target.unlink()
+                except OSError as cleanup_error:
+                    logger.warning(f"Could not remove partial {target} after a failed pigz run: {cleanup_error}")
+            raise
+        return target
+
+    tmp_target = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     block_size = 1024 * 1024
-    with open(path, "rb") as source, gzip.open(target, "wb", compresslevel=6) as dest:
-        while True:
-            block = source.read(block_size)
-            if not block:
-                break
-            dest.write(block)
+    try:
+        with open(path, "rb") as source, gzip.open(tmp_target, "wb", compresslevel=6) as dest:
+            while True:
+                block = source.read(block_size)
+                if not block:
+                    break
+                dest.write(block)
+        os.replace(tmp_target, target)
+    finally:
+        if tmp_target.exists():
+            try:
+                tmp_target.unlink()
+            except OSError as cleanup_error:
+                logger.warning(f"Could not remove leftover temp file {tmp_target}: {cleanup_error}")
     path.unlink()
     return target
 
@@ -434,23 +459,31 @@ def _handle_download_output(
     # file is cheaper, and the verdict message format must stay stable either way.
     verdict = verify_download(output_path.name, output_path, expected_spots=expected_spots)
 
+    compression_failures = []
     if compress:
         for file in moved:
             try:
                 compress_fastq(file, num_threads)
             except Exception as e:
                 logger.warning(f"Could not compress {file}: {e}")
+                compression_failures.append(file.name)
 
     if verdict["verdict"] == "unverified":
-        return True, f"Downloaded {len(found)} files, unverified"
+        message = f"Downloaded {len(found)} files, unverified"
+    else:
+        spots_note = f"({verdict['reads_r1']} of {verdict['expected_spots']} spots)"
+        message = f"Downloaded {len(found)} files, {verdict['verdict']} {spots_note}"
+        if verdict["verdict"] == "truncated":
+            logger.warning(
+                f"Truncated download for {output_path.name}: {verdict['reads_r1']} of "
+                f"{verdict['expected_spots']} spots (ratio {verdict['ratio']})"
+            )
 
-    spots_note = f"({verdict['reads_r1']} of {verdict['expected_spots']} spots)"
-    message = f"Downloaded {len(found)} files, {verdict['verdict']} {spots_note}"
-    if verdict["verdict"] == "truncated":
-        logger.warning(
-            f"Truncated download for {output_path.name}: {verdict['reads_r1']} of "
-            f"{verdict['expected_spots']} spots (ratio {verdict['ratio']})"
-        )
+    if compression_failures:
+        # Appended, never prepended, so parse_verdict_message's regex/substring checks
+        # on the leading verdict text keep working unchanged.
+        message += "; compression failed for " + ", ".join(compression_failures)
+
     return True, message
 
 
