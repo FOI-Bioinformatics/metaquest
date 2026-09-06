@@ -477,6 +477,17 @@ def record_download(
     download.pop("inferred", None)
 
 
+def set_download_verdict(registry: Registry, accession: str, verdict: Dict[str, Any]) -> None:
+    """Set only a downloaded accession's completeness verdict, touching nothing else.
+
+    Unlike ``record_download``, this never resets ``date``, re-scans ``files``/``bytes_total``,
+    or clears ``message``/``source``/``store_name``; use it when only the completeness verdict
+    needs to change, e.g. computing one that a download recorded before verification existed
+    never got.
+    """
+    upsert_dataset(registry, accession).setdefault("download", {"attempts": 0})["complete"] = verdict
+
+
 def nan_to_none(value: Any) -> Any:
     """Return ``None`` for a pandas NaN/NA value, else ``value`` unchanged."""
     import pandas as pd
@@ -912,7 +923,7 @@ def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> 
             continue
         verify = verify_download(acc, acc_dir, spots)
         complete = {"method": "spots", "ratio": verify["ratio"], "verdict": verify["verdict"]}
-        record_download(registry, acc, "downloaded", paths.fastq, attempt=False, complete=complete)
+        set_download_verdict(registry, acc, complete)
 
 
 def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:

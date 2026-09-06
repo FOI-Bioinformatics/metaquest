@@ -525,6 +525,27 @@ class TestStatusReconcileVerdict:
         complete = data["datasets"]["SRR1"]["download"]["complete"]
         assert complete["verdict"] == "truncated"
 
+    def test_reconcile_backfilling_a_verdict_does_not_disturb_the_recorded_date(self, tmp_path, capsys):
+        """Filling in a missing verdict uses set_download_verdict, not record_download, so the
+        download's recorded date (and files/bytes_total/message) survive untouched."""
+        from metaquest.data.registry import record_metadata
+
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        capsys.readouterr()
+
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {"run_total_spots": 100})
+        original_date = registry.datasets["SRR1"]["download"]["date"]
+        save_registry(registry)
+
+        StatusCommand().execute(_status_args(tmp_path, reconcile=True))
+        capsys.readouterr()
+
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        assert data["datasets"]["SRR1"]["download"]["date"] == original_date
+        assert data["datasets"]["SRR1"]["download"]["complete"]["verdict"] == "truncated"
+
     def test_reconcile_leaves_existing_verdict_alone(self, tmp_path, capsys):
         """A verdict already on file (e.g. from a fresh download run) is never recomputed."""
         from metaquest.data.registry import record_download, record_metadata

@@ -348,6 +348,28 @@ class TestRecords:
         reg.record_download(r, "SRR1", "downloaded", tmp_path / "fastq", attempt=False)
         assert r.datasets["SRR1"]["download"]["complete"] == verdict
 
+    def test_set_download_verdict_only_touches_complete(self, tmp_path):
+        """Unlike record_download, set_download_verdict must not reset date, files, bytes_total,
+        message, source or store_name; it only sets the completeness verdict."""
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_download(
+            r, "SRR1", "downloaded", tmp_path / "fastq", message="original", source="store", store_name="SRR1"
+        )
+        original = dict(r.datasets["SRR1"]["download"])
+
+        verdict = {"method": "spots", "ratio": 0.5, "verdict": "truncated"}
+        reg.set_download_verdict(r, "SRR1", verdict)
+
+        download = r.datasets["SRR1"]["download"]
+        assert download["complete"] == verdict
+        assert download["date"] == original["date"]
+        assert download["files"] == original["files"]
+        assert download["bytes_total"] == original["bytes_total"]
+        assert download["message"] == original["message"]
+        assert download["source"] == original["source"]
+        assert download["store_name"] == original["store_name"]
+        assert download["attempts"] == original["attempts"]
+
     def test_screening_source_and_threshold_are_per_genome(self, tmp_path):
         """A later screening from another source must not overwrite the first genome's provenance."""
         r = reg.load_registry(tmp_path / "metaquest_registry.json")

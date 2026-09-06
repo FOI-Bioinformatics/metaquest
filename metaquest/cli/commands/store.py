@@ -366,13 +366,13 @@ class StoreAdoptCommand(BaseCommand):
             dest="move",
             action="store_true",
             default=True,
-            help="Move each accession's folder into the store when the two share a filesystem (default)",
+            help="Remove each accession's project folder and link it to the store's copy (default)",
         )
         mode.add_argument(
             "--copy",
             dest="move",
             action="store_false",
-            help="Copy each accession's folder into the store instead of moving it",
+            help="Leave each accession's project folder as is; the store keeps its own copy, unlinked",
         )
         parser.add_argument(
             "--dry-run", action="store_true", help="Report what would be adopted without changing anything"
@@ -427,6 +427,9 @@ class StoreAdoptCommand(BaseCommand):
                 print(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
             return 0
 
+        # Only an accession the project now links to (adopted via --move, or deduplicated,
+        # which always links) needs its download record pointed at the store; a --copy
+        # accession keeps its project folder exactly as it was, unlinked.
         newly_linked = sorted(set(report.adopted) | set(report.deduplicated))
         if newly_linked:
             with registry_transaction(args.registry) as reg:
@@ -439,9 +442,12 @@ class StoreAdoptCommand(BaseCommand):
                 reg.store["linked"] = sorted(linked)
 
         print(
-            f"Adopted {len(report.adopted)}, deduplicated {len(report.deduplicated)}, "
-            f"conflicts {len(report.conflicts)}, skipped {len(report.skipped)}"
+            f"Adopted {len(report.adopted)}, copied {len(report.copied)}, "
+            f"deduplicated {len(report.deduplicated)}, conflicts {len(report.conflicts)}, "
+            f"skipped {len(report.skipped)}"
         )
+        if report.resumed:
+            print(f"Resumed after an interrupted run: {', '.join(sorted(report.resumed))}")
         if report.conflicts:
             self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
         return 0
@@ -501,26 +507,37 @@ class StoreVerifyCommand(BaseCommand):
 
     @staticmethod
     def _check_bytes_and_md5(accession: str, store_dir: Path, sidecar: Sidecar, check_md5: bool):
+        """Returns ``(bytes_ok, md5_ok, detail)``; ``detail`` names the first file and reason
+        for any bytes or md5 mismatch (or missing/unreadable file), else None."""
         bytes_ok = True
         md5_ok: Optional[bool] = True if check_md5 else None
+        detail: Optional[str] = None
         for entry in sidecar.files:
-            file_path = store_dir / str(entry.get("name"))
+            name = str(entry.get("name"))
+            file_path = store_dir / name
             if not file_path.is_file():
                 bytes_ok = False
                 if check_md5:
                     md5_ok = False
+                detail = detail or f"{name}: missing"
                 continue
             try:
-                if file_path.stat().st_size != entry.get("bytes"):
+                actual_bytes = file_path.stat().st_size
+                if actual_bytes != entry.get("bytes"):
                     bytes_ok = False
-                if check_md5 and _md5_file(file_path) != entry.get("md5"):
-                    md5_ok = False
+                    detail = detail or f"{name}: size mismatch ({actual_bytes} vs {entry.get('bytes')} bytes)"
+                if check_md5:
+                    actual_md5 = _md5_file(file_path)
+                    if actual_md5 != entry.get("md5"):
+                        md5_ok = False
+                        detail = detail or f"{name}: md5 mismatch"
             except OSError as e:
                 logger.warning("%s: could not read %s: %s", accession, file_path, e)
                 bytes_ok = False
                 if check_md5:
                     md5_ok = False
-        return bytes_ok, md5_ok
+                detail = detail or f"{name}: {e}"
+        return bytes_ok, md5_ok, detail
 
     def _verify_one(self, accession: str, paths: StorePaths, check_md5: bool, check_spots: bool) -> Dict[str, Any]:
         store_dir = sra_dir(paths, accession)
@@ -536,9 +553,10 @@ class StoreVerifyCommand(BaseCommand):
                 "sidecar": None,
                 "spots_verdict": None,
                 "spots_ratio": None,
+                "mismatch_detail": None,
             }
 
-        bytes_ok, md5_ok = self._check_bytes_and_md5(accession, store_dir, sidecar, check_md5)
+        bytes_ok, md5_ok, detail = self._check_bytes_and_md5(accession, store_dir, sidecar, check_md5)
 
         spots_verdict = None
         spots_ratio = None
@@ -551,6 +569,7 @@ class StoreVerifyCommand(BaseCommand):
                 self.logger.warning("%s: could not verify read counts: %s", accession, e)
                 bytes_ok = False
                 spots_verdict = "corrupt"
+                detail = detail or f"read count verification failed: {e}"
 
         if not bytes_ok or (check_md5 and md5_ok is False):
             verdict = "corrupt"
@@ -570,17 +589,41 @@ class StoreVerifyCommand(BaseCommand):
             "sidecar": sidecar,
             "spots_verdict": spots_verdict,
             "spots_ratio": spots_ratio,
+            "mismatch_detail": detail,
         }
 
     def _fix_state(self, result: Dict[str, Any], paths: StorePaths) -> None:
+        """Rewrite the sidecar's state (and, for a spots-only mismatch, its completeness) to
+        match what this check found.
+
+        A bytes or md5 mismatch always wins: the file itself is wrong, so the dataset is
+        ``"failed"`` with an error naming the first mismatch, regardless of what the spots
+        check says (a corrupt file can still happen to contain the right number of reads). Only
+        when bytes and md5 (if checked) both check out does the spots verdict decide
+        ``complete``/``partial``.
+        """
         sidecar = result.get("sidecar")
-        spots_verdict = result.get("spots_verdict")
-        if sidecar is None or spots_verdict is None:
+        if sidecar is None:
             return
+
+        if not result.get("bytes_ok") or result.get("md5_ok") is False:
+            error = result.get("mismatch_detail") or "verify: bytes or md5 mismatch"
+            if sidecar.state == "failed" and sidecar.error == error:
+                return
+            sidecar.state = "failed"
+            sidecar.error = error
+            write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
+            with catalog_write(paths) as catalog:
+                catalog.upsert_dataset(sidecar)
+            result["state"] = "failed"
+            return
+
+        spots_verdict = result.get("spots_verdict")
         state_for_verdict = {"complete": "complete", "truncated": "partial"}
         if spots_verdict not in state_for_verdict:
-            # "unverified" (no recorded spot count) or "corrupt" (the files could not be read):
-            # neither is a state this check can confidently rewrite.
+            # "unverified" (no recorded spot count) or "corrupt" (the files could not be read
+            # for the spots check specifically, bytes/md5 having passed): neither is a state
+            # this check can confidently rewrite.
             return
         new_state = state_for_verdict[spots_verdict]
         if new_state == sidecar.state and sidecar.completeness.get("verdict") == spots_verdict:

@@ -475,19 +475,28 @@ class TestStoreAdoptCommand:
         assert not (project_dir / "fastq" / "SRR1").is_symlink()
         assert not registry_path.exists()
 
-    def test_copy_mode_leaves_registry_updated(self, tmp_path, monkeypatch):
+    def test_copy_mode_leaves_project_folder_untouched_and_unlinked(self, tmp_path, monkeypatch):
         root = tmp_path / "store"
         init_store(root)
         project_dir = tmp_path / "project"
-        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
-        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        entry = project_dir / "fastq" / "SRR1"
+        entry.mkdir(parents=True)
+        (entry / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
         monkeypatch.chdir(project_dir)
 
         registry_path = project_dir / "metaquest_registry.json"
         rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path), move=False))
 
         assert rc == 0
-        assert (project_dir / "fastq" / "SRR1").is_symlink()
+        # --copy: the project's own folder is left exactly as it was, not linked.
+        assert entry.is_dir() and not entry.is_symlink()
+        assert (entry / "SRR1.fastq").is_file()
+
+        paths = store_paths(root)
+        assert sra_dir(paths, "SRR1").is_dir()
+
+        # No registry write is needed: the project's own download record did not change.
+        assert not registry_path.exists()
 
 
 class TestStoreVerifyCommand:
@@ -504,7 +513,7 @@ class TestStoreVerifyCommand:
         rc = StoreVerifyCommand().execute(_verify_args(registry=str(project_dir / "metaquest_registry.json")))
         assert rc == 1
 
-    def test_verify_healthy_dataset_reports_ok(self, tmp_path, capsys):
+    def test_verify_healthy_dataset_reports_ok(self, tmp_path, monkeypatch, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
         acc_dir = sra_dir(paths, "SRR1")
@@ -514,14 +523,20 @@ class TestStoreVerifyCommand:
         with catalog_write(paths) as cat:
             cat.upsert_dataset(sidecar)
 
-        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(root)))
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(data_root=str(root), registry=str(project_dir / "metaquest_registry.json"))
+        )
         out = capsys.readouterr().out
 
         assert rc == 0
         assert "SRR1" in out
         assert "ok" in out
 
-    def test_verify_flags_truncated_dataset_and_fix_state_updates_sidecar(self, tmp_path, capsys):
+    def test_verify_flags_truncated_dataset_and_fix_state_updates_sidecar(self, tmp_path, monkeypatch, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
         acc_dir = sra_dir(paths, "SRR1")
@@ -540,7 +555,15 @@ class TestStoreVerifyCommand:
         with catalog_write(paths) as cat:
             cat.upsert_dataset(sidecar)
 
-        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(root), spots=True, fix_state=True))
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(
+                data_root=str(root), registry=str(project_dir / "metaquest_registry.json"), spots=True, fix_state=True
+            )
+        )
         out = capsys.readouterr().out
 
         assert rc == 1
@@ -554,7 +577,55 @@ class TestStoreVerifyCommand:
             row = cat.get_dataset("SRR1")
             assert row["state"] == "partial"
 
-    def test_verify_specific_accessions_only(self, tmp_path, capsys):
+    def test_verify_flags_bad_md5_as_failed_regardless_of_spots(self, tmp_path, monkeypatch, capsys):
+        """A bytes/md5 mismatch always wins over the spots check: a corrupted file can still
+        happen to contain the right number of reads, so --fix-state must mark it failed, not
+        complete."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                # Wrong md5 on purpose; read count/spots still match (ncbi.spots defaults to 5).
+                "md5": "0" * 32,
+                "reads": 5,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(
+                data_root=str(root),
+                registry=str(project_dir / "metaquest_registry.json"),
+                md5=True,
+                spots=True,
+                fix_state=True,
+            )
+        )
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "corrupt" in out
+
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error and "md5 mismatch" in fixed.error
+
+        with Catalog(paths) as cat:
+            row = cat.get_dataset("SRR1")
+            assert row["state"] == "failed"
+
+    def test_verify_specific_accessions_only(self, tmp_path, monkeypatch, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
         for acc in ("SRR1", "SRR2"):
@@ -565,24 +636,42 @@ class TestStoreVerifyCommand:
             with catalog_write(paths) as cat:
                 cat.upsert_dataset(sidecar)
 
-        rc = StoreVerifyCommand().execute(_verify_args(accessions=["SRR2"], data_root=str(root)))
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(
+                accessions=["SRR2"], data_root=str(root), registry=str(project_dir / "metaquest_registry.json")
+            )
+        )
         out = capsys.readouterr().out
 
         assert rc == 0
         assert "SRR2" in out
         assert "SRR1" not in out
 
-    def test_missing_dataset_fails(self, tmp_path, capsys):
+    def test_missing_dataset_fails(self, tmp_path, monkeypatch, capsys):
         root = tmp_path / "store"
         init_store(root)
 
-        rc = StoreVerifyCommand().execute(_verify_args(accessions=["SRR-ghost"], data_root=str(root)))
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(
+                accessions=["SRR-ghost"],
+                data_root=str(root),
+                registry=str(project_dir / "metaquest_registry.json"),
+            )
+        )
         out = capsys.readouterr().out
 
         assert rc == 1
         assert "missing" in out
 
-    def test_corrupt_gzip_reported_as_corrupt_without_crashing(self, tmp_path, capsys):
+    def test_corrupt_gzip_reported_as_corrupt_without_crashing(self, tmp_path, monkeypatch, capsys):
         """A truncated/corrupt gzip file makes read-count verification raise inside the data
         layer; --spots must catch that and report it, not crash the whole command."""
         root = tmp_path / "store"
@@ -596,7 +685,13 @@ class TestStoreVerifyCommand:
         with catalog_write(paths) as cat:
             cat.upsert_dataset(sidecar)
 
-        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(root), spots=True))
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(data_root=str(root), registry=str(project_dir / "metaquest_registry.json"), spots=True)
+        )
         out = capsys.readouterr().out
 
         assert rc == 1

@@ -4,27 +4,35 @@ Adopting a project's own downloaded FASTQ folders into the shared store.
 A project that downloaded reads before it adopted the shared store (or ran a
 download with the store unconfigured) ends up with real, project-owned
 ``fastq/<ACC>`` folders instead of links. ``adopt`` folds each of those folders
-into the store: either relocating it (a fast rename when the project and the
-store share a filesystem) or copying it, compressing any plain FASTQ files,
-writing the dataset's sidecar and catalogue entry, and finally replacing the
-project's folder with a link to the store's copy, exactly like a download the
-store already had would have been linked.
+into the store: staging a copy, compressing any plain FASTQ files, writing the
+dataset's sidecar and catalogue entry, and then either replacing the project's
+folder with a link to the store's copy (``--move``) or leaving the project's
+folder untouched and unlinked, with the store now also holding a copy
+(``--copy``).
 
-Interrupted runs are safe to rerun: a dataset whose files already made it into
-``<store>/sra/<ACC>`` but whose sidecar was never written (the process died
-between the final move and writing the sidecar) is finished in place on the
-next call, without re-touching the files.
+Staging always copies (never moves) the project's original folder into
+``<store>/tmp/<ACC>_adopt``, regardless of ``--move``/``--copy``: the project's
+own folder is never touched until the store's copy and its sidecar both exist,
+so a crash mid-compression (or anywhere before that point) leaves the project's
+data exactly as it was, with nothing to recover beyond removing the stale
+staging copy. ``--move`` only ever removes the project's folder, and only
+after that point.
+
+A dataset whose files already made it into ``<store>/sra/<ACC>`` but whose
+sidecar was never written (the process died between the final move and
+writing the sidecar) is finished in place on the next call, without
+re-touching the files.
 """
 
+import gzip
+import hashlib
 import logging
-import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
-from metaquest.core.exceptions import DataAccessError
-from metaquest.data.sra import compress_fastq, fastq_files, is_transient_folder
+from metaquest.data.sra import compress_fastq, count_fastq_reads, fastq_files, fastq_stem, is_transient_folder
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
@@ -36,18 +44,27 @@ logger = logging.getLogger(__name__)
 # time rather than many downloads in parallel, so a modest, fixed thread count is enough.
 _ADOPT_COMPRESS_THREADS = 4
 
+# Suffix on a staging folder under paths.tmp, e.g. "SRR1_adopt".
+_STAGING_SUFFIX = "_adopt"
+
 
 @dataclass
 class AdoptReport:
     """Outcome of one ``adopt`` call, one accession name per relevant list."""
 
     adopted: List[str] = field(default_factory=list)
+    # --copy: the store now holds a copy too, but the project's folder is untouched and unlinked.
+    copied: List[str] = field(default_factory=list)
     deduplicated: List[str] = field(default_factory=list)
     conflicts: List[str] = field(default_factory=list)
     # Entries in project_fastq that were already store links, so nothing to adopt.
     skipped: List[str] = field(default_factory=list)
     # Populated instead of acting, when dry_run is True.
     planned: List[str] = field(default_factory=list)
+    # A stale <ACC>_adopt staging folder from an interrupted run, swept at the start of this
+    # call; the project's own folder was untouched by the interruption, so the accession is
+    # simply re-adopted within this same call.
+    resumed: List[str] = field(default_factory=list)
 
 
 def _notify(on_progress: Optional[Callable[[str, str], None]], accession: str, event: str) -> None:
@@ -62,8 +79,6 @@ def _notify(on_progress: Optional[Callable[[str, str], None]], accession: str, e
 
 def _md5_file(path: Union[str, Path]) -> str:
     """MD5 hex digest of ``path``, read in 1 MiB chunks so a large file is never loaded whole."""
-    import hashlib
-
     digest = hashlib.md5()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -71,21 +86,47 @@ def _md5_file(path: Union[str, Path]) -> str:
     return digest.hexdigest()
 
 
-def _files_match(project_dir: Path, sidecar: Sidecar) -> bool:
-    """True when ``project_dir`` holds exactly the files the sidecar records, byte-for-byte.
+def _decompressed_md5(path: Union[str, Path]) -> str:
+    """MD5 of ``path``'s decompressed content: gunzips on the fly for a ``.gz`` path, else reads
+    plain bytes, so a plain file and a gzipped file holding the same reads compare equal."""
+    digest = hashlib.md5()
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    Compares by name, then by size and md5 for every matching name; a file present on one side
-    only, or a size or md5 mismatch, makes this a conflict rather than a duplicate.
+
+def _files_match(project_dir: Path, store_dir: Path, sidecar: Sidecar) -> bool:
+    """True when ``project_dir`` holds the same reads the sidecar's store copy records.
+
+    Files are paired by ``fastq_stem`` (e.g. ``SRR1_1``, not ``SRR1_1.fastq.gz``), so a plain
+    project copy matches a gzipped store copy of the same reads and vice versa. When both sides
+    share the same compression, compares the sidecar's recorded bytes/md5 directly (cheap, no
+    decompression); when they differ (a compressed size never equals a plain one), decompresses
+    both sides and compares content md5 and read count instead.
     """
-    project_files = {p.name: p for p in fastq_files(project_dir)}
-    sidecar_files = {entry.get("name"): entry for entry in sidecar.files}
+    project_files = {fastq_stem(p): p for p in fastq_files(project_dir)}
+    sidecar_files = {fastq_stem(Path(str(entry.get("name") or ""))): entry for entry in sidecar.files}
     if set(project_files) != set(sidecar_files):
         return False
-    for name, path in project_files.items():
-        record = sidecar_files[name]
-        if path.stat().st_size != record.get("bytes"):
+    for stem, path in project_files.items():
+        record = sidecar_files[stem]
+        record_name = str(record.get("name") or "")
+        if str(path).endswith(".gz") == record_name.endswith(".gz"):
+            if path.stat().st_size != record.get("bytes"):
+                return False
+            if _md5_file(path) != record.get("md5"):
+                return False
+            continue
+        # Compression differs: sizes are never comparable, so decompress both sides and compare
+        # content instead.
+        store_path = store_dir / record_name
+        if not store_path.is_file():
             return False
-        if _md5_file(path) != record.get("md5"):
+        if _decompressed_md5(path) != _decompressed_md5(store_path):
+            return False
+        if count_fastq_reads(path) != record.get("reads"):
             return False
     return True
 
@@ -116,7 +157,7 @@ def _finish_sidecar(
 ) -> Sidecar:
     """Write the sidecar and catalogue entry for a dataset whose files already sit in the store.
 
-    Shared by a fresh adoption (files just moved/copied and compressed into ``store_dir``) and by
+    Shared by a fresh adoption (files just staged and compressed into ``store_dir``) and by
     finishing an interrupted one (files already there from an earlier, incomplete run).
     """
     ncbi = _ncbi_from_folders(accession, metadata_folders)
@@ -128,35 +169,45 @@ def _finish_sidecar(
     return sidecar
 
 
+def _sweep_stale_staging(paths: StorePaths) -> List[str]:
+    """Remove any ``<store>/tmp/<ACC>_adopt`` leftover from an interrupted staging copy.
+
+    Staging always copies the project's original folder (see ``_adopt_fresh``), so an
+    interruption here never touches that folder; the accession is simply re-adopted from
+    scratch by this same call. Returns the accessions swept, so the caller can report them.
+    """
+    resumed: List[str] = []
+    if not paths.tmp.is_dir():
+        return resumed
+    for entry in sorted(paths.tmp.iterdir()):
+        if entry.is_dir() and entry.name.endswith(_STAGING_SUFFIX):
+            shutil.rmtree(entry)
+            resumed.append(entry.name[: -len(_STAGING_SUFFIX)])
+    return resumed
+
+
 def _adopt_fresh(
     entry: Path,
     accession: str,
     paths: StorePaths,
-    move: bool,
     compress: bool,
     metadata_folders: Sequence[Union[str, Path]],
 ) -> None:
-    """Get ``entry``'s files into ``<store>/sra/<accession>``, compressing plain files on the way.
+    """Copy ``entry``'s files into ``<store>/sra/<accession>``, compressing plain files on the way.
 
-    Stages through ``paths.tmp`` first (a rename when ``move`` and the two trees share a
-    filesystem, else a copy), so a crash mid-compression never leaves a half-written folder
-    under ``paths.sra``. Refuses ``move`` across filesystems; use ``move=False`` there.
+    Always stages through a *copy* into ``paths.tmp`` first, regardless of ``--move``/``--copy``:
+    the project's original folder is only ever removed (for ``--move``, by the caller, after this
+    returns) once the store's copy and its sidecar both exist. A crash anywhere in this function
+    leaves ``entry`` untouched; the stale staging copy it made is cleaned up by
+    ``_sweep_stale_staging`` on the next call.
     """
     store_dir = sra_dir(paths, accession)
-    staged = paths.tmp / f"{accession}_adopt"
+    staged = paths.tmp / f"{accession}{_STAGING_SUFFIX}"
     paths.tmp.mkdir(parents=True, exist_ok=True)
     if staged.exists():
         shutil.rmtree(staged)
 
-    if move:
-        if os.stat(entry).st_dev != os.stat(paths.root).st_dev:
-            raise DataAccessError(
-                f"Cannot move {accession} into the store: {entry} and {paths.root} are on "
-                "different filesystems; rerun with --copy instead"
-            )
-        shutil.move(str(entry), str(staged))
-    else:
-        shutil.copytree(entry, staged)
+    shutil.copytree(entry, staged)
 
     if compress:
         for file_path in fastq_files(staged):
@@ -193,9 +244,11 @@ def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]
 def _scan_interrupted(paths: StorePaths, project_dir: Path, real_dirs: Dict[str, Path]) -> set:
     """Accessions whose files already sit in the store with no sidecar, and no local folder.
 
-    Covers a ``move`` that finished relocating the files (so the project's folder is already
-    gone) but was interrupted before the sidecar was written. Restricted to accessions not
-    already in ``real_dirs`` (those are handled where they are found) and not already linked.
+    Ordinarily the project's folder is only removed after the sidecar is written (see
+    ``_adopt_fresh``/``_adopt_new_or_restart``), so this covers the rare case where it went
+    missing some other way (e.g. removed outside MetaQuest) while the store side was left
+    incomplete. Restricted to accessions not already in ``real_dirs`` (those are handled where
+    they are found) and not already linked.
     """
     interrupted: set = set()
     if not paths.sra.is_dir():
@@ -215,6 +268,7 @@ def _scan_interrupted(paths: StorePaths, project_dir: Path, real_dirs: Dict[str,
 def _dedup_or_conflict(
     accession: str,
     entry: Optional[Path],
+    store_dir: Path,
     sc_path: Path,
     paths: StorePaths,
     project_dir: Path,
@@ -230,7 +284,7 @@ def _dedup_or_conflict(
     if entry is None:
         return
     existing = read_sidecar(sc_path)
-    if existing is not None and _files_match(entry, existing):
+    if existing is not None and _files_match(entry, store_dir, existing):
         if dry_run:
             report.planned.append(accession)
             return
@@ -260,14 +314,26 @@ def _adopt_new_or_restart(
     on_progress: Optional[Callable[[str, str], None]],
     report: AdoptReport,
 ) -> None:
-    """Adopt a fresh accession, or finish one interrupted after its files reached the store."""
+    """Get a fresh accession's files into the store (or finish one interrupted after its files
+    already reached the store), then apply ``--move``/``--copy``.
+
+    ``--move`` removes the project's folder and links it to the store's copy; ``--copy`` leaves
+    the project's folder exactly as it was (a second, independent copy) and does not link it,
+    since a project that asked to keep its own copy should not have it silently swapped for a
+    link on the same run.
+    """
     if store_dir.is_dir() and not sc_path.is_file():
         _finish_sidecar(accession, store_dir, sc_path, paths, metadata_folders)
     else:
         # A fresh accession always comes from real_dirs (interrupted ones are handled by the
         # branch above), so entry is never None here.
         assert entry is not None
-        _adopt_fresh(entry, accession, paths, move, compress, metadata_folders)
+        _adopt_fresh(entry, accession, paths, compress, metadata_folders)
+
+    if not move:
+        report.copied.append(accession)
+        _notify(on_progress, accession, "copied")
+        return
 
     if entry is not None and entry.exists():
         shutil.rmtree(entry)
@@ -290,21 +356,28 @@ def adopt(
     For each real (non-symlink, non-transient) directory ``project_fastq/<ACC>``: if the store
     already has ``<ACC>`` with a sidecar, an identical set of files is deduplicated (the project
     copy is dropped and replaced with a link) and a differing set is left as a conflict (both
-    copies kept); otherwise the folder is moved or copied into the store, compressed, sidecar'd,
-    catalogued and linked back. A symlink already in ``project_fastq`` is counted in ``skipped``
-    and left untouched.
+    copies kept); otherwise the folder is staged into the store, compressed, sidecar'd and
+    catalogued, then either linked back (``--move``, removing the project's folder) or left alone
+    (``--copy``, the project keeps its own folder, unlinked). A symlink already in
+    ``project_fastq`` is counted in ``skipped`` and left untouched.
 
     Also finishes any dataset already sitting in ``<store>/sra/<ACC>`` without a sidecar, from an
-    earlier run that was interrupted after moving the files in but before writing the sidecar
-    (this covers the case where a completed ``move`` had already removed the project's folder).
+    earlier run interrupted after the files reached their final location but before the sidecar
+    was written, and sweeps (removes) any stale ``<store>/tmp/<ACC>_adopt`` staging copy left by a
+    run interrupted earlier than that (the project's own folder is untouched in that case, so the
+    accession is simply re-adopted within this same call; swept accessions are reported in
+    ``resumed``).
 
-    ``dry_run`` performs no filesystem changes and no database changes; every accession that
-    would otherwise be dedup'd, adopted or restarted is instead listed in ``planned``. Conflicts
-    are still detected and reported in ``conflicts`` even during a dry run, since detecting one
-    never writes anything.
+    ``dry_run`` performs no filesystem changes and no database changes (including no sweep of
+    stale staging copies); every accession that would otherwise be dedup'd, adopted or restarted
+    is instead listed in ``planned``. Conflicts are still detected and reported in ``conflicts``
+    even during a dry run, since detecting one never writes anything.
     """
     report = AdoptReport()
     project_dir = Path(project_fastq)
+
+    if not dry_run:
+        report.resumed = _sweep_stale_staging(paths)
 
     real_dirs = _scan_project_dir(project_dir, report)
     interrupted = _scan_interrupted(paths, project_dir, real_dirs)
@@ -315,7 +388,7 @@ def adopt(
         sc_path = sidecar_path(paths, accession)
 
         if store_dir.is_dir() and sc_path.is_file():
-            _dedup_or_conflict(accession, entry, sc_path, paths, project_dir, dry_run, on_progress, report)
+            _dedup_or_conflict(accession, entry, store_dir, sc_path, paths, project_dir, dry_run, on_progress, report)
             continue
 
         # Either a fresh accession (no store folder yet) or an interrupted one (store folder
