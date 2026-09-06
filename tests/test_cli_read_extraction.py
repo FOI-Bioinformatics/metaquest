@@ -76,6 +76,7 @@ def _status_args(root, **overrides):
         targeted_folder=str(root / "targeted"),
         matches_folder=str(root / "matches"),
         registry=str(root / "metaquest_registry.json"),
+        data_root=None,
         accessions_file=None,
         parsed_containment=None,
         stage=None,

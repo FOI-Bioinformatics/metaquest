@@ -21,6 +21,7 @@ from metaquest.data.registry import (
 def _args(registry, **kwargs):
     base = dict(
         registry=str(registry),
+        data_root=None,
         fastq_folder="fastq",
         metadata_folder="metadata",
         genomes_folder="genomes",
@@ -175,6 +176,7 @@ def _status_args(root, **overrides):
         targeted_folder=str(root / "targeted"),
         matches_folder=str(root / "matches"),
         registry=str(root / "metaquest_registry.json"),
+        data_root=None,
         accessions_file=None,
         parsed_containment=None,
         stage=None,
@@ -416,3 +418,67 @@ class TestStatusWithRegistry:
         StatusCommand().execute(_status_args(tmp_path, json=False))
         out = capsys.readouterr().out
         assert "truncated downloads: 1 (SRR1)" in out
+
+
+class TestStatusStorePlumbing:
+    def test_no_store_configured_omits_store_section(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        rc = StatusCommand().execute(_status_args(tmp_path))
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0
+        assert "store" not in out
+
+    def test_no_store_configured_text_report_has_no_store_block(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, json=False))
+        out = capsys.readouterr().out
+        assert "Store" not in out
+
+    def test_data_root_flag_adds_store_section(self, tmp_path, capsys):
+        from metaquest.store.catalog import catalog_write
+        from metaquest.store.layout import init_store
+
+        _project_tree(tmp_path)
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proj1", "P1", "/p1", "reg1")
+
+        rc = StatusCommand().execute(_status_args(tmp_path, data_root=str(store_root)))
+        out = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert out["store"]["root"] == str(store_root.resolve())
+        assert out["store"]["datasets"] == {}
+
+    def test_data_root_flag_adds_text_store_block_after_local_inventory(self, tmp_path, capsys):
+        from metaquest.store.layout import init_store
+
+        _project_tree(tmp_path)
+        store_root = tmp_path / "store"
+        init_store(store_root)
+
+        StatusCommand().execute(_status_args(tmp_path, data_root=str(store_root), json=False))
+        out = capsys.readouterr().out
+
+        assert "Local inventory" in out
+        assert "Store" in out
+        assert out.index("Local inventory") < out.index("Store")
+
+    def test_registry_recorded_store_root_is_used_when_no_flag(self, tmp_path, capsys):
+        from metaquest.store.layout import init_store
+
+        _project_tree(tmp_path)
+        store_root = tmp_path / "store"
+        init_store(store_root)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        seeded.store = {"root": str(store_root), "mode": "symlink", "linked": []}
+        save_registry(seeded)
+        capsys.readouterr()
+
+        rc = StatusCommand().execute(_status_args(tmp_path))
+        out = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert out["store"]["root"] == str(store_root.resolve())

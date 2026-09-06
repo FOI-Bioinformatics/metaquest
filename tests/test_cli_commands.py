@@ -506,6 +506,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         result = command.execute(args)
@@ -561,6 +562,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
             sra_cache="/tmp/custom-cache",
             use_prefetch=False,
             keep_sra=True,
@@ -602,6 +604,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=8):
@@ -637,6 +640,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=4):
@@ -673,6 +677,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         # One worker is already the floor of the derived default, so on a 2-CPU machine a
@@ -710,6 +715,7 @@ class TestDownloadSraCommand:
             blacklist=["bl.txt"],
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         result = command.execute(args)
@@ -748,6 +754,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         with caplog.at_level("INFO"):
@@ -792,6 +799,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         with caplog.at_level("ERROR"):
@@ -819,6 +827,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
 
         result = command.execute(args)
@@ -842,6 +851,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
         assert DownloadSraCommand().execute(args) == 1
         mock_download.assert_not_called()
@@ -872,6 +882,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
         assert DownloadSraCommand().execute(args) == 0
 
@@ -905,6 +916,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=str(report),
             registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
         )
         DownloadSraCommand().execute(args)
         assert report.read_text().splitlines() == [
@@ -960,6 +972,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
         )
 
         result = DownloadSraCommand().execute(args)
@@ -1024,6 +1037,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
         )
 
         assert DownloadSraCommand().execute(args) == 0
@@ -1064,6 +1078,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
             verify_downloads=True,
         )
 
@@ -1101,6 +1116,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
             verify_downloads=False,
         )
 
@@ -1141,6 +1157,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
             redownload_truncated=True,
         )
 
@@ -1187,6 +1204,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
         )
 
         assert DownloadSraCommand().execute(args) == 0
@@ -1234,6 +1252,7 @@ class TestDownloadSraCommand:
             blacklist=None,
             report_file=None,
             registry=str(registry_path),
+            data_root=None,
         )
 
         assert DownloadSraCommand().execute(args) == 0
@@ -1241,6 +1260,44 @@ class TestDownloadSraCommand:
         assert datasets["SRR9"]["exclusion"]["excluded"] is True
         assert datasets["SRR1"]["download"]["state"] == "downloaded"
         assert datasets["SRR2"]["download"]["state"] == "downloaded"
+
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_dry_run_resolves_and_logs_data_root(self, mock_download, tmp_path, caplog):
+        """--dry-run --data-root resolves the store root (no fasterq-dump check needed) and logs it."""
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        init_store(store_root)
+        mock_download.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 0,
+            "failed": 0,
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=True,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=str(store_root),
+        )
+
+        with caplog.at_level("INFO"):
+            result = DownloadSraCommand().execute(args)
+
+        assert result == 0
+        assert any(str(store_root.resolve()) in message for message in caplog.messages)
 
 
 class TestSingleSampleCommand:

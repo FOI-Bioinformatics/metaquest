@@ -29,7 +29,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 REGISTRY_FILENAME = "metaquest_registry.json"
-SCHEMA_VERSION = 1
+# Version 1: version, created, updated, genomes, datasets.
+# Version 2 adds project (this project's identity, recorded by `store_init`) and store
+# (the shared data store this project is bound to). Both default to {} so a version-1
+# file loads unchanged; the next save writes it back as version 2.
+SCHEMA_VERSION = 2
 STAGES = ("screened", "selected", "excluded", "downloaded", "analysed", "extracted", "assembled")
 LOCK_STALE_SECONDS = 30.0
 LOCK_WAIT_SECONDS = 30.0
@@ -60,6 +64,10 @@ class Registry:
     updated: str = field(default_factory=_now)
     genomes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     datasets: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # This project's identity ({"id", "name", "path", "created"}), recorded by `store_init`.
+    project: Dict[str, Any] = field(default_factory=dict)
+    # The shared data store this project is bound to ({"root", "mode", "linked"}).
+    store: Dict[str, Any] = field(default_factory=dict)
     path: Optional[Path] = None
 
 
@@ -107,6 +115,8 @@ def load_registry(path: Optional[Union[str, Path]] = None) -> Registry:
         updated=str(data.get("updated", _now())),
         genomes=dict(data.get("genomes", {})),
         datasets=dict(data.get("datasets", {})),
+        project=dict(data.get("project", {})),
+        store=dict(data.get("store", {})),
         path=target,
     )
 
@@ -141,12 +151,18 @@ def _write_registry(registry: Registry, target: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     registry.updated = _now()
     registry.path = target
+    # A registry loaded from an older schema is upgraded to the current one on save; there
+    # is no separate migration step, since every field new schema versions add already
+    # defaults to {} when missing.
+    registry.version = SCHEMA_VERSION
     payload = {
         "version": registry.version,
         "created": registry.created,
         "updated": registry.updated,
         "genomes": registry.genomes,
         "datasets": registry.datasets,
+        "project": registry.project,
+        "store": registry.store,
     }
     tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     try:
@@ -173,6 +189,10 @@ def save_registry(registry: Registry, path: Optional[Union[str, Path]] = None) -
 @contextmanager
 def registry_transaction(path: Optional[Union[str, Path]] = None) -> Iterator[Registry]:
     """Load, mutate and save the registry under one lock, so a concurrent edit is never reverted.
+
+    Not re-entrant: nesting a second call to this function (or to `save_registry`) for the
+    same registry file inside this block's body will deadlock against the lock this call
+    already holds, since the lock file is only released when this context manager exits.
 
     Use this instead of holding one loaded registry across a long run: the file is
     read inside the lock and written back at the end of the block. If the block

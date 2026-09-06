@@ -18,12 +18,14 @@ machine or a shared network volume never interleave writes. Reads may open the
 database directly without taking the lock.
 """
 
+import functools
 import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, TypeVar
 
+from metaquest.core.exceptions import DataAccessError
 from metaquest.data.registry import _acquire_lock
 from metaquest.store.layout import StorePaths
 from metaquest.store.sidecar import Sidecar
@@ -105,6 +107,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _wrap_sqlite_errors(func: _F) -> _F:
+    """Translate any ``sqlite3.Error`` the wrapped call raises into ``DataAccessError``.
+
+    Every public method of ``Catalog`` (and ``catalog_write``) is wrapped with this so a
+    caller never has to catch ``sqlite3.Error`` directly; a corrupt database, a locked file,
+    or a disk I/O error all surface the same way as every other MetaQuest data-access failure.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(*args, **kwargs)
+        except sqlite3.Error as e:
+            raise DataAccessError(f"Catalog operation '{func.__name__}' failed: {e}") from e
+
+    return wrapper  # type: ignore[return-value]
+
+
 class Catalog:
     """One open connection to ``catalog.sqlite``.
 
@@ -125,6 +148,7 @@ class Catalog:
             raise RuntimeError("Catalog is not open; use it as a context manager")
         return self._conn
 
+    @_wrap_sqlite_errors
     def __enter__(self) -> "Catalog":
         self.paths.root.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.paths.catalog))
@@ -149,6 +173,7 @@ class Catalog:
 
     # ------------------------------------------------------------------ schema
 
+    @_wrap_sqlite_errors
     def migrate(self) -> None:
         """Create the catalogue schema if it does not already exist. Safe to call repeatedly."""
         for statement in _SCHEMA_STATEMENTS:
@@ -160,6 +185,7 @@ class Catalog:
 
     # ---------------------------------------------------------------- datasets
 
+    @_wrap_sqlite_errors
     def upsert_dataset(self, sidecar: Sidecar) -> None:
         """Insert or update the ``datasets``/``files`` rows for one sidecar.
 
@@ -215,6 +241,7 @@ class Catalog:
             [(sidecar.accession, f.get("name"), f.get("bytes"), f.get("md5"), f.get("reads")) for f in files],
         )
 
+    @_wrap_sqlite_errors
     def get_dataset(self, accession: str) -> Optional[Dict[str, Any]]:
         """The ``datasets`` row for ``accession`` as a plain dict (with its ``files``), or None."""
         row = self.conn.execute("SELECT * FROM datasets WHERE accession = ?", (accession,)).fetchone()
@@ -230,6 +257,7 @@ class Catalog:
 
     # ---------------------------------------------------------------- projects
 
+    @_wrap_sqlite_errors
     def upsert_project(self, project_id: str, name: str, path: str, registry: str) -> None:
         """Insert or update one project's row, keeping its original ``created`` timestamp."""
         now = _now()
@@ -248,6 +276,7 @@ class Catalog:
 
     # ------------------------------------------------------------------- usage
 
+    @_wrap_sqlite_errors
     def record_usage(self, accession: str, project_id: str, genome_id: str, stage: str, detail: str = "") -> None:
         """Record that ``project_id`` used ``accession`` (for ``genome_id``, at ``stage``).
 
@@ -258,7 +287,14 @@ class Catalog:
         of the next reindex), a minimal placeholder row with ``state="unknown"`` is
         inserted first so the foreign key from ``usage`` to ``datasets`` is
         satisfied; a later ``upsert_dataset`` or ``reindex`` fills it in properly.
+
+        Raises ``DataAccessError`` if ``project_id`` is not a known project (from
+        ``upsert_project``); usage is never recorded against a fabricated project.
         """
+        known = self.conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (project_id,)).fetchone()
+        if known is None:
+            raise DataAccessError(f"Unknown project_id: {project_id}")
+
         now = _now()
         genome_id = genome_id or ""
 
@@ -279,6 +315,7 @@ class Catalog:
 
     # ----------------------------------------------------------------- queries
 
+    @_wrap_sqlite_errors
     def projects_for(self, accession: str) -> List[Dict[str, Any]]:
         """Every project that has recorded usage of ``accession``, sorted by project id."""
         rows = self.conn.execute(
@@ -293,6 +330,7 @@ class Catalog:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    @_wrap_sqlite_errors
     def datasets_for_project(self, project_id: str) -> List[Dict[str, Any]]:
         """Every dataset ``project_id`` has recorded usage of, sorted by accession."""
         rows = self.conn.execute(
@@ -307,11 +345,13 @@ class Catalog:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    @_wrap_sqlite_errors
     def unused(self) -> List[str]:
         """Accessions in ``datasets`` with no usage row at all, sorted."""
         rows = self.conn.execute("SELECT accession FROM unused_datasets ORDER BY accession").fetchall()
         return [row["accession"] for row in rows]
 
+    @_wrap_sqlite_errors
     def bytes_by_genome(self) -> Dict[str, int]:
         """Total ``bytes_total`` per genome, summed over distinct (accession, genome_id) usage pairs.
 
@@ -327,6 +367,7 @@ class Catalog:
             """).fetchall()
         return {row["genome_id"]: (row["total"] or 0) for row in rows}
 
+    @_wrap_sqlite_errors
     def datasets_for_genome(self, genome_id: str) -> List[Tuple[str, str]]:
         """Distinct (accession, project_id) pairs with recorded usage for ``genome_id``."""
         rows = self.conn.execute(
@@ -342,6 +383,7 @@ class Catalog:
 
     # ----------------------------------------------------------------- rebuild
 
+    @_wrap_sqlite_errors
     def reindex(self, sidecars: Iterable[Sidecar]) -> int:
         """Rebuild ``datasets``/``files`` from ``sidecars``; keep ``projects`` and ``usage``.
 
@@ -374,6 +416,10 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     commits on a clean exit, and always releases the lock. If the block raises,
     the connection is closed without committing (uncommitted changes are
     discarded) and the lock is still released.
+
+    Not re-entrant: nesting a second ``catalog_write`` (or ``Catalog.__enter__``, opened
+    against the same store root) inside this block's body will deadlock against the
+    ``catalog.sqlite.lock`` file this call already holds.
     """
     paths.root.mkdir(parents=True, exist_ok=True)
     _acquire_lock(paths.catalog_lock)
@@ -381,6 +427,9 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
         with Catalog(paths) as catalog:
             catalog.migrate()
             yield catalog
-            catalog.conn.commit()
+            try:
+                catalog.conn.commit()
+            except sqlite3.Error as e:
+                raise DataAccessError(f"Cannot commit catalog write: {e}") from e
     finally:
         paths.catalog_lock.unlink(missing_ok=True)

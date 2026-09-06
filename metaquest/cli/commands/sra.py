@@ -6,6 +6,7 @@ import argparse
 import csv
 import os
 import shutil
+from typing import Optional
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
@@ -14,6 +15,7 @@ from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.registry import Registry, load_registry, query, record_download, registry_transaction
 from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_message
+from metaquest.store.resolve import resolve_store_root
 
 
 class DownloadSraCommand(BaseCommand):
@@ -95,6 +97,7 @@ class DownloadSraCommand(BaseCommand):
             default=None,
             help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
         )
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
             "--verify-downloads",
             dest="verify_downloads",
@@ -239,6 +242,17 @@ class DownloadSraCommand(BaseCommand):
             )
         return max_workers
 
+    def _resolve_and_log_store_root(self, args: argparse.Namespace, project_registry: Registry) -> Optional[Path]:
+        """Resolve the shared data store root (if any) and log it; behaviour is otherwise unchanged.
+
+        Only logs the root for now; the store write path (linking a download into the
+        store) is wired up in a later change.
+        """
+        store_root = resolve_store_root(args.data_root, project_registry.store.get("root"))
+        if store_root is not None:
+            self.logger.info("Using shared data store at %s", store_root)
+        return store_root
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             if not args.dry_run and shutil.which("fasterq-dump") is None:
@@ -262,8 +276,10 @@ class DownloadSraCommand(BaseCommand):
             on_result = None
             fastq_dir = Path(args.fastq_folder)
 
+            project_registry = load_registry(args.registry)
+            self._resolve_and_log_store_root(args, project_registry)
+
             if not args.dry_run:
-                project_registry = load_registry(args.registry)
                 excluded = set(query(project_registry, "excluded"))
 
                 if verify_downloads:

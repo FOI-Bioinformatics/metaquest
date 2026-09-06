@@ -109,6 +109,62 @@ class TestLoadSave:
         lock.unlink()
 
 
+class TestRegistrySchemaV2:
+    def test_fresh_registry_has_empty_project_and_store(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        assert r.project == {}
+        assert r.store == {}
+        assert r.version == reg.SCHEMA_VERSION == 2
+
+    def test_v1_file_loads_with_empty_project_and_store(self, tmp_path):
+        target = tmp_path / "metaquest_registry.json"
+        v1_payload = {
+            "version": 1,
+            "created": "2026-01-01T00:00:00",
+            "updated": "2026-01-01T00:00:00",
+            "genomes": {},
+            "datasets": {},
+        }
+        target.write_text(json.dumps(v1_payload))
+
+        r = reg.load_registry(target)
+
+        assert r.version == 1
+        assert r.project == {}
+        assert r.store == {}
+
+    def test_v1_file_is_upgraded_to_v2_on_save(self, tmp_path):
+        target = tmp_path / "metaquest_registry.json"
+        v1_payload = {
+            "version": 1,
+            "created": "2026-01-01T00:00:00",
+            "updated": "2026-01-01T00:00:00",
+            "genomes": {},
+            "datasets": {},
+        }
+        target.write_text(json.dumps(v1_payload))
+
+        r = reg.load_registry(target)
+        reg.save_registry(r)
+
+        written = json.loads(target.read_text())
+        assert written["version"] == reg.SCHEMA_VERSION
+        assert written["project"] == {}
+        assert written["store"] == {}
+
+    def test_project_and_store_round_trip(self, tmp_path):
+        target = tmp_path / "metaquest_registry.json"
+        r = reg.load_registry(target)
+        r.project = {"id": "abc-123", "name": "Wolbachia", "path": "/projects/wolbachia", "created": "2026-01-01"}
+        r.store = {"root": "/data/store", "mode": "symlink", "linked": []}
+        reg.save_registry(r)
+
+        again = reg.load_registry(target)
+
+        assert again.project == r.project
+        assert again.store == r.store
+
+
 class TestRegistryTransaction:
     def test_transaction_reloads_before_writing(self, tmp_path):
         """A change made between transactions survives, because each one loads from disk."""

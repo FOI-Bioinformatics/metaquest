@@ -41,6 +41,7 @@ from metaquest.cli.commands import (
 from metaquest.cli.commands.select import SelectDatasetsCommand
 from metaquest.cli.commands.blacklist import BlacklistCommand
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
+from metaquest.cli.commands.store import StoreInitCommand, StoreReindexCommand, StoreStatusCommand
 from metaquest.cli.commands.advanced_analysis import (
     DiversityAnalysisCommand,
     InteractivePlotCommand,
@@ -95,6 +96,10 @@ def register_all_commands() -> None:
         SRAInteractiveDashboardCommand(),
         SRAComparativeAnalysisCommand(),
         ExtractTargetReadsCommand(),
+        # Store commands
+        StoreInitCommand(),
+        StoreStatusCommand(),
+        StoreReindexCommand(),
         # Analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),
@@ -106,7 +111,7 @@ def register_all_commands() -> None:
         command_registry.register(command)
 
 
-GROUP_ORDER = ["Containment", "Metadata", "Genomes", "Reads", "Analysis", "Other"]
+GROUP_ORDER = ["Containment", "Metadata", "Genomes", "Reads", "Store", "Analysis", "Other"]
 
 
 class _HelpFormatter(DefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):

@@ -34,6 +34,9 @@ from metaquest.data.registry import (
     to_dataframes,
 )
 from metaquest.data.sra import accession_has_fastq, is_transient_folder
+from metaquest.store.catalog import Catalog
+from metaquest.store.layout import store_paths
+from metaquest.store.resolve import resolve_store_root
 
 
 class StatusCommand(BaseCommand):
@@ -72,6 +75,7 @@ class StatusCommand(BaseCommand):
             default=None,
             help="Registry file (default: metaquest_registry.json found upwards from here)",
         )
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument("--stage", choices=list(STAGES), default=None, help="List the accessions in one stage")
         parser.add_argument(
             "--genome",
@@ -288,7 +292,26 @@ class StatusCommand(BaseCommand):
         write_csv(datasets_df, f"{prefix}_datasets.tsv", sep="\t")
         write_csv(extractions_df, f"{prefix}_extractions.tsv", sep="\t")
 
+    # -------------------------------------------------------------------- store
+
+    @staticmethod
+    def _store_report(root: Path) -> Dict[str, Any]:
+        """Dataset counts by state from the shared data store's catalogue at ``root``."""
+        paths = store_paths(root)
+        with Catalog(paths) as catalog:
+            catalog.migrate()
+            rows = catalog.conn.execute("SELECT state, COUNT(*) AS n FROM datasets GROUP BY state").fetchall()
+        return {"root": str(root), "datasets": {row["state"]: row["n"] for row in rows}}
+
     # ---------------------------------------------------------------- printing
+
+    @staticmethod
+    def _print_store(store: Dict[str, Any]) -> None:
+        print("\nStore")
+        print("=====")
+        print(f"  Root : {store['root']}")
+        for state, count in sorted(store["datasets"].items()):
+            print(f"  {state:<10s}: {count}")
 
     @staticmethod
     def _print_inventory(report: Dict[str, Any], list_missing: bool) -> None:
@@ -440,6 +463,8 @@ class StatusCommand(BaseCommand):
 
     def _print_report(self, args: argparse.Namespace, report: Dict[str, Any], registry: Registry) -> None:
         self._print_inventory(report, args.list_missing)
+        if report.get("store"):
+            self._print_store(report["store"])
         self._print_stages(report["stages"], registry)
         self._print_genomes(report["genomes"])
         self._print_stage_filter(registry, args.stage, args.genome)
@@ -495,6 +520,10 @@ class StatusCommand(BaseCommand):
                 drift = reconcile(registry, paths)
                 save_registry(registry)
 
+            store_root = resolve_store_root(args.data_root, registry.store.get("root"))
+            if store_root is not None:
+                self.logger.info("Using shared data store at %s", store_root)
+
             report = self._inventory_report(args, registry)
             report["registry"] = {
                 "path": str(registry_file),
@@ -502,6 +531,8 @@ class StatusCommand(BaseCommand):
                 "exists": existed or args.init,
                 "updated": registry.updated,
             }
+            if store_root is not None:
+                report["store"] = self._store_report(store_root)
             counts = stage_counts(registry)
             report["stages"] = {s: {"count": counts["stages"][s], "accessions": query(registry, s)} for s in STAGES}
             report["downloads"] = self._download_verdicts(registry)

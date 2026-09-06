@@ -340,3 +340,108 @@ def test_catalog_write_raises_when_lock_never_released(paths, monkeypatch):
     with pytest.raises(DataAccessError):
         with catalog_write(paths):
             pass
+
+
+def test_record_usage_unknown_project_raises(paths):
+    """record_usage never fabricates a project row for an id it does not recognise."""
+    with Catalog(paths) as catalog:
+        catalog.migrate()
+        with pytest.raises(DataAccessError, match="Unknown project_id"):
+            catalog.record_usage("SRR1", "no-such-project", "wMel", "downloaded")
+
+        # No placeholder dataset or usage row was left behind by the failed call.
+        assert catalog.get_dataset("SRR1") is None
+        assert catalog._conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 0
+
+
+class _FlagConnection(sqlite3.Connection):
+    """A real sqlite3.Connection subclass whose statement methods can be told to fail.
+
+    sqlite3.Connection is an immutable C type: its bound methods cannot be
+    monkeypatched on an instance. Subclassing it (as ``test_wal_fallback_logs_and_continues``
+    above already does) and flipping a plain instance attribute is the way to make a real,
+    already-open connection start raising ``sqlite3.Error`` on demand, after any setup calls
+    that must succeed have already run.
+    """
+
+    _boom = False
+
+    def execute(self, sql, *args, **kwargs):
+        if self._boom:
+            raise sqlite3.OperationalError("simulated disk I/O error")
+        return super().execute(sql, *args, **kwargs)
+
+    def executemany(self, sql, *args, **kwargs):
+        if self._boom:
+            raise sqlite3.OperationalError("simulated disk I/O error")
+        return super().executemany(sql, *args, **kwargs)
+
+    def commit(self):
+        if self._boom:
+            raise sqlite3.OperationalError("simulated disk I/O error")
+        return super().commit()
+
+
+@pytest.fixture
+def flag_connect(monkeypatch):
+    """Route sqlite3.connect through _FlagConnection for the duration of one test."""
+    real_connect = sqlite3.connect
+
+    def fake_connect(database, *args, **kwargs):
+        kwargs["factory"] = _FlagConnection
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", fake_connect)
+
+
+@pytest.mark.parametrize(
+    "method_name, call_args",
+    [
+        ("migrate", ()),
+        ("upsert_dataset", (_sidecar(),)),
+        ("get_dataset", ("SRR1",)),
+        ("upsert_project", ("proj1", "P1", "/p1", "reg1")),
+        ("projects_for", ("SRR1",)),
+        ("datasets_for_project", ("proj1",)),
+        ("unused", ()),
+        ("bytes_by_genome", ()),
+        ("datasets_for_genome", ("wMel",)),
+        ("reindex", ([],)),
+    ],
+)
+def test_public_methods_wrap_sqlite_errors(paths, flag_connect, method_name, call_args):
+    """A raw sqlite3.Error out of the connection surfaces as DataAccessError, never raw."""
+    with Catalog(paths) as catalog:
+        catalog.migrate()
+        catalog.conn._boom = True
+
+        method = getattr(catalog, method_name)
+        with pytest.raises(DataAccessError):
+            method(*call_args)
+
+
+def test_record_usage_wraps_sqlite_error(paths, flag_connect):
+    with Catalog(paths) as catalog:
+        catalog.migrate()
+        catalog.upsert_project("proj1", "P1", "/p1", "reg1")
+        catalog.conn._boom = True
+
+        with pytest.raises(DataAccessError):
+            catalog.record_usage("SRR1", "proj1", "wMel", "downloaded")
+
+
+def test_catalog_open_wraps_sqlite_error(paths, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(sqlite3, "connect", boom)
+    with pytest.raises(DataAccessError):
+        with Catalog(paths):
+            pass
+
+
+def test_catalog_write_wraps_commit_sqlite_error(paths, flag_connect):
+    with pytest.raises(DataAccessError):
+        with catalog_write(paths) as catalog:
+            catalog.upsert_dataset(_sidecar())
+            catalog.conn._boom = True
