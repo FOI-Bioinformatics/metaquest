@@ -4,6 +4,7 @@ SRA-related CLI commands.
 
 import argparse
 import csv
+import os
 import shutil
 
 from metaquest.cli.base import BaseCommand
@@ -12,7 +13,7 @@ from pathlib import Path
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.registry import Registry, load_registry, query, record_download, registry_transaction
-from metaquest.data.sra import download_sra, parse_verdict_message
+from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_message
 
 
 class DownloadSraCommand(BaseCommand):
@@ -56,8 +57,8 @@ class DownloadSraCommand(BaseCommand):
         parser.add_argument(
             "--max-workers",
             type=int,
-            default=4,
-            help="Number of threads for parallel downloads",
+            default=None,
+            help="Number of parallel downloads (default: computed from the CPU count)",
         )
         parser.add_argument(
             "--dry-run",
@@ -187,6 +188,21 @@ class DownloadSraCommand(BaseCommand):
             with registry_transaction(args.registry) as reg:
                 self._record_skip(reg, acc, "--max-downloads", fastq_dir)
 
+    def _resolve_max_workers(self, args: argparse.Namespace) -> int:
+        """Resolve --max-workers, falling back to a CPU-derived default, and warn on oversubscription."""
+        max_workers = args.max_workers if args.max_workers is not None else default_max_workers(args.num_threads)
+        cpu_count = os.cpu_count() or 4
+        if max_workers * args.num_threads > cpu_count:
+            self.logger.warning(
+                "--max-workers %d x --num-threads %d = %d threads requested, which exceeds "
+                "the %d CPUs detected on this machine; downloads may be slower than expected",
+                max_workers,
+                args.num_threads,
+                max_workers * args.num_threads,
+                cpu_count,
+            )
+        return max_workers
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             if not args.dry_run and shutil.which("fasterq-dump") is None:
@@ -198,6 +214,7 @@ class DownloadSraCommand(BaseCommand):
 
             verify_downloads = getattr(args, "verify_downloads", True)
             redownload_truncated = getattr(args, "redownload_truncated", False)
+            max_workers = self._resolve_max_workers(args)
 
             excluded: set = set()
             expected_spots: dict = {}
@@ -242,7 +259,7 @@ class DownloadSraCommand(BaseCommand):
                 max_downloads=args.max_downloads,
                 dry_run=args.dry_run,
                 num_threads=args.num_threads,
-                max_workers=args.max_workers,
+                max_workers=max_workers,
                 force=args.force,
                 max_retries=args.max_retries,
                 temp_folder=args.temp_folder,

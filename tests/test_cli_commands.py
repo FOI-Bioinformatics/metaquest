@@ -403,7 +403,7 @@ class TestDownloadSraCommand:
         assert args.accessions_file == "accessions.txt"
         assert args.fastq_folder == "fastq"
         assert args.num_threads == 4
-        assert args.max_workers == 4
+        assert args.max_workers is None
         assert args.dry_run is False
         assert args.force is False
         assert args.verify_downloads is True
@@ -501,6 +501,77 @@ class TestDownloadSraCommand:
             "redownload_truncated": False,
             "truncated_accessions": set(),
         }
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_computes_default_max_workers_from_cpu_count(self, mock_command, _which, tmp_path):
+        """When --max-workers is not given, it is computed from the CPU count and thread count."""
+        mock_command.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        command = DownloadSraCommand()
+
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=None,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=8):
+            result = command.execute(args)
+
+        assert result == 0
+        assert mock_command.call_args.kwargs["max_workers"] == 2
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_warns_when_workers_oversubscribe_cpu(self, mock_command, _which, tmp_path, caplog):
+        """An explicit --max-workers x --num-threads exceeding the CPU count logs a warning."""
+        mock_command.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        command = DownloadSraCommand()
+
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=4):
+            with caplog.at_level("WARNING"):
+                result = command.execute(args)
+
+        assert result == 0
+        assert "exceeds" in caplog.text
 
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_dry_run(self, mock_command, tmp_path):

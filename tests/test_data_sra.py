@@ -7,7 +7,7 @@ import json
 
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import (
@@ -27,6 +27,8 @@ from metaquest.data.sra import (
     count_fastq_reads,
     verify_download,
     parse_verdict_message,
+    classify_download_error,
+    default_max_workers,
 )
 
 
@@ -680,6 +682,105 @@ class TestDownloadAccession:
         assert "already exists" not in message
         mock_run.assert_called_once()
 
+    def test_download_accession_failure_keeps_temp_folder_for_resume(self, tmp_path):
+        """A failed download must not wipe <acc>_temp; a later attempt resumes into it."""
+        import subprocess
+
+        output_folder = tmp_path / "downloads"
+
+        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                mock_prep.return_value = tmp_path / "temp"
+                mock_run.side_effect = subprocess.CalledProcessError(1, "fasterq-dump", stderr="Connection timed out")
+
+                success, message = download_accession("SRR123", output_folder)
+
+        assert success is False
+        temp_path = output_folder / "SRR123_temp"
+        assert temp_path.exists()
+
+    def test_download_accession_command_failure_classifies_network_error(self, tmp_path):
+        import subprocess
+
+        output_folder = tmp_path / "downloads"
+
+        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                mock_prep.return_value = tmp_path / "temp"
+                mock_run.side_effect = subprocess.CalledProcessError(1, "fasterq-dump", stderr="Connection timed out")
+
+                success, message = download_accession("SRR123", output_folder)
+
+        assert success is False
+        assert message.startswith("network:")
+
+    def test_download_accession_security_error_keeps_temp_folder(self, tmp_path):
+        output_folder = tmp_path / "downloads"
+
+        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                mock_prep.return_value = tmp_path / "temp"
+                mock_run.side_effect = SecurityError("Command blocked")
+
+                success, message = download_accession("SRR123", output_folder)
+
+        assert success is False
+        temp_path = output_folder / "SRR123_temp"
+        assert temp_path.exists()
+        assert message.startswith("unknown:")
+
+
+class TestClassifyDownloadError:
+    """Test classify_download_error pure helper."""
+
+    @pytest.mark.parametrize(
+        "text,expected_class",
+        [
+            ("Connection timed out", "network"),
+            ("curl: (7) Failed to connect to host", "network"),
+            ("Could not resolve host ftp.ncbi.nlm.nih.gov", "network"),
+            ("SSL handshake failed", "network"),
+            ("network is unreachable", "network"),
+            ("No space left on device", "disk-full"),
+            ("write failed: ENOSPC", "disk-full"),
+            ("Disk full while writing output", "disk-full"),
+            ("SRR000000 not found", "not-found"),
+            ("Invalid accession format", "not-found"),
+            ("403 Forbidden", "not-found"),
+            ("404 Not Found", "not-found"),
+            ("accession does not exist", "not-found"),
+            ("Some completely unrelated failure", "unknown"),
+            ("", "unknown"),
+        ],
+    )
+    def test_classify_download_error_table(self, text, expected_class):
+        assert classify_download_error(text) == expected_class
+
+    def test_classify_download_error_case_insensitive(self):
+        assert classify_download_error("CONNECTION TIMED OUT") == "network"
+        assert classify_download_error("NO SPACE LEFT") == "disk-full"
+        assert classify_download_error("NOT FOUND") == "not-found"
+
+
+class TestDefaultMaxWorkers:
+    """Test default_max_workers pure helper."""
+
+    def test_default_max_workers_scales_with_cpu_and_threads(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        assert default_max_workers(4) == 2
+
+    def test_default_max_workers_capped_by_default_max_workers_constant(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 64)
+        assert default_max_workers(1) == 4
+
+    def test_default_max_workers_capped_by_max_concurrent_downloads(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: None)
+        assert default_max_workers(1) <= 10
+
+    def test_default_max_workers_at_least_one(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 2)
+        assert default_max_workers(16) == 1
+
 
 class TestCheckExistingDownloads:
     """Test _check_existing_downloads function."""
@@ -824,26 +925,115 @@ class TestRetryFailedDownloads:
         assert len(updated_failed) == 0
         assert retried_successful == 2
 
-    def test_retry_failed_downloads_partial_success(self, tmp_path):
-        """Test partial success in retry."""
-        failed_accessions = ["SRR123", "SRR456"]
+    def test_retry_failed_downloads_uses_force_false(self, tmp_path):
+        """A retry must not wipe a partially-downloaded temp folder, so it must pass force=False."""
+        failed_accessions = ["SRR123"]
         download_results = {}
 
         with patch("metaquest.data.sra.download_accession") as mock_download:
-            mock_download.side_effect = [(True, "Retry success"), (False, "Retry failed")]
+            mock_download.return_value = (True, "Retry success")
 
-            retried_successful, updated_failed = _retry_failed_downloads(
+            _retry_failed_downloads(
                 failed_accessions,
-                max_retries=2,
+                max_retries=1,
                 fastq_path=tmp_path,
                 num_threads=4,
                 temp_folder=None,
                 download_results=download_results,
             )
 
+        mock_download.assert_called_once()
+        assert mock_download.call_args.kwargs.get("force") is False
+
+    def test_retry_failed_downloads_partial_success(self, tmp_path):
+        """Test partial success in retry."""
+        failed_accessions = ["SRR123", "SRR456"]
+        download_results = {}
+
+        with patch("metaquest.data.sra.download_accession") as mock_download:
+            with patch("metaquest.data.sra.time.sleep") as mock_sleep:
+                mock_download.side_effect = [(True, "Retry success"), (False, "Retry failed")]
+
+                retried_successful, updated_failed = _retry_failed_downloads(
+                    failed_accessions,
+                    max_retries=2,
+                    fastq_path=tmp_path,
+                    num_threads=4,
+                    temp_folder=None,
+                    download_results=download_results,
+                )
+
         assert download_results == {"SRR123": "Retry 1: Retry success", "SRR456": "Retry 2 error: "}
         assert updated_failed == ["SRR456"]
         assert retried_successful == 1
+        mock_sleep.assert_called_once_with(1)
+
+    def test_retry_failed_downloads_skips_not_found(self, tmp_path):
+        """An accession already classified as not-found must not be retried again."""
+        failed_accessions = ["SRR123", "SRR404"]
+        download_results = {"SRR123": "network: Connection timed out", "SRR404": "not-found: 404 Not Found"}
+
+        with patch("metaquest.data.sra.download_accession") as mock_download:
+            mock_download.return_value = (True, "Retry success")
+
+            retried_successful, updated_failed = _retry_failed_downloads(
+                failed_accessions,
+                max_retries=1,
+                fastq_path=tmp_path,
+                num_threads=4,
+                temp_folder=None,
+                download_results=download_results,
+            )
+
+        mock_download.assert_called_once_with(
+            "SRR123",
+            tmp_path,
+            4,
+            force=False,
+            temp_folder=None,
+            expected_spots=None,
+            redownload_truncated=False,
+        )
+        assert updated_failed == ["SRR404"]
+        assert retried_successful == 1
+
+    def test_retry_failed_downloads_sleeps_exponentially_between_rounds(self, tmp_path):
+        """Between retry rounds, sleep 2**attempt seconds so a flaky network gets a backoff."""
+        failed_accessions = ["SRR123"]
+        download_results = {}
+
+        with patch("metaquest.data.sra.download_accession") as mock_download:
+            with patch("metaquest.data.sra.time.sleep") as mock_sleep:
+                mock_download.return_value = (False, "network: Connection timed out")
+
+                _retry_failed_downloads(
+                    failed_accessions,
+                    max_retries=3,
+                    fastq_path=tmp_path,
+                    num_threads=4,
+                    temp_folder=None,
+                    download_results=download_results,
+                )
+
+        assert mock_sleep.call_args_list == [call(1), call(2)]
+
+    def test_retry_failed_downloads_disk_full_raises(self, tmp_path):
+        """A disk-full failure must abort the whole retry run instead of continuing."""
+        failed_accessions = ["SRR123"]
+        download_results = {}
+
+        with patch("metaquest.data.sra.download_accession") as mock_download:
+            mock_download.return_value = (False, "disk-full: No space left on device")
+
+            with pytest.raises(DataAccessError, match="Disk full"):
+                _retry_failed_downloads(
+                    failed_accessions,
+                    max_retries=2,
+                    fastq_path=tmp_path,
+                    num_threads=4,
+                    temp_folder=None,
+                    download_results=download_results,
+                )
 
 
 class TestHandleDownloadFailure:

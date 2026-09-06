@@ -11,11 +11,12 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.constants import FAILED_ACCESSIONS_FILE, FASTQ_GLOBS
+from metaquest.core.constants import DEFAULT_MAX_WORKERS, FAILED_ACCESSIONS_FILE, FASTQ_GLOBS, MAX_CONCURRENT_DOWNLOADS
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
@@ -25,6 +26,45 @@ logger = logging.getLogger(__name__)
 # Ratio of downloaded reads to NCBI's recorded run_total_spots at or above which a download
 # counts as complete rather than truncated.
 COMPLETE_RATIO_THRESHOLD = 0.99
+
+# Regexes used by classify_download_error to sort a failure message into a coarse class that
+# retry logic can act on: retry network/unknown failures, never retry not-found, and abort the
+# whole run on disk-full.
+_NETWORK_ERROR_RE = re.compile(r"timeout|timed out|connection|resolve|network|curl|ssl", re.IGNORECASE)
+_DISK_FULL_ERROR_RE = re.compile(r"no space left|enospc|disk full", re.IGNORECASE)
+_NOT_FOUND_ERROR_RE = re.compile(r"not found|invalid accession|cannot be found|403|404|does not exist", re.IGNORECASE)
+
+
+def classify_download_error(text: str) -> str:
+    """Classify a download failure message into a coarse error class.
+
+    Returns one of ``"network"``, ``"disk-full"``, ``"not-found"``, or ``"unknown"``. Pure
+    function of the message text; used both to prefix ``download_accession``'s failure
+    messages and to decide, in ``_retry_failed_downloads``, which accessions are worth
+    retrying.
+    """
+    if not text:
+        return "unknown"
+    if _NETWORK_ERROR_RE.search(text):
+        return "network"
+    if _DISK_FULL_ERROR_RE.search(text):
+        return "disk-full"
+    if _NOT_FOUND_ERROR_RE.search(text):
+        return "not-found"
+    return "unknown"
+
+
+def default_max_workers(num_threads: int) -> int:
+    """Size the download worker pool from the machine's CPU count and per-download thread use.
+
+    Each worker runs its own ``fasterq-dump`` using ``num_threads`` threads, so the pool is
+    sized to roughly saturate the CPU without wildly oversubscribing it: divide the CPU count
+    by the per-download thread count, floor at 1 worker, cap at ``MAX_CONCURRENT_DOWNLOADS``
+    (a hard ceiling regardless of CPU count) and at ``DEFAULT_MAX_WORKERS`` (this project's
+    conservative default).
+    """
+    cpu_count = os.cpu_count() or 4
+    return min(MAX_CONCURRENT_DOWNLOADS, max(1, cpu_count // max(1, num_threads)), DEFAULT_MAX_WORKERS)
 
 
 def _safe_rmtree(path: Path) -> None:
@@ -425,18 +465,20 @@ def download_accession(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
-        _safe_rmtree(temp_path)
-        return False, f"Download failed: {e.stderr}"
+        # The <acc>_temp folder is left in place (not removed) so a subsequent attempt can
+        # resume into fasterq-dump's own temp cache rather than starting from scratch.
+        message = f"Download failed: {e.stderr}"
+        return False, f"{classify_download_error(message)}: {message}"
 
     except SecurityError as e:
         logger.error(f"Security error downloading {accession}: {e}")
-        _safe_rmtree(temp_path)
-        return False, f"Security error: {e}"
+        message = f"Security error: {e}"
+        return False, f"{classify_download_error(message)}: {message}"
 
     except Exception as e:
         logger.error(f"Error downloading {accession}: {e}")
-        _safe_rmtree(temp_path)
-        return False, f"Download failed: {str(e)}"
+        message = f"Download failed: {str(e)}"
+        return False, f"{classify_download_error(message)}: {message}"
 
     finally:
         # Clean up auto-created temp directory (from tempfile.mkdtemp)
@@ -557,6 +599,10 @@ def _retry_failed_downloads(
 
     Returns:
         Tuple of (retried_successful, failed_accessions)
+
+    Raises:
+        DataAccessError: If any retry attempt fails with a disk-full error; this aborts the
+            whole run rather than continuing to retry other accessions.
     """
     if max_retries <= 0 or not failed_accessions:
         return 0, failed_accessions
@@ -570,9 +616,23 @@ def _retry_failed_downloads(
         if not failed_accessions:
             break
 
+        # An accession classified as not-found from its last attempt's message will not
+        # succeed on retry (the run genuinely does not exist, or the ID is invalid); skip it
+        # but keep it in the failed list rather than burning a retry round on it.
+        retry_batch = []
+        skipped_not_found = []
+        for accession in failed_accessions:
+            if classify_download_error(download_results.get(accession, "")) == "not-found":
+                skipped_not_found.append(accession)
+            else:
+                retry_batch.append(accession)
+
+        failed_accessions = list(skipped_not_found)
+
+        if not retry_batch:
+            break
+
         logger.info(f"Retry attempt {retry + 1}/{max_retries}")
-        retry_batch = failed_accessions.copy()
-        failed_accessions = []
 
         for accession in retry_batch:
             retry_count += 1
@@ -581,7 +641,7 @@ def _retry_failed_downloads(
                     accession,
                     fastq_path,
                     num_threads,
-                    force=True,
+                    force=False,
                     temp_folder=temp_folder,
                     expected_spots=expected_spots.get(accession),
                     redownload_truncated=redownload_truncated,
@@ -601,8 +661,13 @@ def _retry_failed_downloads(
             else:
                 failed_accessions.append(accession)
                 logger.warning(f"Failed to download {accession} on retry {retry + 1}: {message}")
+                if classify_download_error(message) == "disk-full":
+                    raise DataAccessError(f"Disk full while downloading {accession}: {message}")
 
             _notify_result(on_result, accession, success, download_results[accession])
+
+        if failed_accessions and retry < max_retries - 1:
+            time.sleep(2**retry)
 
     return retried_successful, failed_accessions
 
