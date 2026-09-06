@@ -21,15 +21,17 @@ copies at once: the project's original folder, its staging copy, and (briefly,
 during the final move) the store's copy.
 
 Staging one accession runs under that accession's own lock
-(``<store>/locks/<ACC>.lock``), same as a store download: two adopts of
-different accessions never touch each other's staging folder, and two adopts
-of the same accession serialise on this lock rather than trampling one
-another's ``<ACC>_adopt`` copy.
+(``<store>/locks/<ACC>.lock``, see ``metaquest.store.locks``), same as a store
+download: two adopts of different accessions never touch each other's staging
+folder, and two adopts of the same accession serialise on this lock rather
+than trampling one another's ``<ACC>_adopt`` copy.
 
-A dataset whose files already made it into ``<store>/sra/<ACC>`` but whose
-sidecar was never written (the process died between the final move and
-writing the sidecar) is finished in place on the next call, without
-re-touching the files.
+Adoption only ever claims the project's own ``fastq/<ACC>`` folders. A dataset
+whose files made it into ``<store>/sra/<ACC>`` but whose sidecar was never
+written is finished in place on the next call, without re-touching the files,
+but only when this project also has that accession: a sidecar-less folder for
+any other accession is another project's interrupted or still running work,
+and is reported rather than blessed with a sidecar and linked here.
 """
 
 import gzip
@@ -37,6 +39,7 @@ import hashlib
 import logging
 import shutil
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
@@ -44,7 +47,7 @@ from metaquest.data.sra import compress_fastq, count_fastq_reads, fastq_files, f
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
-from metaquest.store.locks import dataset_lock
+from metaquest.store.locks import dataset_lock, lock_holder, lock_is_held
 from metaquest.store.sidecar import Sidecar, build_sidecar, ncbi_from_metadata_xml, read_sidecar, write_sidecar
 
 logger = logging.getLogger(__name__)
@@ -74,6 +77,13 @@ class AdoptReport:
     # accession, removed (under this accession's lock) right before staging; the project's own
     # folder was untouched by that interruption, so the accession is simply re-adopted here.
     resumed: List[str] = field(default_factory=list)
+    # Sidecar-less store folders for accessions this project does not have: another project's
+    # interrupted (or still running) work, reported and never touched.
+    foreign: List[str] = field(default_factory=list)
+    # Accessions whose store lock is held right now, so another run is publishing them.
+    in_progress: List[str] = field(default_factory=list)
+    # Accessions left alone because the store's filesystem has no room to stage them.
+    refused: List[str] = field(default_factory=list)
 
 
 def _notify(on_progress: Optional[Callable[[str, str], None]], accession: str, event: str) -> None:
@@ -157,6 +167,24 @@ def _ncbi_from_folders(accession: str, metadata_folders: Sequence[Union[str, Pat
     return {}
 
 
+def _newest_file_time(acc_dir: Path) -> Optional[str]:
+    """When the newest FASTQ file in ``acc_dir`` was last written, as an ISO timestamp.
+
+    An adopted dataset was downloaded at some earlier point that nothing recorded, so its
+    files' own age is the best available answer; ``store_gc --older-than`` then counts from
+    when the reads were obtained rather than from when they were adopted.
+    """
+    times = []
+    for file_path in fastq_files(acc_dir):
+        try:
+            times.append(file_path.stat().st_mtime)
+        except OSError:
+            continue
+    if not times:
+        return None
+    return datetime.fromtimestamp(max(times), tz=timezone.utc).isoformat()
+
+
 def _finish_sidecar(
     accession: str,
     store_dir: Path,
@@ -167,25 +195,71 @@ def _finish_sidecar(
     """Write the sidecar and catalogue entry for a dataset whose files already sit in the store.
 
     Shared by a fresh adoption (files just staged and compressed into ``store_dir``) and by
-    finishing an interrupted one (files already there from an earlier, incomplete run).
+    finishing an interrupted one (files already there from an earlier, incomplete run). The
+    sidecar records ``tool="adopted"`` and the files' own age rather than this moment: nothing
+    here downloaded them, and no tool version is known.
     """
     ncbi = _ncbi_from_folders(accession, metadata_folders)
     compression = _detect_compression(store_dir)
-    sidecar = build_sidecar(accession, store_dir, ncbi, "adopted", compression)
+    sidecar = build_sidecar(
+        accession,
+        store_dir,
+        ncbi,
+        "",
+        compression,
+        tool="adopted",
+        downloaded=_newest_file_time(store_dir),
+    )
     write_sidecar(sc_path, sidecar)
     with catalog_write(paths) as catalog:
         catalog.upsert_dataset(sidecar)
     return sidecar
 
 
-def _adopt_fresh(
+def _folder_bytes(folder: Path) -> int:
+    """Total bytes of every file under ``folder``, skipping anything that cannot be stat'ed."""
+    total = 0
+    for sub in folder.rglob("*"):
+        try:
+            if sub.is_file():
+                total += sub.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _has_room_for(accession: str, entry: Path, paths: StorePaths) -> bool:
+    """True when the store's filesystem has room to stage ``entry``, with a copy to spare.
+
+    Adoption peaks at three copies of one accession (the project's, the staging copy and,
+    briefly, the store's), so it needs at least twice the folder's size free before it starts.
+    A filesystem that cannot be measured is assumed to have room: refusing on an unreadable
+    ``disk_usage`` would be worse than trying.
+    """
+    needed = _folder_bytes(entry) * 2
+    try:
+        free = shutil.disk_usage(paths.root).free
+    except OSError as e:
+        logger.warning("Could not check free space on %s: %s", paths.root, e)
+        return True
+    if free >= needed:
+        return True
+    logger.warning(
+        "%s: not adopting it, the store's filesystem has %d bytes free and staging needs about %d",
+        accession,
+        free,
+        needed,
+    )
+    return False
+
+
+def _stage_into_store(
     entry: Path,
     accession: str,
     paths: StorePaths,
     compress: bool,
     metadata_folders: Sequence[Union[str, Path]],
     report: AdoptReport,
-    lock_wait: float = 0.0,
 ) -> None:
     """Copy ``entry``'s files into ``<store>/sra/<accession>``, compressing plain files on the way.
 
@@ -193,37 +267,29 @@ def _adopt_fresh(
     the project's original folder is only ever removed (for ``--move``, by the caller, after this
     returns) once the store's copy and its sidecar both exist. A crash anywhere in this function
     leaves ``entry`` untouched; a stale ``<ACC>_adopt`` staging copy left by such a crash is
-    removed here, under this accession's lock, right before staging starts again, and reported in
-    ``report.resumed``.
+    removed here, right before staging starts again, and reported in ``report.resumed``.
 
-    The whole operation (sweep, copy, compress, move, sidecar) runs under this accession's own
-    lock (``<store>/locks/<ACC>.lock``, held through ``metaquest.store.locks.dataset_lock``,
-    same as a store download): a concurrent adopt or download of this same accession blocks
-    here until this one finishes, rather than racing it for the same staging folder. That lock
-    heartbeats while held, so a multi-hour copy is never reclaimed as stale; ``lock_wait``
-    above zero gives up on this accession instead of waiting.
+    The caller holds this accession's lock (``<store>/locks/<ACC>.lock``, see ``_adopt_one``).
     """
     store_dir = sra_dir(paths, accession)
     staged = paths.tmp / f"{accession}{_STAGING_SUFFIX}"
     paths.tmp.mkdir(parents=True, exist_ok=True)
-    paths.locks.mkdir(parents=True, exist_ok=True)
 
-    with dataset_lock(paths, accession, wait_seconds=lock_wait):
-        if staged.exists():
-            shutil.rmtree(staged)
-            report.resumed.append(accession)
+    if staged.exists():
+        shutil.rmtree(staged)
+        report.resumed.append(accession)
 
-        shutil.copytree(entry, staged)
+    shutil.copytree(entry, staged)
 
-        if compress:
-            for file_path in fastq_files(staged):
-                if not str(file_path).endswith(".gz"):
-                    compress_fastq(file_path, _ADOPT_COMPRESS_THREADS)
+    if compress:
+        for file_path in fastq_files(staged):
+            if not str(file_path).endswith(".gz"):
+                compress_fastq(file_path, _ADOPT_COMPRESS_THREADS)
 
-        store_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(staged), str(store_dir))
+    store_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(staged), str(store_dir))
 
-        _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
+    _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
 
 
 def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]:
@@ -247,28 +313,26 @@ def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]
     return real_dirs
 
 
-def _scan_interrupted(paths: StorePaths, project_dir: Path, real_dirs: Dict[str, Path]) -> set:
-    """Accessions whose files already sit in the store with no sidecar, and no local folder.
+def _scan_foreign_incomplete(paths: StorePaths, real_dirs: Dict[str, Path]) -> List[str]:
+    """Sidecar-less store folders for accessions this project is not adopting.
 
-    Ordinarily the project's folder is only removed after the sidecar is written (see
-    ``_adopt_fresh``/``_adopt_new_or_restart``), so this covers the rare case where it went
-    missing some other way (e.g. removed outside MetaQuest) while the store side was left
-    incomplete. Restricted to accessions not already in ``real_dirs`` (those are handled where
-    they are found) and not already linked.
+    Such a folder is another project's work: an interrupted run of theirs, or one still in
+    flight. Adoption reports it so the store's owner can see it, and never blesses it with a
+    sidecar or links it here. Only the project's own folders (``real_dirs``) are ever adopted,
+    so a dataset another project is mid-download on cannot be claimed by this run.
     """
-    interrupted: set = set()
+    foreign: List[str] = []
     if not paths.sra.is_dir():
-        return interrupted
+        return foreign
     for store_dir in sorted(paths.sra.iterdir()):
         if not store_dir.is_dir():
             continue
         accession = store_dir.name
         if accession in real_dirs or sidecar_path(paths, accession).is_file():
             continue
-        if (project_dir / accession).is_symlink():
-            continue
-        interrupted.add(accession)
-    return interrupted
+        foreign.append(accession)
+        logger.warning("foreign: %s, no sidecar; left untouched", accession)
+    return foreign
 
 
 def _dedup_or_conflict(
@@ -307,11 +371,36 @@ def _dedup_or_conflict(
     _notify(on_progress, accession, "conflict")
 
 
-def _adopt_new_or_restart(
+def _apply_move_or_copy(
     accession: str,
-    entry: Optional[Path],
-    store_dir: Path,
-    sc_path: Path,
+    entry: Path,
+    paths: StorePaths,
+    project_dir: Path,
+    move: bool,
+    on_progress: Optional[Callable[[str, str], None]],
+    report: AdoptReport,
+) -> None:
+    """Finish one adopted accession: ``--move`` links it, ``--copy`` leaves the project alone.
+
+    ``--copy`` leaves the project's folder exactly as it was (a second, independent copy) and
+    does not link it, since a project that asked to keep its own copy should not have it
+    silently swapped for a link on the same run.
+    """
+    if not move:
+        report.copied.append(accession)
+        _notify(on_progress, accession, "copied")
+        return
+
+    if entry.exists():
+        shutil.rmtree(entry)
+    link_dataset(project_dir, accession, paths)
+    report.adopted.append(accession)
+    _notify(on_progress, accession, "adopted")
+
+
+def _adopt_one(
+    accession: str,
+    entry: Path,
     paths: StorePaths,
     project_dir: Path,
     move: bool,
@@ -319,34 +408,48 @@ def _adopt_new_or_restart(
     metadata_folders: Sequence[Union[str, Path]],
     on_progress: Optional[Callable[[str, str], None]],
     report: AdoptReport,
-    lock_wait: float = 0.0,
+    lock_wait: float,
 ) -> None:
-    """Get a fresh accession's files into the store (or finish one interrupted after its files
-    already reached the store), then apply ``--move``/``--copy``.
+    """Get one of this project's accessions into the store, then apply ``--move``/``--copy``.
 
-    ``--move`` removes the project's folder and links it to the store's copy; ``--copy`` leaves
-    the project's folder exactly as it was (a second, independent copy) and does not link it,
-    since a project that asked to keep its own copy should not have it silently swapped for a
-    link on the same run.
+    Everything that writes to the store happens under this accession's own lock (see
+    ``metaquest.store.locks.dataset_lock``), and the store's state is read again inside it:
+    a download that finished while this run waited leaves a sidecar behind, and this run must
+    then compare copies rather than move its own on top of the published one.
+
+    A sidecar-less store folder whose lock is held right now belongs to a run publishing it at
+    this moment; that accession is reported ``in progress elsewhere`` and left alone.
     """
-    if store_dir.is_dir() and not sc_path.is_file():
-        _finish_sidecar(accession, store_dir, sc_path, paths, metadata_folders)
-    else:
-        # A fresh accession always comes from real_dirs (interrupted ones are handled by the
-        # branch above), so entry is never None here.
-        assert entry is not None
-        _adopt_fresh(entry, accession, paths, compress, metadata_folders, report, lock_wait)
+    store_dir = sra_dir(paths, accession)
+    sc_path = sidecar_path(paths, accession)
 
-    if not move:
-        report.copied.append(accession)
-        _notify(on_progress, accession, "copied")
+    if store_dir.is_dir() and not sc_path.is_file() and lock_is_held(paths, accession):
+        logger.warning(
+            "%s: in progress elsewhere (%s); leaving both copies alone", accession, lock_holder(paths, accession)
+        )
+        report.in_progress.append(accession)
         return
 
-    if entry is not None and entry.exists():
-        shutil.rmtree(entry)
-    link_dataset(project_dir, accession, paths)
-    report.adopted.append(accession)
-    _notify(on_progress, accession, "adopted")
+    if not store_dir.is_dir() and not _has_room_for(accession, entry, paths):
+        report.refused.append(accession)
+        return
+
+    paths.locks.mkdir(parents=True, exist_ok=True)
+    with dataset_lock(paths, accession, wait_seconds=lock_wait):
+        published_elsewhere = sc_path.is_file()
+        if not published_elsewhere:
+            if store_dir.is_dir():
+                _finish_sidecar(accession, store_dir, sc_path, paths, metadata_folders)
+            else:
+                _stage_into_store(entry, accession, paths, compress, metadata_folders, report)
+
+    if published_elsewhere:
+        # Someone published this accession while we waited for the lock; the project's copy is
+        # now a second copy to compare, not something to move on top of theirs.
+        _dedup_or_conflict(accession, entry, store_dir, sc_path, paths, project_dir, False, on_progress, report)
+        return
+
+    _apply_move_or_copy(accession, entry, paths, project_dir, move, on_progress, report)
 
 
 def adopt(
@@ -369,13 +472,16 @@ def adopt(
     (``--copy``, the project keeps its own folder, unlinked). A symlink already in
     ``project_fastq`` is counted in ``skipped`` and left untouched.
 
-    Also finishes any dataset already sitting in ``<store>/sra/<ACC>`` without a sidecar, from an
-    earlier run interrupted after the files reached their final location but before the sidecar
-    was written, and removes (under that accession's own lock, right before re-staging) any stale
-    ``<store>/tmp/<ACC>_adopt`` copy left by a run interrupted earlier than that (the project's
-    own folder is untouched in that case, so the accession is simply re-adopted; such accessions
-    are reported in ``resumed``). Peak disk use for one accession adopted this way is up to three
-    copies at once: see the module docstring.
+    Only the project's own folders are ever adopted. A sidecar-less ``<store>/sra/<ACC>`` for an
+    accession this project also has is finished in place (an earlier run of this project died
+    after the files reached the store but before the sidecar was written), under that accession's
+    lock; a sidecar-less folder for any other accession belongs to another project, and is listed
+    in ``foreign`` without being touched or linked. An accession whose lock is held right now is
+    listed in ``in_progress`` and left alone, and one the store's filesystem has no room to stage
+    is listed in ``refused``. Any stale ``<store>/tmp/<ACC>_adopt`` copy from a run interrupted
+    mid-staging is removed (under that accession's lock, right before re-staging) and the
+    accession reported in ``resumed``. Peak disk use for one accession adopted this way is up to
+    three copies at once: see the module docstring.
 
     ``dry_run`` performs no filesystem changes and no database changes (including no sweep of a
     stale staging copy); every accession that would otherwise be dedup'd, adopted or restarted is
@@ -386,10 +492,10 @@ def adopt(
     project_dir = Path(project_fastq)
 
     real_dirs = _scan_project_dir(project_dir, report)
-    interrupted = _scan_interrupted(paths, project_dir, real_dirs)
+    report.foreign.extend(_scan_foreign_incomplete(paths, real_dirs))
 
-    for accession in sorted(set(real_dirs) | interrupted):
-        entry = real_dirs.get(accession)
+    for accession in sorted(real_dirs):
+        entry = real_dirs[accession]
         store_dir = sra_dir(paths, accession)
         sc_path = sidecar_path(paths, accession)
 
@@ -397,17 +503,15 @@ def adopt(
             _dedup_or_conflict(accession, entry, store_dir, sc_path, paths, project_dir, dry_run, on_progress, report)
             continue
 
-        # Either a fresh accession (no store folder yet) or an interrupted one (store folder
-        # exists, no sidecar).
+        # Either a fresh accession (no store folder yet) or one this project left incomplete
+        # in the store (folder there, no sidecar).
         if dry_run:
             report.planned.append(accession)
             continue
 
-        _adopt_new_or_restart(
+        _adopt_one(
             accession,
             entry,
-            store_dir,
-            sc_path,
             paths,
             project_dir,
             move,

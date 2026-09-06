@@ -101,6 +101,8 @@ def build_sidecar(
     ncbi: Dict[str, Any],
     tool_version: str,
     compression: str,
+    tool: str = "fasterq-dump",
+    downloaded: Optional[str] = None,
 ) -> Sidecar:
     """Build a sidecar describing the files already downloaded for ``accession`` in ``acc_dir``.
 
@@ -110,6 +112,10 @@ def build_sidecar(
     file makes ``count_fastq_reads`` raise ``EOFError`` (or plain garbage raise ``OSError``);
     either is caught per file and turns the whole result into ``state="failed"`` with the
     error recorded, since a corrupt file cannot be verified against NCBI's spot count.
+
+    ``tool`` and ``downloaded`` default to a fresh fasterq-dump download happening now;
+    adoption passes ``tool="adopted"`` and the files' own age instead, since it did not
+    download them.
     """
     acc_path = Path(acc_dir)
     files = fastq_files(acc_path)
@@ -150,8 +156,8 @@ def build_sidecar(
         accession=accession,
         state=state,
         layout=layout,
-        downloaded=datetime.now(timezone.utc).isoformat(),
-        tool="fasterq-dump",
+        downloaded=downloaded or datetime.now(timezone.utc).isoformat(),
+        tool=tool,
         tool_version=tool_version,
         compression=compression,
         files=file_records,

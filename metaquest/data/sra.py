@@ -855,6 +855,29 @@ def _store_precheck(
     return None
 
 
+def _publish_store_dataset(staged: Path, target: Path, tmp: Path) -> None:
+    """Move the finished ``staged`` folder to ``target`` with one rename.
+
+    An older copy at ``target`` is renamed aside into ``<tmp>/<ACC>_old`` first and removed
+    only after the new one is in place, so the accession is never absent from ``sra/`` and a
+    rename that fails puts the old copy back rather than losing both.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    previous: Optional[Path] = None
+    if target.exists():
+        previous = tmp / f"{target.name}_old"
+        _safe_rmtree(previous)
+        os.replace(target, previous)
+    try:
+        os.replace(staged, target)
+    except OSError:
+        if previous is not None:
+            os.replace(previous, target)
+        raise
+    if previous is not None:
+        _safe_rmtree(previous)
+
+
 def _store_fetch(
     accession: str,
     project_fastq: Path,
@@ -865,46 +888,47 @@ def _store_fetch(
 ) -> Tuple[bool, str]:
     """Download ``accession`` into the store, describe it, and link the project to it.
 
-    An existing (incomplete) copy is replaced only once the new download has succeeded: the
-    replacement is built beside the store in its ``tmp`` folder and moved over the old one,
-    so a failed resume leaves the partial copy exactly as it was.
+    Everything happens in the store's ``tmp`` folder: fasterq-dump builds
+    ``tmp/<ACC>_temp``, the files are verified and compressed into ``tmp/<ACC>``, and the
+    sidecar describing them is written there too. Only then is the finished folder published
+    into ``sra/<ACC>`` with one rename, so that folder never holds an unverified or
+    sidecar-less dataset for another project to find, and an existing copy is replaced only
+    once its replacement is complete.
     """
     from metaquest.store.catalog import catalog_write
-    from metaquest.store.layout import sidecar_path, sra_dir
+    from metaquest.store.layout import sra_dir
     from metaquest.store.link import link_dataset
     from metaquest.store.sidecar import build_sidecar, ncbi_from_metadata_xml, write_sidecar
 
     target = sra_dir(store, accession)
     replacing = target.exists()
     staged = store.tmp / accession
-    download_kwargs["force"] = replacing
+    # A forced refetch stays forced even when nothing is in the store yet: it must not reuse
+    # a cached archive from an earlier attempt.
+    download_kwargs["force"] = bool(download_kwargs.get("force")) or replacing
     download_kwargs.setdefault("sra_cache", None)
     if download_kwargs["sra_cache"] is None:
         download_kwargs["sra_cache"] = store.tmp / ".sra-cache"
 
-    success, message = download_accession(
-        accession,
-        store.tmp if replacing else store.sra,
-        staging_folder=store.tmp,
-        **download_kwargs,
-    )
+    # Whatever an earlier interrupted attempt left staged is not a resume point: the download
+    # would otherwise be skipped as "already exists" and that partial copy published.
+    _safe_rmtree(staged)
+
+    success, message = download_accession(accession, store.tmp, staging_folder=store.tmp, **download_kwargs)
 
     if not success:
-        if replacing:
-            _safe_rmtree(staged)
+        _safe_rmtree(staged)
         return False, message
 
-    if replacing:
-        _safe_rmtree(target)
-        shutil.move(str(staged), str(target))
-
-    files = fastq_files(target)
+    files = fastq_files(staged)
     compression = "gzip" if any(path.name.endswith(".gz") for path in files) else "none"
     xml = _metadata_xml(store_metadata, accession) or _metadata_xml(store.metadata, accession)
     ncbi = ncbi_from_metadata_xml(xml) if xml is not None else {}
 
-    sidecar = build_sidecar(accession, target, ncbi, fasterq_dump_version(), compression)
-    write_sidecar(sidecar_path(store, accession), sidecar)
+    sidecar = build_sidecar(accession, staged, ncbi, fasterq_dump_version(), compression)
+    write_sidecar(staged / f"{accession}.json", sidecar)
+    _publish_store_dataset(staged, target, store.tmp)
+
     with catalog_write(store) as catalog:
         catalog.upsert_dataset(sidecar)
 

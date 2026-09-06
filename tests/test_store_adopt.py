@@ -43,7 +43,7 @@ class TestAdoptFresh:
         assert (sra_dir(paths, "SRR1")).is_dir()
         sidecar = read_sidecar(sidecar_path(paths, "SRR1"))
         assert sidecar is not None
-        assert sidecar.tool_version == "adopted"
+        assert sidecar.tool == "adopted"
         assert sidecar.compression == "gzip"
         assert (sra_dir(paths, "SRR1") / "SRR1.fastq.gz").is_file()
 
@@ -291,22 +291,93 @@ class TestAdoptRestart:
         assert sidecar_path(paths, "SRR1").exists()
         assert entry.is_dir() and not entry.is_symlink()
 
-    def test_project_folder_missing_entirely_still_finishes_via_defensive_scan(self, tmp_path):
-        """Edge case: the store has the files and no sidecar, and the project's folder is gone
-        by some means outside adopt() (e.g. removed manually). The defensive scan still finishes
-        the sidecar and links it."""
+    def test_a_foreign_sidecar_less_folder_is_reported_and_left_alone(self, tmp_path):
+        """A sidecar-less sra/<ACC> for an accession this project never had belongs to
+        someone else's interrupted run, most likely one still in flight: adoption reports it
+        and touches neither the folder nor the project."""
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        acc_dir = sra_dir(paths, "SRR-FOREIGN")
+        _write_fastq_gz(acc_dir / "SRR-FOREIGN.fastq.gz")
+
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+
+        report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.adopted == ["SRR1"]
+        assert report.foreign == ["SRR-FOREIGN"]
+        assert not (project_fastq / "SRR-FOREIGN").exists()
+        assert not sidecar_path(paths, "SRR-FOREIGN").exists()
+        assert (acc_dir / "SRR-FOREIGN.fastq.gz").is_file()
+
+    def test_an_accession_locked_by_another_run_is_skipped_as_in_progress(self, tmp_path):
+        """The store holds our accession without a sidecar and its lock is held: another run
+        is publishing it right now, so this one leaves both copies alone."""
+        import json
+
         store_root = tmp_path / "store"
         paths = init_store(store_root)
         acc_dir = sra_dir(paths, "SRR1")
         _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
 
         project_fastq = tmp_path / "project" / "fastq"
-        project_fastq.mkdir(parents=True)
+        entry = project_fastq / "SRR1"
+        _write_fastq_gz(entry / "SRR1.fastq.gz")
+
+        lock = lock_path(paths, "SRR1")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"pid": 999999, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
 
         report = adopt(project_fastq, paths, move=True, dry_run=False)
 
-        assert report.adopted == ["SRR1"]
-        assert (project_fastq / "SRR1").is_symlink()
+        assert report.in_progress == ["SRR1"]
+        assert report.adopted == []
+        assert not sidecar_path(paths, "SRR1").exists()
+        assert entry.is_dir() and not entry.is_symlink()
+
+    def test_adoption_refuses_an_accession_without_room_for_it(self, tmp_path):
+        """Adoption peaks at three copies of one accession; without room for the staging copy
+        it refuses that accession with a message rather than filling the store's filesystem."""
+        import shutil as shutil_module
+        from collections import namedtuple
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        project_fastq = tmp_path / "project" / "fastq"
+        entry = project_fastq / "SRR1"
+        _write_fastq(entry / "SRR1.fastq")
+
+        usage = namedtuple("usage", "total used free")
+        with patch.object(shutil_module, "disk_usage", return_value=usage(1000, 1000, 1)):
+            report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.refused == ["SRR1"]
+        assert report.adopted == []
+        assert not sra_dir(paths, "SRR1").exists()
+        assert (entry / "SRR1.fastq").is_file()
+
+    def test_an_adopted_sidecar_records_the_tool_and_the_files_own_age(self, tmp_path):
+        """An adopted dataset was not downloaded now, and not by fasterq-dump: its sidecar
+        says so, so --older-than counts from the reads' own age rather than from adoption."""
+        import os
+        import time
+        from datetime import datetime, timezone
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        project_fastq = tmp_path / "project" / "fastq"
+        entry = project_fastq / "SRR1"
+        _write_fastq_gz(entry / "SRR1.fastq.gz")
+        old = time.time() - 90 * 86400
+        os.utime(entry / "SRR1.fastq.gz", (old, old))
+
+        adopt(project_fastq, paths, move=True, dry_run=False)
+
+        sidecar = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert sidecar.tool == "adopted"
+        age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(sidecar.downloaded)).days
+        assert age_days >= 89
 
 
 class TestAdoptStagingCrashSafety:

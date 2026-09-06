@@ -507,6 +507,12 @@ class StoreAdoptCommand(BaseCommand):
         )
         if report.resumed:
             print(f"Resumed after an interrupted run: {', '.join(sorted(report.resumed))}")
+        if report.foreign:
+            print(f"Left to their own project (no sidecar, not ours): {', '.join(sorted(report.foreign))}")
+        if report.in_progress:
+            print(f"In progress elsewhere: {', '.join(sorted(report.in_progress))}")
+        if report.refused:
+            print(f"Refused for lack of free space: {', '.join(sorted(report.refused))}")
         if report.conflicts:
             self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
         return 0

@@ -1915,7 +1915,9 @@ class TestDownloadSraStore:
         assert len(calls) == 1
         accession, output_folder, kwargs = calls[0]
         assert accession == "SRR1"
-        assert output_folder == paths.sra
+        # The download lands in the store's tmp folder and is only published into sra/ once
+        # it is verified, compressed and described.
+        assert output_folder == paths.tmp
         assert Path(kwargs["staging_folder"]) == paths.tmp
         assert stats["successful"] == 1
         assert stats["results"]["SRR1"].endswith("; stored")
@@ -2171,3 +2173,107 @@ class TestStoreDownloadLockWait:
         assert "4242" in message and "otherhost" in message
         # The other project's lock is left exactly as it was.
         assert json_module.loads(lock.read_text())["pid"] == 4242
+
+
+class TestStoreDownloadPublishesAtomically:
+    """sra/<ACC> only ever appears complete: verified, compressed and described."""
+
+    @staticmethod
+    def _store(tmp_path):
+        from metaquest.store.layout import init_store
+
+        return init_store(tmp_path / "store")
+
+    @staticmethod
+    def _accessions(tmp_path, *accessions):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("".join(f"{a}\n" for a in accessions))
+        return acc
+
+    def test_the_store_folder_is_absent_until_the_dataset_is_described(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+        seen = {}
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            # The files exist now, unverified and undescribed: the published location must
+            # still be empty, so no other project can see or claim a half-finished dataset.
+            seen["published_during_download"] = (paths.sra / accession).exists()
+            seen["output_folder"] = Path(output_folder)
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=_download):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert seen["published_during_download"] is False
+        assert seen["output_folder"] == paths.tmp
+        assert stats["successful"] == 1
+        # The folder is published with its sidecar already inside it.
+        assert sorted(p.name for p in (paths.sra / "SRR1").iterdir()) == ["SRR1.json", "SRR1_1.fastq"]
+        assert read_sidecar(paths.sra / "SRR1" / "SRR1.json") is not None
+        assert not (paths.tmp / "SRR1").exists()
+
+    def test_a_failure_before_publish_never_creates_the_store_folder(self, tmp_path):
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=_download):
+            with patch("metaquest.store.sidecar.build_sidecar", side_effect=OSError("disk went away")):
+                stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert stats["failed"] == 1
+        assert not (paths.sra / "SRR1").exists()
+        # The half-finished work stays in the store's tmp folder, out of the published tree.
+        assert (paths.tmp / "SRR1").is_dir()
+        assert not (fastq_folder / "SRR1").exists()
+
+    def test_a_failed_replacement_leaves_the_existing_copy_in_place(self, tmp_path):
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        paths = self._store(tmp_path)
+        existing = paths.sra / "SRR1"
+        existing.mkdir(parents=True)
+        (existing / "SRR1_1.fastq").write_text("@old\nACGT\n+\nIIII\n")
+        write_sidecar(existing / "SRR1.json", Sidecar(accession="SRR1", state="partial"))
+        fastq_folder = tmp_path / "project" / "fastq"
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@new\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=_download):
+            with patch("metaquest.store.sidecar.build_sidecar", side_effect=OSError("disk went away")):
+                download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert (existing / "SRR1_1.fastq").read_text().startswith("@old")
+        assert (existing / "SRR1.json").is_file()
+
+    def test_a_forced_refetch_of_an_absent_dataset_stays_forced(self, tmp_path):
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append(kwargs)
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=_download):
+            download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0, force=True)
+
+        assert calls[0]["force"] is True
