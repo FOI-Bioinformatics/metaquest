@@ -105,6 +105,19 @@ class SRAQualityProfileCommand(BaseCommand):
             action="store_true",
             help="Generate only summary statistics",
         )
+        parser.add_argument(
+            "--sample-size",
+            type=int,
+            default=10000,
+            help="Reads sampled per accession for quality/GC/complexity metrics (default: 10000)",
+        )
+        parser.add_argument(
+            "--sampler",
+            choices=["uniform", "head"],
+            default="uniform",
+            help="'uniform' samples reads across the whole file; 'head' takes the first "
+            "--sample-size reads only (default: uniform)",
+        )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
@@ -155,7 +168,7 @@ class SRAQualityProfileCommand(BaseCommand):
                     "avg_read_length": profile.avg_read_length,
                     "read_length_distribution": profile.read_length_distribution,
                     "gc_content": profile.gc_content,
-                    "gc_distribution": profile.gc_distribution,
+                    "gc_histogram": profile.gc_histogram,
                     "quality_grade": profile.quality_grade,
                     "quality_distribution": profile.quality_distribution,
                     "complexity_score": profile.complexity_score,
@@ -177,7 +190,11 @@ class SRAQualityProfileCommand(BaseCommand):
             print(f"⚠️  No FASTQ files found for {accession}")
             return None
 
-        profile = analyzer.profile_dataset_quality(accession, fastq_path=str(accession_file))
+        sample_size = getattr(args, "sample_size", 10000)
+        sampler = getattr(args, "sampler", "uniform")
+        profile = analyzer.profile_dataset_quality(
+            accession, fastq_path=str(accession_file), sample_size=sample_size, sampler=sampler
+        )
         if not args.summary_only:
             self._print_quality_profile(profile)
         if args.detailed_reports:
@@ -468,6 +485,11 @@ class SRAComparativeAnalysisCommand(BaseCommand):
             default=True,
             help="Generate HTML comparative analysis report",
         )
+        parser.add_argument(
+            "--quality-profiles",
+            help="Directory containing quality profile JSONs; an accession found there is "
+            "reused as-is instead of being reprofiled from FASTQ",
+        )
 
     def _load_groups(self, filename: str) -> dict:
         """Load accession groups from JSON file."""
@@ -552,7 +574,15 @@ class SRAComparativeAnalysisCommand(BaseCommand):
 
             analyzer = SRADatasetAnalyzer(fastq_dir=args.fastq_dir)
             all_accessions = [acc for accs in groups.values() for acc in accs]
-            missing = [acc for acc in all_accessions if analyzer.find_fastq(acc) is None]
+
+            quality_profiles_dir = getattr(args, "quality_profiles", None)
+            profiles: Dict[str, QualityProfile] = {}
+            if quality_profiles_dir and Path(quality_profiles_dir).is_dir():
+                profiles = load_quality_profiles(quality_profiles_dir)
+                if profiles:
+                    print(f"Reusing {len(profiles)} saved quality profile(s) from {quality_profiles_dir}")
+
+            missing = [acc for acc in all_accessions if acc not in profiles and analyzer.find_fastq(acc) is None]
             if len(missing) == len(all_accessions):
                 logger.error(
                     "No FASTQ files found for any of %d accession(s) under %s; nothing to compare",
@@ -564,7 +594,7 @@ class SRAComparativeAnalysisCommand(BaseCommand):
                 logger.warning("FASTQ missing for %d accession(s), e.g. %s", len(missing), ", ".join(missing[:5]))
 
             print("\nPerforming comparative analysis...")
-            comparison = analyzer.compare_datasets(groups)
+            comparison = analyzer.compare_datasets(groups, profiles=profiles or None)
 
             self._print_group_summaries(groups, comparison)
             if args.statistical_tests:

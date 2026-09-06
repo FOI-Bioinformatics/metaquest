@@ -103,7 +103,7 @@ class SRAReportGenerator:
         dashboard_data["summary_stats"] = summary_stats
 
         # Detect anomalies
-        anomaly_report = self.analyzer.detect_dataset_anomalies(list(profiles.keys()))
+        anomaly_report = self.analyzer.detect_dataset_anomalies(list(profiles.keys()), profiles=profiles)
         dashboard_data["anomaly_report"] = anomaly_report
 
         # Create visualizations

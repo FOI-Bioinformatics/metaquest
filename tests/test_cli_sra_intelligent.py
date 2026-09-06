@@ -36,7 +36,7 @@ def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0):
         avg_read_length=150.0,
         read_length_distribution={},
         gc_content=0.45,
-        gc_distribution=[],
+        gc_histogram={},
         quality_distribution={"excellent_q30+": 0.9},
         n_content=n_content,
         contamination_indicators={"adapter_contamination": adapter},
@@ -76,6 +76,8 @@ class TestSRAQualityProfileCommand:
         assert "--accessions-file" in call_args
         assert "--fastq-dir" in call_args
         assert "--detailed-reports" in call_args
+        assert "--sample-size" in call_args
+        assert "--sampler" in call_args
 
     def test_print_quality_profile(self, capsys):
         """Test quality profile printing."""
@@ -129,6 +131,77 @@ class TestSRAQualityProfileCommand:
         # records it relative to it, which keeps the project movable.
         assert analysis["output"] == "output/quality_summary.json"
 
+    def test_execute_passes_sample_size_and_sampler_to_analyzer(self, tmp_path):
+        """--sample-size/--sampler are plumbed through to profile_dataset_quality."""
+        cmd = SRAQualityProfileCommand()
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        (fastq_dir / "SRR001.fastq.gz").touch()
+
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+            sample_size=500,
+            sampler="head",
+        )
+
+        mock_profile = make_profile("SRR001")
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer.profile_dataset_quality.return_value = mock_profile
+            mock_analyzer_class.return_value = mock_analyzer
+
+            result = cmd.execute(args)
+
+        assert result == 0
+        _, kwargs = mock_analyzer.profile_dataset_quality.call_args
+        assert kwargs["sample_size"] == 500
+        assert kwargs["sampler"] == "head"
+
+    def test_execute_defaults_sample_size_and_sampler_when_absent(self, tmp_path):
+        """A Namespace without --sample-size/--sampler (e.g. an older caller) still works."""
+        cmd = SRAQualityProfileCommand()
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        (fastq_dir / "SRR001.fastq.gz").touch()
+
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+            # sample_size / sampler intentionally absent
+        )
+
+        mock_profile = make_profile("SRR001")
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer.profile_dataset_quality.return_value = mock_profile
+            mock_analyzer_class.return_value = mock_analyzer
+
+            result = cmd.execute(args)
+
+        assert result == 0
+        _, kwargs = mock_analyzer.profile_dataset_quality.call_args
+        assert kwargs["sample_size"] == 10000
+        assert kwargs["sampler"] == "uniform"
+
     def test_execute_batch_mode(self, tmp_path):
         """Test batch profiling mode."""
         cmd = SRAQualityProfileCommand()
@@ -155,7 +228,7 @@ class TestSRAQualityProfileCommand:
             data_root=None,
         )
 
-        def profile_for(accession, fastq_path):
+        def profile_for(accession, fastq_path, **kwargs):
             return make_profile(accession, n_content=0.01, duplication_rate=0.15, adapter=0.02)
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
@@ -174,7 +247,7 @@ class TestSRAQualityProfileCommand:
         assert report["contamination_indicators"]["adapter_contamination"] == 0.02
         # A profile written with --detailed-reports round-trips through load_quality_profiles.
         assert "read_length_distribution" in report
-        assert "gc_distribution" in report
+        assert "gc_histogram" in report
         assert "technology_confidence" in report
 
         registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
@@ -561,6 +634,7 @@ class TestSRAComparativeAnalysisCommand:
         call_args = [call[0][0] for call in parser.add_argument.call_args_list]
         assert "--groups-file" in call_args
         assert "--statistical-tests" in call_args
+        assert "--quality-profiles" in call_args
 
     def test_load_groups_success(self, tmp_path):
         """Test successful group loading."""
@@ -651,6 +725,73 @@ class TestSRAComparativeAnalysisCommand:
         assert result == 0
         assert Path(tmp_path / "output" / "comparative_analysis.json").exists()
 
+    def test_execute_reuses_saved_quality_profiles(self, tmp_path):
+        """--quality-profiles is loaded and reused instead of reprofiling every accession."""
+        cmd = SRAComparativeAnalysisCommand()
+
+        groups_file = tmp_path / "groups.json"
+        groups_data = {"Group_A": ["SRR001"], "Group_B": ["SRR002"]}
+        groups_file.write_text(json.dumps(groups_data))
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        for acc in ("SRR001", "SRR002"):
+            profile = make_profile(acc)
+            (profiles_dir / f"{acc}_quality_profile.json").write_text(
+                json.dumps(
+                    {
+                        "accession": profile.accession,
+                        "total_reads": profile.total_reads,
+                        "total_bases": profile.total_bases,
+                        "avg_read_length": profile.avg_read_length,
+                        "read_length_distribution": profile.read_length_distribution,
+                        "gc_content": profile.gc_content,
+                        "gc_histogram": profile.gc_histogram,
+                        "quality_distribution": profile.quality_distribution,
+                        "n_content": profile.n_content,
+                        "contamination_indicators": profile.contamination_indicators,
+                        "complexity_score": profile.complexity_score,
+                        "duplication_rate": profile.duplication_rate,
+                        "technology_confidence": profile.technology_confidence,
+                        "quality_grade": profile.quality_grade,
+                        "recommendations": profile.recommendations,
+                    }
+                )
+            )
+
+        args = Namespace(
+            groups_file=str(groups_file),
+            quality_profiles=str(profiles_dir),
+            fastq_dir=str(tmp_path / "fastq"),  # never created: no FASTQ files exist on disk
+            output_dir=str(tmp_path / "output"),
+            statistical_tests=False,
+            generate_report=False,
+        )
+
+        mock_comparison = ComparativeAnalysis(
+            dataset_groups=groups_data,
+            summary_statistics={},
+            statistical_tests={},
+            outlier_datasets=[],
+            clustering_results=None,
+            batch_effects={},
+            recommendations=[],
+            visualization_data={},
+        )
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
+            mock_analyzer = Mock()
+            mock_analyzer.find_fastq.return_value = None
+            mock_analyzer.compare_datasets.return_value = mock_comparison
+            mock_analyzer_class.return_value = mock_analyzer
+
+            result = cmd.execute(args)
+
+        assert result == 0
+        mock_analyzer.profile_dataset_quality.assert_not_called()
+        _, kwargs = mock_analyzer.compare_datasets.call_args
+        assert set(kwargs["profiles"].keys()) == {"SRR001", "SRR002"}
+
 
 # ============================================================================
 # TEST CLASS: Integration against REAL backend dataclasses
@@ -674,7 +815,7 @@ class TestRealBackendInterface:
             avg_read_length=150.0,
             read_length_distribution={},
             gc_content=0.45,
-            gc_distribution=[],
+            gc_histogram={},
             quality_distribution={"excellent_q30+": 0.9},
             n_content=n_content,
             contamination_indicators={"adapter_contamination": adapter},

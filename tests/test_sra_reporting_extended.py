@@ -286,7 +286,7 @@ class TestQualityDashboardGeneration:
             avg_read_length=150.0,
             read_length_distribution={},
             gc_content=0.55,
-            gc_distribution=[],
+            gc_histogram={},
             quality_distribution={"excellent_q30+": 0.9},
             n_content=0.01,
             contamination_indicators={"adapter_contamination": 0.01},

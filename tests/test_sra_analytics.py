@@ -24,6 +24,7 @@ with patch.dict("sys.modules", {"Bio": Mock(), "Bio.SeqIO": Mock()}):
         ComparativeAnalysis,
         AnomalyReport,
         ProcessingRecommendations,
+        load_quality_profiles,
     )
 
 from metaquest.core.exceptions import DataAccessError
@@ -131,7 +132,7 @@ class TestSequenceQualityAnalyzer:
         mock_seqio.parse.return_value = [mock_record1, mock_record2]
 
         with patch("pathlib.Path.exists", return_value=True):
-            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100)
+            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100, sampler="head")
 
         assert "total_reads_sampled" in result
         assert "read_length_stats" in result
@@ -172,9 +173,90 @@ class TestSequenceQualityAnalyzer:
         mock_seqio.parse.return_value = [rec, dup]
 
         with patch("pathlib.Path.exists", return_value=True):
-            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100)
+            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100, sampler="head")
 
         assert result["duplication_rate"] == 0.5  # one of two reads is a duplicate
+
+    def test_analyze_fastq_quality_uniform_default_holds_histogram_not_per_read_list(self, tmp_path):
+        """The default (uniform) sampler's output holds a GC histogram, not a raw per-read list."""
+        fastq = tmp_path / "reads.fastq"
+        lines = []
+        for i in range(20):
+            seq = "GGGGGGGGGG" if i % 2 == 0 else "AAAAAAAAAA"
+            lines.extend([f"@r{i}", seq, "+", "I" * len(seq)])
+        fastq.write_text("\n".join(lines) + "\n")
+
+        result = self.analyzer.analyze_fastq_quality(fastq, sample_size=100)
+
+        assert "histogram" in result["gc_content_stats"]
+        assert "distribution" not in result["gc_content_stats"]
+        assert isinstance(result["gc_content_stats"]["histogram"], dict)
+        assert sum(result["gc_content_stats"]["histogram"].values()) == 20
+
+    def test_analyze_fastq_quality_uniform_samples_tail_of_large_file(self, tmp_path):
+        """The uniform sampler must not be biased toward the head of a large file."""
+        fastq = tmp_path / "reads.fastq"
+        lines = []
+        for _ in range(4000):
+            lines.extend(["@head", "AAAAAAAA", "+", "IIIIIIII"])
+        for _ in range(1000):
+            lines.extend(["@tail", "CCCCCCCC", "+", "IIIIIIII"])
+        fastq.write_text("\n".join(lines) + "\n")
+
+        result = self.analyzer.analyze_fastq_quality(fastq, sample_size=200, sampler="uniform")
+
+        assert result["total_reads_sampled"] == 200
+        # A head-biased sample would show gc_content == 0.0; the tail is 20% of the file.
+        assert result["gc_content_stats"]["mean"] > 0.02
+
+
+class TestLoadQualityProfiles:
+    """load_quality_profiles must read both the old (gc_distribution list) and the new
+    (gc_histogram dict) on-disk JSON shape."""
+
+    def _base_profile_json(self, accession):
+        return {
+            "accession": accession,
+            "total_reads": 100,
+            "total_bases": 15000,
+            "avg_read_length": 150.0,
+            "read_length_distribution": {},
+            "gc_content": 0.5,
+            "quality_distribution": {},
+            "n_content": 0.0,
+            "contamination_indicators": {},
+            "complexity_score": 0.8,
+            "duplication_rate": 0.1,
+            "technology_confidence": 0.9,
+            "quality_grade": "good",
+            "recommendations": [],
+        }
+
+    def test_reads_old_format_gc_distribution_key(self, tmp_path):
+        import json
+
+        data = self._base_profile_json("SRR_OLD")
+        data["gc_distribution"] = [0.4, 0.5, 0.6]  # legacy per-read list
+        (tmp_path / "SRR_OLD_quality_profile.json").write_text(json.dumps(data))
+
+        profiles = load_quality_profiles(tmp_path)
+
+        assert "SRR_OLD" in profiles
+        # The legacy key is not surfaced through the new field; old data does not crash
+        # loading and the histogram field defaults to empty.
+        assert profiles["SRR_OLD"].gc_histogram == {}
+
+    def test_reads_new_format_gc_histogram_key(self, tmp_path):
+        import json
+
+        data = self._base_profile_json("SRR_NEW")
+        data["gc_histogram"] = {"45-50": 2, "50-55": 1}
+        (tmp_path / "SRR_NEW_quality_profile.json").write_text(json.dumps(data))
+
+        profiles = load_quality_profiles(tmp_path)
+
+        assert "SRR_NEW" in profiles
+        assert profiles["SRR_NEW"].gc_histogram == {"45-50": 2, "50-55": 1}
 
 
 class TestSRADatasetAnalyzer:
@@ -339,7 +421,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.45,
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
                 contamination_indicators={"adapter_contamination": 0.02},
@@ -356,7 +438,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.48,
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.015,
                 contamination_indicators={"adapter_contamination": 0.025},
@@ -373,7 +455,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.42,
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.008,
                 contamination_indicators={"adapter_contamination": 0.03},
@@ -390,7 +472,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.40,
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.012,
                 contamination_indicators={"adapter_contamination": 0.035},
@@ -429,7 +511,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.45,
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
                 contamination_indicators={"adapter_contamination": 0.02},
@@ -446,7 +528,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.15,  # Unusual GC
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.08,  # High N
                 contamination_indicators={"adapter_contamination": 0.15},
@@ -463,7 +545,7 @@ class TestSRADatasetAnalyzer:
                 avg_read_length=150,
                 read_length_distribution={},
                 gc_content=0.42,
-                gc_distribution=[],
+                gc_histogram={},
                 quality_distribution={},
                 n_content=0.012,
                 contamination_indicators={"adapter_contamination": 0.018},
@@ -491,6 +573,100 @@ class TestSRADatasetAnalyzer:
         assert "SRR789012" in anomaly_report.severity_scores
         assert anomaly_report.severity_scores["SRR789012"] > 0.2
 
+    def test_compare_datasets_with_profiles_does_not_call_profile_dataset_quality(self):
+        """Supplying profiles reuses them; profile_dataset_quality must not be called."""
+        groups = {"group1": ["SRR1"], "group2": ["SRR2"]}
+        profiles = {
+            "SRR1": QualityProfile(
+                accession="SRR1",
+                total_reads=10000,
+                total_bases=1500000,
+                avg_read_length=150,
+                read_length_distribution={},
+                gc_content=0.45,
+                gc_histogram={},
+                quality_distribution={},
+                n_content=0.01,
+                contamination_indicators={"adapter_contamination": 0.02},
+                complexity_score=0.7,
+                duplication_rate=None,
+                technology_confidence=0.9,
+                quality_grade="good",
+                recommendations=[],
+            ),
+            "SRR2": QualityProfile(
+                accession="SRR2",
+                total_reads=8000,
+                total_bases=1200000,
+                avg_read_length=150,
+                read_length_distribution={},
+                gc_content=0.40,
+                gc_histogram={},
+                quality_distribution={},
+                n_content=0.02,
+                contamination_indicators={"adapter_contamination": 0.03},
+                complexity_score=0.6,
+                duplication_rate=None,
+                technology_confidence=0.85,
+                quality_grade="fair",
+                recommendations=[],
+            ),
+        }
+
+        with patch.object(self.analyzer, "profile_dataset_quality") as mock_profile:
+            comparison = self.analyzer.compare_datasets(groups, profiles=profiles)
+
+        mock_profile.assert_not_called()
+        assert isinstance(comparison, ComparativeAnalysis)
+        assert "group1" in comparison.summary_statistics
+
+    def test_detect_dataset_anomalies_with_profiles_does_not_call_profile_dataset_quality(self):
+        """Supplying profiles reuses them; profile_dataset_quality must not be called."""
+        accessions = ["SRR1", "SRR2"]
+        profiles = {
+            "SRR1": QualityProfile(
+                accession="SRR1",
+                total_reads=10000,
+                total_bases=1500000,
+                avg_read_length=150,
+                read_length_distribution={},
+                gc_content=0.45,
+                gc_histogram={},
+                quality_distribution={},
+                n_content=0.01,
+                contamination_indicators={"adapter_contamination": 0.02},
+                complexity_score=0.7,
+                duplication_rate=None,
+                technology_confidence=0.9,
+                quality_grade="good",
+                recommendations=[],
+            ),
+            "SRR2": QualityProfile(  # anomalous: high contamination, low complexity
+                accession="SRR2",
+                total_reads=8000,
+                total_bases=1200000,
+                avg_read_length=150,
+                read_length_distribution={},
+                gc_content=0.15,
+                gc_histogram={},
+                quality_distribution={},
+                n_content=0.08,
+                contamination_indicators={"adapter_contamination": 0.15},
+                complexity_score=0.05,
+                duplication_rate=None,
+                technology_confidence=0.6,
+                quality_grade="poor",
+                recommendations=[],
+            ),
+        }
+
+        with patch.object(self.analyzer, "profile_dataset_quality") as mock_profile:
+            anomaly_report = self.analyzer.detect_dataset_anomalies(accessions, profiles=profiles)
+
+        mock_profile.assert_not_called()
+        assert isinstance(anomaly_report, AnomalyReport)
+        assert "SRR2" in anomaly_report.anomalous_datasets
+
     def test_recommend_processing_params(self):
         """Test processing parameter recommendations."""
         # Create test profile
@@ -501,7 +677,7 @@ class TestSRADatasetAnalyzer:
             avg_read_length=150,
             read_length_distribution={},
             gc_content=0.45,
-            gc_distribution=[],
+            gc_histogram={},
             quality_distribution={},
             n_content=0.01,
             contamination_indicators={"adapter_contamination": 0.08},
@@ -619,7 +795,7 @@ class TestDataStructures:
             avg_read_length=150.0,
             read_length_distribution={"101-150": 8000, "151-250": 2000},
             gc_content=0.45,
-            gc_distribution=[0.45] * 100,
+            gc_histogram={},
             quality_distribution={"excellent_q30+": 0.8},
             n_content=0.01,
             contamination_indicators={"adapter_contamination": 0.02},

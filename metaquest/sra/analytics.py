@@ -11,6 +11,7 @@ This module provides comprehensive analysis capabilities for SRA datasets includ
 
 import json
 import logging
+import random
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from Bio import SeqIO
 from scipy import stats
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.sra import iter_fastq_records
 from metaquest.data.sra_metadata import SRADatasetInfo
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ class QualityProfile:
     avg_read_length: float
     read_length_distribution: Dict[str, int]  # length_range -> count
     gc_content: float
-    gc_distribution: List[float]  # per-read GC content
+    gc_histogram: Dict[str, int]  # 5-percent-wide GC buckets, e.g. {"40-45": 12, ...}
     quality_distribution: Dict[str, float]  # quality_range -> percentage
     n_content: float
     contamination_indicators: Dict[str, float]
@@ -47,6 +49,13 @@ class QualityProfile:
     technology_confidence: float
     quality_grade: str  # 'excellent', 'good', 'fair', 'poor'
     recommendations: List[str]
+
+    @property
+    def gc_distribution(self) -> List[float]:
+        """Deprecated: the per-read GC list this field used to hold is no longer kept in
+        memory or written to JSON (it made every profile file grow with the dataset). Always
+        returns an empty list; use ``gc_histogram`` instead."""
+        return []
 
 
 @dataclass
@@ -99,6 +108,11 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
     ``*_quality_profile.json`` file found directly under ``profiles_dir``. A
     missing directory yields an empty mapping; a file that is not valid JSON
     is skipped with a warning rather than raising.
+
+    Reads both the current ``gc_histogram`` key and a profile JSON written before this
+    field existed (which held a ``gc_distribution`` per-read list instead): the old key is
+    never converted into a histogram, since the two are not the same statistic, so
+    ``gc_histogram`` defaults to ``{}`` for old-format data.
     """
     profiles: Dict[str, QualityProfile] = {}
     directory = Path(profiles_dir)
@@ -119,7 +133,7 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
             avg_read_length=data.get("avg_read_length", 0.0),
             read_length_distribution=data.get("read_length_distribution", {}),
             gc_content=data.get("gc_content", 0.0),
-            gc_distribution=data.get("gc_distribution", []),
+            gc_histogram=data.get("gc_histogram", {}),
             quality_distribution=data.get("quality_distribution", {}),
             n_content=data.get("n_content", 0.0),
             contamination_indicators=data.get("contamination_indicators", {}),
@@ -138,13 +152,20 @@ class SequenceQualityAnalyzer:
     def __init__(self):
         self.quality_encodings = {"sanger": 33, "illumina_1.3": 64, "illumina_1.5": 64, "solexa": 64}
 
-    def analyze_fastq_quality(self, fastq_path: Union[str, Path], sample_size: int = 10000) -> Dict[str, Any]:
+    def analyze_fastq_quality(
+        self, fastq_path: Union[str, Path], sample_size: int = 10000, sampler: str = "uniform"
+    ) -> Dict[str, Any]:
         """
         Analyze quality metrics from FASTQ file.
 
         Args:
             fastq_path: Path to FASTQ file
             sample_size: Number of reads to sample for analysis
+            sampler: ``"uniform"`` (default) reservoir-samples reads across the whole file,
+                so reads past the first ``sample_size`` are represented too, not just the
+                head. ``"head"`` takes the first ``sample_size`` reads only (the original
+                behaviour), for a caller that wants the cheapest possible read of a file it
+                already knows to be homogeneous.
 
         Returns:
             Dictionary of quality metrics
@@ -153,35 +174,15 @@ class SequenceQualityAnalyzer:
         if not fastq_path.exists():
             raise DataAccessError(f"FASTQ file not found: {fastq_path}")
 
-        read_lengths = []
-        gc_contents = []
-        quality_scores = []
-        n_contents = []
-        sequences = []
-
         try:
-            # Sample reads for analysis
-            import gzip
-
-            opener = gzip.open if fastq_path.suffix.endswith(".gz") else open
-            with opener(fastq_path, "rt") as handle:
-                read_count = 0
-                for record in SeqIO.parse(handle, "fastq"):
-                    if read_count >= sample_size:
-                        break
-
-                    sequence = str(record.seq)
-                    qualities = record.letter_annotations["phred_quality"]
-
-                    # Basic metrics
-                    read_lengths.append(len(sequence))
-                    gc_contents.append(self._calculate_gc_content(sequence))
-                    quality_scores.extend(qualities)
-                    n_contents.append(sequence.count("N") / len(sequence))
-                    sequences.append(sequence)
-
-                    read_count += 1
-
+            if sampler == "head":
+                read_lengths, gc_contents, quality_scores, n_contents, sequences = self._sample_head(
+                    fastq_path, sample_size
+                )
+            else:
+                read_lengths, gc_contents, quality_scores, n_contents, sequences = self._sample_uniform(
+                    fastq_path, sample_size
+                )
         except Exception as e:
             logger.error(f"Error analyzing FASTQ file {fastq_path}: {e}")
             raise DataAccessError(f"Failed to analyze FASTQ file: {e}")
@@ -204,7 +205,9 @@ class SequenceQualityAnalyzer:
                 "mean": statistics.mean(gc_contents),
                 "median": statistics.median(gc_contents),
                 "std": statistics.stdev(gc_contents) if len(gc_contents) > 1 else 0,
-                "distribution": gc_contents,
+                # A histogram, not the raw per-read list: the list used to make every
+                # profile JSON grow with the dataset instead of staying a fixed size.
+                "histogram": self._gc_histogram(gc_contents),
             },
             "quality_stats": {
                 "mean": statistics.mean(quality_scores),
@@ -222,6 +225,83 @@ class SequenceQualityAnalyzer:
             "contamination_indicators": self._detect_contamination_indicators(sequences),
             "duplication_rate": self._calculate_duplication_rate(sequences),
         }
+
+    def _sample_head(
+        self, fastq_path: Path, sample_size: int
+    ) -> Tuple[List[int], List[float], List[int], List[float], List[str]]:
+        """First ``sample_size`` reads of ``fastq_path`` (the original, head-only sampling)."""
+        import gzip
+
+        read_lengths: List[int] = []
+        gc_contents: List[float] = []
+        quality_scores: List[int] = []
+        n_contents: List[float] = []
+        sequences: List[str] = []
+
+        opener = gzip.open if fastq_path.suffix.endswith(".gz") else open
+        with opener(fastq_path, "rt") as handle:
+            read_count = 0
+            for record in SeqIO.parse(handle, "fastq"):
+                if read_count >= sample_size:
+                    break
+
+                sequence = str(record.seq)
+                qualities = record.letter_annotations["phred_quality"]
+
+                read_lengths.append(len(sequence))
+                gc_contents.append(self._calculate_gc_content(sequence))
+                quality_scores.extend(qualities)
+                n_contents.append(sequence.count("N") / len(sequence))
+                sequences.append(sequence)
+
+                read_count += 1
+
+        return read_lengths, gc_contents, quality_scores, n_contents, sequences
+
+    def _sample_uniform(
+        self, fastq_path: Path, sample_size: int
+    ) -> Tuple[List[int], List[float], List[int], List[float], List[str]]:
+        """Reservoir-sample ``sample_size`` reads uniformly over the whole file.
+
+        Unlike ``_sample_head``, a read from anywhere in the file has an equal chance of
+        being included, so a dataset whose later reads differ from its first ones is still
+        represented in the quality metrics. Streams with ``iter_fastq_records`` (no
+        Biopython) so a large file is never fully parsed record-by-record.
+        """
+        reservoir: List[Tuple[str, str]] = []
+        seen = 0
+        rng = random.Random(0)
+        for seq, qual in iter_fastq_records(fastq_path):
+            seen += 1
+            if len(reservoir) < sample_size:
+                reservoir.append((seq, qual))
+            else:
+                j = rng.randint(0, seen - 1)
+                if j < sample_size:
+                    reservoir[j] = (seq, qual)
+
+        read_lengths: List[int] = []
+        gc_contents: List[float] = []
+        quality_scores: List[int] = []
+        n_contents: List[float] = []
+        sequences: List[str] = []
+        for seq, qual in reservoir:
+            read_lengths.append(len(seq))
+            gc_contents.append(self._calculate_gc_content(seq))
+            quality_scores.extend(ord(c) - 33 for c in qual)
+            n_contents.append((seq.count("N") / len(seq)) if seq else 0.0)
+            sequences.append(seq)
+
+        return read_lengths, gc_contents, quality_scores, n_contents, sequences
+
+    @staticmethod
+    def _gc_histogram(gc_contents: List[float]) -> Dict[str, int]:
+        """Bucket per-read GC fractions into 5-percent-wide bins, e.g. ``{"40-45": 12, ...}``."""
+        histogram: Dict[str, int] = defaultdict(int)
+        for gc in gc_contents:
+            start = min(95, max(0, int((gc * 100) // 5) * 5))
+            histogram[f"{start}-{start + 5}"] += 1
+        return dict(histogram)
 
     def _calculate_duplication_rate(self, sequences: List[str]) -> float:
         """Fraction of sampled reads that are exact duplicates of another read.
@@ -385,7 +465,12 @@ class SRADatasetAnalyzer:
         self.fastq_dir = Path(fastq_dir) if fastq_dir else None
 
     def profile_dataset_quality(
-        self, accession: str, fastq_path: Optional[Union[str, Path]] = None, metadata: Optional[SRADatasetInfo] = None
+        self,
+        accession: str,
+        fastq_path: Optional[Union[str, Path]] = None,
+        metadata: Optional[SRADatasetInfo] = None,
+        sample_size: int = 10000,
+        sampler: str = "uniform",
     ) -> QualityProfile:
         """
         Generate comprehensive quality profile for SRA dataset.
@@ -394,6 +479,8 @@ class SRADatasetAnalyzer:
             accession: SRA accession
             fastq_path: Path to FASTQ file (optional, will attempt to locate)
             metadata: Dataset metadata (optional)
+            sample_size: Reads sampled for the quality/GC/complexity metrics
+            sampler: "uniform" (default) or "head"; see ``SequenceQualityAnalyzer.analyze_fastq_quality``
 
         Returns:
             QualityProfile with comprehensive analysis
@@ -406,7 +493,9 @@ class SRADatasetAnalyzer:
 
         if fastq_path and Path(fastq_path).exists():
             # Analyze FASTQ file
-            quality_metrics = self.quality_analyzer.analyze_fastq_quality(fastq_path)
+            quality_metrics = self.quality_analyzer.analyze_fastq_quality(
+                fastq_path, sample_size=sample_size, sampler=sampler
+            )
         else:
             logger.warning(f"FASTQ file not found for {accession}, using metadata only")
             quality_metrics = {}
@@ -434,7 +523,7 @@ class SRADatasetAnalyzer:
             avg_read_length=read_length_stats.get("mean", 0),
             read_length_distribution=read_length_stats.get("distribution", {}),
             gc_content=gc_stats.get("mean", 0),
-            gc_distribution=gc_stats.get("distribution", []),
+            gc_histogram=gc_stats.get("histogram", {}),
             quality_distribution=quality_stats.get("distribution", {}),
             n_content=quality_metrics.get("n_content_stats", {}).get("mean", 0),
             contamination_indicators=contamination,
@@ -510,7 +599,10 @@ class SRADatasetAnalyzer:
         return summary_stats
 
     def compare_datasets(
-        self, groups: Dict[str, List[str]], metadata_df: Optional[pd.DataFrame] = None
+        self,
+        groups: Dict[str, List[str]],
+        metadata_df: Optional[pd.DataFrame] = None,
+        profiles: Optional[Dict[str, QualityProfile]] = None,
     ) -> ComparativeAnalysis:
         """
         Perform comparative analysis across dataset groups.
@@ -518,13 +610,16 @@ class SRADatasetAnalyzer:
         Args:
             groups: Dictionary mapping group names to lists of accessions
             metadata_df: DataFrame with metadata for all datasets
+            profiles: Previously computed profiles keyed by accession. When given, these are
+                reused as-is instead of calling ``profile_dataset_quality`` again for every
+                accession in ``groups``.
 
         Returns:
             ComparativeAnalysis with statistical comparisons
         """
         logger.info(f"Comparing {len(groups)} dataset groups")
 
-        all_profiles = self._collect_group_profiles(groups)
+        all_profiles = profiles if profiles is not None else self._collect_group_profiles(groups)
         comparison_df = self._build_comparison_dataframe(all_profiles, groups)
 
         if comparison_df.empty:
@@ -558,7 +653,10 @@ class SRADatasetAnalyzer:
         )
 
     def detect_dataset_anomalies(
-        self, accessions: List[str], metadata_df: Optional[pd.DataFrame] = None
+        self,
+        accessions: List[str],
+        metadata_df: Optional[pd.DataFrame] = None,
+        profiles: Optional[Dict[str, QualityProfile]] = None,
     ) -> AnomalyReport:
         """
         Detect anomalies in SRA datasets.
@@ -566,6 +664,10 @@ class SRADatasetAnalyzer:
         Args:
             accessions: List of SRA accessions to analyze
             metadata_df: DataFrame with metadata
+            profiles: Previously computed profiles keyed by accession. When given, these are
+                reused as-is instead of calling ``profile_dataset_quality`` again; an
+                accession missing from ``profiles`` is treated the same as a profiling
+                failure below.
 
         Returns:
             AnomalyReport with detected anomalies
@@ -580,7 +682,13 @@ class SRADatasetAnalyzer:
 
         for accession in accessions:
             try:
-                flags = _detect_profile_anomalies(self.profile_dataset_quality(accession))
+                if profiles is not None:
+                    profile = profiles.get(accession)
+                    if profile is None:
+                        raise DataAccessError(f"No supplied quality profile for {accession}")
+                else:
+                    profile = self.profile_dataset_quality(accession)
+                flags = _detect_profile_anomalies(profile)
                 for atype, _reason, _weight in flags:
                     anomaly_types[atype].append(accession)
 
