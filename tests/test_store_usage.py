@@ -1,16 +1,19 @@
 """
 Tests for metaquest.store.usage: the safe wrapper that records dataset usage in the
-shared store's catalogue without ever letting a catalogue failure reach the caller.
+shared store's catalogue without ever letting a catalogue failure reach the caller, plus the
+``stale_projects`` and ``linked_by`` helpers ``store_status``/``store_gc`` build on.
 """
 
+import json
+import os
 from unittest.mock import patch
 
 import pytest
 
 from metaquest.data.registry import Registry
-from metaquest.store.catalog import Catalog
+from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store
-from metaquest.store.usage import record_usage_many, record_usage_safe
+from metaquest.store.usage import linked_by, record_usage_many, record_usage_safe, stale_projects
 
 
 @pytest.fixture
@@ -170,3 +173,93 @@ class TestRecordUsageMany:
             with caplog.at_level("WARNING"):
                 result = record_usage_many(paths, registry, [("SRR1", "", "linked", "")])
         assert result is False
+
+
+class TestStaleProjects:
+    def test_unreadable_registry_directory_marks_project_stale_without_crashing(self, paths, tmp_path, caplog):
+        """A registry file this process cannot even stat (e.g. a directory permissions
+        problem on a shared multi-user store) must be treated as stale, not raise."""
+        if os.name != "posix":
+            pytest.skip("directory permission bits are not enforced the same way outside POSIX")
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("running as root bypasses directory permission checks")
+
+        blocked_dir = tmp_path / "blocked"
+        blocked_dir.mkdir()
+        registry_file = blocked_dir / "metaquest_registry.json"
+        registry_file.write_text(json.dumps({"project": {"id": "proj1"}}))
+
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proj1", "Blocked", str(blocked_dir), str(registry_file))
+
+        original_mode = blocked_dir.stat().st_mode
+        blocked_dir.chmod(0o000)
+        try:
+            with Catalog(paths) as cat:
+                cat.migrate()
+                with caplog.at_level("WARNING"):
+                    stale = stale_projects(cat)
+        finally:
+            blocked_dir.chmod(original_mode)
+
+        assert [row["project_id"] for row in stale] == ["proj1"]
+        assert any(str(registry_file) in message for message in caplog.messages)
+
+
+class TestLinkedBy:
+    def test_no_projects_returns_empty(self, paths):
+        with Catalog(paths) as cat:
+            cat.migrate()
+            assert linked_by(paths, cat, "SRR1") == []
+
+    def test_live_project_with_matching_symlink_is_returned(self, paths, tmp_path):
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1.fastq.gz").write_bytes(b"x")
+
+        project_dir = tmp_path / "proj"
+        (project_dir / "fastq").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1").symlink_to(acc_dir, target_is_directory=True)
+        registry_file = project_dir / "metaquest_registry.json"
+        registry_file.write_text(json.dumps({"project": {"id": "proj1"}}))
+
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proj1", "Live", str(project_dir), str(registry_file))
+
+        with Catalog(paths) as cat:
+            cat.migrate()
+            assert linked_by(paths, cat, "SRR1") == ["Live"]
+
+    def test_stale_project_symlink_is_ignored(self, paths, tmp_path):
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+
+        project_dir = tmp_path / "proj"
+        (project_dir / "fastq").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1").symlink_to(acc_dir, target_is_directory=True)
+        # No registry file is ever written at this path, so the project is stale.
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proj1", "Gone", str(project_dir), str(project_dir / "metaquest_registry.json"))
+
+        with Catalog(paths) as cat:
+            cat.migrate()
+            assert linked_by(paths, cat, "SRR1") == []
+
+    def test_symlink_to_a_different_accession_is_ignored(self, paths, tmp_path):
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        other_dir = paths.sra / "SRR2"
+        other_dir.mkdir(parents=True)
+
+        project_dir = tmp_path / "proj"
+        (project_dir / "fastq").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1").symlink_to(other_dir, target_is_directory=True)
+        registry_file = project_dir / "metaquest_registry.json"
+        registry_file.write_text(json.dumps({"project": {"id": "proj1"}}))
+
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proj1", "Live", str(project_dir), str(registry_file))
+
+        with Catalog(paths) as cat:
+            cat.migrate()
+            assert linked_by(paths, cat, "SRR1") == []

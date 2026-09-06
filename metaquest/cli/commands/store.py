@@ -28,7 +28,7 @@ from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
-from metaquest.store.usage import record_usage_safe, stale_projects
+from metaquest.store.usage import linked_by, record_usage_safe, stale_projects
 
 logger = logging.getLogger(__name__)
 
@@ -1123,10 +1123,15 @@ class StoreGcCommand(BaseCommand):
             "--dry-run",
             dest="dry_run",
             action="store_true",
-            default=True,
-            help="Report candidates without removing anything (default)",
+            default=False,
+            help="Report candidates without removing anything (this is the default when --yes is not given)",
         )
-        parser.add_argument("--yes", action="store_true", default=False, help="Actually remove the reported candidates")
+        parser.add_argument(
+            "--yes",
+            action="store_true",
+            default=False,
+            help="Remove the reported candidates (cannot be combined with --dry-run)",
+        )
         parser.add_argument(
             "--older-than",
             dest="older_than",
@@ -1164,10 +1169,16 @@ class StoreGcCommand(BaseCommand):
     def _dataset_candidates(
         cls,
         catalog: Catalog,
+        paths: StorePaths,
         stale: List[Dict[str, Any]],
         older_than_days: Optional[int],
         keep_partial: bool,
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Removal candidates and, separately, datasets skipped because a live project still
+        symlinks them despite carrying no (live) usage row.
+
+        Returns ``(candidates, still_linked)``.
+        """
         stale_ids = {row["project_id"] for row in stale}
         stale_names = {row["project_id"]: (row.get("name") or row["project_id"]) for row in stale}
 
@@ -1180,21 +1191,34 @@ class StoreGcCommand(BaseCommand):
             usage_by_accession.setdefault(u["accession"], set()).add(u["project_id"])
 
         candidates: List[Dict[str, Any]] = []
+        still_linked: List[Dict[str, Any]] = []
         for row in rows:
             if keep_partial and row["state"] == "partial":
                 continue
             if not cls._downloaded_before_cutoff(row["downloaded"], older_than_days):
                 continue
             project_ids = usage_by_accession.get(row["accession"], set())
+            if project_ids and not project_ids <= stale_ids:
+                continue
+
+            linked_names = linked_by(paths, catalog, row["accession"])
+            if linked_names:
+                still_linked.append(
+                    {
+                        "accession": row["accession"],
+                        "bytes": row["bytes"],
+                        "reason": "still linked by " + ", ".join(linked_names),
+                    }
+                )
+                continue
+
             if not project_ids:
                 reason = "unused"
-            elif project_ids <= stale_ids:
+            else:
                 names = sorted(stale_names.get(pid, pid) for pid in project_ids)
                 reason = "stale projects: " + ", ".join(names)
-            else:
-                continue
             candidates.append({"accession": row["accession"], "bytes": row["bytes"], "reason": reason})
-        return candidates
+        return candidates, still_linked
 
     @staticmethod
     def _leftover_candidates(paths: StorePaths) -> List[Dict[str, Any]]:
@@ -1226,6 +1250,8 @@ class StoreGcCommand(BaseCommand):
             print(f"  dataset   {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
         for entry in report["leftovers"]:
             print(f"  leftover  {entry['path']:<40s} {entry['bytes']:>12} bytes  {entry['reason']}")
+        for entry in report.get("still_linked", []):
+            print(f"  kept      {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
         if report["stale_projects"]:
             print("Stale projects:")
             for entry in report["stale_projects"]:
@@ -1234,6 +1260,10 @@ class StoreGcCommand(BaseCommand):
     # --------------------------------------------------------------- execute
 
     def execute(self, args: argparse.Namespace) -> int:
+        if args.dry_run and args.yes:
+            self.logger.error("--dry-run and --yes cannot be combined")
+            return 1
+
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -1250,7 +1280,9 @@ class StoreGcCommand(BaseCommand):
             with Catalog(paths) as catalog:
                 catalog.migrate()
                 stale = stale_projects(catalog)
-                dataset_candidates = self._dataset_candidates(catalog, stale, args.older_than, args.keep_partial)
+                dataset_candidates, still_linked = self._dataset_candidates(
+                    catalog, paths, stale, args.older_than, args.keep_partial
+                )
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1
@@ -1274,11 +1306,15 @@ class StoreGcCommand(BaseCommand):
             "leftovers": [
                 {"path": str(c["path"]), "bytes": c["bytes"], "reason": c["reason"]} for c in leftover_candidates
             ],
+            "still_linked": still_linked,
             "total_bytes": sum(c["bytes"] for c in dataset_candidates) + sum(c["bytes"] for c in leftover_candidates),
             "stale_projects": stale_project_rows,
             "removed_datasets": [],
             "removed_leftovers": [],
         }
+
+        if not args.yes:
+            self.logger.info("Dry run: nothing removed; pass --yes to remove")
 
         if args.yes:
             removed_datasets: List[str] = []

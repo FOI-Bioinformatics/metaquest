@@ -29,7 +29,7 @@ def _gc_args(**overrides):
     base = dict(
         data_root=None,
         registry=None,
-        dry_run=True,
+        dry_run=False,
         yes=False,
         older_than=None,
         keep_partial=False,
@@ -214,7 +214,7 @@ class TestStoreGcCommand:
         with catalog_write(paths) as cat:
             cat.upsert_dataset(_sidecar("SRR1"))
 
-        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=False, yes=True, json=True))
         report = json.loads(capsys.readouterr().out)
 
         assert rc == 0
@@ -224,6 +224,55 @@ class TestStoreGcCommand:
             assert cat.get_dataset("SRR1") is None
         assert "SRR1" in report["removed_datasets"]
         assert any("SRR9_temp" in entry for entry in report["removed_leftovers"])
+
+    def test_dry_run_and_yes_together_refuses_and_removes_nothing(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(_sidecar("SRR1"))
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=True, yes=True))
+
+        assert rc == 1
+        assert acc_dir.is_dir()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
+    def test_live_project_symlink_without_usage_row_keeps_dataset(self, tmp_path, capsys):
+        """A dataset a live project still symlinks to must never be removed, even when it has
+        no usage row at all (usage tracking predating that project, or a failed hook)."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = _write_dataset_dir(paths, "SRR1")
+
+        project_dir = tmp_path / "live_proj"
+        (project_dir / "fastq").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1").symlink_to(acc_dir, target_is_directory=True)
+        registry_file = project_dir / "metaquest_registry.json"
+        registry_file.write_text(json.dumps({"project": {"id": "live1"}}))
+
+        with catalog_write(paths) as cat:
+            cat.upsert_project("live1", "LiveProject", str(project_dir), str(registry_file))
+            cat.upsert_dataset(_sidecar("SRR1"))
+            # Deliberately no usage row recorded for SRR1.
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["datasets"] == []
+        still_linked = {row["accession"]: row for row in report["still_linked"]}
+        assert "LiveProject" in still_linked["SRR1"]["reason"]
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert acc_dir.is_dir()
+        assert "SRR1" not in report["removed_datasets"]
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
 
     def test_stale_projects_named_in_report(self, tmp_path, capsys):
         root = tmp_path / "store"

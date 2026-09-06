@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from metaquest.core.exceptions import DataAccessError
 from metaquest.data.registry import Registry, load_registry
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths
@@ -108,8 +109,10 @@ def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
     store again: its registry file (the ``registry`` column, written by ``store_init``) has
     been removed, or the registry now found at that path belongs to a different project (its
     ``project.id`` no longer matches this row's ``project_id``, e.g. the project folder was
-    reused for a fresh ``store_init``). A registry that exists but fails to parse is treated
-    the same as missing: it cannot vouch for this project either.
+    reused for a fresh ``store_init``). A registry that exists but fails to parse, or whose
+    path cannot even be checked (e.g. a permissions error on a shared multi-user store), is
+    treated the same as missing: it cannot vouch for this project either, and the check must
+    never crash the caller over one unreadable project.
 
     Shared by ``store_status`` (which only reports stale projects) and ``store_gc`` (which
     also uses this to decide that a dataset's only usage rows no longer keep it alive).
@@ -120,15 +123,48 @@ def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
     stale: List[Dict[str, Any]] = []
     for row in rows:
         registry_path = row["registry"]
-        if not registry_path or not Path(registry_path).is_file():
-            stale.append(dict(row))
-            continue
         try:
+            if not registry_path or not Path(registry_path).is_file():
+                stale.append(dict(row))
+                continue
             registry = load_registry(registry_path)
-        except Exception as e:
-            logger.warning("Could not read registry %s while checking staleness: %s", registry_path, e)
+        except (OSError, DataAccessError, ValueError) as e:
+            logger.warning("Could not check registry %s while checking staleness: %s", registry_path, e)
             stale.append(dict(row))
             continue
         if (registry.project or {}).get("id") != row["project_id"]:
             stale.append(dict(row))
     return stale
+
+
+def linked_by(paths: StorePaths, catalog: Catalog, accession: str) -> List[str]:
+    """Names of every non-stale project that still symlinks ``accession`` to this store.
+
+    Usage rows are the normal record of "a project uses this dataset", but a project can end
+    up linking an accession without one: usage tracking predates that project's ``store_link``
+    call, or a hook that would have recorded it failed silently. Before ``store_gc`` removes a
+    dataset with no (live) usage rows, it must also check the filesystem directly: for every
+    project ``stale_projects`` does not consider gone, does its default ``fastq/<accession>``
+    folder (relative to the project's recorded ``path``) exist as a symlink resolving to this
+    store's copy of the dataset? A project whose path or link cannot be checked (missing,
+    unreadable, broken symlink) is silently treated as not linking it, never as an error.
+    Returns the matching project names, sorted, or an empty list when none link it.
+    """
+    stale_ids = {row["project_id"] for row in stale_projects(catalog)}
+    target = (paths.sra / accession).resolve()
+
+    rows = catalog.conn.execute("SELECT project_id, name, path FROM projects ORDER BY project_id").fetchall()
+    linked: List[str] = []
+    for row in rows:
+        if row["project_id"] in stale_ids:
+            continue
+        project_path = row["path"]
+        if not project_path:
+            continue
+        link_path = Path(project_path) / "fastq" / accession
+        try:
+            if link_path.is_symlink() and link_path.resolve() == target:
+                linked.append(row["name"] or row["project_id"])
+        except OSError:
+            continue
+    return sorted(linked)
