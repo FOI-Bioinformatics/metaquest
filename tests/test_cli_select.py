@@ -3,19 +3,27 @@
 import argparse
 import json
 
+import pytest
+
 from metaquest.cli.commands.select import SelectDatasetsCommand
+from metaquest.data.registry import load_registry, record_download, record_exclusion, save_registry
 
 
 def _args(tmp_path, **kwargs):
     base = dict(
         parsed_containment=str(tmp_path / "parsed_containment.txt"),
         genome_id=None,
+        genome_ids=None,
+        require="any",
         threshold=0.5,
+        top_n=None,
         metadata_file=None,
         metadata_column=None,
         metadata_value=None,
         output=str(tmp_path / "accessions.txt"),
         registry=str(tmp_path / "metaquest_registry.json"),
+        skip_excluded=True,
+        skip_downloaded=False,
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -51,3 +59,73 @@ def test_command_is_registered():
     parser = create_parser()
     action = next(a for a in parser._subparsers._group_actions if getattr(a, "choices", None))
     assert "select_datasets" in action.choices
+
+
+def test_excluded_accessions_removed_by_default(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    registry = load_registry(registry_path)
+    record_exclusion(registry, "SRR2", "16S amplicon")
+    save_registry(registry)
+
+    with caplog.at_level("INFO"):
+        rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=str(registry_path)))
+    assert rc == 0
+    assert (tmp_path / "accessions.txt").read_text() == "SRR1\n"
+    assert any("already downloaded" in r.message and "excluded" in r.message for r in caplog.records)
+
+
+def test_downloaded_accessions_removed_with_flag(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    registry = load_registry(registry_path)
+    record_download(registry, "SRR2", "downloaded", tmp_path / "fastq")
+    save_registry(registry)
+
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=str(registry_path), skip_downloaded=True))
+    assert rc == 0
+    assert (tmp_path / "accessions.txt").read_text() == "SRR1\n"
+
+
+def test_no_skip_excluded_keeps_excluded_accessions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    registry = load_registry(registry_path)
+    record_exclusion(registry, "SRR2", "16S amplicon")
+    save_registry(registry)
+
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=str(registry_path), skip_excluded=False))
+    assert rc == 0
+    assert (tmp_path / "accessions.txt").read_text() == "SRR1\nSRR2\n"
+
+
+def test_argparse_rejects_genome_id_with_genome_ids():
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "select_datasets",
+                "--genome-id",
+                "GCF_A",
+                "--genome-ids",
+                "GCF_A",
+                "GCF_B",
+            ]
+        )
+
+
+def test_registry_records_ranked_selection(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=str(registry_path)))
+    assert rc == 0
+    data = json.loads(registry_path.read_text())
+    ranked = data["datasets"]["SRR1"]["selection"]["ranked"]
+    assert ranked == [{"accession": "SRR1", "rank": 1, "column": "max_containment", "value": 0.9}]

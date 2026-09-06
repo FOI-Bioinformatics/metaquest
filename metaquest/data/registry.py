@@ -300,22 +300,35 @@ def record_genome(registry: Registry, genome_id: str, fasta: Union[str, Path], m
 
 
 def record_selection(
-    registry: Registry, accessions: Sequence[str], criteria: Dict[str, Any], output: Union[str, Path]
+    registry: Registry,
+    accessions: Sequence[str],
+    criteria: Dict[str, Any],
+    output: Union[str, Path],
+    ranked: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
-    """Mark ``accessions`` selected with ``criteria``; anything selected earlier but absent now becomes unselected."""
+    """Mark ``accessions`` selected with ``criteria``; anything selected earlier but absent now becomes unselected.
+
+    ``ranked`` is the per-accession rank detail (``{"accession", "rank", "column", "value"}``)
+    for the selected accessions; entries for accessions outside ``accessions`` are dropped so
+    the recorded list is always capped to what was actually selected.
+    """
     chosen = set(accessions)
     for accession, record in registry.datasets.items():
         selection = record.get("selection")
         if selection and selection.get("selected") and accession not in chosen:
             selection["selected"] = False
             selection["date"] = _now()
+    ranked_by_accession = {entry["accession"]: entry for entry in ranked or [] if entry.get("accession") in chosen}
     for accession in accessions:
-        upsert_dataset(registry, accession)["selection"] = {
+        selection = {
             "selected": True,
             "date": _now(),
             "criteria": dict(criteria),
             "output": str(output),
         }
+        if accession in ranked_by_accession:
+            selection["ranked"] = [ranked_by_accession[accession]]
+        upsert_dataset(registry, accession)["selection"] = selection
 
 
 def cap_screening(registry: Registry, genome_id: str, max_screened: int = DEFAULT_REGISTRY_MAX_SCREENED) -> int:
