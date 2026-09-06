@@ -43,11 +43,13 @@ from metaquest.cli.commands.blacklist import BlacklistCommand
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.cli.commands.store import (
     StoreAdoptCommand,
+    StoreGcCommand,
     StoreInitCommand,
     StoreLinkCommand,
     StoreReindexCommand,
     StoreStatusCommand,
     StoreUnlinkCommand,
+    StoreUsageCommand,
     StoreVerifyCommand,
 )
 from metaquest.cli.commands.advanced_analysis import (
@@ -112,6 +114,8 @@ def register_all_commands() -> None:
         StoreVerifyCommand(),
         StoreLinkCommand(),
         StoreUnlinkCommand(),
+        StoreUsageCommand(),
+        StoreGcCommand(),
         # Analysis commands
         DiversityAnalysisCommand(),
         InteractivePlotCommand(),

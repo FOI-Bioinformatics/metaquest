@@ -11,23 +11,24 @@ default config), via `metaquest.store.resolve.resolve_store_root`.
 import argparse
 import json
 import logging
+import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.registry import load_registry, record_download, registry_transaction
-from metaquest.data.sra import verify_download
+from metaquest.data.sra import is_transient_folder, verify_download
 from metaquest.store.adopt import adopt
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
-from metaquest.store.usage import record_usage_safe
+from metaquest.store.usage import record_usage_safe, stale_projects
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +228,16 @@ class StoreStatusCommand(BaseCommand):
         return result
 
     @staticmethod
-    def _stale_project_ids(catalog: Catalog) -> List[str]:
-        rows = catalog.conn.execute("SELECT project_id, path FROM projects ORDER BY project_id").fetchall()
-        return [row["project_id"] for row in rows if not Path(row["path"]).exists()]
+    def _stale_project_rows(catalog: Catalog) -> List[Dict[str, Any]]:
+        stale = stale_projects(catalog)
+        return [
+            {
+                "project_id": row["project_id"],
+                "name": row.get("name") or row["project_id"],
+                "registry": row.get("registry"),
+            }
+            for row in stale
+        ]
 
     def _build_report(self, root: Path, args: argparse.Namespace) -> Dict[str, Any]:
         paths = store_paths(root)
@@ -238,7 +246,7 @@ class StoreStatusCommand(BaseCommand):
             catalog.migrate()
             counts, bytes_total = self._dataset_counts_and_bytes(catalog)
             project_count = catalog.conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"]
-            stale = self._stale_project_ids(catalog)
+            stale = self._stale_project_rows(catalog)
             report: Dict[str, Any] = {
                 "root": str(root),
                 "id": marker.get("id"),
@@ -262,7 +270,9 @@ class StoreStatusCommand(BaseCommand):
         for state, count in sorted(report["datasets"].items()):
             print(f"  {state:<12s}: {count}")
         if report["stale_projects"]:
-            print("  Stale projects: " + ", ".join(report["stale_projects"]))
+            print("  Stale projects:")
+            for entry in report["stale_projects"]:
+                print(f"    {entry['name']} (registry missing: {entry['registry']})")
         if verbose:
             print("\nDatasets")
             print("========")
@@ -843,3 +853,458 @@ class StoreUnlinkCommand(BaseCommand):
 
         print(f"Unlinked {len(removed)} of {len(args.accessions)} accession(s)")
         return 1 if refused else 0
+
+
+class StoreUsageCommand(BaseCommand):
+    """Command to report catalogue usage: by accession, project, organism, or store-wide."""
+
+    _COLUMNS: Dict[str, List[Tuple[str, str]]] = {
+        "accession": [
+            ("project_name", "project"),
+            ("project_id", "id"),
+            ("genome_id", "genome_id"),
+            ("stage", "stage"),
+            ("first_used", "first_used"),
+            ("last_used", "last_used"),
+        ],
+        "project": [
+            ("accession", "accession"),
+            ("genome_id", "genome_id"),
+            ("stage", "stage"),
+            ("last_used", "last_used"),
+        ],
+        "organism": [("accession", "accession"), ("project_name", "project"), ("stage", "stage")],
+        "unused": [("accession", "accession"), ("state", "state"), ("bytes", "bytes")],
+        "bytes-by-organism": [("genome_id", "genome_id"), ("datasets", "datasets"), ("bytes", "bytes")],
+    }
+
+    @property
+    def name(self) -> str:
+        return "store_usage"
+
+    @property
+    def help(self) -> str:
+        return "Report catalogue usage by accession, project, organism, or store-wide"
+
+    @property
+    def group(self) -> str:
+        return "Store"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+        selector = parser.add_mutually_exclusive_group(required=True)
+        selector.add_argument("--accession", default=None, help="Every project that has used this accession")
+        selector.add_argument("--project", default=None, help="Every dataset this project (by name or id) has used")
+        selector.add_argument("--organism", default=None, help="Every dataset used for this target genome id")
+        selector.add_argument(
+            "--unused", action="store_true", help="Datasets in the store with no recorded usage at all"
+        )
+        selector.add_argument(
+            "--bytes-by-organism", action="store_true", help="Total bytes and dataset counts, grouped by genome id"
+        )
+        parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
+
+    # --------------------------------------------------------------- queries
+
+    @staticmethod
+    def _resolve_project_id(catalog: Catalog, value: str) -> Tuple[str, List[str]]:
+        """Resolve ``value`` (a project id or name) to the id to query.
+
+        Returns ``(project_id, [])`` when ``value`` is itself a known project id, or matches
+        exactly one project's name. Returns ``(value, [])`` unchanged when it matches no
+        project at all (the caller's query then simply returns no rows). Returns
+        ``(None-ish, ambiguous_ids)`` when ``value`` matches more than one project's name; the
+        caller must treat a non-empty second element as an error.
+        """
+        row = catalog.conn.execute("SELECT project_id FROM projects WHERE project_id = ?", (value,)).fetchone()
+        if row is not None:
+            return row["project_id"], []
+        rows = catalog.conn.execute(
+            "SELECT project_id FROM projects WHERE name = ? ORDER BY project_id", (value,)
+        ).fetchall()
+        ids = [r["project_id"] for r in rows]
+        if len(ids) == 1:
+            return ids[0], []
+        if len(ids) > 1:
+            return value, ids
+        return value, []
+
+    @staticmethod
+    def _rows_for_accession(catalog: Catalog, accession: str) -> List[Dict[str, Any]]:
+        rows = catalog.conn.execute(
+            """
+            SELECT p.name AS project_name, p.project_id AS project_id, u.genome_id AS genome_id,
+                   u.stage AS stage, u.first_used AS first_used, u.last_used AS last_used
+            FROM usage u
+            JOIN projects p ON p.project_id = u.project_id
+            WHERE u.accession = ?
+            ORDER BY p.project_id, u.genome_id, u.stage
+            """,
+            (accession,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _rows_for_project(catalog: Catalog, project_id: str) -> List[Dict[str, Any]]:
+        rows = catalog.conn.execute(
+            """
+            SELECT DISTINCT u.accession AS accession, u.genome_id AS genome_id, u.stage AS stage,
+                   u.last_used AS last_used
+            FROM usage u
+            WHERE u.project_id = ?
+            ORDER BY u.accession, u.genome_id, u.stage
+            """,
+            (project_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _rows_for_organism(catalog: Catalog, genome_id: str) -> List[Dict[str, Any]]:
+        rows = catalog.conn.execute(
+            """
+            SELECT DISTINCT u.accession AS accession, p.name AS project_name, u.stage AS stage
+            FROM usage u
+            JOIN projects p ON p.project_id = u.project_id
+            WHERE u.genome_id = ?
+            ORDER BY u.accession, p.name, u.stage
+            """,
+            (genome_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _rows_unused(catalog: Catalog) -> List[Dict[str, Any]]:
+        rows = catalog.conn.execute("""
+            SELECT d.accession AS accession, d.state AS state, COALESCE(d.bytes_total, 0) AS bytes
+            FROM datasets d
+            LEFT JOIN usage u ON u.accession = d.accession
+            WHERE u.accession IS NULL
+            ORDER BY d.accession
+            """).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _rows_bytes_by_organism(catalog: Catalog) -> List[Dict[str, Any]]:
+        rows = catalog.conn.execute("""
+            SELECT pair.genome_id AS genome_id, COUNT(DISTINCT pair.accession) AS datasets,
+                   COALESCE(SUM(d.bytes_total), 0) AS bytes
+            FROM (SELECT DISTINCT genome_id, accession FROM usage) pair
+            JOIN datasets d ON d.accession = pair.accession
+            GROUP BY pair.genome_id
+            ORDER BY pair.genome_id
+            """).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------------------------------------------------------------- print
+
+    @classmethod
+    def _print_rows(cls, selector: str, rows: List[Dict[str, Any]]) -> None:
+        columns = cls._COLUMNS[selector]
+        print("  ".join(f"{label:<15s}" for _, label in columns))
+        for row in rows:
+            print("  ".join(f"{str(row.get(key, '')):<15s}" for key, _ in columns))
+
+    # --------------------------------------------------------------- execute
+
+    def execute(self, args: argparse.Namespace) -> int:
+        try:
+            registry = load_registry(args.registry)
+            root = resolve_store_root(args.data_root, registry.store.get("root"))
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if root is None:
+            _no_store_hint()
+            return 1
+
+        try:
+            paths = store_paths(root)
+            with Catalog(paths) as catalog:
+                catalog.migrate()
+                if args.accession:
+                    selector = "accession"
+                    rows = self._rows_for_accession(catalog, args.accession)
+                elif args.project:
+                    selector = "project"
+                    project_id, ambiguous = self._resolve_project_id(catalog, args.project)
+                    if ambiguous:
+                        self.logger.error(
+                            "Project name %r is ambiguous: %s", args.project, ", ".join(sorted(ambiguous))
+                        )
+                        return 1
+                    rows = self._rows_for_project(catalog, project_id)
+                elif args.organism:
+                    selector = "organism"
+                    rows = self._rows_for_organism(catalog, args.organism)
+                elif args.unused:
+                    selector = "unused"
+                    rows = self._rows_unused(catalog)
+                else:
+                    selector = "bytes-by-organism"
+                    rows = self._rows_bytes_by_organism(catalog)
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if args.json:
+            print(json.dumps({"selector": selector, "rows": rows}, indent=2))
+        else:
+            self._print_rows(selector, rows)
+        return 0
+
+
+def _remove_path(path: Path) -> None:
+    """Remove a file or directory tree at ``path``, logging (never raising) on failure."""
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    except OSError as e:
+        logger.warning("Could not remove %s: %s", path, e)
+
+
+def _path_bytes(path: Path) -> int:
+    """Total bytes held by ``path``: its own size for a file, or the recursive sum for a directory."""
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    if path.is_dir():
+        for sub in path.rglob("*"):
+            if sub.is_file():
+                try:
+                    total += sub.stat().st_size
+                except OSError:
+                    continue
+    return total
+
+
+class StoreGcCommand(BaseCommand):
+    """Command to report, and optionally remove, unused datasets and leftover temp files.
+
+    A dataset is a removal candidate when it has no usage rows at all, or when every usage
+    row it does have belongs to a project ``stale_projects`` (see ``metaquest.store.usage``)
+    considers gone; a dataset any live project still links is never a candidate. Leftover
+    temp artifacts (``<store>/tmp/*_temp`` from an interrupted download, ``<store>/tmp/*_adopt``
+    from an interrupted adopt, the ``.sra-cache`` archive cache under ``tmp`` or ``sra``) are
+    reported and removed independently of the dataset check. Nothing is removed unless
+    ``--yes`` is given; the default is a dry-run report only.
+    """
+
+    @property
+    def name(self) -> str:
+        return "store_gc"
+
+    @property
+    def help(self) -> str:
+        return "Report, and with --yes remove, unused datasets and leftover temp files from the store"
+
+    @property
+    def group(self) -> str:
+        return "Store"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+        parser.add_argument(
+            "--dry-run",
+            dest="dry_run",
+            action="store_true",
+            default=True,
+            help="Report candidates without removing anything (default)",
+        )
+        parser.add_argument("--yes", action="store_true", default=False, help="Actually remove the reported candidates")
+        parser.add_argument(
+            "--older-than",
+            dest="older_than",
+            type=int,
+            default=None,
+            help="Only consider datasets whose sidecar was downloaded at least this many days ago",
+        )
+        parser.add_argument(
+            "--keep-partial", action="store_true", help="Never remove a dataset whose state is 'partial'"
+        )
+        parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
+
+    # ------------------------------------------------------------- candidates
+
+    @staticmethod
+    def _downloaded_before_cutoff(downloaded: Optional[str], older_than_days: Optional[int]) -> bool:
+        """True when ``downloaded`` (a sidecar's ISO timestamp) is at least ``older_than_days``
+        old; True unconditionally when ``older_than_days`` is None (no filter requested). A
+        dataset with no recorded ``downloaded`` date, or an unparsable one, is treated as not
+        old enough to remove under a threshold, since its age cannot be confirmed."""
+        if older_than_days is None:
+            return True
+        if not downloaded:
+            return False
+        try:
+            when = datetime.fromisoformat(downloaded)
+        except ValueError:
+            return False
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - when).total_seconds() / 86400.0
+        return age_days >= older_than_days
+
+    @classmethod
+    def _dataset_candidates(
+        cls,
+        catalog: Catalog,
+        stale: List[Dict[str, Any]],
+        older_than_days: Optional[int],
+        keep_partial: bool,
+    ) -> List[Dict[str, Any]]:
+        stale_ids = {row["project_id"] for row in stale}
+        stale_names = {row["project_id"]: (row.get("name") or row["project_id"]) for row in stale}
+
+        rows = catalog.conn.execute(
+            "SELECT accession, state, COALESCE(bytes_total, 0) AS bytes, downloaded FROM datasets ORDER BY accession"
+        ).fetchall()
+        usage_rows = catalog.conn.execute("SELECT DISTINCT accession, project_id FROM usage").fetchall()
+        usage_by_accession: Dict[str, set] = {}
+        for u in usage_rows:
+            usage_by_accession.setdefault(u["accession"], set()).add(u["project_id"])
+
+        candidates: List[Dict[str, Any]] = []
+        for row in rows:
+            if keep_partial and row["state"] == "partial":
+                continue
+            if not cls._downloaded_before_cutoff(row["downloaded"], older_than_days):
+                continue
+            project_ids = usage_by_accession.get(row["accession"], set())
+            if not project_ids:
+                reason = "unused"
+            elif project_ids <= stale_ids:
+                names = sorted(stale_names.get(pid, pid) for pid in project_ids)
+                reason = "stale projects: " + ", ".join(names)
+            else:
+                continue
+            candidates.append({"accession": row["accession"], "bytes": row["bytes"], "reason": reason})
+        return candidates
+
+    @staticmethod
+    def _leftover_candidates(paths: StorePaths) -> List[Dict[str, Any]]:
+        candidates: List[Dict[str, Any]] = []
+        tmp = paths.tmp
+        if tmp.is_dir():
+            for entry in sorted(tmp.iterdir()):
+                if entry.name == ".sra-cache" and entry.is_dir():
+                    for sub in sorted(entry.iterdir()):
+                        candidates.append({"path": sub, "bytes": _path_bytes(sub), "reason": "leftover"})
+                    continue
+                if entry.is_dir() and (is_transient_folder(entry.name) or entry.name.endswith("_adopt")):
+                    candidates.append({"path": entry, "bytes": _path_bytes(entry), "reason": "leftover"})
+        sra_cache = paths.sra / ".sra-cache"
+        if sra_cache.exists():
+            candidates.append({"path": sra_cache, "bytes": _path_bytes(sra_cache), "reason": "leftover"})
+        return candidates
+
+    # ----------------------------------------------------------------- print
+
+    @staticmethod
+    def _print_report(report: Dict[str, Any], performed: bool) -> None:
+        verb = "Removed" if performed else "Would remove"
+        print(
+            f"{verb} {len(report['datasets'])} dataset(s), {len(report['leftovers'])} leftover(s), "
+            f"{report['total_bytes']} bytes total"
+        )
+        for entry in report["datasets"]:
+            print(f"  dataset   {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
+        for entry in report["leftovers"]:
+            print(f"  leftover  {entry['path']:<40s} {entry['bytes']:>12} bytes  {entry['reason']}")
+        if report["stale_projects"]:
+            print("Stale projects:")
+            for entry in report["stale_projects"]:
+                print(f"  {entry['name']} (registry missing: {entry['registry']})")
+
+    # --------------------------------------------------------------- execute
+
+    def execute(self, args: argparse.Namespace) -> int:
+        try:
+            registry = load_registry(args.registry)
+            root = resolve_store_root(args.data_root, registry.store.get("root"))
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        if root is None:
+            _no_store_hint()
+            return 1
+
+        paths = store_paths(root)
+        try:
+            with Catalog(paths) as catalog:
+                catalog.migrate()
+                stale = stale_projects(catalog)
+                dataset_candidates = self._dataset_candidates(catalog, stale, args.older_than, args.keep_partial)
+        except DataAccessError as e:
+            self.logger.error(str(e))
+            return 1
+
+        leftover_candidates = self._leftover_candidates(paths)
+        stale_project_rows = sorted(
+            (
+                {
+                    "project_id": row["project_id"],
+                    "name": row.get("name") or row["project_id"],
+                    "registry": row.get("registry"),
+                }
+                for row in stale
+            ),
+            key=lambda r: r["project_id"],
+        )
+
+        report: Dict[str, Any] = {
+            "root": str(root),
+            "datasets": dataset_candidates,
+            "leftovers": [
+                {"path": str(c["path"]), "bytes": c["bytes"], "reason": c["reason"]} for c in leftover_candidates
+            ],
+            "total_bytes": sum(c["bytes"] for c in dataset_candidates) + sum(c["bytes"] for c in leftover_candidates),
+            "stale_projects": stale_project_rows,
+            "removed_datasets": [],
+            "removed_leftovers": [],
+        }
+
+        if args.yes:
+            removed_datasets: List[str] = []
+            for candidate in dataset_candidates:
+                accession = candidate["accession"]
+                _remove_path(sra_dir(paths, accession))
+                removed_datasets.append(accession)
+            if removed_datasets:
+                try:
+                    with catalog_write(paths) as catalog:
+                        for accession in removed_datasets:
+                            catalog.delete_dataset(accession)
+                except DataAccessError as e:
+                    self.logger.error(str(e))
+                    return 1
+
+            removed_leftovers: List[str] = []
+            for candidate in leftover_candidates:
+                _remove_path(candidate["path"])
+                removed_leftovers.append(str(candidate["path"]))
+
+            report["removed_datasets"] = removed_datasets
+            report["removed_leftovers"] = removed_leftovers
+
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            self._print_report(report, args.yes)
+        return 0

@@ -20,6 +20,7 @@ from metaquest.cli.commands.store import (
     StoreReindexCommand,
     StoreStatusCommand,
     StoreUnlinkCommand,
+    StoreUsageCommand,
     StoreVerifyCommand,
 )
 from metaquest.core.constants import STORE_ENV
@@ -98,6 +99,21 @@ def _link_args(accessions, **overrides):
 
 def _unlink_args(accessions, **overrides):
     base = dict(accessions=list(accessions), fastq_folder="fastq", registry=None)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _usage_args(**overrides):
+    base = dict(
+        data_root=None,
+        registry=None,
+        accession=None,
+        project=None,
+        organism=None,
+        unused=False,
+        bytes_by_organism=False,
+        json=False,
+    )
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -318,12 +334,15 @@ class TestStoreStatusCommand:
     def test_reports_counts_bytes_and_projects(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
+        project_dir = tmp_path / "proj1"
+        project_dir.mkdir()
+        registry_file = project_dir / "metaquest_registry.json"
+        registry_file.write_text(json.dumps({"project": {"id": "proj1"}}))
         with catalog_write(paths) as cat:
-            cat.upsert_project("proj1", "Wolbachia", str(tmp_path / "proj1"), "reg1")
+            cat.upsert_project("proj1", "Wolbachia", str(project_dir), str(registry_file))
             cat.upsert_dataset(_sidecar("SRR1", state="complete"))
             cat.upsert_dataset(_sidecar("SRR2", state="partial"))
             cat.record_usage("SRR1", "proj1", "wMel", "downloaded")
-        (tmp_path / "proj1").mkdir()
 
         rc = StoreStatusCommand().execute(_status_args(data_root=str(root), json=True))
         report = json.loads(capsys.readouterr().out)
@@ -350,18 +369,39 @@ class TestStoreStatusCommand:
         assert rc == 0
         assert report["datasets_list"] == [{"accession": "SRR1", "state": "complete", "bytes": 100, "projects": 1}]
 
-    def test_stale_project_detected_when_path_missing(self, tmp_path, capsys):
+    def test_stale_project_detected_when_registry_missing(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
         missing_path = tmp_path / "gone"
+        missing_registry = tmp_path / "gone" / "metaquest_registry.json"
         with catalog_write(paths) as cat:
-            cat.upsert_project("proj1", "Wolbachia", str(missing_path), "reg1")
+            cat.upsert_project("proj1", "Wolbachia", str(missing_path), str(missing_registry))
 
         rc = StoreStatusCommand().execute(_status_args(data_root=str(root), json=True))
         report = json.loads(capsys.readouterr().out)
 
         assert rc == 0
-        assert report["stale_projects"] == ["proj1"]
+        assert report["stale_projects"] == [
+            {"project_id": "proj1", "name": "Wolbachia", "registry": str(missing_registry)}
+        ]
+
+    def test_stale_project_detected_when_registry_id_differs(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        project_dir = tmp_path / "proj1"
+        project_dir.mkdir()
+        registry_file = project_dir / "metaquest_registry.json"
+        registry_file.write_text(json.dumps({"project": {"id": "some-other-id"}}))
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proj1", "Wolbachia", str(project_dir), str(registry_file))
+
+        rc = StoreStatusCommand().execute(_status_args(data_root=str(root), json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["stale_projects"] == [
+            {"project_id": "proj1", "name": "Wolbachia", "registry": str(registry_file)}
+        ]
 
     def test_text_output_includes_store_header(self, tmp_path, capsys):
         root = tmp_path / "store"
@@ -952,3 +992,140 @@ class TestStoreUnlinkCommand:
         assert rc == 1
         assert (fastq_dir / "SRR1").is_dir() and not (fastq_dir / "SRR1").is_symlink()
         assert (fastq_dir / "SRR1" / "SRR1.fastq").is_file()
+
+
+class TestStoreUsageCommand:
+    def test_command_properties(self):
+        cmd = StoreUsageCommand()
+        assert cmd.name == "store_usage"
+        assert cmd.group == "Store"
+
+    def test_configure_parser_requires_one_selector(self):
+        cmd = StoreUsageCommand()
+        parser = argparse.ArgumentParser()
+        cmd.configure_parser(parser)
+        with pytest.raises(SystemExit):
+            parser.parse_args([])
+
+    def test_configure_parser_rejects_two_selectors(self):
+        cmd = StoreUsageCommand()
+        parser = argparse.ArgumentParser()
+        cmd.configure_parser(parser)
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--accession", "SRR1", "--unused"])
+
+    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreUsageCommand().execute(
+            _usage_args(unused=True, registry=str(project_dir / "metaquest_registry.json"))
+        )
+        assert rc == 1
+
+    def _seed(self, tmp_path):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        proj_a_dir = tmp_path / "proja"
+        proj_a_dir.mkdir()
+        proj_b_dir = tmp_path / "projb"
+        proj_b_dir.mkdir()
+        with catalog_write(paths) as cat:
+            cat.upsert_project("proja", "Wolbachia", str(proj_a_dir), str(proj_a_dir / "metaquest_registry.json"))
+            cat.upsert_project("projb", "Rickettsia", str(proj_b_dir), str(proj_b_dir / "metaquest_registry.json"))
+            cat.upsert_dataset(_sidecar("SRR1"))
+            cat.upsert_dataset(_sidecar("SRR2"))
+            cat.record_usage("SRR1", "proja", "wMel", "downloaded")
+            cat.record_usage("SRR1", "projb", "wMel", "analysed")
+            cat.record_usage("SRR2", "proja", "wRi", "downloaded")
+        return root
+
+    def test_selector_by_accession(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), accession="SRR1", json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["selector"] == "accession"
+        project_ids = {row["project_id"] for row in report["rows"]}
+        assert project_ids == {"proja", "projb"}
+        for row in report["rows"]:
+            assert set(row) == {"project_name", "project_id", "genome_id", "stage", "first_used", "last_used"}
+
+    def test_selector_by_project_name(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), project="Wolbachia", json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["selector"] == "project"
+        accessions = {row["accession"] for row in report["rows"]}
+        assert accessions == {"SRR1", "SRR2"}
+
+    def test_selector_by_project_id(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), project="projb", json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        accessions = {row["accession"] for row in report["rows"]}
+        assert accessions == {"SRR1"}
+
+    def test_selector_by_ambiguous_project_name_exits_1(self, tmp_path, caplog):
+        root = self._seed(tmp_path)
+        paths = store_paths(root)
+        with catalog_write(paths) as cat:
+            proj_c_dir = tmp_path / "projc"
+            proj_c_dir.mkdir()
+            cat.upsert_project("projc", "Wolbachia", str(proj_c_dir), str(proj_c_dir / "metaquest_registry.json"))
+
+        with caplog.at_level("ERROR"):
+            rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), project="Wolbachia"))
+
+        assert rc == 1
+        assert any("proja" in message and "projc" in message for message in caplog.messages)
+
+    def test_selector_by_organism(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), organism="wMel", json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["selector"] == "organism"
+        accessions = {row["accession"] for row in report["rows"]}
+        assert accessions == {"SRR1"}
+
+    def test_selector_unused(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        paths = store_paths(root)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(_sidecar("SRR3"))
+
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), unused=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["selector"] == "unused"
+        assert report["rows"] == [{"accession": "SRR3", "state": "complete", "bytes": 100}]
+
+    def test_selector_bytes_by_organism(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), bytes_by_organism=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["selector"] == "bytes-by-organism"
+        by_genome = {row["genome_id"]: row for row in report["rows"]}
+        assert by_genome["wMel"]["datasets"] == 1
+        assert by_genome["wMel"]["bytes"] == 100
+        assert by_genome["wRi"]["datasets"] == 1
+        assert by_genome["wRi"]["bytes"] == 100
+
+    def test_text_output_lists_projects(self, tmp_path, capsys):
+        root = self._seed(tmp_path)
+        rc = StoreUsageCommand().execute(_usage_args(data_root=str(root), accession="SRR1"))
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "proja" in out and "projb" in out

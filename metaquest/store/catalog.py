@@ -255,6 +255,17 @@ class Catalog:
         result["files"] = [dict(f) for f in file_rows]
         return result
 
+    @_wrap_sqlite_errors
+    def delete_dataset(self, accession: str) -> None:
+        """Remove ``accession``'s row from ``datasets``.
+
+        The foreign key cascade (``ON DELETE CASCADE``) removes its ``files`` and ``usage``
+        rows along with it. Used by ``store_gc --yes`` once the accession's folder has been
+        removed from disk; a dataset the catalogue no longer backs with real data must never
+        keep a row here. A no-op when ``accession`` is not present.
+        """
+        self.conn.execute("DELETE FROM datasets WHERE accession = ?", (accession,))
+
     # ---------------------------------------------------------------- projects
 
     @_wrap_sqlite_errors

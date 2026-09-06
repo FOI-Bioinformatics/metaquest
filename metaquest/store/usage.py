@@ -13,10 +13,11 @@ neither ever raises.
 """
 
 import logging
-from typing import Iterable, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from metaquest.data.registry import Registry
-from metaquest.store.catalog import catalog_write
+from metaquest.data.registry import Registry, load_registry
+from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths
 
 logger = logging.getLogger(__name__)
@@ -98,3 +99,36 @@ def record_usage_many(
     except Exception as e:
         logger.warning("Could not record usage batch (%d row(s)): %s", len(rows), e)
         return False
+
+
+def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
+    """Projects in the catalogue whose registry no longer keeps them alive.
+
+    A project row is stale when the pipeline run that recorded it will never write to this
+    store again: its registry file (the ``registry`` column, written by ``store_init``) has
+    been removed, or the registry now found at that path belongs to a different project (its
+    ``project.id`` no longer matches this row's ``project_id``, e.g. the project folder was
+    reused for a fresh ``store_init``). A registry that exists but fails to parse is treated
+    the same as missing: it cannot vouch for this project either.
+
+    Shared by ``store_status`` (which only reports stale projects) and ``store_gc`` (which
+    also uses this to decide that a dataset's only usage rows no longer keep it alive).
+    Returns each stale row as a dict with ``project_id``, ``name``, ``path`` and ``registry``,
+    sorted by ``project_id``.
+    """
+    rows = catalog.conn.execute("SELECT project_id, name, path, registry FROM projects ORDER BY project_id").fetchall()
+    stale: List[Dict[str, Any]] = []
+    for row in rows:
+        registry_path = row["registry"]
+        if not registry_path or not Path(registry_path).is_file():
+            stale.append(dict(row))
+            continue
+        try:
+            registry = load_registry(registry_path)
+        except Exception as e:
+            logger.warning("Could not read registry %s while checking staleness: %s", registry_path, e)
+            stale.append(dict(row))
+            continue
+        if (registry.project or {}).get("id") != row["project_id"]:
+            stale.append(dict(row))
+    return stale

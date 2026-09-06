@@ -56,6 +56,8 @@ class TestRegisterAllCommands:
             "store_verify",
             "store_link",
             "store_unlink",
+            "store_usage",
+            "store_gc",
             "sra_info",
             "sra_stats",
             "sra_validate",
