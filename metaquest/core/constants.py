@@ -219,6 +219,13 @@ CONFIG_DIRNAME = "metaquest"
 CONFIG_FILENAME = "config.toml"
 STORE_LAYOUT = "sra-v1"
 
+# Per-accession dataset lock (metaquest.store.locks). A store download or adopt holds its
+# accession's lock for as long as the transfer takes, which can be hours, so the holder
+# refreshes the lock file's mtime every LOCK_HEARTBEAT_SECONDS and a waiter only reclaims a
+# lock whose mtime is older than DATASET_LOCK_STALE_SECONDS, i.e. one whose holder has died.
+LOCK_HEARTBEAT_SECONDS = 10.0
+DATASET_LOCK_STALE_SECONDS = 600.0
+
 # Memory and Resource Limits
 DEFAULT_MEMORY_LIMIT_GB = 8
 MAX_FILE_SIZE_MB = 1024  # 1GB max file size for uploads

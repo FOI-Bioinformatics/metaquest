@@ -921,6 +921,7 @@ def _store_download(
     resume_partial: bool = True,
     store_metadata=None,
     force: bool = False,
+    lock_wait: float = 0.0,
     **download_kwargs,
 ) -> Tuple[bool, str]:
     """Get ``accession`` for this project through the shared store.
@@ -929,9 +930,13 @@ def _store_download(
     copy that is already there is linked without touching the network. Otherwise the store's
     per-accession lock is taken, the sidecar is checked again (another project may have
     finished the download while this one waited), and the download runs into the store.
+
+    The lock is held for the whole download (``metaquest.store.locks.dataset_lock``, which
+    heartbeats while held), so a second project waits rather than writing the same folder.
+    ``lock_wait`` of zero waits for as long as the other project keeps working; a positive
+    value gives up after that many seconds, naming the accession and the holder.
     """
-    from metaquest.data.registry import _acquire_lock
-    from metaquest.store.layout import lock_path
+    from metaquest.store.locks import dataset_lock
 
     project_path = Path(project_fastq)
     for directory in (store.sra, store.tmp, store.locks):
@@ -943,9 +948,7 @@ def _store_download(
             if settled is not None:
                 return settled
 
-        lock = lock_path(store, accession)
-        _acquire_lock(lock)
-        try:
+        with dataset_lock(store, accession, wait_seconds=lock_wait):
             if not force:
                 settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
                 if settled is not None:
@@ -953,14 +956,14 @@ def _store_download(
             return _store_fetch(
                 accession, project_path, store, link_mode, store_metadata, force=force, **download_kwargs
             )
-        finally:
-            lock.unlink(missing_ok=True)
     except DataAccessError as e:
         logger.error(f"Store download failed for {accession}: {e}")
         return False, f"store error: {e}"
 
 
-def _store_downloader(store, link_mode: str, accept_partial: bool, resume_partial: bool, store_metadata):
+def _store_downloader(
+    store, link_mode: str, accept_partial: bool, resume_partial: bool, store_metadata, lock_wait: float = 0.0
+):
     """A ``download_accession``-shaped callable that routes every download through the store.
 
     The download loops call it with the project's FASTQ folder as ``output_folder``, which is
@@ -980,6 +983,7 @@ def _store_downloader(store, link_mode: str, accept_partial: bool, resume_partia
             resume_partial=resume_partial,
             store_metadata=store_metadata,
             force=force,
+            lock_wait=lock_wait,
             num_threads=num_threads,
             temp_folder=temp_folder,
             **kwargs,
@@ -1399,6 +1403,7 @@ def download_sra(
     accept_partial: bool = False,
     resume_partial: bool = True,
     store_metadata: Optional[Union[str, Path, Sequence[Union[str, Path]]]] = None,
+    lock_wait: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -1447,6 +1452,9 @@ def download_sra(
         store_metadata: One folder, or an ordered list of folders, searched for
             ``<ACC>_metadata.xml`` to record NCBI's spot count in the dataset's sidecar; the
             store's own metadata folder is always tried last
+        lock_wait: Seconds to wait for another project's lock on an accession before giving
+            up on that accession; zero (the default) waits for as long as the other project
+            keeps working, since a download legitimately takes hours
 
     Returns:
         Dictionary with download statistics
@@ -1510,7 +1518,7 @@ def download_sra(
 
         # With a shared store, every download goes through it: the store keeps the only copy
         # and the project gets a link to it.
-        downloader = _store_downloader(store, link_mode, accept_partial, resume_partial, store_metadata)
+        downloader = _store_downloader(store, link_mode, accept_partial, resume_partial, store_metadata, lock_wait)
 
         # Download accessions in parallel, with an optional retry pass
         successful_count, failed_count, failed_accessions, download_results, abort_reason = _download_with_retries(

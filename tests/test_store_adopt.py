@@ -399,28 +399,27 @@ class TestAdoptPerAccessionLocking:
         assert report.adopted == ["SRR1"]
         assert not lock_path(paths, "SRR1").exists()
 
-    def test_a_lock_already_held_by_another_process_makes_adopt_fail_fast(self, tmp_path, monkeypatch):
-        import metaquest.data.registry as registry_module
+    def test_a_lock_held_by_a_live_holder_makes_lock_wait_give_up(self, tmp_path):
+        import json
 
         store_root = tmp_path / "store"
         paths = init_store(store_root)
         project_fastq = tmp_path / "project" / "fastq"
         _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
 
-        # A short wait so the test does not hang, without touching LOCK_STALE_SECONDS: the
-        # pre-created lock below must still look fresh (not stale) so _acquire_lock hits the
-        # wait deadline rather than reclaiming it.
-        monkeypatch.setattr(registry_module, "LOCK_WAIT_SECONDS", 0.1)
+        # A live holder (a fresh lock file, so not stale): with no --lock-wait, adopt would
+        # rightly wait for as long as that project keeps working, so this run gives up instead.
         lock = lock_path(paths, "SRR1")
         lock.parent.mkdir(parents=True, exist_ok=True)
-        lock.write_text("999999")
+        lock.write_text(json.dumps({"pid": 999999, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
 
-        with pytest.raises(DataAccessError, match="locked"):
-            adopt(project_fastq, paths, move=True, dry_run=False)
+        with pytest.raises(DataAccessError, match="SRR1"):
+            adopt(project_fastq, paths, move=True, dry_run=False, lock_wait=0.1)
 
         # The lock was held by "another process": adopt() must not remove a lock it did not
         # create itself.
         assert lock.exists()
+        assert json.loads(lock.read_text())["pid"] == 999999
         # Nothing was staged or moved, since the lock was never acquired.
         assert not sra_dir(paths, "SRR1").exists()
         assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()

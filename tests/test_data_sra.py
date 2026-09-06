@@ -2135,3 +2135,39 @@ class TestFasterqDumpVersion:
     def test_returns_empty_when_the_tool_cannot_be_run(self):
         with patch("metaquest.utils.security.SecureSubprocess.run_secure", side_effect=SecurityError("not installed")):
             assert fasterq_dump_version() == ""
+
+
+class TestStoreDownloadLockWait:
+    """download_sra's --lock-wait: give up on an accession another project is downloading."""
+
+    @staticmethod
+    def _store(tmp_path):
+        from metaquest.store.layout import init_store
+
+        return init_store(tmp_path / "store")
+
+    def test_lock_wait_gives_up_naming_the_accession_and_holder(self, tmp_path):
+        import json as json_module
+
+        from metaquest.store.layout import lock_path
+
+        paths = self._store(tmp_path)
+        lock = lock_path(paths, "SRR1")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json_module.dumps({"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        fastq_folder = tmp_path / "project" / "fastq"
+
+        with patch("metaquest.data.sra.download_accession") as mock_download:
+            stats = download_sra(
+                fastq_folder, acc, store=paths, max_retries=0, lock_wait=0.1, num_threads=1, max_workers=1
+            )
+
+        mock_download.assert_not_called()
+        assert stats["failed"] == 1
+        message = stats["results"]["SRR1"]
+        assert "SRR1" in message
+        assert "4242" in message and "otherhost" in message
+        # The other project's lock is left exactly as it was.
+        assert json_module.loads(lock.read_text())["pid"] == 4242

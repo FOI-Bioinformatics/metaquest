@@ -189,6 +189,16 @@ class DownloadSraCommand(BaseCommand):
             default=True,
             help="Do not download an incomplete store dataset again",
         )
+        parser.add_argument(
+            "--lock-wait",
+            dest="lock_wait",
+            type=float,
+            default=0.0,
+            help=(
+                "Seconds to wait for another project's download of the same accession before "
+                "giving up on it (default: 0, wait for as long as the other project keeps working)"
+            ),
+        )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
         """Log the summary for a dry run."""
@@ -436,6 +446,7 @@ class DownloadSraCommand(BaseCommand):
             "accept_partial": getattr(args, "accept_partial", False),
             "resume_partial": getattr(args, "resume_partial", True),
             "store_metadata": [project_root(registry) / "metadata", store.metadata],
+            "lock_wait": getattr(args, "lock_wait", 0.0),
         }
 
     def execute(self, args: argparse.Namespace) -> int:

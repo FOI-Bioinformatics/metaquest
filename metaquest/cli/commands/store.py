@@ -431,6 +431,16 @@ class StoreAdoptCommand(BaseCommand):
             default="metadata",
             help="Folder holding NCBI metadata XML, consulted for each accession's recorded spot count",
         )
+        parser.add_argument(
+            "--lock-wait",
+            dest="lock_wait",
+            type=float,
+            default=0.0,
+            help=(
+                "Seconds to wait for another project's work on the same accession before giving "
+                "up on it (default: 0, wait for as long as the other project keeps working)"
+            ),
+        )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -453,6 +463,7 @@ class StoreAdoptCommand(BaseCommand):
                 dry_run=args.dry_run,
                 compress=args.compress,
                 metadata_folders=[Path(args.metadata_folder), paths.metadata],
+                lock_wait=getattr(args, "lock_wait", 0.0),
             )
         except DataAccessError as e:
             self.logger.error(str(e))

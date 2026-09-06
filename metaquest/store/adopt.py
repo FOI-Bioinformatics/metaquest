@@ -44,6 +44,7 @@ from metaquest.data.sra import compress_fastq, count_fastq_reads, fastq_files, f
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
+from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import Sidecar, build_sidecar, ncbi_from_metadata_xml, read_sidecar, write_sidecar
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,7 @@ def _adopt_fresh(
     compress: bool,
     metadata_folders: Sequence[Union[str, Path]],
     report: AdoptReport,
+    lock_wait: float = 0.0,
 ) -> None:
     """Copy ``entry``'s files into ``<store>/sra/<accession>``, compressing plain files on the way.
 
@@ -195,24 +197,18 @@ def _adopt_fresh(
     ``report.resumed``.
 
     The whole operation (sweep, copy, compress, move, sidecar) runs under this accession's own
-    lock (``<store>/locks/<ACC>.lock``, acquired with ``metaquest.data.registry._acquire_lock``,
-    same as a store download): a concurrent adopt of this same accession blocks here until this
-    one finishes, rather than racing it for the same staging folder.
+    lock (``<store>/locks/<ACC>.lock``, held through ``metaquest.store.locks.dataset_lock``,
+    same as a store download): a concurrent adopt or download of this same accession blocks
+    here until this one finishes, rather than racing it for the same staging folder. That lock
+    heartbeats while held, so a multi-hour copy is never reclaimed as stale; ``lock_wait``
+    above zero gives up on this accession instead of waiting.
     """
-    # Imported here rather than at module level, matching the same pairing's other call site in
-    # metaquest.data.sra: the store package's own modules import the data layer, so importing
-    # metaquest.data.registry back at module level here risks a cycle.
-    from metaquest.data.registry import _acquire_lock
-    from metaquest.store.layout import lock_path
-
     store_dir = sra_dir(paths, accession)
     staged = paths.tmp / f"{accession}{_STAGING_SUFFIX}"
     paths.tmp.mkdir(parents=True, exist_ok=True)
     paths.locks.mkdir(parents=True, exist_ok=True)
 
-    lock = lock_path(paths, accession)
-    _acquire_lock(lock)
-    try:
+    with dataset_lock(paths, accession, wait_seconds=lock_wait):
         if staged.exists():
             shutil.rmtree(staged)
             report.resumed.append(accession)
@@ -228,8 +224,6 @@ def _adopt_fresh(
         shutil.move(str(staged), str(store_dir))
 
         _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
-    finally:
-        lock.unlink(missing_ok=True)
 
 
 def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]:
@@ -325,6 +319,7 @@ def _adopt_new_or_restart(
     metadata_folders: Sequence[Union[str, Path]],
     on_progress: Optional[Callable[[str, str], None]],
     report: AdoptReport,
+    lock_wait: float = 0.0,
 ) -> None:
     """Get a fresh accession's files into the store (or finish one interrupted after its files
     already reached the store), then apply ``--move``/``--copy``.
@@ -340,7 +335,7 @@ def _adopt_new_or_restart(
         # A fresh accession always comes from real_dirs (interrupted ones are handled by the
         # branch above), so entry is never None here.
         assert entry is not None
-        _adopt_fresh(entry, accession, paths, compress, metadata_folders, report)
+        _adopt_fresh(entry, accession, paths, compress, metadata_folders, report, lock_wait)
 
     if not move:
         report.copied.append(accession)
@@ -362,6 +357,7 @@ def adopt(
     on_progress: Optional[Callable[[str, str], None]] = None,
     compress: bool = True,
     metadata_folders: Sequence[Union[str, Path]] = (),
+    lock_wait: float = 0.0,
 ) -> AdoptReport:
     """Fold every real accession folder in ``project_fastq`` into the shared store.
 
@@ -419,6 +415,7 @@ def adopt(
             metadata_folders,
             on_progress,
             report,
+            lock_wait,
         )
 
     return report
