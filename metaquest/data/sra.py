@@ -107,12 +107,17 @@ def count_fastq_reads(path: Union[str, Path]) -> int:
     opener = gzip.open if str(path).endswith(".gz") else open
     block_size = 1024 * 1024
     total_newlines = 0
+    last_byte = b""
     with opener(path, "rb") as handle:
         while True:
             block = handle.read(block_size)
             if not block:
                 break
             total_newlines += block.count(b"\n")
+            last_byte = block[-1:]
+    # A file whose last line has no trailing newline still ends a record; count it too.
+    if last_byte and last_byte != b"\n":
+        total_newlines += 1
     return total_newlines // 4
 
 

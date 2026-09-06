@@ -172,6 +172,15 @@ class TestRecords:
         reg.record_download(r, "SRR3", "skipped", tmp_path / "fastq", message="--max-downloads")
         assert r.datasets["SRR3"]["download"]["attempts"] == 0
 
+        # A zero-byte file (e.g. left by an interrupted download) must never appear in
+        # download["files"]; fastq_files() is the single source of truth here too.
+        (tmp_path / "fastq" / "SRR2").mkdir(parents=True)
+        (tmp_path / "fastq" / "SRR2" / "SRR2_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (tmp_path / "fastq" / "SRR2" / "SRR2_2.fastq").write_text("")
+        reg.record_download(r, "SRR2", "downloaded", tmp_path / "fastq")
+        names = [Path(f["path"]).name for f in r.datasets["SRR2"]["download"]["files"]]
+        assert names == ["SRR2_1.fastq"]
+
         # A "downloaded" state recorded without an actual attempt (e.g. already present on
         # disk) must not bump attempts.
         _fastq(tmp_path / "fastq" / "SRR4" / "SRR4_1.fastq")

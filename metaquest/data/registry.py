@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
-from metaquest.data.sra import accession_has_fastq, count_fastq_reads
+from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -375,7 +375,7 @@ def record_download(
         download["attempts"] = int(download.get("attempts", 0)) + 1
     files: List[Dict[str, Any]] = []
     if state == "downloaded":
-        files = _file_entries(sorted(p for p in (Path(fastq_dir) / accession).glob("*.fastq*") if p.is_file()))
+        files = _file_entries(fastq_files(Path(fastq_dir) / accession))
     download.update(
         {
             "state": state,

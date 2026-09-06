@@ -322,6 +322,27 @@ class TestCountFastqReads:
         assert path.stat().st_size > 1024 * 1024
         assert count_fastq_reads(path) == 20000
 
+    def test_missing_trailing_newline_plain(self, tmp_path):
+        """A file whose last record has no trailing newline must not be undercounted."""
+        content = "".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(2))
+        content = content[:-1]  # drop the final newline
+        path = tmp_path / "a.fastq"
+        path.write_text(content)
+        assert count_fastq_reads(path) == 2
+
+    def test_missing_trailing_newline_gz(self, tmp_path):
+        content = "".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(2))
+        content = content[:-1]
+        path = tmp_path / "a.fastq.gz"
+        with gzip.open(path, "wt") as handle:
+            handle.write(content)
+        assert count_fastq_reads(path) == 2
+
+    def test_empty_file(self, tmp_path):
+        path = tmp_path / "empty.fastq"
+        path.write_text("")
+        assert count_fastq_reads(path) == 0
+
 
 class TestVerifyDownload:
     """verify_download: reads_r1 against NCBI's expected spot count."""
