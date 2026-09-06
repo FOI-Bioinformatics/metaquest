@@ -6,7 +6,7 @@ import argparse
 import csv
 import os
 import shutil
-from typing import Callable, Optional, Set
+from typing import Callable, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
@@ -26,7 +26,7 @@ from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import read_sidecar
-from metaquest.store.usage import record_usage_many, record_usage_safe
+from metaquest.store.usage import ensure_project_identity, record_usage_many, record_usage_safe
 
 # Markers the data layer puts in a result message for a dataset the shared store provided
 # (linked from a copy already there) or received (downloaded into it by this run).
@@ -274,6 +274,8 @@ class DownloadSraCommand(BaseCommand):
         for acc in stats.get("already_downloaded_accessions", []):
             from_store = store is not None and is_store_link(fastq_dir / acc, store)
             with registry_transaction(args.registry) as reg:
+                if from_store:
+                    ensure_project_identity(reg)
                 if reg.datasets.get(acc, {}).get("download", {}).get("state") != "downloaded":
                     complete = self._sidecar_completeness(store, acc) if from_store else None
                     record_download(
@@ -344,7 +346,10 @@ class DownloadSraCommand(BaseCommand):
         def _record_result(accession: str, success: bool, message: str) -> None:
             linked = bool(success) and message.startswith(STORE_LINKED_PREFIX)
             from_store = linked or (bool(success) and message.endswith(STORE_SAVED_SUFFIX))
+            usage: Optional[Tuple[Registry, str, str]] = None
             with registry_transaction(args.registry) as reg:
+                if from_store:
+                    ensure_project_identity(reg)
                 complete = parse_verdict_message(message) if success else None
                 if complete is None and from_store:
                     # "linked from store" carries no verify-download message of its own; the
@@ -364,8 +369,14 @@ class DownloadSraCommand(BaseCommand):
                 )
                 if from_store:
                     self._mark_linked(reg, accession)
-                    stage = "linked" if linked else "downloaded"
-                    record_usage_safe(store, reg, accession, "", stage, detail=message)
+                    usage = (reg, "linked" if linked else "downloaded", message)
+
+            if usage is not None:
+                # Recorded after the registry transaction closes: the catalogue has its own
+                # lock, and waiting for it while holding the project's registry lock can time
+                # a concurrent worker's registry write out.
+                reg, stage, detail = usage
+                record_usage_safe(store, reg, accession, "", stage, detail=detail)
 
         return _record_result
 

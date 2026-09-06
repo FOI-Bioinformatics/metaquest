@@ -20,6 +20,7 @@ database directly without taking the lock.
 
 import functools
 import logging
+import socket
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -173,11 +174,24 @@ class Catalog:
 
     # ------------------------------------------------------------------ schema
 
+    def _add_missing_columns(self) -> None:
+        """Add columns later schema versions introduced to a database created by an earlier one.
+
+        ``projects.hostname`` records which machine wrote a project's row. A project's registry
+        living on another workstation's disk looks missing from here, so staleness cannot be
+        read the same way for a row written elsewhere; recording the host at least makes that
+        visible in ``store_status`` and ``store_gc``.
+        """
+        existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(projects)").fetchall()}
+        if "hostname" not in existing:
+            self.conn.execute("ALTER TABLE projects ADD COLUMN hostname TEXT")
+
     @_wrap_sqlite_errors
     def migrate(self) -> None:
         """Create the catalogue schema if it does not already exist. Safe to call repeatedly."""
         for statement in _SCHEMA_STATEMENTS:
             self.conn.execute(statement)
+        self._add_missing_columns()
         self.conn.execute(
             "INSERT OR IGNORE INTO store_meta (key, value) VALUES ('schema_version', ?)",
             (str(SCHEMA_VERSION),),
@@ -270,19 +284,24 @@ class Catalog:
 
     @_wrap_sqlite_errors
     def upsert_project(self, project_id: str, name: str, path: str, registry: str) -> None:
-        """Insert or update one project's row, keeping its original ``created`` timestamp."""
+        """Insert or update one project's row, keeping its original ``created`` timestamp.
+
+        The row records the host that wrote it, so a shared store used from two machines can
+        say where a project it cannot see from here was last written.
+        """
         now = _now()
         self.conn.execute(
             """
-            INSERT INTO projects (project_id, name, path, registry, created, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (project_id, name, path, registry, created, last_seen, hostname)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(project_id) DO UPDATE SET
                 name=excluded.name,
                 path=excluded.path,
                 registry=excluded.registry,
-                last_seen=excluded.last_seen
+                last_seen=excluded.last_seen,
+                hostname=excluded.hostname
             """,
-            (project_id, name, path, registry, now, now),
+            (project_id, name, path, registry, now, now, socket.gethostname()),
         )
 
     # ------------------------------------------------------------------- usage

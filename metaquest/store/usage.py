@@ -13,6 +13,8 @@ neither ever raises.
 """
 
 import logging
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -32,6 +34,36 @@ def _upsert_project_row(catalog, registry: Registry, project_id: str) -> None:
         project.get("path", ""),
         str(registry.path),
     )
+
+
+def ensure_project_identity(registry: Registry) -> Dict[str, Any]:
+    """Give ``registry`` a project identity if it has none, and return it.
+
+    A project reaches the store through four discovery rules, and three of them (the
+    ``METAQUEST_DATA`` environment variable, ``--data-root`` and the user config's default)
+    never run ``store_init``, so the registry carries no ``project.id``. Without one the
+    project records no usage, and ``store_gc`` then sees a dataset it links as used by nobody.
+    Minting the identity on first use closes that gap: every project that links from the store
+    has a row in the catalogue, whichever rule found the store.
+
+    The identity is written into ``registry.project`` only; the caller's ``registry_transaction``
+    persists it with whatever else that transaction records, and the catalogue row follows from
+    the next ``record_usage_safe``/``record_usage_many`` call.
+    """
+    project = dict(registry.project or {})
+    if project.get("id"):
+        return project
+
+    cwd = Path.cwd()
+    project = {
+        "id": str(uuid.uuid4()),
+        "name": project.get("name") or cwd.name,
+        "path": project.get("path") or str(cwd.resolve()),
+        "created": project.get("created") or datetime.now(timezone.utc).isoformat(),
+    }
+    registry.project = project
+    logger.info("Recorded this project's identity for the shared store: %s (%s)", project["id"], project["name"])
+    return project
 
 
 def record_usage_safe(
@@ -116,24 +148,30 @@ def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
 
     Shared by ``store_status`` (which only reports stale projects) and ``store_gc`` (which
     also uses this to decide that a dataset's only usage rows no longer keep it alive).
-    Returns each stale row as a dict with ``project_id``, ``name``, ``path`` and ``registry``,
-    sorted by ``project_id``.
+    Returns each stale row as a dict with ``project_id``, ``name``, ``path``, ``registry``,
+    ``hostname`` and a ``reason``, sorted by ``project_id``. The reason separates the two
+    cases a reader must tell apart: ``registry missing`` (nothing at that path on this
+    machine, which is also what every project on another workstation of a shared store looks
+    like from here) and ``project id differs`` (a registry is there, but it now belongs to a
+    different project).
     """
-    rows = catalog.conn.execute("SELECT project_id, name, path, registry FROM projects ORDER BY project_id").fetchall()
+    rows = catalog.conn.execute(
+        "SELECT project_id, name, path, registry, hostname FROM projects ORDER BY project_id"
+    ).fetchall()
     stale: List[Dict[str, Any]] = []
     for row in rows:
         registry_path = row["registry"]
         try:
             if not registry_path or not Path(registry_path).is_file():
-                stale.append(dict(row))
+                stale.append({**dict(row), "reason": "registry missing"})
                 continue
             registry = load_registry(registry_path)
         except (OSError, DataAccessError, ValueError) as e:
             logger.warning("Could not check registry %s while checking staleness: %s", registry_path, e)
-            stale.append(dict(row))
+            stale.append({**dict(row), "reason": "registry unreadable"})
             continue
         if (registry.project or {}).get("id") != row["project_id"]:
-            stale.append(dict(row))
+            stale.append({**dict(row), "reason": "project id differs"})
     return stale
 
 

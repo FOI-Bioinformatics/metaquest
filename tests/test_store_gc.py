@@ -33,6 +33,7 @@ def _gc_args(**overrides):
         yes=False,
         older_than=None,
         keep_partial=False,
+        include_stale=False,
         json=False,
     )
     base.update(overrides)
@@ -92,7 +93,7 @@ class TestStoreGcCommand:
         assert accessions["SRR1"]["bytes"] == 100
         assert accessions["SRR1"]["reason"] == "unused"
 
-    def test_dataset_used_only_by_stale_project_listed_with_reason(self, tmp_path, capsys):
+    def test_dataset_used_only_by_stale_project_needs_include_stale(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
@@ -104,6 +105,17 @@ class TestStoreGcCommand:
             cat.record_usage("SRR1", "stale1", "wMel", "downloaded")
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        # A project is "stale" whenever its registry is not a file on this machine, which is
+        # true of every project on another workstation of a shared store: by default such a
+        # dataset is kept and only reported.
+        assert rc == 0
+        assert report["datasets"] == []
+        kept = {row["accession"]: row for row in report["kept_stale"]}
+        assert "OldProject" in kept["SRR1"]["reason"]
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), include_stale=True, json=True))
         report = json.loads(capsys.readouterr().out)
 
         assert rc == 0
@@ -287,6 +299,92 @@ class TestStoreGcCommand:
         report = json.loads(capsys.readouterr().out)
 
         assert rc == 0
-        assert report["stale_projects"] == [
-            {"project_id": "stale1", "name": "OldProject", "registry": str(missing_registry)}
-        ]
+        row = report["stale_projects"][0]
+        assert len(report["stale_projects"]) == 1
+        assert row["project_id"] == "stale1"
+        assert row["name"] == "OldProject"
+        assert row["registry"] == str(missing_registry)
+        assert row["reason"] == "registry missing"
+
+
+class TestStoreGcRespectsLocksAndPlaceholders:
+    """Never remove what another run is working on, or a row that stands for no files."""
+
+    @staticmethod
+    def _hold(paths, accession):
+        import json as json_module
+
+        from metaquest.store.layout import lock_path
+
+        lock = lock_path(paths, accession)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json_module.dumps({"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
+        return lock
+
+    def test_a_locked_dataset_is_kept_and_reported_as_in_use(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(_sidecar("SRR1"))
+        self._hold(paths, "SRR1")
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["datasets"] == []
+        assert [row["accession"] for row in report["in_use"]] == ["SRR1"]
+        assert sra_dir(paths, "SRR1").is_dir()
+
+    def test_leftovers_of_a_locked_accession_are_kept(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        building = paths.tmp / "SRR1_temp"
+        building.mkdir(parents=True)
+        (building / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        cached = paths.tmp / ".sra-cache" / "SRR1"
+        cached.mkdir(parents=True)
+        (cached / "SRR1.sra").write_bytes(b"x" * 10)
+        self._hold(paths, "SRR1")
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["leftovers"] == []
+        assert building.is_dir()
+        assert cached.is_dir()
+
+    def test_a_placeholder_row_is_never_a_candidate(self, tmp_path, capsys):
+        """A usage row for an accession that is not catalogued yet inserts a state="unknown"
+        placeholder; it stands for no files, so gc must not offer to remove it."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(proj), str(proj / "metaquest_registry.json"))
+            cat.record_usage("SRR-PLACEHOLDER", "p1", "wMel", "linked")
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert [row["accession"] for row in report["datasets"]] == []
+
+    def test_stale_projects_report_their_host_and_reason(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        gone = tmp_path / "gone"
+        gone.mkdir()
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Gone", str(gone), str(gone / "metaquest_registry.json"))
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        row = report["stale_projects"][0]
+        assert row["reason"] == "registry missing"
+        assert row["hostname"]

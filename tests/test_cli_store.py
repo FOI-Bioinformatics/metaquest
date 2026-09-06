@@ -78,6 +78,7 @@ def _adopt_args(**overrides):
         dry_run=False,
         compress=True,
         metadata_folder="metadata",
+        lock_wait=0.0,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -92,7 +93,14 @@ def _verify_args(accessions=None, **overrides):
 
 
 def _link_args(accessions, **overrides):
-    base = dict(accessions=list(accessions), fastq_folder="fastq", registry=None, data_root=None, link_mode="auto")
+    base = dict(
+        accessions=list(accessions),
+        fastq_folder="fastq",
+        registry=None,
+        data_root=None,
+        link_mode="auto",
+        accept_partial=False,
+    )
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -381,9 +389,10 @@ class TestStoreStatusCommand:
         report = json.loads(capsys.readouterr().out)
 
         assert rc == 0
-        assert report["stale_projects"] == [
-            {"project_id": "proj1", "name": "Wolbachia", "registry": str(missing_registry)}
-        ]
+        assert len(report["stale_projects"]) == 1
+        row = report["stale_projects"][0]
+        assert (row["project_id"], row["name"], row["registry"]) == ("proj1", "Wolbachia", str(missing_registry))
+        assert row["reason"] == "registry missing"
 
     def test_stale_project_detected_when_registry_id_differs(self, tmp_path, capsys):
         root = tmp_path / "store"
@@ -399,9 +408,12 @@ class TestStoreStatusCommand:
         report = json.loads(capsys.readouterr().out)
 
         assert rc == 0
-        assert report["stale_projects"] == [
-            {"project_id": "proj1", "name": "Wolbachia", "registry": str(registry_file)}
-        ]
+        assert len(report["stale_projects"]) == 1
+        row = report["stale_projects"][0]
+        assert (row["project_id"], row["name"], row["registry"]) == ("proj1", "Wolbachia", str(registry_file))
+        # A registry is there; it simply belongs to a different project now. Saying "registry
+        # missing" for that case sends the reader looking for a file that exists.
+        assert row["reason"] == "project id differs"
 
     def test_text_output_includes_store_header(self, tmp_path, capsys):
         root = tmp_path / "store"
@@ -1129,3 +1141,175 @@ class TestStoreUsageCommand:
 
         assert rc == 0
         assert "proja" in out and "projb" in out
+
+
+class TestStoreInitRebinding:
+    """store_init is run again: keep what the project already links, and say what changed."""
+
+    def test_rebinding_to_another_root_preserves_linked_and_warns(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        first = tmp_path / "store-a"
+        second = tmp_path / "store-b"
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(first, project_dir)) == 0
+        registry = load_registry(registry_path)
+        registry.store["linked"] = ["SRR1", "SRR2"]
+        from metaquest.data.registry import save_registry
+
+        save_registry(registry, registry_path)
+
+        with caplog.at_level(logging.WARNING):
+            assert StoreInitCommand().execute(_init_args(second, project_dir)) == 0
+
+        registry = load_registry(registry_path)
+        assert registry.store["root"] == str(second.resolve())
+        # The list of what this project links is not something store_init knows how to rebuild.
+        assert registry.store["linked"] == ["SRR1", "SRR2"]
+        assert any("was bound to" in record.message for record in caplog.records)
+
+    def test_refuses_a_non_empty_folder_that_is_not_a_store(self, tmp_path, monkeypatch):
+        home_like = tmp_path / "documents"
+        home_like.mkdir()
+        (home_like / "thesis.txt").write_text("chapter one")
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreInitCommand().execute(_init_args(home_like, project_dir))
+
+        assert rc == 1
+        assert not (home_like / "sra").exists()
+        assert not (home_like / "metaquest_store.json").exists()
+
+    def test_accepts_an_empty_folder(self, tmp_path, monkeypatch):
+        empty = tmp_path / "new-store"
+        empty.mkdir()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        assert StoreInitCommand().execute(_init_args(empty, project_dir)) == 0
+        assert read_marker(empty) is not None
+
+
+class TestStoreLinkGuardsIncompleteDatasets:
+    def _store_with(self, tmp_path, state):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        with gzip.open(acc_dir / "SRR1.fastq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+        if state is not None:
+            write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state=state))
+        return root, paths
+
+    @pytest.mark.parametrize("state", ["partial", "failed", None])
+    def test_an_incomplete_dataset_needs_accept_partial(self, tmp_path, monkeypatch, capsys, state):
+        root, paths = self._store_with(tmp_path, state)
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root)))
+
+        assert rc == 1
+        assert not (project_dir / "fastq" / "SRR1").exists()
+
+        rc = StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root), accept_partial=True))
+
+        assert rc == 0
+        assert (project_dir / "fastq" / "SRR1").is_symlink()
+
+    def test_a_complete_dataset_links_without_the_flag(self, tmp_path, monkeypatch):
+        root, paths = self._store_with(tmp_path, "complete")
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        assert StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root))) == 0
+        assert (project_dir / "fastq" / "SRR1").is_symlink()
+
+
+class TestLinkersAlwaysHaveAProjectIdentity:
+    """A project that never ran store_init still records who it is, so gc can see its links."""
+
+    def test_store_link_mints_a_project_identity(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        with gzip.open(acc_dir / "SRR1.fastq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+        write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state="complete"))
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        # No store_init: the store was found through --data-root alone.
+        assert StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root))) == 0
+
+        registry = load_registry(registry_path)
+        assert registry.project["id"]
+        assert registry.project["name"] == project_dir.name
+        with Catalog(paths) as catalog:
+            rows = catalog.conn.execute("SELECT project_id FROM projects").fetchall()
+        assert [row["project_id"] for row in rows] == [registry.project["id"]]
+
+    def test_store_adopt_mints_a_project_identity(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root)))
+
+        assert rc == 0
+        registry = load_registry(project_dir / "metaquest_registry.json")
+        assert registry.project["id"]
+        with Catalog(paths) as catalog:
+            assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
+
+
+class TestStoreCommandsWithoutAMarker:
+    """A store root that is not a store: the error names the rule that produced the root."""
+
+    def test_store_status_reports_the_missing_marker(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        not_a_store = tmp_path / "not-a-store"
+        not_a_store.mkdir()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreStatusCommand().execute(_status_args(data_root=str(not_a_store)))
+
+        assert rc == 1
+        assert any("no store marker" in record.message for record in caplog.records)
+
+
+class TestStoreAdoptGitignoreGuard:
+    def test_adopt_adds_fastq_to_gitignore(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / ".git").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+            assert StoreAdoptCommand().execute(_adopt_args(data_root=str(root))) == 0
+
+        assert "fastq/" in (project_dir / ".gitignore").read_text()

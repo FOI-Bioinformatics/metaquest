@@ -26,9 +26,10 @@ from metaquest.store.adopt import adopt
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
+from metaquest.store.locks import lock_holder, lock_is_held
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
-from metaquest.store.usage import linked_by, record_usage_safe, stale_projects
+from metaquest.store.usage import ensure_project_identity, linked_by, record_usage_many, stale_projects
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,22 @@ def _now() -> str:
 
 def _no_store_hint() -> None:
     print("No store configured; run: metaquest store_init --data-root PATH")
+
+
+def _stale_project_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """One stale project as reported by ``store_status`` and ``store_gc``.
+
+    Carries the reason staleness was decided ("registry missing" reads very differently from
+    "project id differs") and the host that wrote the row, since a project on another
+    workstation of a shared store always looks registry-missing from here.
+    """
+    return {
+        "project_id": row["project_id"],
+        "name": row.get("name") or row["project_id"],
+        "registry": row.get("registry"),
+        "hostname": row.get("hostname") or "an unrecorded host",
+        "reason": row.get("reason") or "registry missing",
+    }
 
 
 def _sidecar_completeness(paths: StorePaths, accession: str) -> Optional[Dict[str, Any]]:
@@ -53,6 +70,54 @@ def _sidecar_completeness(paths: StorePaths, accession: str) -> Optional[Dict[st
         "expected_spots": sidecar.ncbi.get("spots"),
         "reads_r1": sidecar.reads_per_mate,
     }
+
+
+def _gitignore_guard(cwd: Path, log: logging.Logger) -> None:
+    """Keep `fastq/` out of git for a project that has just adopted the shared store.
+
+    Only ever reads git state (`git ls-files`) to decide whether to warn; never runs a
+    command that changes the git index or working tree. Run from both `store_init` and
+    `store_adopt`, since either can be the moment a project's reads become links.
+    """
+    if not (cwd / ".git").is_dir():
+        return
+
+    gitignore = cwd / ".gitignore"
+    existing_lines = gitignore.read_text().splitlines() if gitignore.exists() else []
+    if not any(line.strip() in ("fastq/", "fastq") for line in existing_lines):
+        with gitignore.open("a") as handle:
+            if existing_lines and existing_lines[-1] != "":
+                handle.write("\n")
+            handle.write("fastq/\n")
+        log.info("Added fastq/ to %s", gitignore)
+
+    try:
+        result = subprocess.run(["git", "ls-files", "fastq"], cwd=cwd, capture_output=True, text=True, check=False)
+    except OSError as e:
+        log.warning("Could not check git tracking of fastq/: %s", e)
+        return
+
+    if result.stdout.strip():
+        log.warning("fastq/ is tracked by git; remove it from version control, for example: git rm -r --cached fastq")
+
+
+def _refuse_unusable_root(root: Path) -> None:
+    """Raise unless ``root`` is either an existing store or a directory safe to make one in.
+
+    ``store_init --data-root ~`` (or any folder already holding unrelated work) would
+    otherwise scatter ``sra/``, ``tmp/``, ``locks/``, ``metadata/`` and a marker through it.
+    A folder that does not exist yet, an empty one, or one that already carries a store
+    marker are all fine.
+    """
+    if not root.exists() or read_marker(root) is not None:
+        return
+    if not root.is_dir():
+        raise DataAccessError(f"Store root '{root}' is not a directory")
+    if any(root.iterdir()):
+        raise DataAccessError(
+            f"Store root '{root}' is not empty and holds no store marker; "
+            "point --data-root at an empty folder or an existing store"
+        )
 
 
 class StoreInitCommand(BaseCommand):
@@ -88,49 +153,28 @@ class StoreInitCommand(BaseCommand):
             help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
         )
 
-    # ------------------------------------------------------------------- git
-
-    def _gitignore_guard(self, cwd: Path) -> None:
-        """Keep `fastq/` out of git for a project that has just adopted the shared store.
-
-        Only ever reads git state (`git ls-files`) to decide whether to warn; never runs a
-        command that changes the git index or working tree.
-        """
-        git_dir = cwd / ".git"
-        if not git_dir.is_dir():
-            return
-
-        gitignore = cwd / ".gitignore"
-        existing_lines = gitignore.read_text().splitlines() if gitignore.exists() else []
-        if not any(line.strip() in ("fastq/", "fastq") for line in existing_lines):
-            with gitignore.open("a") as handle:
-                if existing_lines and existing_lines[-1] != "":
-                    handle.write("\n")
-                handle.write("fastq/\n")
-            self.logger.info("Added fastq/ to %s", gitignore)
-
-        try:
-            result = subprocess.run(
-                ["git", "ls-files", "fastq"],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError as e:
-            self.logger.warning("Could not check git tracking of fastq/: %s", e)
-            return
-
-        if result.stdout.strip():
-            self.logger.warning(
-                "fastq/ is tracked by git; remove it from version control, for example: " "git rm -r --cached fastq"
-            )
-
     # --------------------------------------------------------------- execute
+
+    def _warn_on_rebinding(self, registry_store: Dict[str, Any], root: Path) -> None:
+        """Say so when this project was already bound to a different store root.
+
+        Rebinding leaves the datasets the project links from the old store exactly where they
+        are; the links now point outside the store this project records, which is worth one
+        line rather than silence.
+        """
+        previous = (registry_store or {}).get("root")
+        if previous and previous != str(root):
+            self.logger.warning(
+                "This project was bound to the store at %s and is now bound to %s; "
+                "datasets it links from the old store are untouched and still linked there",
+                previous,
+                root,
+            )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
             root = Path(args.data_root)
+            _refuse_unusable_root(root)
             paths = init_store(root)
             # catalog_write migrates the schema itself; opening (and closing) it here is
             # enough to make sure catalog.sqlite exists before anything else touches it.
@@ -150,10 +194,13 @@ class StoreInitCommand(BaseCommand):
                     "path": str(cwd.resolve()),
                     "created": created,
                 }
+                self._warn_on_rebinding(registry.store, root.resolve())
                 registry.store = {
                     "root": str(root.resolve()),
                     "mode": "symlink",
-                    "linked": [],
+                    # Preserved: store_init cannot rebuild the list of datasets this project
+                    # links, and resetting it would lose that record silently.
+                    "linked": sorted(registry.store.get("linked") or []),
                 }
                 project_snapshot = dict(registry.project)
                 registry_path_str = str(registry.path)
@@ -167,7 +214,7 @@ class StoreInitCommand(BaseCommand):
                 write_config_data_root(root.resolve())
                 self.logger.info("Recorded %s as the default store in the user config", root.resolve())
 
-            self._gitignore_guard(cwd)
+            _gitignore_guard(cwd, self.logger)
 
             self.logger.info("Store root: %s", root.resolve())
             self.logger.info("Project id: %s (%s)", project_snapshot["id"], project_snapshot["name"])
@@ -204,8 +251,15 @@ class StoreStatusCommand(BaseCommand):
 
     @staticmethod
     def _dataset_counts_and_bytes(catalog: Catalog) -> Any:
+        """Dataset counts by state and total bytes, without the placeholder rows.
+
+        A usage row recorded before its dataset was catalogued inserts a ``state="unknown"``
+        row that stands for no files at all; counting it as a dataset would overstate what
+        the store holds.
+        """
         rows = catalog.conn.execute(
-            "SELECT state, COUNT(*) AS n, COALESCE(SUM(bytes_total), 0) AS bytes FROM datasets GROUP BY state"
+            "SELECT state, COUNT(*) AS n, COALESCE(SUM(bytes_total), 0) AS bytes FROM datasets "
+            "WHERE state IS NOT 'unknown' GROUP BY state"
         ).fetchall()
         counts = {row["state"]: row["n"] for row in rows}
         bytes_total = sum(row["bytes"] for row in rows)
@@ -213,7 +267,9 @@ class StoreStatusCommand(BaseCommand):
 
     @staticmethod
     def _datasets_list(catalog: Catalog) -> List[Dict[str, Any]]:
-        rows = catalog.conn.execute("SELECT accession, state, bytes_total FROM datasets ORDER BY accession").fetchall()
+        rows = catalog.conn.execute(
+            "SELECT accession, state, bytes_total FROM datasets WHERE state IS NOT 'unknown' ORDER BY accession"
+        ).fetchall()
         result = []
         for row in rows:
             project_count = len(catalog.projects_for(row["accession"]))
@@ -229,15 +285,7 @@ class StoreStatusCommand(BaseCommand):
 
     @staticmethod
     def _stale_project_rows(catalog: Catalog) -> List[Dict[str, Any]]:
-        stale = stale_projects(catalog)
-        return [
-            {
-                "project_id": row["project_id"],
-                "name": row.get("name") or row["project_id"],
-                "registry": row.get("registry"),
-            }
-            for row in stale
-        ]
+        return [_stale_project_row(row) for row in stale_projects(catalog)]
 
     def _build_report(self, root: Path, args: argparse.Namespace) -> Dict[str, Any]:
         paths = store_paths(root)
@@ -272,7 +320,7 @@ class StoreStatusCommand(BaseCommand):
         if report["stale_projects"]:
             print("  Stale projects:")
             for entry in report["stale_projects"]:
-                print(f"    {entry['name']} (registry missing: {entry['registry']})")
+                print(f"    {entry['name']} on {entry['hostname']} ({entry['reason']}: {entry['registry']})")
         if verbose:
             print("\nDatasets")
             print("========")
@@ -483,6 +531,7 @@ class StoreAdoptCommand(BaseCommand):
         newly_linked = sorted(set(report.adopted) | set(report.deduplicated))
         if newly_linked:
             with registry_transaction(args.registry) as reg:
+                ensure_project_identity(reg)
                 for acc in newly_linked:
                     complete = _sidecar_completeness(paths, acc)
                     record_download(
@@ -495,10 +544,15 @@ class StoreAdoptCommand(BaseCommand):
                         source="store",
                         store_name=acc,
                     )
-                    record_usage_safe(paths, reg, acc, "", "linked", detail="store_adopt")
                 linked = set(reg.store.get("linked") or [])
                 linked.update(newly_linked)
                 reg.store["linked"] = sorted(linked)
+                usage_registry = reg
+            # Recorded outside the transaction: the catalogue lock is a separate wait, and
+            # holding the project's registry lock while queueing for it can time the registry
+            # write out.
+            record_usage_many(paths, usage_registry, [(acc, "", "linked", "store_adopt") for acc in newly_linked])
+            _gitignore_guard(Path.cwd(), self.logger)
 
         print(
             f"Adopted {len(report.adopted)}, copied {len(report.copied)}, "
@@ -771,6 +825,39 @@ class StoreLinkCommand(BaseCommand):
                 "parent folder)"
             ),
         )
+        parser.add_argument(
+            "--accept-partial",
+            dest="accept_partial",
+            action="store_true",
+            default=False,
+            help="Link a dataset whose store copy is incomplete, failed or undescribed",
+        )
+
+    def _refuse_incomplete(self, paths: StorePaths, accession: str, accept_partial: bool) -> bool:
+        """True when ``accession`` must not be linked as it stands.
+
+        The store's sidecar is the record of whether a dataset is usable. A ``partial`` or
+        ``failed`` one, or one with no sidecar at all (an interrupted run, or a folder put
+        there by hand), reads as complete once it is linked into ``fastq/``, so linking it
+        silently would feed an unfinished dataset into every later analysis.
+        """
+        sidecar = read_sidecar(sidecar_path(paths, accession))
+        if sidecar is None:
+            state = "no sidecar"
+        elif sidecar.state in ("partial", "failed", "downloading"):
+            state = sidecar.state
+        else:
+            return False
+
+        if accept_partial:
+            self.logger.warning("%s: linking a dataset the store records as %s", accession, state)
+            return False
+        self.logger.error(
+            "%s: the store records this dataset as %s; rerun with --accept-partial to link it anyway",
+            accession,
+            state,
+        )
+        return True
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -785,9 +872,13 @@ class StoreLinkCommand(BaseCommand):
             return 1
 
         paths = store_paths(root)
+        accept_partial = getattr(args, "accept_partial", False)
         linked: List[str] = []
         failed: List[str] = []
         for accession in args.accessions:
+            if self._refuse_incomplete(paths, accession, accept_partial):
+                failed.append(accession)
+                continue
             try:
                 link_dataset(args.fastq_folder, accession, paths, mode=args.link_mode)
                 linked.append(accession)
@@ -797,6 +888,7 @@ class StoreLinkCommand(BaseCommand):
 
         if linked:
             with registry_transaction(args.registry) as reg:
+                ensure_project_identity(reg)
                 for accession in linked:
                     complete = _sidecar_completeness(paths, accession)
                     record_download(
@@ -809,10 +901,12 @@ class StoreLinkCommand(BaseCommand):
                         source="store",
                         store_name=accession,
                     )
-                    record_usage_safe(paths, reg, accession, "", "linked", detail="store_link")
                 reg_linked = set(reg.store.get("linked") or [])
                 reg_linked.update(linked)
                 reg.store["linked"] = sorted(reg_linked)
+                usage_registry = reg
+            # Outside the transaction: see the note in store_adopt.
+            record_usage_many(paths, usage_registry, [(acc, "", "linked", "store_link") for acc in linked])
 
         print(f"Linked {len(linked)} of {len(args.accessions)} accession(s)")
         return 1 if failed else 0
@@ -1159,6 +1253,16 @@ class StoreGcCommand(BaseCommand):
         parser.add_argument(
             "--keep-partial", action="store_true", help="Never remove a dataset whose state is 'partial'"
         )
+        parser.add_argument(
+            "--include-stale",
+            dest="include_stale",
+            action="store_true",
+            default=False,
+            help=(
+                "Also remove datasets whose only users are projects that look stale from this "
+                "machine; every project on another workstation of a shared store looks stale here"
+            ),
+        )
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
 
     # ------------------------------------------------------------- candidates
@@ -1182,6 +1286,47 @@ class StoreGcCommand(BaseCommand):
         age_days = (datetime.now(timezone.utc) - when).total_seconds() / 86400.0
         return age_days >= older_than_days
 
+    @staticmethod
+    def _usage_by_accession(catalog: Catalog) -> Dict[str, set]:
+        """The set of project ids that has recorded usage of each accession."""
+        usage_by_accession: Dict[str, set] = {}
+        for row in catalog.conn.execute("SELECT DISTINCT accession, project_id FROM usage").fetchall():
+            usage_by_accession.setdefault(row["accession"], set()).add(row["project_id"])
+        return usage_by_accession
+
+    @classmethod
+    def _classify_dataset(
+        cls,
+        row: Any,
+        paths: StorePaths,
+        catalog: Catalog,
+        project_ids: set,
+        stale: Dict[str, str],
+        include_stale: bool,
+    ) -> Tuple[str, str]:
+        """Why this dataset is, or is not, a removal candidate: ``(bucket, reason)``.
+
+        The buckets are ``candidate``, ``in_use`` (another run holds the accession's lock right
+        now), ``linked`` (a live project still symlinks it despite carrying no usage row),
+        ``stale`` (its only users look stale from this machine, kept unless ``--include-stale``)
+        and ``keep`` (a live project uses it).
+        """
+        accession = row["accession"]
+        if lock_is_held(paths, accession):
+            return "in_use", f"in use: {lock_holder(paths, accession)}"
+        if project_ids and not project_ids <= set(stale):
+            return "keep", "in use by a live project"
+
+        linked_names = linked_by(paths, catalog, accession)
+        if linked_names:
+            return "linked", "still linked by " + ", ".join(linked_names)
+
+        if not project_ids:
+            return "candidate", "unused"
+        names = sorted(stale.get(pid, pid) for pid in project_ids)
+        reason = "stale projects: " + ", ".join(names)
+        return ("candidate" if include_stale else "stale"), reason
+
     @classmethod
     def _dataset_candidates(
         cls,
@@ -1190,65 +1335,77 @@ class StoreGcCommand(BaseCommand):
         stale: List[Dict[str, Any]],
         older_than_days: Optional[int],
         keep_partial: bool,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Removal candidates and, separately, datasets skipped because a live project still
-        symlinks them despite carrying no (live) usage row.
+        include_stale: bool = False,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Sort every catalogued dataset into removal candidates and the reasons for keeping.
 
-        Returns ``(candidates, still_linked)``.
+        Returns a dict with ``candidates``, ``still_linked``, ``in_use`` and ``kept_stale``.
+        Placeholder rows (``state = "unknown"``, inserted so a usage row can reference an
+        accession the catalogue has not indexed yet) stand for no files at all and are never
+        offered for removal.
         """
-        stale_ids = {row["project_id"] for row in stale}
         stale_names = {row["project_id"]: (row.get("name") or row["project_id"]) for row in stale}
 
         rows = catalog.conn.execute(
-            "SELECT accession, state, COALESCE(bytes_total, 0) AS bytes, downloaded FROM datasets ORDER BY accession"
+            "SELECT accession, state, COALESCE(bytes_total, 0) AS bytes, downloaded FROM datasets "
+            "WHERE state IS NOT 'unknown' ORDER BY accession"
         ).fetchall()
-        usage_rows = catalog.conn.execute("SELECT DISTINCT accession, project_id FROM usage").fetchall()
-        usage_by_accession: Dict[str, set] = {}
-        for u in usage_rows:
-            usage_by_accession.setdefault(u["accession"], set()).add(u["project_id"])
+        usage_by_accession = cls._usage_by_accession(catalog)
 
-        candidates: List[Dict[str, Any]] = []
-        still_linked: List[Dict[str, Any]] = []
+        buckets: Dict[str, List[Dict[str, Any]]] = {
+            "candidates": [],
+            "still_linked": [],
+            "in_use": [],
+            "kept_stale": [],
+        }
+        bucket_names = {"candidate": "candidates", "linked": "still_linked", "in_use": "in_use", "stale": "kept_stale"}
         for row in rows:
             if keep_partial and row["state"] == "partial":
                 continue
             if not cls._downloaded_before_cutoff(row["downloaded"], older_than_days):
                 continue
             project_ids = usage_by_accession.get(row["accession"], set())
-            if project_ids and not project_ids <= stale_ids:
+            bucket, reason = cls._classify_dataset(row, paths, catalog, project_ids, stale_names, include_stale)
+            if bucket == "keep":
                 continue
-
-            linked_names = linked_by(paths, catalog, row["accession"])
-            if linked_names:
-                still_linked.append(
-                    {
-                        "accession": row["accession"],
-                        "bytes": row["bytes"],
-                        "reason": "still linked by " + ", ".join(linked_names),
-                    }
-                )
-                continue
-
-            if not project_ids:
-                reason = "unused"
-            else:
-                names = sorted(stale_names.get(pid, pid) for pid in project_ids)
-                reason = "stale projects: " + ", ".join(names)
-            candidates.append({"accession": row["accession"], "bytes": row["bytes"], "reason": reason})
-        return candidates, still_linked
+            buckets[bucket_names[bucket]].append(
+                {"accession": row["accession"], "bytes": row["bytes"], "reason": reason}
+            )
+        return buckets
 
     @staticmethod
-    def _leftover_candidates(paths: StorePaths) -> List[Dict[str, Any]]:
+    def _accession_of_leftover(name: str) -> str:
+        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp``."""
+        for suffix in ("_temp", "_adopt", "_old"):
+            if name.endswith(suffix):
+                return name[: -len(suffix)]
+        return name
+
+    @classmethod
+    def _leftover_candidates(cls, paths: StorePaths) -> List[Dict[str, Any]]:
+        """Leftover build folders and cached archives, minus anything a live run is using.
+
+        A ``<ACC>_temp`` folder or a cached ``.sra`` archive whose accession lock is held is a
+        download in progress, not a leftover: removing it would pull the files out from under
+        a running fasterq-dump.
+        """
         candidates: List[Dict[str, Any]] = []
         tmp = paths.tmp
         if tmp.is_dir():
             for entry in sorted(tmp.iterdir()):
                 if entry.name == ".sra-cache" and entry.is_dir():
                     for sub in sorted(entry.iterdir()):
+                        if lock_is_held(paths, cls._accession_of_leftover(sub.name)):
+                            continue
                         candidates.append({"path": sub, "bytes": _path_bytes(sub), "reason": "leftover"})
                     continue
-                if entry.is_dir() and (is_transient_folder(entry.name) or entry.name.endswith("_adopt")):
-                    candidates.append({"path": entry, "bytes": _path_bytes(entry), "reason": "leftover"})
+                if not entry.is_dir():
+                    continue
+                if not (is_transient_folder(entry.name) or entry.name.endswith(("_adopt", "_old"))):
+                    continue
+                if lock_is_held(paths, cls._accession_of_leftover(entry.name)):
+                    continue
+                candidates.append({"path": entry, "bytes": _path_bytes(entry), "reason": "leftover"})
         sra_cache = paths.sra / ".sra-cache"
         if sra_cache.exists():
             candidates.append({"path": sra_cache, "bytes": _path_bytes(sra_cache), "reason": "leftover"})
@@ -1267,12 +1424,13 @@ class StoreGcCommand(BaseCommand):
             print(f"  dataset   {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
         for entry in report["leftovers"]:
             print(f"  leftover  {entry['path']:<40s} {entry['bytes']:>12} bytes  {entry['reason']}")
-        for entry in report.get("still_linked", []):
-            print(f"  kept      {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
+        for key in ("still_linked", "in_use", "kept_stale"):
+            for entry in report.get(key, []):
+                print(f"  kept      {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
         if report["stale_projects"]:
             print("Stale projects:")
             for entry in report["stale_projects"]:
-                print(f"  {entry['name']} (registry missing: {entry['registry']})")
+                print(f"  {entry['name']} on {entry['hostname']} ({entry['reason']}: {entry['registry']})")
 
     # --------------------------------------------------------------- execute
 
@@ -1297,23 +1455,17 @@ class StoreGcCommand(BaseCommand):
             with Catalog(paths) as catalog:
                 catalog.migrate()
                 stale = stale_projects(catalog)
-                dataset_candidates, still_linked = self._dataset_candidates(
-                    catalog, paths, stale, args.older_than, args.keep_partial
+                buckets = self._dataset_candidates(
+                    catalog, paths, stale, args.older_than, args.keep_partial, getattr(args, "include_stale", False)
                 )
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1
 
+        dataset_candidates = buckets["candidates"]
         leftover_candidates = self._leftover_candidates(paths)
         stale_project_rows = sorted(
-            (
-                {
-                    "project_id": row["project_id"],
-                    "name": row.get("name") or row["project_id"],
-                    "registry": row.get("registry"),
-                }
-                for row in stale
-            ),
+            (_stale_project_row(row) for row in stale),
             key=lambda r: r["project_id"],
         )
 
@@ -1323,7 +1475,9 @@ class StoreGcCommand(BaseCommand):
             "leftovers": [
                 {"path": str(c["path"]), "bytes": c["bytes"], "reason": c["reason"]} for c in leftover_candidates
             ],
-            "still_linked": still_linked,
+            "still_linked": buckets["still_linked"],
+            "in_use": buckets["in_use"],
+            "kept_stale": buckets["kept_stale"],
             "total_bytes": sum(c["bytes"] for c in dataset_candidates) + sum(c["bytes"] for c in leftover_candidates),
             "stale_projects": stale_project_rows,
             "removed_datasets": [],

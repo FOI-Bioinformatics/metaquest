@@ -2327,3 +2327,67 @@ class TestPlotMetadataCountsCommand:
         mock_command.assert_called_once_with(
             file_path="counts.txt", title=None, plot_type="bar", colors=None, show_title=False, save_format=None
         )
+
+
+class TestDownloadSraMintsAProjectIdentity:
+    """A project that reached the store without store_init still records its usage."""
+
+    @staticmethod
+    def _usage_rows(store_root):
+        from metaquest.store.catalog import Catalog
+        from metaquest.store.layout import store_paths
+
+        with Catalog(store_paths(store_root)) as catalog:
+            catalog.migrate()
+            return [dict(r) for r in catalog.conn.execute("SELECT accession, project_id, stage FROM usage").fetchall()]
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_a_project_without_store_init_still_records_usage(self, mock_download, _which, tmp_path, monkeypatch):
+        from metaquest.data.registry import load_registry
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        init_store(store_root)
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_file = project_dir / "metaquest_registry.json"
+        message = "Downloaded 1 files, complete (1 of 1 spots); stored"
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, message)
+            return {
+                "total": 1,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 1,
+                "failed": 0,
+                "failed_accessions": [],
+                "results": {"SRR1": message},
+            }
+
+        mock_download.side_effect = fake_download_sra
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(project_dir / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=str(store_root),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        registry = load_registry(registry_file)
+        assert registry.project["id"]
+        rows = self._usage_rows(store_root)
+        assert [(r["accession"], r["stage"]) for r in rows] == [("SRR1", "downloaded")]
+        assert rows[0]["project_id"] == registry.project["id"]
