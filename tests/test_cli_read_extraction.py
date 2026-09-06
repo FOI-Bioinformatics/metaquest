@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.cli.commands.status import StatusCommand
 from metaquest.core.exceptions import ProcessingError
@@ -131,10 +133,122 @@ def _two_sample_tree(tmp):
 
 
 class TestExtractTargetReadsCommand:
+    @pytest.fixture(autouse=True)
+    def _tools_present(self):
+        """Most of these tests exercise extraction logic with ``SecureSubprocess.run_secure``
+        mocked, on a machine that may genuinely lack minimap2/samtools/megahit; the
+        pre-flight tool check must not fail them. A test that specifically exercises a
+        missing tool applies its own, more specific ``shutil.which`` patch, which takes
+        precedence over this one for its duration."""
+        with patch("metaquest.utils.security.shutil.which", return_value="/usr/bin/tool"):
+            yield
+
     def test_command_properties(self):
         cmd = ExtractTargetReadsCommand()
         assert cmd.name == "extract_target_reads"
         assert "target" in cmd.help.lower()
+
+    @patch("metaquest.utils.security.shutil.which", return_value=None)
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_missing_minimap2_or_samtools_exits_1_before_any_work(self, mock_run, _which):
+        """A missing minimap2/samtools is reported once, with an install hint, before any
+        tool ever runs -- not as a raw subprocess error partway through extraction."""
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                )
+            )
+        assert rc == 1
+        mock_run.assert_not_called()
+
+    @patch("metaquest.utils.security.shutil.which")
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_missing_minimap2_logs_install_hint(self, mock_run, mock_which, caplog):
+        mock_which.side_effect = lambda name: None if name == "minimap2" else f"/usr/bin/{name}"
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            with caplog.at_level("ERROR"):
+                rc = cmd.execute(
+                    _args(
+                        tmp,
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                    )
+                )
+        assert rc == 1
+        assert "minimap2 not found on PATH" in caplog.text
+        assert "conda install -c bioconda minimap2" in caplog.text
+
+    @patch("metaquest.utils.security.shutil.which")
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_missing_megahit_only_checked_when_assembling(self, mock_run, mock_which):
+        """megahit is only required (and checked) when --assemble is set."""
+        mock_run.side_effect = _fake_tools({})
+        mock_which.side_effect = lambda name: None if name == "megahit" else f"/usr/bin/{name}"
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=False,
+                )
+            )
+        assert rc == 0
+        mock_run.assert_called()
+
+    @patch("metaquest.utils.security.shutil.which")
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_missing_megahit_exits_1_when_assembling(self, mock_run, mock_which):
+        mock_which.side_effect = lambda name: None if name == "megahit" else f"/usr/bin/{name}"
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    assemble=True,
+                )
+            )
+        assert rc == 1
+        mock_run.assert_not_called()
+
+    @patch("metaquest.utils.security.shutil.which", return_value=None)
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_dry_run_skips_the_tool_check(self, mock_run, _which):
+        """--dry-run never touches any tool, so the pre-flight check is skipped entirely."""
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    dry_run=True,
+                )
+            )
+        assert rc == 0
+        mock_run.assert_not_called()
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_extracts(self, mock_run):

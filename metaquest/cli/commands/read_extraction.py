@@ -35,6 +35,7 @@ from metaquest.data.sra import count_fastq_reads
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.usage import record_usage_safe
+from metaquest.utils.security import missing_tools
 
 
 class ExtractTargetReadsCommand(BaseCommand):
@@ -334,8 +335,25 @@ class ExtractTargetReadsCommand(BaseCommand):
                 )
         self.logger.info("Assembled %d sample(s)", len(with_reads))
 
+    def _check_required_tools(self, args: argparse.Namespace) -> bool:
+        """Report any of minimap2/samtools (and megahit when --assemble) missing on PATH.
+
+        Checked once before any work starts, rather than surfacing as a raw subprocess
+        error partway through extraction; skipped entirely for --dry-run, which never runs
+        an external tool. Returns True when every required tool is present.
+        """
+        if args.dry_run:
+            return True
+        required = ["minimap2", "samtools"] + (["megahit"] if args.assemble else [])
+        missing = missing_tools(required)
+        for tool in missing:
+            self.logger.error("%s not found on PATH. Install it, for example: conda install -c bioconda %s", tool, tool)
+        return not missing
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
+            if not self._check_required_tools(args):
+                return 1
             registry = load_registry(args.registry)
             store = self._resolve_store(args, registry)
             already_done = {
