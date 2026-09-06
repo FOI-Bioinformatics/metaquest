@@ -152,6 +152,7 @@ class TestParseContainmentCommand:
         assert args.summary_containment_file == "top_containments.txt"
         assert args.step_size == 0.1
         assert args.registry_max_screened == DEFAULT_REGISTRY_MAX_SCREENED
+        assert args.details_file is None
 
     def test_configure_parser_with_optional_args(self):
         """Test parser with optional arguments."""
@@ -169,12 +170,15 @@ class TestParseContainmentCommand:
                 "custom_summary.txt",
                 "--step-size",
                 "0.1",
+                "--details-file",
+                "custom_details.tsv",
             ]
         )
 
         assert args.parsed_containment_file == "custom_parsed.txt"
         assert args.summary_containment_file == "custom_summary.txt"
         assert args.step_size == 0.1
+        assert args.details_file == "custom_details.tsv"
 
     @patch("metaquest.cli.commands.containment.parse_containment_data")
     def test_execute(self, mock_command, tmp_path):
@@ -187,13 +191,16 @@ class TestParseContainmentCommand:
             parsed_containment_file=str(tmp_path / "parsed.txt"),
             summary_containment_file="summary.txt",
             step_size=0.05,
+            details_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
             registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
         )
 
         result = command.execute(args)
         assert result == 0
-        mock_command.assert_called_once_with("test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05)
+        mock_command.assert_called_once_with(
+            "test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05, details_file=None
+        )
 
     def test_execute_records_screening_in_registry(self, tmp_path):
         """Every accession in the parsed containment table is recorded as screened from matches."""
@@ -207,6 +214,7 @@ class TestParseContainmentCommand:
             parsed_containment_file=str(tmp_path / "parsed.txt"),
             summary_containment_file=str(tmp_path / "summary.txt"),
             step_size=0.1,
+            details_file=None,
             registry=str(tmp_path / "metaquest_registry.json"),
             registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
         )
@@ -219,6 +227,54 @@ class TestParseContainmentCommand:
             screening = data["datasets"][acc]["screening"]
             assert "GCF_A" in screening["genomes"]
             assert screening["genomes"]["GCF_A"]["source"] == "matches"
+
+    def test_execute_writes_details_file_default_path(self, tmp_path):
+        """The details table (cANI, sample metadata) is written next to the parsed containment table."""
+        matches_folder = tmp_path / "matches"
+        matches_folder.mkdir()
+        (matches_folder / "GCF_A.csv").write_text("acc,containment,cANI,biosample\nSRR1,0.9,0.98,SAMN1\n")
+
+        command = ParseContainmentCommand()
+        parsed_file = tmp_path / "parsed.txt"
+        args = argparse.Namespace(
+            matches_folder=str(matches_folder),
+            parsed_containment_file=str(parsed_file),
+            summary_containment_file=str(tmp_path / "summary.txt"),
+            step_size=0.1,
+            details_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        )
+
+        result = command.execute(args)
+        assert result == 0
+
+        details_file = tmp_path / "parsed_details.tsv"
+        assert details_file.exists()
+        content = details_file.read_text()
+        assert "SRR1" in content and "GCF_A" in content and "0.98" in content
+
+    def test_execute_writes_details_file_explicit_path(self, tmp_path):
+        matches_folder = tmp_path / "matches"
+        matches_folder.mkdir()
+        (matches_folder / "GCF_A.csv").write_text("acc,containment\nSRR1,0.9\n")
+
+        command = ParseContainmentCommand()
+        custom_details = tmp_path / "custom_details.tsv"
+        args = argparse.Namespace(
+            matches_folder=str(matches_folder),
+            parsed_containment_file=str(tmp_path / "parsed.txt"),
+            summary_containment_file=str(tmp_path / "summary.txt"),
+            step_size=0.1,
+            details_file=str(custom_details),
+            registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        )
+
+        result = command.execute(args)
+        assert result == 0
+        assert custom_details.exists()
+        assert not (tmp_path / "parsed_details.tsv").exists()
 
 
 class TestDownloadMetadataCommand:

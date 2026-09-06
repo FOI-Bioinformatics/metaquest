@@ -49,6 +49,12 @@ class ParseContainmentCommand(BaseCommand):
             type=float,
             help="Size of steps for the containment thresholds",
         )
+        parser.add_argument(
+            "--details-file",
+            default=None,
+            help="File for the cANI and sample metadata details table "
+            "(default: <parsed-containment-file stem>_details.tsv)",
+        )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument(
             "--registry-max-screened",
@@ -64,6 +70,7 @@ class ParseContainmentCommand(BaseCommand):
                 args.parsed_containment_file,
                 args.summary_containment_file,
                 args.step_size,
+                details_file=args.details_file,
             )
             with registry_transaction(args.registry) as registry:
                 record_screening_from_table(

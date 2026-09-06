@@ -7,7 +7,7 @@ This module provides functions for processing Branchwater containment files.
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, List, Union
+from typing import Any, DefaultDict, Dict, List, Optional, Union
 
 import pandas as pd
 
@@ -28,6 +28,61 @@ logger = logging.getLogger(__name__)
 
 # Register format plugins
 format_registry.register(BranchWaterFormatPlugin)
+
+# Columns of the details table written alongside the parsed containment table. It carries the
+# cANI and sample metadata a Branchwater match brings, which the wide containment matrix (one
+# column per genome) has no room for.
+DETAILS_COLUMNS = [
+    "accession",
+    "genome_id",
+    "containment",
+    "cANI",
+    "biosample",
+    "bioproject",
+    "assay_type",
+    "organism",
+    "geo_loc_name",
+    "lat_lon",
+]
+
+# Maps a details column to the key it is read from in a Containment's additional_data
+# (the Branchwater CSV column name, as BranchWaterFormatPlugin.parse_file exposes it).
+_DETAILS_FIELD_SOURCE = {
+    "cANI": "cANI",
+    "biosample": "biosample",
+    "bioproject": "bioproject",
+    "assay_type": "assay_type",
+    "organism": "organism",
+    "geo_loc_name": "geo_loc_name_country_calc",
+    "lat_lon": "lat_lon",
+}
+
+
+def _containment_details_row(accession, genome_id, value, containment) -> Dict[str, Any]:
+    """Build one details row from a parsed Containment; a field absent from the CSV is an empty string."""
+    additional_data = getattr(containment, "additional_data", None)
+    if not isinstance(additional_data, dict):
+        additional_data = {}
+    row: Dict[str, Any] = {"accession": accession, "genome_id": genome_id, "containment": value}
+    for column, source_field in _DETAILS_FIELD_SOURCE.items():
+        field_value = additional_data.get(source_field, "")
+        row[column] = "" if field_value is None else field_value
+    return row
+
+
+def _resolve_details_file(output_file: Union[str, Path], details_file: Optional[Union[str, Path]]) -> Path:
+    """Return the details table path: the given one, or ``<parsed file stem>_details.tsv`` next to it."""
+    if details_file is not None:
+        return Path(details_file)
+    output_path = Path(output_file)
+    return output_path.parent / f"{output_path.stem}_details.tsv"
+
+
+def _write_details_table(details_rows: List[Dict[str, Any]], details_file: Union[str, Path]) -> None:
+    """Write the collected details rows as a TSV, in the fixed DETAILS_COLUMNS order."""
+    df = pd.DataFrame(details_rows, columns=DETAILS_COLUMNS)
+    write_csv(df, details_file, sep="\t", index=False)
+    logger.info(f"Containment details saved to {details_file}")
 
 
 def process_branchwater_files(source_folder: Union[str, Path], target_folder: Union[str, Path]) -> Dict[str, Path]:
@@ -240,7 +295,7 @@ def _finalize_metadata_extraction(metadata_records, output_file, processed_count
     return metadata_df
 
 
-def _process_genome_containments(csv_file, genome_id, containment_data):
+def _process_genome_containments(csv_file, genome_id, containment_data, details_rows=None):
     """
     Process containment data from a single genome file.
 
@@ -248,6 +303,9 @@ def _process_genome_containments(csv_file, genome_id, containment_data):
         csv_file: Path to CSV file
         genome_id: ID of the genome
         containment_data: Dictionary to store containment data
+        details_rows: Optional list to append a details row (cANI and sample metadata) to,
+            one per containment. Left untouched when None (the default), so existing
+            callers keep their prior behaviour.
 
     Raises:
         DataAccessError: If processing fails
@@ -271,6 +329,11 @@ def _process_genome_containments(csv_file, genome_id, containment_data):
                 containment_data[containment.accession][genome_id] = max(
                     containment_data[containment.accession][genome_id],
                     containment.value,
+                )
+
+            if details_rows is not None:
+                details_rows.append(
+                    _containment_details_row(containment.accession, genome_id, containment.value, containment)
                 )
 
     except Exception as e:
@@ -368,15 +431,22 @@ def parse_containment_data(
     output_file: Union[str, Path],
     summary_file: Union[str, Path],
     step_size: float = 0.1,
+    details_file: Optional[Union[str, Path]] = None,
 ) -> ContainmentSummary:
     """
     Parse containment data from match files and generate summary.
+
+    Alongside the parsed containment table, writes a details table (default
+    ``<output_file stem>_details.tsv``) with one row per (accession, genome_id)
+    carrying the cANI and sample metadata a Branchwater match brings; the wide
+    containment matrix itself is unchanged.
 
     Args:
         matches_folder: Folder containing match files
         output_file: Path to save parsed containment data
         summary_file: Path to save containment summary
         step_size: Step size for threshold calculation
+        details_file: Path to save the details table (default: derived from output_file)
 
     Returns:
         ContainmentSummary object
@@ -388,6 +458,7 @@ def parse_containment_data(
 
     # Dictionary to store containment data
     containment_data: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
+    details_rows: List[Dict[str, Any]] = []
 
     # Get all CSV files in the matches folder
     csv_files = list_files(matches_path, "*.csv")
@@ -402,13 +473,15 @@ def parse_containment_data(
         genome_id = csv_file.stem
 
         try:
-            _process_genome_containments(csv_file, genome_id, containment_data)
+            _process_genome_containments(csv_file, genome_id, containment_data, details_rows=details_rows)
             processed_count += 1
         except Exception as e:
             error_count += 1
             logger.error(f"Error parsing containment from {csv_file}: {e}")
 
     logger.info(f"Processed {processed_count} files with {error_count} errors")
+
+    _write_details_table(details_rows, _resolve_details_file(output_file, details_file))
 
     if not containment_data:
         logger.warning("No valid containment data found")

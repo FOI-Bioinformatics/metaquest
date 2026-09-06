@@ -228,6 +228,7 @@ def search_index(
 
     text: Optional[str] = None
     if cache_path is not None and not refresh:
+        assert cache_key is not None  # set together with cache_path above
         text = _cache_read(cache_path, cache_key, max_cache_age_days)
 
     fetched_now = False
@@ -255,6 +256,7 @@ def search_index(
         logger.info("Dropped %d match(es) below containment %.2f reported by the server", n_dropped, threshold)
 
     if fetched_now and cache_path is not None:
+        assert cache_key is not None  # set together with cache_path above
         _cache_write(cache_path, cache_key, text, server, threshold, len(kept))
 
     return kept

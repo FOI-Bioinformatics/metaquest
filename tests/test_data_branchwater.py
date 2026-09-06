@@ -440,7 +440,7 @@ class TestParseContainmentData:
         # Create test CSV file
         (matches_dir / "genome1.csv").write_text("acc,containment\nERR123,0.95")
 
-        def mock_process_side_effect(csv_file, genome_id, containment_data):
+        def mock_process_side_effect(csv_file, genome_id, containment_data, details_rows=None):
             # Simulate adding some data to containment_data
             containment_data["ERR123"]["genome1"] = 0.95
 
@@ -623,6 +623,142 @@ class TestBranchwaterIntegration:
             # Verify some realistic entries are present
             run_ids = result["Run_ID"].tolist()
             assert any(run_id.startswith("ERR") or run_id.startswith("SRR") for run_id in run_ids)
+
+
+class TestProcessGenomeContainmentsDetails:
+    """Test that _process_genome_containments can collect a details row per containment."""
+
+    def test_collects_details_rows_when_requested(self, tmp_path):
+        csv_file = tmp_path / "GCF_1.csv"
+        csv_file.write_text(
+            "acc,containment,cANI,biosample,bioproject,assay_type,organism,geo_loc_name_country_calc,lat_lon\n"
+            "SRR1,0.9,0.98,SAMN1,PRJNA1,WGS,Salmonella enterica,USA,35.7N 100.2W\n"
+        )
+        containment_data = defaultdict(dict)
+        details_rows: list = []
+
+        _process_genome_containments(csv_file, "GCF_1", containment_data, details_rows=details_rows)
+
+        assert len(details_rows) == 1
+        assert details_rows[0] == {
+            "accession": "SRR1",
+            "genome_id": "GCF_1",
+            "containment": 0.9,
+            "cANI": "0.98",
+            "biosample": "SAMN1",
+            "bioproject": "PRJNA1",
+            "assay_type": "WGS",
+            "organism": "Salmonella enterica",
+            "geo_loc_name": "USA",
+            "lat_lon": "35.7N 100.2W",
+        }
+
+    def test_default_details_rows_is_none_and_backward_compatible(self, tmp_path):
+        """Existing callers that do not pass details_rows must keep working unchanged."""
+        csv_file = tmp_path / "GCF_1.csv"
+        csv_file.write_text("acc,containment\nSRR1,0.9\n")
+        containment_data = defaultdict(dict)
+
+        _process_genome_containments(csv_file, "GCF_1", containment_data)
+
+        assert containment_data["SRR1"]["GCF_1"] == 0.9
+
+    def test_missing_fields_become_empty_strings(self, tmp_path):
+        csv_file = tmp_path / "GCF_1.csv"
+        csv_file.write_text("acc,containment\nSRR1,0.9\n")
+        containment_data = defaultdict(dict)
+        details_rows: list = []
+
+        _process_genome_containments(csv_file, "GCF_1", containment_data, details_rows=details_rows)
+
+        row = details_rows[0]
+        assert row["cANI"] == ""
+        assert row["biosample"] == ""
+        assert row["geo_loc_name"] == ""
+
+
+class TestContainmentDetailsTable:
+    """Test that parse_containment_data writes a details table alongside the parsed containment table."""
+
+    def test_details_rows_for_two_genome_matches_folder(self, tmp_path):
+        matches_dir = tmp_path / "matches"
+        matches_dir.mkdir()
+        (matches_dir / "GCF_1.csv").write_text(
+            "acc,containment,cANI,biosample,bioproject,assay_type,organism,geo_loc_name_country_calc,lat_lon\n"
+            "SRR1,0.95,0.99,SAMN1,PRJNA1,WGS,Salmonella enterica,USA,35.7N 100.2W\n"
+        )
+        (matches_dir / "GCF_2.csv").write_text(
+            "acc,containment,cANI,biosample,bioproject,assay_type,organism,geo_loc_name_country_calc,lat_lon\n"
+            "SRR2,0.80,0.95,SAMN2,PRJNA2,AMPLICON,gut metagenome,Denmark,55.67N 12.57E\n"
+        )
+        output_file = tmp_path / "parsed.txt"
+        summary_file = tmp_path / "summary.txt"
+
+        parse_containment_data(matches_dir, output_file, summary_file, 0.1)
+
+        details_file = tmp_path / "parsed_details.tsv"
+        assert details_file.exists()
+        details = pd.read_csv(details_file, sep="\t", dtype=str).fillna("")
+        assert list(details.columns) == [
+            "accession",
+            "genome_id",
+            "containment",
+            "cANI",
+            "biosample",
+            "bioproject",
+            "assay_type",
+            "organism",
+            "geo_loc_name",
+            "lat_lon",
+        ]
+        rows = {row["accession"]: row for _, row in details.iterrows()}
+        assert set(rows) == {"SRR1", "SRR2"}
+        assert rows["SRR1"]["genome_id"] == "GCF_1"
+        assert rows["SRR1"]["cANI"] == "0.99"
+        assert rows["SRR1"]["biosample"] == "SAMN1"
+        assert rows["SRR1"]["geo_loc_name"] == "USA"
+        assert rows["SRR2"]["genome_id"] == "GCF_2"
+        assert rows["SRR2"]["assay_type"] == "AMPLICON"
+        assert rows["SRR2"]["geo_loc_name"] == "Denmark"
+
+    def test_details_file_override(self, tmp_path):
+        matches_dir = tmp_path / "matches"
+        matches_dir.mkdir()
+        (matches_dir / "GCF_1.csv").write_text("acc,containment,cANI\nSRR1,0.9,0.98\n")
+        output_file = tmp_path / "parsed.txt"
+        summary_file = tmp_path / "summary.txt"
+        custom_details = tmp_path / "custom_details.tsv"
+
+        parse_containment_data(matches_dir, output_file, summary_file, 0.1, details_file=custom_details)
+
+        assert custom_details.exists()
+        assert not (tmp_path / "parsed_details.tsv").exists()
+
+    def test_parsed_containment_unchanged_by_details_table(self, tmp_path):
+        """Adding the details table must not change parsed_containment.txt's bytes."""
+        matches_dir = tmp_path / "matches"
+        matches_dir.mkdir()
+        (matches_dir / "GCF_1.csv").write_text(
+            "acc,containment,cANI,biosample\nSRR1,0.9,0.98,SAMN1\nSRR2,0.2,0.9,SAMN2\n"
+        )
+        output_file = tmp_path / "parsed.txt"
+        summary_file = tmp_path / "summary.txt"
+
+        parse_containment_data(matches_dir, output_file, summary_file, 0.1)
+        produced = output_file.read_bytes()
+
+        from metaquest.data.file_io import write_csv
+
+        containment_data = {"SRR1": {"GCF_1": 0.9}, "SRR2": {"GCF_1": 0.2}}
+        df = pd.DataFrame.from_dict(containment_data, orient="index")
+        df.fillna(0, inplace=True)
+        df["max_containment"] = df.max(axis=1)
+        df["max_containment_annotation"] = df.idxmax(axis=1)
+        df.sort_values(by="max_containment", ascending=False, inplace=True)
+        expected_file = tmp_path / "expected.txt"
+        write_csv(df, expected_file, sep="\t")
+
+        assert produced == expected_file.read_bytes()
 
 
 def test_summary_counts_samples_at_exactly_one(tmp_path):
