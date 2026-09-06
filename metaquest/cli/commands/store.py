@@ -6,6 +6,12 @@ project's identity, in the project registry. `store_status` and `store_reindex` 
 against whichever store root resolves for the current project (an explicit `--data-root`, the
 `METAQUEST_DATA` environment variable, the registry's recorded `store.root`, or the user's
 default config), via `metaquest.store.resolve.resolve_store_root`.
+
+Every command here exists to operate on the store, so an unreachable one is an error with
+exit 1, not something to work around; the analysis and reporting commands degrade instead
+(see `metaquest.store.resolve.resolve_optional_store`). A project that links from the store
+without ever running `store_init` has its identity minted on the spot
+(`metaquest.store.usage.ensure_project_identity`), so `store_gc` can always see who uses what.
 """
 
 import argparse
@@ -127,7 +133,11 @@ class StoreInitCommand(BaseCommand):
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--data-root", required=True, help="Folder to use as the shared data store root")
+        parser.add_argument(
+            "--data-root",
+            required=True,
+            help="Folder to use as the shared data store root (must be empty, or an existing store)",
+        )
         parser.add_argument(
             "--project-name",
             default=None,
@@ -354,7 +364,10 @@ class StoreReindexCommand(BaseCommand):
 
     @property
     def help(self) -> str:
-        return "Rebuild the store catalogue from every dataset's sidecar file"
+        return (
+            "Rebuild the store catalogue from every dataset's sidecar file "
+            "(refuses to run when any sidecar cannot be read)"
+        )
 
     @property
     def group(self) -> str:
@@ -428,7 +441,10 @@ class StoreAdoptCommand(BaseCommand):
 
     Each accession is staged and moved under its own per-accession lock (see
     ``metaquest.store.adopt``), so running this command concurrently against the same store from
-    two projects is safe: a shared accession simply serialises rather than racing.
+    two projects is safe: a shared accession simply serialises rather than racing, and only the
+    project's own ``fastq/<ACC>`` folders are ever claimed. Store folders belonging to other
+    projects, accessions another run is publishing right now, and accessions the store's
+    filesystem has no room to stage are reported and left alone.
     """
 
     @property
@@ -796,7 +812,7 @@ class StoreLinkCommand(BaseCommand):
 
     @property
     def help(self) -> str:
-        return "Link project accessions to the shared store's copies"
+        return "Link project accessions to the shared store's copies (complete datasets only, unless --accept-partial)"
 
     @property
     def group(self) -> str:
@@ -1197,13 +1213,20 @@ def _path_bytes(path: Path) -> int:
 class StoreGcCommand(BaseCommand):
     """Command to report, and optionally remove, unused datasets and leftover temp files.
 
-    A dataset is a removal candidate when it has no usage rows at all, or when every usage
-    row it does have belongs to a project ``stale_projects`` (see ``metaquest.store.usage``)
-    considers gone; a dataset any live project still links is never a candidate. Leftover
-    temp artifacts (``<store>/tmp/*_temp`` from an interrupted download, ``<store>/tmp/*_adopt``
-    from an interrupted adopt, the ``.sra-cache`` archive cache under ``tmp`` or ``sra``) are
-    reported and removed independently of the dataset check. Nothing is removed unless
-    ``--yes`` is given; the default is a dry-run report only.
+    A dataset is a removal candidate when it has no usage rows at all and no live project
+    symlinks it. Three things keep a dataset out of the candidate list and into the report's
+    ``still_linked``, ``in_use`` and ``kept_stale`` sections: a live project's symlink, a held
+    accession lock (another run is downloading or adopting it right now), and usage rows that
+    belong only to projects ``stale_projects`` (see ``metaquest.store.usage``) cannot see from
+    this machine, which on a shared store is every project on another workstation. That last
+    case needs ``--include-stale`` before it is removed. Placeholder rows (``state="unknown"``,
+    a usage row recorded ahead of its dataset) stand for no files and are never candidates.
+
+    Leftover temp artifacts (``<store>/tmp/*_temp`` from an interrupted download,
+    ``<store>/tmp/*_adopt`` from an interrupted adopt, ``<store>/tmp/*_old`` from a publish,
+    the ``.sra-cache`` archive cache under ``tmp`` or ``sra``) are reported and removed
+    independently of the dataset check, minus anything whose accession lock is held. Nothing
+    is removed unless ``--yes`` is given; the default is a dry-run report only.
     """
 
     @property
@@ -1212,7 +1235,10 @@ class StoreGcCommand(BaseCommand):
 
     @property
     def help(self) -> str:
-        return "Report, and with --yes remove, unused datasets and leftover temp files from the store"
+        return (
+            "Report, and with --yes remove, unused datasets and leftover temp files from the store "
+            "(datasets a project links, or another run is working on, are always kept)"
+        )
 
     @property
     def group(self) -> str:

@@ -15,7 +15,11 @@ Writes are serialised across processes with the same lock protocol the
 per-project registry uses (``metaquest.data.registry._acquire_lock``), on a
 ``catalog.sqlite.lock`` file next to the database, so two projects on one
 machine or a shared network volume never interleave writes. Reads may open the
-database directly without taking the lock.
+database directly without taking the lock, but only one that already exists:
+creating and migrating are ``catalog_write``'s job, so a read never runs DDL
+outside the lock. The database journals in DELETE mode, never WAL, because a
+shared store is expected to live on a NAS and SQLite documents WAL as unsafe
+over NFS and SMB while accepting the pragma there regardless.
 """
 
 import functools
@@ -135,7 +139,9 @@ class Catalog:
     Use as a context manager. Opening never migrates the schema and never takes
     the write lock; both are the caller's job (``catalog_write`` does both for a
     write session). A plain ``with Catalog(paths) as catalog:`` is for reads
-    against a catalogue that already exists.
+    against a catalogue that already exists, and refuses to open one that does
+    not: ``create=True`` (what ``catalog_write`` passes) is the only way to
+    bring a new database into being.
     """
 
     def __init__(self, paths: StorePaths, create: bool = False):

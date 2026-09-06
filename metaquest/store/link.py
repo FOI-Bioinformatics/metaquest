@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 # How a project entry points at the store: a symlink whose target is written relative to the
 # link ("relative") or as an absolute path ("absolute"), a copy of the folder ("copy"), or
-# "auto", which picks relative when the two trees share a parent and absolute otherwise.
+# "auto", which picks relative when the two trees share a parent within one volume and
+# absolute otherwise (two separately mounted volumes share no tree that survives a remount).
 LINK_MODES = ("auto", "relative", "absolute", "copy")
 
 
