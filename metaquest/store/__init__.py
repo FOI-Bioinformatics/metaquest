@@ -38,6 +38,7 @@ from metaquest.store.link import (
     link_dataset,
     unlink_dataset,
 )
+from metaquest.store.adopt import AdoptReport, adopt
 
 __all__ = [
     "StorePaths",
@@ -64,4 +65,6 @@ __all__ = [
     "is_store_link",
     "link_dataset",
     "unlink_dataset",
+    "AdoptReport",
+    "adopt",
 ]
