@@ -591,7 +591,9 @@ def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
         if is_transient_folder(folder.name):
             continue
         if accession_has_fastq(folder):
-            files = [p for p in folder.glob("*.fastq*") if p.is_file()]
+            # fastq_files, not a raw glob: a zero-byte file or a .gz.tmp.<pid> leftover of an
+            # interrupted compression is not a downloaded read file.
+            files = fastq_files(folder)
             found[folder.name] = (len(files), sum(p.stat().st_size for p in files))
     return found
 

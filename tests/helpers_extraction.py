@@ -74,10 +74,12 @@ def _fake_tools(state):
             cache_dir = Path(args[args.index("-O") + 1])
             acc_dir = cache_dir / accession
             acc_dir.mkdir(parents=True, exist_ok=True)
-            (acc_dir / f"{accession}.sra").write_bytes(b"")
+            # NCBI serves some runs only as the smaller .sralite format.
+            suffix = ".sralite" if state.get("sralite") else ".sra"
+            (acc_dir / f"{accession}{suffix}").write_bytes(b"")
         if executable == "fasterq-dump":
             positional = _positional(args)
-            accession = Path(positional).stem if positional.endswith(".sra") else positional
+            accession = Path(positional).stem if positional.endswith((".sra", ".sralite")) else positional
             out_dir = Path(args[args.index("-O") + 1])
             out_dir.mkdir(parents=True, exist_ok=True)
             record = "@r\nACGT\n+\nIIII\n" * state.get("reads", 4)

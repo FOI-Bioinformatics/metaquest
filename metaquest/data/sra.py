@@ -229,7 +229,6 @@ def verify_download(
     accession: str,
     acc_dir: Union[str, Path],
     expected_spots: Optional[int],
-    expected_bytes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compare what actually downloaded for ``accession`` against NCBI's recorded spot count.
 
@@ -265,7 +264,7 @@ def verify_download(
     }
 
 
-_VERDICT_MESSAGE_RE = re.compile(r"(complete|truncated) \((\d+) of (\d+) spots\)")
+_VERDICT_MESSAGE_RE = re.compile(r", (complete|truncated) \((\d+) of (\d+) spots\)")
 
 
 def parse_verdict_message(message: str) -> Optional[Dict[str, Any]]:
@@ -275,13 +274,17 @@ def parse_verdict_message(message: str) -> Optional[Dict[str, Any]]:
     download/registry boundary, so the CLI recovers the verdict from it rather than the data
     layer reaching into the registry directly. Returns ``None`` for a message that carries no
     verdict (a failure message, or "already exists").
+
+    Both patterns are anchored on the ", <verdict>" separator ``_handle_download_output``
+    writes, so a failure message that merely contains one of these words is not read as a
+    verdict.
     """
     match = _VERDICT_MESSAGE_RE.search(message)
     if match:
         verdict, reads_r1, expected_spots = match.group(1), int(match.group(2)), int(match.group(3))
         ratio = round(reads_r1 / expected_spots, 4) if expected_spots else 0.0
         return {"verdict": verdict, "reads_r1": reads_r1, "expected_spots": expected_spots, "ratio": ratio}
-    if "unverified" in message:
+    if ", unverified" in message:
         return {"verdict": "unverified"}
     return None
 
@@ -568,6 +571,20 @@ def _fasterq_dump_args(
     return args + tail
 
 
+def _cached_sra_archive(acc_cache_dir: Path, accession: str) -> Path:
+    """The archive prefetch wrote for ``accession``, preferring ``.sra`` over ``.sralite``.
+
+    NCBI serves some runs only in the smaller ``.sralite`` format, which fasterq-dump reads
+    just as well. When the folder holds neither, the ``.sra`` path is returned so
+    fasterq-dump reports the missing file itself.
+    """
+    expected = acc_cache_dir / f"{accession}.sra"
+    if expected.is_file():
+        return expected
+    candidates = sorted(p for p in acc_cache_dir.glob(f"{accession}.sra*") if p.is_file())
+    return candidates[0] if candidates else expected
+
+
 def _discard_cached_archive(cache_path: Path, accession: str, message: str) -> None:
     """Remove the prefetched ``.sra`` archive once its FASTQ files are on disk.
 
@@ -652,6 +669,11 @@ def download_accession(
         temp_folder_path = _prepare_temp_folder(temp_folder)
 
         using_prefetch = use_prefetch and shutil.which("prefetch") is not None
+        if use_prefetch and not using_prefetch:
+            logger.info(
+                f"prefetch not found on PATH; running fasterq-dump directly against {accession}, "
+                "which downloads and dumps in one step"
+            )
 
         if using_prefetch:
             SecureSubprocess.add_allowed_root(cache_path)
@@ -659,7 +681,7 @@ def download_accession(
                 "prefetch",
                 ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
             )
-            source = str(cache_path / accession / f"{accession}.sra")
+            source = str(_cached_sra_archive(cache_path / accession, accession))
         else:
             # Direct call against the accession, without going through prefetch's
             # on-disk .sra archive: used when use_prefetch is False, or prefetch is
@@ -1184,6 +1206,9 @@ def download_sra(
                 "already_downloaded_accessions": sorted(str(a) for a in already_downloaded),
                 "blacklisted_accessions": sorted(str(a) for a in blacklisted),
                 "skipped_accessions": sorted(str(a) for a in skipped_accessions),
+                # No download ran, so nothing could abort; the key is present either way so
+                # callers can read it without knowing which mode produced the stats.
+                "aborted": None,
             }
 
         # Limit number of downloads if specified
@@ -1241,33 +1266,3 @@ def download_sra(
 
     except Exception as e:
         raise DataAccessError(f"Downloading SRA data: {e}")
-
-
-def _find_paired_reads(illumina_files):
-    """
-    Find pairs of Illumina reads.
-
-    Args:
-        illumina_files: List of Illumina fastq files
-
-    Returns:
-        List of tuples (R1_file, R2_file)
-    """
-    read_pairs = []
-
-    # Accept both the "R1/R2" convention and fasterq-dump's "_1/_2" split-files output.
-    r1_markers = ("R1", "_1")
-    for fastq_file in illumina_files:
-        marker = next((m for m in r1_markers if m in fastq_file.name), None)
-        if marker is None:
-            continue
-
-        mate_marker = marker.replace("1", "2")
-        r2_file = fastq_file.with_name(fastq_file.name.replace(marker, mate_marker))
-
-        if r2_file.exists():
-            read_pairs.append((fastq_file, r2_file))
-        else:
-            logger.warning(f"Could not find paired read file for {fastq_file}")
-
-    return read_pairs

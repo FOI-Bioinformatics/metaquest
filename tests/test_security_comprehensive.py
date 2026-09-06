@@ -429,6 +429,17 @@ class TestArgumentParsing:
         cmd = SecureSubprocess._build_validated_command("fasterq-dump", ["--split-3", "--threads", "4", str(sra_file)])
         assert cmd == ["fasterq-dump", "--split-3", "--threads", "4", str(sra_file.resolve())]
 
+    def test_fasterq_dump_accepts_a_sralite_path_positional(self, tmp_path, monkeypatch):
+        """NCBI serves some runs only as .sralite; that archive is a path, not an accession."""
+        monkeypatch.chdir(tmp_path)
+        sra_dir = tmp_path / "SRR1"
+        sra_dir.mkdir()
+        sra_file = sra_dir / "SRR1.sralite"
+        sra_file.write_text("data")
+
+        cmd = SecureSubprocess._build_validated_command("fasterq-dump", ["--split-3", str(sra_file)])
+        assert cmd == ["fasterq-dump", "--split-3", str(sra_file.resolve())]
+
     def test_pigz_parallel_force_allowed(self, tmp_path, monkeypatch):
         """pigz -p <n> -f <file> is an allowed command."""
         monkeypatch.chdir(tmp_path)

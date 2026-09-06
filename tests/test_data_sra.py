@@ -3,6 +3,7 @@ Tests for metaquest.data.sra module.
 """
 
 import gzip
+import inspect
 import json
 
 import pytest
@@ -14,6 +15,7 @@ from metaquest.data.sra import (
     _read_blacklist_files,
     _prepare_temp_folder,
     _check_existing_download,
+    _cached_sra_archive,
     _handle_download_output,
     download_accession,
     _check_existing_downloads,
@@ -21,7 +23,6 @@ from metaquest.data.sra import (
     _retry_failed_downloads,
     _handle_download_failure,
     download_sra,
-    _find_paired_reads,
     accession_has_fastq,
     fastq_files,
     primary_fastq,
@@ -473,6 +474,10 @@ class TestVerifyDownload:
         assert result["reads_r1"] == 500
         assert result["verdict"] == "complete"
 
+    def test_no_expected_bytes_parameter(self):
+        """NCBI's recorded size is the .sra archive size, so it never constrained the FASTQ bytes."""
+        assert "expected_bytes" not in inspect.signature(verify_download).parameters
+
     def test_bytes_total_sums_fastq_files(self, tmp_path):
         acc_dir = tmp_path / "SRR1"
         acc_dir.mkdir()
@@ -483,6 +488,29 @@ class TestVerifyDownload:
         result = verify_download("SRR1", acc_dir, expected_spots=None)
 
         assert result["bytes_total"] == expected_bytes
+
+
+class TestCachedSraArchive:
+    """_cached_sra_archive: which prefetch output fasterq-dump is pointed at."""
+
+    def test_prefers_sra_over_sralite(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.sralite").write_bytes(b"")
+        (acc_dir / "SRR1.sra").write_bytes(b"")
+
+        assert _cached_sra_archive(acc_dir, "SRR1") == acc_dir / "SRR1.sra"
+
+    def test_finds_a_sralite_only_download(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.sralite").write_bytes(b"")
+
+        assert _cached_sra_archive(acc_dir, "SRR1") == acc_dir / "SRR1.sralite"
+
+    def test_falls_back_to_the_expected_name_when_nothing_was_written(self, tmp_path):
+        """An empty cache folder yields the .sra path, so fasterq-dump reports the missing file."""
+        assert _cached_sra_archive(tmp_path / "SRR1", "SRR1") == tmp_path / "SRR1" / "SRR1.sra"
 
 
 class TestParseVerdictMessage:
@@ -506,6 +534,11 @@ class TestParseVerdictMessage:
     def test_unrelated_message_returns_none(self):
         assert parse_verdict_message("Download failed: timeout") is None
         assert parse_verdict_message("already exists") is None
+
+    def test_verdict_words_outside_the_message_format_are_ignored(self):
+        """Only the ", <verdict>" text _handle_download_output writes counts as a verdict."""
+        assert parse_verdict_message("Download failed: unverified checksum for SRR1") is None
+        assert parse_verdict_message("not-found: could not complete (0 of 5 spots) for SRR1") is None
 
 
 class TestHandleDownloadOutput:
@@ -923,6 +956,32 @@ class TestDownloadAccession:
         assert "--skip-technical" in dump_args
         # No cache directory was ever created.
         assert not (output_folder / ".sra-cache").exists()
+        assert accession_has_fastq(output_folder / "SRR123")
+
+    def test_download_accession_logs_the_direct_call_when_prefetch_is_missing(self, tmp_path, caplog):
+        """The fallback changes where the data comes from, so it is recorded at info level."""
+        state = {"reads": 4}
+
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                with caplog.at_level("INFO", logger="metaquest.data.sra"):
+                    success, message = download_accession("SRR123", tmp_path / "downloads", compress=False)
+
+        assert success is True, message
+        assert "prefetch not found on PATH" in caplog.text
+
+    def test_download_accession_dumps_a_sralite_archive(self, tmp_path):
+        """Some runs are served only as .sralite; fasterq-dump must be pointed at that file."""
+        output_folder = tmp_path / "downloads"
+        state = {"reads": 4, "sralite": True}
+
+        with patch("metaquest.data.sra.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"):
+            with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", output_folder, compress=False)
+
+        assert success is True, message
+        dump_args = state["calls"][1][1]
+        assert dump_args[-1] == str(output_folder / ".sra-cache" / "SRR123" / "SRR123.sralite")
         assert accession_has_fastq(output_folder / "SRR123")
 
     def test_download_accession_use_prefetch_false_skips_prefetch(self, tmp_path):
@@ -1603,6 +1662,7 @@ class TestDownloadSra:
             "already_downloaded_accessions": [],
             "blacklisted_accessions": [],
             "skipped_accessions": [],
+            "aborted": None,
         }
         assert result == expected_result
         mock_logger.info.assert_called_with("Dry run: would download 2 accessions")
@@ -1722,48 +1782,6 @@ class TestDownloadSra:
         mock_download.assert_called_once()
         assert stats["already_downloaded"] == 0
         assert stats["successful"] == 1
-
-
-class TestFindPairedReads:
-    """Test _find_paired_reads function."""
-
-    def test_find_paired_reads_standard_naming(self, tmp_path):
-        """Test finding paired reads with standard naming."""
-        files = [
-            tmp_path / "SRR456_R1.fastq",
-            tmp_path / "SRR456_R2.fastq",
-            tmp_path / "SRR789_R1.fastq",  # Single R1 without R2
-        ]
-
-        # Create all files
-        for file in files:
-            file.write_text("@seq1\nACGT\n+\nIIII\n")
-
-        # Test with only the R1 file (function should find the R2 automatically)
-        result = _find_paired_reads([files[0]])  # Only pass SRR456_R1.fastq
-
-        # Should find 1 pair
-        assert len(result) == 1
-        r1_file, r2_file = result[0]
-        assert r1_file == files[0]  # SRR456_R1.fastq
-        assert r2_file == files[1]  # SRR456_R2.fastq
-
-    def test_find_paired_reads_no_pairs(self, tmp_path):
-        """Test when no paired reads are found."""
-        files = [tmp_path / "SRR123.fastq", tmp_path / "SRR456.fastq"]  # No R1/R2 naming
-
-        for file in files:
-            file.write_text("@seq1\nACGT\n+\nIIII\n")
-
-        result = _find_paired_reads(files)
-
-        # Should find no pairs since no files have R1 in their names
-        assert len(result) == 0
-
-    def test_find_paired_reads_empty_list(self):
-        """Test with empty file list."""
-        result = _find_paired_reads([])
-        assert result == []
 
 
 if __name__ == "__main__":

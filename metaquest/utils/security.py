@@ -201,10 +201,11 @@ class SecureSubprocess:
                             raise SecurityError(f"Invalid integer value for {arg}: {value}")
                     cmd.append(value)
             else:
-                # Positional argument: for fasterq-dump and prefetch this is either
-                # the SRA accession or a path to an already-downloaded .sra file.
+                # Positional argument: for fasterq-dump and prefetch this is either the SRA
+                # accession or a path to an already-downloaded archive. NCBI serves some runs
+                # only as .sralite, which fasterq-dump reads like a .sra file.
                 if executable in SRA_POSITIONAL_TOOLS:
-                    if arg.endswith(".sra"):
+                    if arg.endswith((".sra", ".sralite")):
                         arg = str(cls.validate_path(arg))
                     else:
                         arg = cls.validate_accession_for_subprocess(arg)

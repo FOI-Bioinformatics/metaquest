@@ -395,6 +395,17 @@ class TestScanners:
 
         assert list(found.keys()) == ["SRR1"]
 
+    def test_scan_downloads_ignores_empty_and_partial_files(self, tmp_path):
+        """A zero-byte file and a .gz.tmp.<pid> leftover are not downloaded reads."""
+        fastq_dir = tmp_path / "fastq"
+        good = _fastq(fastq_dir / "SRR1" / "SRR1_1.fastq")
+        (fastq_dir / "SRR1" / "SRR1_2.fastq").write_text("")
+        (fastq_dir / "SRR1" / "SRR1_1.fastq.gz.tmp.4242").write_text("partial")
+
+        found = reg.scan_downloads(fastq_dir)
+
+        assert found == {"SRR1": (1, good.stat().st_size)}
+
     def test_count_fastq_reads_plain_and_gz(self, tmp_path):
         assert reg.count_fastq_reads(_fastq(tmp_path / "a.fastq", reads=3)) == 3
         assert reg.count_fastq_reads(_fastq(tmp_path / "b.fastq.gz", reads=5, gz=True)) == 5

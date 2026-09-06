@@ -219,10 +219,16 @@ class DownloadSraCommand(BaseCommand):
                 self._record_skip(reg, acc, "--max-downloads", fastq_dir)
 
     def _resolve_max_workers(self, args: argparse.Namespace) -> int:
-        """Resolve --max-workers, falling back to a CPU-derived default, and warn on oversubscription."""
-        max_workers = args.max_workers if args.max_workers is not None else default_max_workers(args.num_threads)
+        """Resolve --max-workers, falling back to a CPU-derived default.
+
+        Oversubscription is only worth warning about when the user chose the worker count:
+        the derived default is already floored at one worker, so a single many-threaded
+        download on a small machine is nothing the user could have set differently.
+        """
+        explicit = args.max_workers is not None
+        max_workers = args.max_workers if explicit else default_max_workers(args.num_threads)
         cpu_count = os.cpu_count() or 4
-        if max_workers * args.num_threads > cpu_count:
+        if explicit and max_workers * args.num_threads > cpu_count:
             self.logger.warning(
                 "--max-workers %d x --num-threads %d = %d threads requested, which exceeds "
                 "the %d CPUs detected on this machine; downloads may be slower than expected",

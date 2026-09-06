@@ -646,6 +646,45 @@ class TestDownloadSraCommand:
         assert result == 0
         assert "exceeds" in caplog.text
 
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_does_not_warn_about_the_derived_default(self, mock_command, _which, tmp_path, caplog):
+        """The CPU-derived default is this tool's own choice; only an explicit --max-workers is warned about."""
+        mock_command.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        command = DownloadSraCommand()
+
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=None,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        # One worker is already the floor of the derived default, so on a 2-CPU machine a
+        # single 4-thread download oversubscribes and there is nothing the user could change.
+        with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=2):
+            with caplog.at_level("WARNING"):
+                result = command.execute(args)
+
+        assert result == 0
+        assert mock_command.call_args.kwargs["max_workers"] == 1
+        assert "exceeds" not in caplog.text
+
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_dry_run(self, mock_command, tmp_path):
         """Dry-run logs the plan (incl. blacklisted and max-downloads branches) and returns 0."""
