@@ -210,6 +210,14 @@ FASTQ_GLOBS = ("*.fastq", "*.fastq.gz", "*.fq", "*.fq.gz")
 # beyond this are dropped, so a broad search does not bloat the project journal.
 DEFAULT_REGISTRY_MAX_SCREENED = 5000
 
+# Shared data store: one folder holding a single copy of every downloaded
+# metagenome, used across organism projects.
+STORE_MARKER = "metaquest_store.json"
+STORE_ENV = "METAQUEST_DATA"
+CONFIG_DIRNAME = "metaquest"
+CONFIG_FILENAME = "config.toml"
+STORE_LAYOUT = "sra-v1"
+
 # Memory and Resource Limits
 DEFAULT_MEMORY_LIMIT_GB = 8
 MAX_FILE_SIZE_MB = 1024  # 1GB max file size for uploads
