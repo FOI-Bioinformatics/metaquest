@@ -52,6 +52,16 @@ class TestComputeDatasetStatsCounts:
         assert stats["reads_per_file"][fastq.name] == 20
         assert stats["reads_total"] == 20
 
+    def test_counts_a_zero_length_record(self, tmp_path):
+        """A read trimmed to length zero is a legal record, not a truncated file."""
+        fastq = tmp_path / "SRR1.fastq"
+        fastq.write_text("@r1\nACGT\n+\nIIII\n@r2\n\n+\n\n@r3\nACGT\n+\nIIII\n")
+
+        stats = compute_dataset_stats([fastq], sample_size=1000, use_seqkit=False)
+
+        assert stats["reads_total"] == 3
+        assert stats["min_read_length"] == 0
+
     def test_signature_tracks_size_and_mtime(self, tmp_path):
         fastq = tmp_path / "SRR1.fastq"
         _write_fastq(fastq, ["ACGT"] * 5)

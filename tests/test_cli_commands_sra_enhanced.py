@@ -209,6 +209,31 @@ class TestSRAStatsCommand:
         assert args.output_report == "custom_stats.csv"
         assert args.accessions == ["SRR123", "SRR456"]
 
+    def test_sample_size_defaults_and_rejects_non_positive_values(self):
+        command = SRAStatsCommand()
+        parser = argparse.ArgumentParser()
+        command.configure_parser(parser)
+
+        assert parser.parse_args([]).sample_size == 10000
+        assert parser.parse_args(["--sample-size", "500"]).sample_size == 500
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--sample-size", "0"])
+
+    @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
+    @patch("builtins.print")
+    def test_execute_passes_sample_size_through(self, mock_print, mock_generate_report, tmp_path):
+        """--sample-size reaches the report generator, which uses it for both the shared
+        statistics record and the streaming per-read sample."""
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder), output_report="stats.csv", accessions=None, sample_size=500
+        )
+
+        assert SRAStatsCommand().execute(args) == 0
+
+        mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv", sample_size=500)
+
     @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
     @patch("builtins.print")
     def test_execute_success(self, mock_print, mock_generate_report, tmp_path):
@@ -224,7 +249,7 @@ class TestSRAStatsCommand:
         result = command.execute(args)
 
         assert result == 0
-        mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv")
+        mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv", sample_size=10000)
 
     @patch("builtins.print")
     def test_execute_records_analyses_in_registry(self, mock_print, tmp_path):
@@ -236,7 +261,7 @@ class TestSRAStatsCommand:
         report_path = tmp_path / "stats.csv"
         registry_path = tmp_path / "metaquest_registry.json"
 
-        def fake_generate_report(folder, output_report):
+        def fake_generate_report(folder, output_report, sample_size=None):
             pd_module.DataFrame(
                 [
                     {"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0},
@@ -284,7 +309,7 @@ class TestSRAStatsCommand:
         registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
         _save(registry)
 
-        def fake_generate_report(folder, output_report):
+        def fake_generate_report(folder, output_report, sample_size=None):
             pd_module.DataFrame(
                 [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
             ).to_csv(output_report, index=False)
@@ -326,7 +351,7 @@ class TestSRAStatsCommand:
         registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
         _save(registry)
 
-        def fake_generate_report(folder, output_report):
+        def fake_generate_report(folder, output_report, sample_size=None):
             pd_module.DataFrame(
                 [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
             ).to_csv(output_report, index=False)
@@ -620,6 +645,47 @@ class TestSRAValidateCommand:
 
         assert result["status"] == "FAILED"
         assert "partial: 5 reads on disk vs 100 spots at NCBI" in result["issues"]
+
+    @pytest.mark.parametrize(
+        "state, expected",
+        [("failed", "failed at NCBI download"), ("downloading", "download in progress elsewhere")],
+    )
+    @patch("builtins.print")
+    def test_validate_directory_flags_failed_and_downloading_sidecars(self, mock_print, tmp_path, state, expected):
+        """Only a complete or adopted dataset passes: a failed download, and one another
+        project is still downloading, are not finished datasets even when their files parse."""
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR123.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(store_acc_dir / "SRR123.json", Sidecar(accession="SRR123", state=state))
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.symlink_to(store_acc_dir)
+
+        result = SRAValidateCommand()._validate_directory(acc_dir)
+
+        assert result["status"] == "FAILED"
+        assert expected in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_passes_a_complete_sidecar(self, mock_print, tmp_path):
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR123.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(store_acc_dir / "SRR123.json", Sidecar(accession="SRR123", state="complete"))
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.symlink_to(store_acc_dir)
+
+        assert SRAValidateCommand()._validate_directory(acc_dir)["status"] == "PASSED"
 
     @patch("builtins.print")
     def test_validate_directory_registry_verdict_truncated_reports_spots(self, mock_print, tmp_path):
@@ -1000,7 +1066,7 @@ class TestAnalysisWithoutAReachableStore:
         registry_path = tmp_path / "metaquest_registry.json"
         gone = tmp_path / "unmounted"
 
-        def fake_generate_report(folder, output_report):
+        def fake_generate_report(folder, output_report, sample_size=None):
             pd_module.DataFrame(
                 [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
             ).to_csv(output_report, index=False)

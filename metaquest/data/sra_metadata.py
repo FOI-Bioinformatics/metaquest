@@ -16,8 +16,8 @@ import pandas as pd
 import requests
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.sra import iter_fastq_records
-from metaquest.store.stats import cached_stats, compute_dataset_stats, store_stats
+from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_records
+from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats, compute_dataset_stats, store_stats
 
 logger = logging.getLogger(__name__)
 
@@ -567,42 +567,78 @@ def _resolved_sidecar_path(acc_dir: Path) -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-def _dataset_stats_row(acc_dir: Path) -> Optional[Dict[str, Any]]:
+def _cached_dataset_stats(acc_dir: Path, files: List[Path], sample_size: int) -> Optional[Dict[str, Any]]:
+    """The shared statistics record for ``acc_dir``, computing and caching it when needed.
+
+    Returns the sidecar's cached record when it still matches the files on disk. When the
+    accession is backed by a store sidecar whose cache is absent or stale (the dataset's
+    files changed since it was last computed), the record is computed once here so
+    ``sra_profile_quality`` and ``sra_compare`` do not have to re-parse the same files.
+    Returns None for a project without a store, which then uses the streaming path below.
+
+    A record that cannot be written back is only a lost cache, so it is reported as a
+    warning and the computed record is still returned; every later command will recompute
+    it until the sidecar becomes writable.
+    """
+    sidecar_path = _resolved_sidecar_path(acc_dir)
+    cached = cached_stats(acc_dir, sidecar_path)
+    if cached is not None or sidecar_path is None:
+        return cached
+    try:
+        files_for_stats: List[Union[str, Path]] = list(files)
+        cached = compute_dataset_stats(files_for_stats, sample_size=sample_size)
+    except Exception as e:
+        logger.debug("Could not compute dataset stats for %s: %s", acc_dir.name, e)
+        return None
+    try:
+        store_stats(sidecar_path, cached)
+    except Exception as e:
+        logger.warning("Could not cache statistics for %s: %s", acc_dir.name, e)
+    return cached
+
+
+def _exact_totals(files: List[Path], stats: ReadStatistics) -> Tuple[int, int]:
+    """Exact read total for ``files``, with a base total scaled from the sampled mean length.
+
+    ``count_fastq_reads`` is a chunked newline count, so the exact total costs one streaming
+    pass per file rather than a full parse. The base total cannot be exact without reading
+    every record, so it is the sampled mean read length times the exact read count, which is
+    what ``metaquest.store.stats.compute_dataset_stats`` does for the same situation.
+    """
+    total_reads = sum(count_fastq_reads(f) for f in files)
+    return total_reads, int(round(stats.avg_read_length * total_reads))
+
+
+def _dataset_stats_row(acc_dir: Path, sample_size: int = DEFAULT_SAMPLE_SIZE) -> Optional[Dict[str, Any]]:
     """Compute a statistics row for one accession directory, or None if unavailable."""
     logger.info(f"Processing {acc_dir.name}")
 
-    fastq_files = list(acc_dir.glob("*.fastq*"))
-    if not fastq_files:
+    files = fastq_files(acc_dir)
+    if not files:
         logger.warning(f"No FASTQ files found in {acc_dir}")
         return None
 
-    sidecar_path = _resolved_sidecar_path(acc_dir)
-    cached = cached_stats(acc_dir, sidecar_path)
-    if cached is None and sidecar_path is not None:
-        # A store sidecar exists but its cache is absent or stale (the dataset's files
-        # changed since it was last computed): compute the shared record once here so
-        # sra_profile_quality and sra_compare do not have to re-parse the same files.
-        try:
-            files_for_stats: List[Union[str, Path]] = list(fastq_files)
-            cached = compute_dataset_stats(files_for_stats)
-            store_stats(sidecar_path, cached)
-        except Exception as e:
-            logger.debug("Could not compute/store dataset stats for %s: %s", acc_dir.name, e)
-            cached = None
+    cached = _cached_dataset_stats(acc_dir, files, sample_size)
 
     try:
-        stats = calculate_read_statistics(fastq_files, cached=cached)
+        stats = calculate_read_statistics(files, max_reads=sample_size, cached=cached)
     except Exception as e:
         logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
         return None
 
-    layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in fastq_files) else "SINGLE"
+    total_reads, total_bases = stats.total_reads, stats.total_bases
+    if cached is None and stats.sampled:
+        # The streaming pass stopped at the sample cutoff: report the exact dataset total
+        # rather than the number of records that happened to be read.
+        total_reads, total_bases = _exact_totals(files, stats)
+
+    layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in files) else "SINGLE"
     return {
         "accession": acc_dir.name,
-        "num_files": len(fastq_files),
+        "num_files": len(files),
         "layout": layout,
-        "total_reads": stats.total_reads,
-        "total_bases": stats.total_bases,
+        "total_reads": total_reads,
+        "total_bases": total_bases,
         "avg_read_length": stats.avg_read_length,
         "min_read_length": stats.min_read_length,
         "max_read_length": stats.max_read_length,
@@ -618,7 +654,10 @@ def _print_statistics_summary(df: pd.DataFrame) -> None:
     print("\nDataset Statistics Summary:")
     print("==========================")
     print(f"Total datasets: {len(df)}")
-    print(f"Total reads: {df['total_reads'].sum():,}")
+    # The read totals are exact counts; a sampled row's per-read metrics (and therefore its
+    # base total) come from a subset of the records, which the reader should know about.
+    sampled = " (read-level metrics from a sample)" if bool(df.get("sampled", pd.Series(dtype=bool)).any()) else ""
+    print(f"Total reads: {df['total_reads'].sum():,}{sampled}")
     print(f"Total bases: {df['total_bases'].sum():,}")
     print(f"Average read length: {df['avg_read_length'].mean():.1f}")
     print(f"Average GC content: {df['gc_content'].mean():.1f}%")
@@ -628,13 +667,19 @@ def _print_statistics_summary(df: pd.DataFrame) -> None:
         print(f"  {layout}: {count}")
 
 
-def generate_statistics_report(fastq_folder: Union[str, Path], output_file: Union[str, Path]) -> None:
+def generate_statistics_report(
+    fastq_folder: Union[str, Path],
+    output_file: Union[str, Path],
+    sample_size: int = DEFAULT_SAMPLE_SIZE,
+) -> None:
     """
     Generate comprehensive statistics report for downloaded datasets.
 
     Args:
         fastq_folder: Folder containing FASTQ files
         output_file: Output report file path
+        sample_size: Records sampled per dataset for the per-read metrics (GC, quality,
+            read length); read totals stay exact regardless of this value
     """
     fastq_path = Path(fastq_folder)
     if not fastq_path.exists():
@@ -647,7 +692,7 @@ def generate_statistics_report(fastq_folder: Union[str, Path], output_file: Unio
         logger.warning("No accession directories found")
         return
 
-    report_data = [row for acc_dir in accession_dirs if (row := _dataset_stats_row(acc_dir)) is not None]
+    report_data = [row for acc_dir in accession_dirs if (row := _dataset_stats_row(acc_dir, sample_size)) is not None]
 
     if not report_data:
         logger.error("No statistics could be calculated")

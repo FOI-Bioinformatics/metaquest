@@ -239,6 +239,34 @@ class TestLoadQualityProfiles:
             "recommendations": [],
         }
 
+    def test_reads_a_profile_written_before_the_sampling_fields_existed(self, tmp_path):
+        """An old JSON has neither reads_sampled nor sampled; its total_reads was the sample
+        size, so it loads as a sampled profile of that size rather than failing."""
+        import json
+
+        data = self._base_profile_json("SRR_OLD")
+        (tmp_path / "SRR_OLD_quality_profile.json").write_text(json.dumps(data))
+
+        profile = load_quality_profiles(tmp_path)["SRR_OLD"]
+
+        assert profile.total_reads == 100
+        assert profile.reads_sampled == 100
+        assert profile.sampled is True
+
+    def test_reads_the_sampling_fields_when_present(self, tmp_path):
+        import json
+
+        data = self._base_profile_json("SRR_NEW")
+        data["reads_sampled"] = 10
+        data["sampled"] = False
+        (tmp_path / "SRR_NEW_quality_profile.json").write_text(json.dumps(data))
+
+        profile = load_quality_profiles(tmp_path)["SRR_NEW"]
+
+        assert profile.total_reads == 100
+        assert profile.reads_sampled == 10
+        assert profile.sampled is False
+
     def test_reads_old_format_gc_distribution_key(self, tmp_path):
         import json
 
@@ -425,6 +453,59 @@ class TestSRADatasetAnalyzer:
         assert profile.duplication_rate == 0.3
         assert profile.quality_grade in ["excellent", "good", "fair", "poor"]
         assert len(profile.recommendations) > 0
+        # Without a shared statistics record the totals can only be the sample's own.
+        assert profile.reads_sampled == 10000
+        assert profile.sampled is True
+
+    @patch.object(SequenceQualityAnalyzer, "analyze_fastq_quality")
+    def test_profile_dataset_quality_prefers_the_shared_statistics_record(self, mock_analyze):
+        """Given the dataset's statistics record, the profile reports the dataset totals and
+        keeps the sample size separately."""
+        mock_analyze.return_value = {
+            "total_reads_sampled": 10000,
+            "read_length_stats": {"mean": 150, "distribution": {}},
+            "gc_content_stats": {"mean": 0.45},
+            "quality_stats": {"mean": 30, "distribution": {}},
+            "n_content_stats": {"mean": 0.01},
+            "complexity_metrics": {"complexity_score": 0.7},
+            "contamination_indicators": {},
+            "duplication_rate": 0.3,
+        }
+        record = {"reads_total": 1724338, "bases_total": 258650700}
+
+        with patch.object(self.analyzer, "find_fastq", return_value=Path("test.fastq")):
+            with patch("pathlib.Path.exists", return_value=True):
+                profile = self.analyzer.profile_dataset_quality("SRR123456", dataset_stats=record)
+
+        assert profile.total_reads == 1724338
+        assert profile.total_bases == 258650700
+        assert profile.reads_sampled == 10000
+        assert profile.sampled is False
+
+    @patch.object(SequenceQualityAnalyzer, "analyze_fastq_quality")
+    def test_profile_dataset_quality_scales_bases_when_the_record_has_none(self, mock_analyze):
+        """A record from the streaming path carries no exact base total; it is scaled from
+        the sampled mean read length instead."""
+        mock_analyze.return_value = {
+            "total_reads_sampled": 100,
+            "read_length_stats": {"mean": 150, "distribution": {}},
+            "gc_content_stats": {"mean": 0.45},
+            "quality_stats": {"mean": 30, "distribution": {}},
+            "n_content_stats": {"mean": 0.0},
+            "complexity_metrics": {"complexity_score": 0.7},
+            "contamination_indicators": {},
+            "duplication_rate": 0.0,
+        }
+
+        with patch.object(self.analyzer, "find_fastq", return_value=Path("test.fastq")):
+            with patch("pathlib.Path.exists", return_value=True):
+                profile = self.analyzer.profile_dataset_quality(
+                    "SRR123456", dataset_stats={"reads_total": 1000, "bases_total": None}
+                )
+
+        assert profile.total_reads == 1000
+        assert profile.total_bases == 150000
+        assert profile.sampled is False
 
     def test_compare_datasets(self):
         """Test dataset comparison functionality."""

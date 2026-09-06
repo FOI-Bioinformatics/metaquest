@@ -49,6 +49,11 @@ class QualityProfile:
     technology_confidence: float
     quality_grade: str  # 'excellent', 'good', 'fair', 'poor'
     recommendations: List[str]
+    # Records actually read for the per-read metrics above. ``total_reads``/``total_bases``
+    # are the dataset totals from the shared statistics record when it is available;
+    # ``sampled`` is True when they are the sample's own figures instead, i.e. a lower bound.
+    reads_sampled: int = 0
+    sampled: bool = False
 
     @property
     def gc_distribution(self) -> List[float]:
@@ -110,8 +115,31 @@ def _gc_histogram(gc_contents: List[float]) -> Dict[str, int]:
     return dict(histogram)
 
 
+def _dataset_totals(
+    dataset_stats: Optional[Dict[str, Any]], reads_sampled: int, mean_read_length: float
+) -> Tuple[int, int, bool]:
+    """``(total_reads, total_bases, sampled)`` for a profile, preferring the shared record.
+
+    A dataset's shared statistics record (``metaquest.store.stats.compute_dataset_stats``)
+    holds an exact ``reads_total`` and, when seqkit ran, an exact ``bases_total``; those are
+    the dataset totals a profile should report. Without a record, or with one that carries no
+    read total, the profile can only report what it sampled, which is flagged with
+    ``sampled`` so a reader does not mistake the sample size for the dataset size.
+    """
+    reads_total = (dataset_stats or {}).get("reads_total")
+    if not reads_total:
+        return reads_sampled, int(reads_sampled * mean_read_length), True
+    bases_total = (dataset_stats or {}).get("bases_total")
+    if not bases_total:
+        bases_total = int(round(mean_read_length * reads_total))
+    return int(reads_total), int(bases_total), False
+
+
 def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityProfile"]:
-    """Load previously saved per-accession quality profile JSONs (see ``_write_detailed_report``).
+    """Load previously saved per-accession quality profile JSONs.
+
+    These are the files ``sra_profile_quality`` writes into its ``--output-dir`` (see
+    ``metaquest.cli.commands.sra_intelligent.SRAQualityProfileCommand._write_profile_json``).
 
     Returns an accession -> QualityProfile mapping for every readable
     ``*_quality_profile.json`` file found directly under ``profiles_dir``. A
@@ -122,6 +150,10 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
     field existed held a ``gc_distribution`` per-read list instead, which is bucketed into
     the same 5-percent-wide histogram here so old data is not silently discarded.
     ``gc_histogram`` is only ``{}`` when neither key is present.
+
+    ``reads_sampled`` and ``sampled`` are likewise absent from a profile JSON written before
+    those fields existed, where ``total_reads`` was the sample size; such a file loads with
+    ``reads_sampled`` equal to ``total_reads`` and ``sampled`` True.
     """
     profiles: Dict[str, QualityProfile] = {}
     directory = Path(profiles_dir)
@@ -151,6 +183,8 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
             technology_confidence=data.get("technology_confidence", 0.0),
             quality_grade=data.get("quality_grade", ""),
             recommendations=data.get("recommendations", []),
+            reads_sampled=data.get("reads_sampled", data.get("total_reads", 0)),
+            sampled=data.get("sampled", "reads_sampled" not in data),
         )
     return profiles
 
@@ -471,6 +505,7 @@ class SRADatasetAnalyzer:
         metadata: Optional[SRADatasetInfo] = None,
         sample_size: int = 10000,
         sampler: str = "uniform",
+        dataset_stats: Optional[Dict[str, Any]] = None,
     ) -> QualityProfile:
         """
         Generate comprehensive quality profile for SRA dataset.
@@ -481,6 +516,10 @@ class SRADatasetAnalyzer:
             metadata: Dataset metadata (optional)
             sample_size: Reads sampled for the quality/GC/complexity metrics
             sampler: "uniform" (default) or "head"; see ``SequenceQualityAnalyzer.analyze_fastq_quality``
+            dataset_stats: The dataset's shared statistics record
+                (``metaquest.store.stats.compute_dataset_stats``), whose exact
+                ``reads_total``/``bases_total`` become the profile's totals. Without it the
+                totals are the sample's own figures and ``sampled`` is set.
 
         Returns:
             QualityProfile with comprehensive analysis
@@ -501,7 +540,7 @@ class SRADatasetAnalyzer:
             quality_metrics = {}
 
         # Extract metrics
-        total_reads = quality_metrics.get("total_reads_sampled", 0)
+        reads_sampled = quality_metrics.get("total_reads_sampled", 0)
         read_length_stats = quality_metrics.get("read_length_stats", {})
         gc_stats = quality_metrics.get("gc_content_stats", {})
         quality_stats = quality_metrics.get("quality_stats", {})
@@ -516,10 +555,14 @@ class SRADatasetAnalyzer:
             quality_stats, contamination, complexity_metrics, metadata
         )
 
+        total_reads, total_bases, sampled = _dataset_totals(
+            dataset_stats, reads_sampled, read_length_stats.get("mean", 0)
+        )
+
         return QualityProfile(
             accession=accession,
             total_reads=total_reads,
-            total_bases=int(total_reads * read_length_stats.get("mean", 0)),
+            total_bases=total_bases,
             avg_read_length=read_length_stats.get("mean", 0),
             read_length_distribution=read_length_stats.get("distribution", {}),
             gc_content=gc_stats.get("mean", 0),
@@ -532,6 +575,8 @@ class SRADatasetAnalyzer:
             technology_confidence=self._estimate_technology_confidence(metadata),
             quality_grade=quality_grade,
             recommendations=recommendations,
+            reads_sampled=reads_sampled,
+            sampled=sampled,
         )
 
     def _collect_group_profiles(self, groups: Dict[str, List[str]]) -> Dict[str, QualityProfile]:

@@ -256,6 +256,22 @@ class TestReadStatistics:
             assert stats.total_reads == 4
             assert stats.sampled is True
 
+    def test_zero_length_record_is_counted(self):
+        """A legal zero-length record in the middle of a file is a record, not truncation.
+
+        Before this was distinguished from a missing line, the stream stopped there and the
+        file's read count was silently reported short, marked as exact.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fastq_file = Path(temp_dir) / "zero.fastq"
+            fastq_file.write_text("@r1\nACGT\n+\nIIII\n@r2\n\n+\n\n@r3\nACGT\n+\nIIII\n")
+
+            stats = calculate_read_statistics([fastq_file])
+
+            assert stats.total_reads == 3
+            assert stats.sampled is False
+            assert stats.min_read_length == 0
+
     def test_max_reads_zero_means_exact(self):
         """max_reads=0 reads every record, however many there are."""
         with tempfile.TemporaryDirectory() as temp_dir:

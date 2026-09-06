@@ -5,6 +5,7 @@ This module provides the sra_info, sra_stats, and sra_validate commands for
 previewing NCBI metadata, computing statistics, and validating downloaded datasets.
 """
 
+import argparse
 import gzip
 import logging
 from pathlib import Path
@@ -32,13 +33,21 @@ from metaquest.data.sra_metadata import (
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.sidecar import md5_file, read_sidecar
-from metaquest.store.stats import cached_stats
+from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats
 from metaquest.store.usage import record_usage_safe
 
 logger = logging.getLogger(__name__)
 
 # Suffixes marking the second mate of a pair, i.e. MATE_SUFFIXES minus MATE1_SUFFIXES.
 _MATE2_SUFFIXES = tuple(suffix for suffix in MATE_SUFFIXES if suffix not in MATE1_SUFFIXES)
+
+
+def _positive_int(value: str) -> int:
+    """argparse type for --sample-size: rejects zero and negative values with a clear message."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"--sample-size must be a positive integer, got {value!r}")
+    return parsed
 
 
 def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
@@ -197,6 +206,13 @@ class SRAStatsCommand(BaseCommand):
             nargs="*",
             help="Specific accessions to analyze (default: all)",
         )
+        parser.add_argument(
+            "--sample-size",
+            type=_positive_int,
+            default=DEFAULT_SAMPLE_SIZE,
+            help="Records sampled per dataset for the per-read metrics such as GC content, "
+            f"quality and read length; read totals stay exact (default: {DEFAULT_SAMPLE_SIZE})",
+        )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
@@ -223,10 +239,14 @@ class SRAStatsCommand(BaseCommand):
         store = _resolve_command_store(args, registry)
         for _, row in df.iterrows():
             accession = str(row["accession"])
+            sampled = nan_to_none(row.get("sampled"))
             summary = {
                 "total_reads": nan_to_none(row.get("total_reads")),
                 "gc_content": nan_to_none(row.get("gc_content")),
                 "avg_read_length": nan_to_none(row.get("avg_read_length")),
+                # True when the per-read metrics came from a sample of the records; the
+                # read total itself is exact either way.
+                "sampled": None if sampled is None else bool(sampled),
             }
             record_analysis(registry, accession, "sra_stats", report_path, summary)
             record_usage_safe(store, registry, accession, "", "analysed", detail="sra_stats")
@@ -243,7 +263,9 @@ class SRAStatsCommand(BaseCommand):
             print("Calculating comprehensive statistics for downloaded datasets...")
 
             # Generate statistics report
-            generate_statistics_report(fastq_folder, args.output_report)
+            generate_statistics_report(
+                fastq_folder, args.output_report, sample_size=getattr(args, "sample_size", DEFAULT_SAMPLE_SIZE)
+            )
 
             print(f"\nStatistics report saved to: {args.output_report}")
 
@@ -375,18 +397,28 @@ class SRAValidateCommand(BaseCommand):
     def _completeness_issues(acc_dir: Path, record: Optional[Dict[str, Any]]) -> list:
         """Issue when this accession's download did not complete against NCBI's spot count.
 
-        Prefers the store sidecar (freshest, when ``acc_dir`` is a store link -- its
-        ``state`` is ``"partial"`` for a truncated download) over the registry's own download
-        verdict (``"truncated"`` in its own vocabulary). Silent when neither source has ever
-        verified this accession against NCBI.
+        Prefers the store sidecar (freshest, when ``acc_dir`` is a store link) over the
+        registry's own download verdict (``"truncated"`` in its own vocabulary). Silent when
+        neither source has ever verified this accession against NCBI.
+
+        Three sidecar states are reported: ``"partial"`` (fewer reads on disk than NCBI's
+        spot count), ``"failed"`` (the download did not finish) and ``"downloading"`` (a
+        download is in progress, so the files on disk are not the finished dataset). Only
+        ``"complete"`` and ``"adopted"`` datasets pass.
         """
         sidecar_path = _resolved_sidecar_path(acc_dir)
         if sidecar_path is not None:
             sidecar = read_sidecar(sidecar_path)
-            if sidecar is not None and sidecar.state == "partial":
+            if sidecar is None:
+                return []
+            if sidecar.state == "partial":
                 reads = sidecar.reads_per_mate
                 spots = sidecar.ncbi.get("spots")
                 return [f"partial: {reads} reads on disk vs {spots} spots at NCBI"]
+            if sidecar.state == "failed":
+                return ["failed at NCBI download"]
+            if sidecar.state == "downloading":
+                return ["download in progress elsewhere"]
             return []
 
         verdict = ((record or {}).get("download") or {}).get("complete") or {}

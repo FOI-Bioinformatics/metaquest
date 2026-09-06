@@ -266,6 +266,11 @@ def iter_fastq_records(path: Union[str, Path]):
 
     Raises ``ValueError`` when a header line is not followed by a complete
     sequence/plus/quality triplet, since a truncated trailing record cannot be trusted.
+    Truncation is decided on the raw lines: a line that is missing entirely (``readline``
+    returns the empty string at end of file) ends the record early, whereas a present but
+    empty line does not. A record whose sequence and quality lines are both empty is a
+    zero-length read, which is legal FASTQ (a read trimmed to nothing, or the empty mate
+    ``fasterq-dump --split-files`` writes for a half-empty spot) and is yielded as such.
     """
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt") as handle:
@@ -273,12 +278,14 @@ def iter_fastq_records(path: Union[str, Path]):
             header = handle.readline()
             if not header:
                 return
-            seq = handle.readline().rstrip("\r\n")
-            plus = handle.readline()
-            qual = handle.readline().rstrip("\r\n")
-            if not plus or not qual:
+            seq_line = handle.readline()
+            plus_line = handle.readline()
+            qual_line = handle.readline()
+            if not seq_line or not plus_line or not qual_line:
                 raise ValueError(f"Truncated FASTQ record after header: {header.strip()!r}")
-            yield seq, qual
+            if not plus_line.startswith("+"):
+                raise ValueError(f"Malformed FASTQ record after header: {header.strip()!r}")
+            yield seq_line.rstrip("\r\n"), qual_line.rstrip("\r\n")
 
 
 def verify_download(

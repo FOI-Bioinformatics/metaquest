@@ -8,7 +8,7 @@ analysis, comparative dataset analysis, and interactive reporting dashboards.
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from metaquest.cli.base import BaseCommand
 from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
@@ -96,7 +96,8 @@ class SRAQualityProfileCommand(BaseCommand):
         parser.add_argument(
             "--detailed-reports",
             action="store_true",
-            help="Generate detailed per-accession reports",
+            help="Print the path of each per-accession profile JSON as it is written "
+            "(the JSONs themselves are always written, into --output-dir)",
         )
         parser.add_argument(
             "--include-contamination",
@@ -132,7 +133,7 @@ class SRAQualityProfileCommand(BaseCommand):
         """Print quality profile summary."""
         print(f"\nQuality Profile: {profile.accession}")
         print("=" * 50)
-        print(f"Total reads: {profile.total_reads:,}")
+        print(f"Total reads: {profile.total_reads:,} (sampled {profile.reads_sampled:,})")
         print(f"Total bases: {profile.total_bases:,}")
         print(f"Average read length: {profile.avg_read_length:.1f}")
         print(f"GC content: {profile.gc_content:.1%}")
@@ -159,14 +160,30 @@ class SRAQualityProfileCommand(BaseCommand):
             print(f"Profiling {len(accessions)} accessions...")
         return accessions
 
-    def _write_detailed_report(self, profile: QualityProfile, output_dir: Path) -> None:
-        """Write a per-accession quality profile as JSON."""
-        profile_file = output_dir / f"{profile.accession}_quality_profile.json"
+    @staticmethod
+    def profile_json_path(accession: str, output_dir: Path) -> Path:
+        """Where this command writes ``accession``'s per-accession quality profile JSON.
+
+        The same name ``metaquest.sra.analytics.load_quality_profiles`` reads back, which is
+        what ``--quality-profiles`` on ``sra_compare`` and ``sra_dashboard`` points at.
+        """
+        return output_dir / f"{accession}_quality_profile.json"
+
+    def _write_profile_json(self, profile: QualityProfile, output_dir: Path, announce: bool) -> Path:
+        """Write a per-accession quality profile as JSON and return its path.
+
+        Written on every run (the file is small: the per-read GC list it used to carry is now
+        a histogram), so ``--quality-profiles`` on a later ``sra_compare`` or ``sra_dashboard``
+        run has something to reuse. ``announce`` only controls the printed confirmation.
+        """
+        profile_file = self.profile_json_path(profile.accession, output_dir)
         with open(profile_file, "w") as profile_f:
             json.dump(
                 {
                     "accession": profile.accession,
                     "total_reads": profile.total_reads,
+                    "reads_sampled": profile.reads_sampled,
+                    "sampled": profile.sampled,
                     "total_bases": profile.total_bases,
                     "avg_read_length": profile.avg_read_length,
                     "read_length_distribution": profile.read_length_distribution,
@@ -184,7 +201,9 @@ class SRAQualityProfileCommand(BaseCommand):
                 profile_f,
                 indent=2,
             )
-        print(f"  Detailed report saved: {profile_file}")
+        if announce:
+            print(f"  Detailed report saved: {profile_file}")
+        return profile_file
 
     def _profile_accession(self, analyzer, args, accession: str, output_dir: Path):
         """Profile a single accession; return its QualityProfile or None if unavailable."""
@@ -193,43 +212,56 @@ class SRAQualityProfileCommand(BaseCommand):
             print(f"⚠️  No FASTQ files found for {accession}")
             return None
 
+        # The dataset's exact read and base totals come from the shared statistics record,
+        # which is obtained first so the profile can report the dataset rather than its sample.
+        dataset_stats = self._dataset_stats(accession_file)
         sample_size = getattr(args, "sample_size", 10000)
         sampler = getattr(args, "sampler", "uniform")
         profile = analyzer.profile_dataset_quality(
-            accession, fastq_path=str(accession_file), sample_size=sample_size, sampler=sampler
+            accession,
+            fastq_path=str(accession_file),
+            sample_size=sample_size,
+            sampler=sampler,
+            dataset_stats=dataset_stats,
         )
         if not args.summary_only:
             self._print_quality_profile(profile)
-        if args.detailed_reports:
-            self._write_detailed_report(profile, output_dir)
-        self._cache_stats(accession_file)
+        self._write_profile_json(profile, output_dir, announce=bool(args.detailed_reports))
         return profile
 
     @staticmethod
-    def _cache_stats(accession_file) -> None:
-        """Compute (or reuse) the shared FASTQ stats record and write it back to the store
-        sidecar, when ``accession_file`` resolves to a store-linked accession directory.
+    def _dataset_stats(accession_file) -> Optional[Dict[str, Any]]:
+        """The shared FASTQ statistics record for ``accession_file``'s dataset, or None.
 
-        A no-op for a plain project folder (no sidecar to update), when the cached record's
-        signature already matches the files on disk, or when ``accession_file`` cannot be
-        resolved to a real directory at all (e.g. a test double standing in for one) --
-        this is a cache warm-up alongside profiling, never something profiling should fail
-        over.
+        Reuses the store sidecar's cached record when its signature still matches the files
+        on disk, otherwise computes it once here. The record is written back to the sidecar
+        only when there is one (a plain project folder keeps the record for this run only);
+        a write that fails is a lost cache, not a failed profile, so it is reported as a
+        warning and the record is still used.
+
+        Returns None when the directory holds no FASTQ files or cannot be read at all (e.g.
+        a test double standing in for a path), in which case the profile falls back to its
+        own sample totals.
         """
         try:
             acc_dir = Path(accession_file).parent
             sidecar_path = _resolved_sidecar_path(acc_dir)
-            if sidecar_path is None:
-                return
-            if cached_stats(acc_dir, sidecar_path) is not None:
-                return
+            cached = cached_stats(acc_dir, sidecar_path)
+            if cached is not None:
+                return cached
             files: List[Union[str, Path]] = list(fastq_files(acc_dir))
             if not files:
-                return
+                return None
             stats = compute_dataset_stats(files)
-            store_stats(sidecar_path, stats)
         except Exception as e:
-            logger.debug("Could not cache dataset stats for %s: %s", accession_file, e)
+            logger.debug("Could not compute dataset stats for %s: %s", accession_file, e)
+            return None
+        if sidecar_path is not None:
+            try:
+                store_stats(sidecar_path, stats)
+            except Exception as e:
+                logger.warning("Could not cache statistics for %s: %s", acc_dir.name, e)
+        return stats
 
     @staticmethod
     def _summary_stats(profiles):
@@ -316,19 +348,15 @@ class SRAQualityProfileCommand(BaseCommand):
                 registry = load_registry(args.registry)
                 store = _resolve_command_store(args, registry)
                 for profile in profiles:
-                    output = (
-                        output_dir / f"{profile.accession}_quality_profile.json"
-                        if args.detailed_reports
-                        else summary_file
-                    )
                     record_analysis(
                         registry,
                         profile.accession,
                         "quality",
-                        output,
+                        self.profile_json_path(profile.accession, output_dir),
                         {
                             "grade": profile.quality_grade,
                             "total_reads": profile.total_reads,
+                            "reads_sampled": profile.reads_sampled,
                             "gc_content": profile.gc_content,
                         },
                     )
@@ -376,7 +404,9 @@ class SRAInteractiveDashboardCommand(BaseCommand):
         )
         parser.add_argument(
             "--quality-profiles",
-            help="Directory containing quality profile JSONs",
+            help="Directory of per-accession quality profile JSONs written by "
+            "sra_profile_quality --output-dir; an accession found there is reused as-is "
+            "instead of being reprofiled from FASTQ",
         )
         parser.add_argument("--fastq-dir", default="fastq", help="Directory containing downloaded FASTQ files")
         parser.add_argument(
@@ -517,8 +547,9 @@ class SRAComparativeAnalysisCommand(BaseCommand):
         )
         parser.add_argument(
             "--quality-profiles",
-            help="Directory containing quality profile JSONs; an accession found there is "
-            "reused as-is instead of being reprofiled from FASTQ",
+            help="Directory of per-accession quality profile JSONs written by "
+            "sra_profile_quality --output-dir; an accession found there is reused as-is "
+            "instead of being reprofiled from FASTQ",
         )
 
     def _load_groups(self, filename: str) -> dict:

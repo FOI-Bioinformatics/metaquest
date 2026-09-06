@@ -681,6 +681,91 @@ class TestGenerateStatisticsReport:
         assert sidecar.stats["reads_total"] == 2
         assert sidecar.stats_computed is not None
 
+    def test_generate_statistics_reports_the_exact_total_when_sampling(self, tmp_path):
+        """A folder without a store reports every read, not just the sampled ones.
+
+        The per-read metrics still come from the sample (hence ``sampled``), but a user
+        reading "total reads" must see the dataset's size, not the sample cutoff.
+        """
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR001"
+        acc_dir.mkdir()
+        for name in ("SRR001_1.fastq", "SRR001_2.fastq", "SRR001.fastq"):
+            (acc_dir / name).write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file, sample_size=2)
+
+        import pandas as pd
+
+        df = pd.read_csv(output_file)
+        assert df.loc[0, "total_reads"] == 15
+        assert bool(df.loc[0, "sampled"]) is True
+        # Bases are scaled from the sampled mean read length times the exact read count.
+        assert df.loc[0, "total_bases"] == 60
+
+    def test_generate_statistics_prints_that_metrics_are_sampled(self, tmp_path, capsys):
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR001"
+        acc_dir.mkdir()
+        (acc_dir / "SRR001.fastq").write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
+
+        generate_statistics_report(fastq_folder, tmp_path / "report.csv", sample_size=2)
+
+        out = capsys.readouterr().out
+        assert "Total reads: 5 (read-level metrics from a sample)" in out
+
+    def test_generate_statistics_cache_survives_a_zero_byte_extra_file(self, tmp_path):
+        """The signature written into the cache uses the same file list ``cached_stats``
+        checks it against, so a zero-byte mate does not force a recompute every run."""
+        from metaquest.store.stats import cached_stats
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR001_1.fastq").write_text("@read1\nATCG\n+\nIIII\n")
+        (store_acc_dir / "SRR001_2.fastq").write_text("")  # interrupted download left this
+        sidecar_path = store_acc_dir / "SRR001.json"
+        write_sidecar(sidecar_path, Sidecar(accession="SRR001"))
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_link = fastq_folder / "SRR001"
+        acc_link.symlink_to(store_acc_dir)
+
+        generate_statistics_report(fastq_folder, tmp_path / "report.csv")
+
+        assert cached_stats(acc_link, sidecar_path) is not None
+
+        with patch("metaquest.data.sra_metadata.compute_dataset_stats") as recompute:
+            generate_statistics_report(fastq_folder, tmp_path / "report2.csv")
+        recompute.assert_not_called()
+
+    def test_generate_statistics_warns_when_the_cache_cannot_be_written(self, tmp_path, caplog):
+        """A sidecar that cannot be written costs every later command a recompute, so the
+        user is told once rather than only at debug level."""
+        import logging
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
+        write_sidecar(store_acc_dir / "SRR001.json", Sidecar(accession="SRR001"))
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        (fastq_folder / "SRR001").symlink_to(store_acc_dir)
+
+        output_file = tmp_path / "report.csv"
+        with caplog.at_level(logging.WARNING):
+            with patch("metaquest.data.sra_metadata.store_stats", side_effect=OSError("read-only store")):
+                generate_statistics_report(fastq_folder, output_file)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Could not cache" in r.message]
+        assert len(warnings) == 1
+        assert "SRR001" in caplog.text and "read-only store" in caplog.text
+        assert output_file.exists()
+
     def test_generate_statistics_without_a_store_writes_no_sidecar(self, tmp_path):
         """A plain project folder (no store link) is unaffected: no sidecar is created."""
         fastq_folder = tmp_path / "fastq"

@@ -28,6 +28,7 @@ from metaquest.data.sra import (
     primary_fastq,
     orphan_fastq,
     count_fastq_reads,
+    iter_fastq_records,
     verify_download,
     parse_verdict_message,
     classify_download_error,
@@ -352,6 +353,49 @@ class TestCountFastqReads:
         path = tmp_path / "empty.fastq"
         path.write_text("")
         assert count_fastq_reads(path) == 0
+
+
+class TestIterFastqRecords:
+    """iter_fastq_records: the shared raw four-line reader."""
+
+    def test_reads_every_record(self, tmp_path):
+        path = tmp_path / "a.fastq"
+        path.write_text("@r1\nACGT\n+\nIIII\n@r2\nTTTT\n+\nJJJJ\n")
+        assert list(iter_fastq_records(path)) == [("ACGT", "IIII"), ("TTTT", "JJJJ")]
+
+    def test_zero_length_record_in_the_middle_is_a_record(self, tmp_path):
+        """An empty sequence with an empty quality line is legal FASTQ, not truncation.
+
+        fasterq-dump writes such a record for the empty mate of a half-empty spot, and a
+        trimmer can reduce a read to length zero.
+        """
+        path = tmp_path / "zero.fastq"
+        path.write_text("@r1\nACGT\n+\nIIII\n@r2\n\n+\n\n@r3\nACGT\n+\nIIII\n")
+        assert list(iter_fastq_records(path)) == [("ACGT", "IIII"), ("", ""), ("ACGT", "IIII")]
+
+    def test_zero_length_record_in_a_gz_file(self, tmp_path):
+        path = tmp_path / "zero.fastq.gz"
+        with gzip.open(path, "wt") as handle:
+            handle.write("@r1\n\n+\n\n@r2\nACGT\n+\nIIII\n")
+        assert list(iter_fastq_records(path)) == [("", ""), ("ACGT", "IIII")]
+
+    def test_file_cut_after_the_sequence_line_raises(self, tmp_path):
+        path = tmp_path / "cut.fastq"
+        path.write_text("@r1\nACGT\n+\nIIII\n@r2\nACGT\n")
+        with pytest.raises(ValueError, match="Truncated FASTQ record"):
+            list(iter_fastq_records(path))
+
+    def test_file_cut_after_the_header_raises(self, tmp_path):
+        path = tmp_path / "cut.fastq"
+        path.write_text("@r1\n")
+        with pytest.raises(ValueError, match="Truncated FASTQ record"):
+            list(iter_fastq_records(path))
+
+    def test_a_third_line_that_is_not_a_separator_raises(self, tmp_path):
+        path = tmp_path / "bad.fastq"
+        path.write_text("@r1\nACGT\nIIII\nACGT\n")
+        with pytest.raises(ValueError, match="Malformed FASTQ record"):
+            list(iter_fastq_records(path))
 
 
 class TestPrimaryAndOrphanFastq:

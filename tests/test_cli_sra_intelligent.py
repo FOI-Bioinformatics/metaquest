@@ -27,11 +27,12 @@ from metaquest.sra.analytics import QualityProfile, ComparativeAnalysis  # noqa:
 from metaquest.sra.analytics import SRADatasetAnalyzer as RealSRADatasetAnalyzer  # noqa: E402
 
 
-def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0):
+def make_profile(accession, n_content=0.0, duplication_rate=None, adapter=0.0, reads_sampled=1000):
     """Build a real QualityProfile."""
     return QualityProfile(
         accession=accession,
         total_reads=1000,
+        reads_sampled=reads_sampled,
         total_bases=150000,
         avg_read_length=150.0,
         read_length_distribution={},
@@ -126,10 +127,17 @@ class TestSRAQualityProfileCommand:
 
         registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
         analysis = registry["datasets"]["SRR001"]["analyses"]["quality"]
-        assert analysis["summary"] == {"grade": "good", "total_reads": 1000, "gc_content": 0.45}
+        assert analysis["summary"] == {
+            "grade": "good",
+            "total_reads": 1000,
+            "reads_sampled": 1000,
+            "gc_content": 0.45,
+        }
         # output/ lives under the project root (the registry's own folder), so the registry
-        # records it relative to it, which keeps the project movable.
-        assert analysis["output"] == "output/quality_summary.json"
+        # records it relative to it, which keeps the project movable. The per-accession
+        # profile JSON is written on every run, with or without --detailed-reports.
+        assert analysis["output"] == "output/SRR001_quality_profile.json"
+        assert (tmp_path / "output" / "SRR001_quality_profile.json").is_file()
 
     def test_execute_passes_sample_size_and_sampler_to_analyzer(self, tmp_path):
         """--sample-size/--sampler are plumbed through to profile_dataset_quality."""
@@ -211,6 +219,96 @@ class TestSRAQualityProfileCommand:
         assert sidecar.stats
         assert sidecar.stats["reads_total"] == 2
         assert sidecar.stats_computed is not None
+
+    def _linked_accession_args(self, tmp_path, store_acc_dir, **overrides):
+        """Namespace for profiling SRR001 through a project link into ``store_acc_dir``."""
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir(exist_ok=True)
+        link = fastq_dir / "SRR001"
+        if not link.exists():
+            link.symlink_to(store_acc_dir)
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+        for key, value in overrides.items():
+            setattr(args, key, value)
+        return args
+
+    def test_profile_reports_the_dataset_total_not_the_sample_size(self, tmp_path, capsys):
+        """The profile's total_reads is the dataset's own count from the shared statistics
+        record; the number of records actually read is reported separately."""
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+        from metaquest.store.stats import compute_dataset_stats
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        fastq_file = store_acc_dir / "SRR001.fastq"
+        fastq_file.write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(4)))
+
+        record = compute_dataset_stats([fastq_file], use_seqkit=False)
+        record["reads_total"] = 1724338  # what the full dataset holds, not what is sampled
+        record["bases_total"] = 258650700
+        write_sidecar(store_acc_dir / "SRR001.json", Sidecar(accession="SRR001", stats=record))
+
+        args = self._linked_accession_args(tmp_path, store_acc_dir, sample_size=2, sampler="head")
+        assert SRAQualityProfileCommand().execute(args) == 0
+
+        assert "Total reads: 1,724,338 (sampled 2)" in capsys.readouterr().out
+
+        profile = json.loads((tmp_path / "output" / "SRR001_quality_profile.json").read_text())
+        assert profile["total_reads"] == 1724338
+        assert profile["total_bases"] == 258650700
+        assert profile["reads_sampled"] == 2
+        assert profile["sampled"] is False
+
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        summary = registry["datasets"]["SRR001"]["analyses"]["quality"]["summary"]
+        assert summary["total_reads"] == 1724338
+        assert summary["reads_sampled"] == 2
+
+    def test_profile_json_is_written_without_detailed_reports(self, tmp_path):
+        """--quality-profiles reuse needs the per-accession JSON, so it is always written."""
+        from metaquest.sra.analytics import load_quality_profiles
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR001.fastq").write_text("@r0\nACGT\n+\nIIII\n")
+
+        args = self._linked_accession_args(tmp_path, store_acc_dir, detailed_reports=False)
+        assert SRAQualityProfileCommand().execute(args) == 0
+
+        reloaded = load_quality_profiles(tmp_path / "output")
+        assert set(reloaded) == {"SRR001"}
+        assert reloaded["SRR001"].total_reads == 1
+        assert reloaded["SRR001"].sampled is False
+
+    def test_profile_warns_once_when_the_cache_cannot_be_written(self, tmp_path, caplog):
+        """A sidecar that cannot be written is reported, and profiling still succeeds."""
+        import logging
+
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR001.fastq").write_text("@r0\nACGT\n+\nIIII\n")
+        write_sidecar(store_acc_dir / "SRR001.json", Sidecar(accession="SRR001"))
+
+        args = self._linked_accession_args(tmp_path, store_acc_dir)
+        with caplog.at_level(logging.WARNING):
+            with patch("metaquest.cli.commands.sra_intelligent.store_stats", side_effect=OSError("read-only store")):
+                assert SRAQualityProfileCommand().execute(args) == 0
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Could not cache" in r.message]
+        assert len(warnings) == 1
+        assert "SRR001" in caplog.text and "read-only store" in caplog.text
 
     def test_execute_without_a_store_writes_no_sidecar(self, tmp_path):
         """A plain project folder (no store link) is unaffected: no sidecar is created."""
@@ -420,7 +518,12 @@ class TestSRAQualityProfileCommand:
         assert result == 0
         registry_after = json.loads(registry_path.read_text())
         analysis = registry_after["datasets"]["SRR001"]["analyses"]["quality"]
-        assert analysis["summary"] == {"grade": "good", "total_reads": 1000, "gc_content": 0.45}
+        assert analysis["summary"] == {
+            "grade": "good",
+            "total_reads": 1000,
+            "reads_sampled": 1000,
+            "gc_content": 0.45,
+        }
 
     def test_execute_missing_fastq_marks_failed(self, tmp_path):
         """Accessions with no FASTQ files are recorded as failed and yield exit 1."""
