@@ -167,6 +167,83 @@ class TestSRAQualityProfileCommand:
         assert kwargs["sample_size"] == 500
         assert kwargs["sampler"] == "head"
 
+    def test_execute_writes_back_computed_stats_to_sidecar_for_a_linked_accession(self, tmp_path):
+        """Profiling a store-linked accession computes (or reuses) the shared FASTQ stats
+        record and writes it back to the sidecar, so sra_stats/sra_compare do not have to
+        re-parse the same files."""
+        from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
+
+        cmd = SRAQualityProfileCommand()
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        fastq_file = store_acc_dir / "SRR001.fastq"
+        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
+
+        sidecar_path = store_acc_dir / "SRR001.json"
+        write_sidecar(sidecar_path, Sidecar(accession="SRR001"))  # no stats recorded yet
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        (fastq_dir / "SRR001").symlink_to(store_acc_dir)
+
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=True,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        mock_profile = make_profile("SRR001")
+        with patch(
+            "metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer.profile_dataset_quality",
+            return_value=mock_profile,
+        ):
+            result = cmd.execute(args)
+
+        assert result == 0
+        sidecar = read_sidecar(sidecar_path)
+        assert sidecar.stats
+        assert sidecar.stats["reads_total"] == 2
+        assert sidecar.stats_computed is not None
+
+    def test_execute_without_a_store_writes_no_sidecar(self, tmp_path):
+        """A plain project folder (no store link) is unaffected: no sidecar is created."""
+        cmd = SRAQualityProfileCommand()
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        acc_dir = fastq_dir / "SRR001"
+        acc_dir.mkdir()
+        (acc_dir / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
+
+        args = Namespace(
+            accession="SRR001",
+            accessions_file=None,
+            fastq_dir=str(fastq_dir),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=True,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        mock_profile = make_profile("SRR001")
+        with patch(
+            "metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer.profile_dataset_quality",
+            return_value=mock_profile,
+        ):
+            result = cmd.execute(args)
+
+        assert result == 0
+        assert not (acc_dir / "SRR001.json").exists()
+
     def test_execute_defaults_sample_size_and_sampler_when_absent(self, tmp_path):
         """A Namespace without --sample-size/--sampler (e.g. an older caller) still works."""
         cmd = SRAQualityProfileCommand()

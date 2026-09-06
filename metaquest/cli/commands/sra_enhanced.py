@@ -5,15 +5,25 @@ This module provides the sra_info, sra_stats, and sra_validate commands for
 previewing NCBI metadata, computing statistics, and validating downloaded datasets.
 """
 
+import gzip
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.data.defaults import read_records
 from metaquest.data.registry import Registry, load_registry, nan_to_none, record_analysis, save_registry
+from metaquest.data.sra import (
+    MATE1_SUFFIXES,
+    MATE_SUFFIXES,
+    count_fastq_reads,
+    fastq_files,
+    fastq_stem,
+    iter_fastq_records,
+)
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
+    _resolved_sidecar_path,
     create_download_preview,
     estimate_download_time,
     save_metadata_report,
@@ -21,9 +31,14 @@ from metaquest.data.sra_metadata import (
 )
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
+from metaquest.store.sidecar import md5_file, read_sidecar
+from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
 
 logger = logging.getLogger(__name__)
+
+# Suffixes marking the second mate of a pair, i.e. MATE_SUFFIXES minus MATE1_SUFFIXES.
+_MATE2_SUFFIXES = tuple(suffix for suffix in MATE_SUFFIXES if suffix not in MATE1_SUFFIXES)
 
 
 def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
@@ -272,6 +287,11 @@ class SRAValidateCommand(BaseCommand):
             action="store_true",
             help="Check that paired-end files have matching read counts",
         )
+        parser.add_argument(
+            "--md5",
+            action="store_true",
+            help="Verify each file's md5 against the store sidecar (no-op without one)",
+        )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
@@ -288,52 +308,159 @@ class SRAValidateCommand(BaseCommand):
         return [f"Empty file: {f.name}" for f in fastq_files if f.stat().st_size == 0]
 
     @staticmethod
-    def _paired_end_issues(fastq_files) -> list:
-        """Issue if R1/R2 counts are mismatched."""
-        r1_files = [f for f in fastq_files if "_R1" in f.name or "_1" in f.name]
-        r2_files = [f for f in fastq_files if "_R2" in f.name or "_2" in f.name]
-        if len(r1_files) != len(r2_files) and len(r2_files) > 0:
-            return ["Mismatched paired-end files"]
+    def _first_header_starts_with_at(path: Path) -> bool:
+        """Peek the first line of ``path`` (gzip aware) and report whether it looks like a
+        FASTQ header. A cheap, bounded read: at most one line, regardless of file size."""
+        opener = gzip.open if str(path).endswith(".gz") else open
+        with opener(path, "rt") as handle:
+            return handle.readline().startswith("@")
+
+    @staticmethod
+    def _fastq_format_issues(acc_dir: Path) -> list:
+        """Issue for any FASTQ file in ``acc_dir`` whose first record is malformed.
+
+        Every file is checked (gzip aware, via ``metaquest.data.sra.fastq_files``), but only
+        its first record: a '@' header, peeked directly since ``iter_fastq_records`` does not
+        expose header text, and a sequence/quality pair of equal length pulled from
+        ``iter_fastq_records`` and stopped after one record via closing the generator. A large
+        corrupted file is never fully parsed.
+        """
+        issues = []
+        for f in fastq_files(acc_dir):
+            try:
+                if not SRAValidateCommand._first_header_starts_with_at(f):
+                    issues.append(f"FASTQ format error in {f.name}: header does not start with '@'")
+                    continue
+                records = iter_fastq_records(f)
+                try:
+                    record = next(records, None)
+                finally:
+                    records.close()
+                if record is None:
+                    issues.append(f"No valid FASTQ records in {f.name}")
+                    continue
+                seq, qual = record
+                if len(seq) != len(qual):
+                    issues.append(f"FASTQ format error in {f.name}: sequence/quality length mismatch")
+            except (ValueError, OSError) as e:
+                issues.append(f"FASTQ format error in {f.name}: {e}")
+        return issues
+
+    @staticmethod
+    def _mate_count_issues(acc_dir: Path, cached: Optional[Dict[str, Any]]) -> list:
+        """Issue when a paired-end dataset's two mate files have different read counts.
+
+        Read counts come from a cached stats record's ``reads_per_file`` (already computed,
+        no file I/O) when available, else a fresh ``count_fastq_reads`` per mate file. A
+        dataset with no complete mate-1/mate-2 pair (single-end, or an incomplete pair) is
+        not flagged here.
+        """
+        files = fastq_files(acc_dir)
+        mate1 = next((f for f in files if fastq_stem(f).endswith(MATE1_SUFFIXES)), None)
+        mate2 = next((f for f in files if fastq_stem(f).endswith(_MATE2_SUFFIXES)), None)
+        if mate1 is None or mate2 is None:
+            return []
+        reads_per_file = (cached or {}).get("reads_per_file") or {}
+        n1 = reads_per_file.get(mate1.name)
+        if n1 is None:
+            n1 = count_fastq_reads(mate1)
+        n2 = reads_per_file.get(mate2.name)
+        if n2 is None:
+            n2 = count_fastq_reads(mate2)
+        if n1 != n2:
+            return [f"mate files differ ({n1} vs {n2})"]
         return []
 
     @staticmethod
-    def _fastq_format_issues(fastq_files) -> list:
-        """Issue if the first FASTQ file has no parseable records or fails to parse."""
-        try:
-            from Bio import SeqIO
+    def _completeness_issues(acc_dir: Path, record: Optional[Dict[str, Any]]) -> list:
+        """Issue when this accession's download did not complete against NCBI's spot count.
 
-            for f in fastq_files[:1]:  # Check first file only for speed
-                with open(f, "rt") as handle:
-                    records = list(SeqIO.parse(handle, "fastq"))
-                    if len(records) == 0:
-                        return [f"No valid FASTQ records in {f.name}"]
-        except Exception as e:
-            return [f"FASTQ format error: {e}"]
+        Prefers the store sidecar (freshest, when ``acc_dir`` is a store link -- its
+        ``state`` is ``"partial"`` for a truncated download) over the registry's own download
+        verdict (``"truncated"`` in its own vocabulary). Silent when neither source has ever
+        verified this accession against NCBI.
+        """
+        sidecar_path = _resolved_sidecar_path(acc_dir)
+        if sidecar_path is not None:
+            sidecar = read_sidecar(sidecar_path)
+            if sidecar is not None and sidecar.state == "partial":
+                reads = sidecar.reads_per_mate
+                spots = sidecar.ncbi.get("spots")
+                return [f"partial: {reads} reads on disk vs {spots} spots at NCBI"]
+            return []
+
+        verdict = ((record or {}).get("download") or {}).get("complete") or {}
+        if verdict.get("verdict") == "truncated":
+            reads = verdict.get("reads_r1")
+            spots = verdict.get("expected_spots")
+            return [f"partial: {reads} reads on disk vs {spots} spots at NCBI"]
         return []
 
-    def _validate_directory(self, acc_dir, check_pairs=False):
+    @staticmethod
+    def _md5_issues(acc_dir: Path) -> list:
+        """Issue for any FASTQ file whose md5 does not match the store sidecar's recorded
+        value. A no-op when there is no sidecar to compare against."""
+        sidecar_path = _resolved_sidecar_path(acc_dir)
+        if sidecar_path is None:
+            return []
+        sidecar = read_sidecar(sidecar_path)
+        if sidecar is None:
+            return []
+        recorded = {entry.get("name"): entry.get("md5") for entry in sidecar.files}
+        issues = []
+        for f in fastq_files(acc_dir):
+            expected = recorded.get(f.name)
+            if expected is None:
+                continue
+            if md5_file(f) != expected:
+                issues.append(f"md5 mismatch: {f.name}")
+        return issues
+
+    def _validate_directory(
+        self,
+        acc_dir,
+        registry: Optional[Registry] = None,
+        check_pairs: bool = False,
+        check_md5: bool = False,
+    ):
         """Validate a single accession directory."""
         print(f"Validating {acc_dir.name}...")
 
-        fastq_files = list(acc_dir.glob("*.fastq*"))
-        if not fastq_files:
+        raw_files = list(acc_dir.glob("*.fastq*"))
+        if not raw_files:
             return {
                 "accession": acc_dir.name,
                 "status": "FAILED",
                 "issues": "No FASTQ files found",
+                "issues_list": ["No FASTQ files found"],
                 "num_files": 0,
+                "checks": [],
             }
 
-        issues = self._empty_file_issues(fastq_files)
+        checks = ["empty_files", "format"]
+        issues = self._empty_file_issues(raw_files)
+        issues += self._fastq_format_issues(acc_dir)
+
+        cached = cached_stats(acc_dir, _resolved_sidecar_path(acc_dir))
         if check_pairs:
-            issues += self._paired_end_issues(fastq_files)
-        issues += self._fastq_format_issues(fastq_files)
+            checks.append("mate_counts")
+            issues += self._mate_count_issues(acc_dir, cached)
+
+        checks.append("completeness")
+        record = registry.datasets.get(acc_dir.name) if registry is not None else None
+        issues += self._completeness_issues(acc_dir, record)
+
+        if check_md5:
+            checks.append("md5")
+            issues += self._md5_issues(acc_dir)
 
         return {
             "accession": acc_dir.name,
             "status": "PASSED" if not issues else "FAILED",
             "issues": "; ".join(issues) if issues else "None",
-            "num_files": len(fastq_files),
+            "issues_list": issues,
+            "num_files": len(raw_files),
+            "checks": checks,
         }
 
     def _print_validation_results(self, validation_results):
@@ -371,16 +498,21 @@ class SRAValidateCommand(BaseCommand):
 
             registry = load_registry(args.registry)
             store = _resolve_command_store(args, registry)
+            check_md5 = getattr(args, "md5", False)
             validation_results = []
             for acc_dir in accession_dirs:
-                result = self._validate_directory(acc_dir, args.check_pairs)
+                result = self._validate_directory(acc_dir, registry, args.check_pairs, check_md5)
                 validation_results.append(result)
                 record_analysis(
                     registry,
                     result["accession"],
                     "validate",
                     "",
-                    {"passed": result["status"] == "PASSED", "files": result.get("num_files", 0)},
+                    {
+                        "passed": result["status"] == "PASSED",
+                        "files": result.get("num_files", 0),
+                        "issues": result.get("issues_list", []),
+                    },
                 )
                 record_usage_safe(store, registry, result["accession"], "", "analysed", detail="validate")
             save_registry(registry)

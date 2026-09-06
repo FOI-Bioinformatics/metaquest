@@ -17,7 +17,7 @@ import requests
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.sra import iter_fastq_records
-from metaquest.store.stats import cached_stats
+from metaquest.store.stats import cached_stats, compute_dataset_stats, store_stats
 
 logger = logging.getLogger(__name__)
 
@@ -576,7 +576,19 @@ def _dataset_stats_row(acc_dir: Path) -> Optional[Dict[str, Any]]:
         logger.warning(f"No FASTQ files found in {acc_dir}")
         return None
 
-    cached = cached_stats(acc_dir, _resolved_sidecar_path(acc_dir))
+    sidecar_path = _resolved_sidecar_path(acc_dir)
+    cached = cached_stats(acc_dir, sidecar_path)
+    if cached is None and sidecar_path is not None:
+        # A store sidecar exists but its cache is absent or stale (the dataset's files
+        # changed since it was last computed): compute the shared record once here so
+        # sra_profile_quality and sra_compare do not have to re-parse the same files.
+        try:
+            files_for_stats: List[Union[str, Path]] = list(fastq_files)
+            cached = compute_dataset_stats(files_for_stats)
+            store_stats(sidecar_path, cached)
+        except Exception as e:
+            logger.debug("Could not compute/store dataset stats for %s: %s", acc_dir.name, e)
+            cached = None
 
     try:
         stats = calculate_read_statistics(fastq_files, cached=cached)

@@ -398,6 +398,7 @@ class TestSRAValidateCommand:
         assert args.fastq_folder == "fastq"
         assert args.accessions is None
         assert not args.check_pairs
+        assert not args.md5
 
     def test_configure_parser_with_options(self):
         """Test parser with all options."""
@@ -406,12 +407,13 @@ class TestSRAValidateCommand:
         command.configure_parser(parser)
 
         args = parser.parse_args(
-            ["--fastq-folder", "custom_fastq", "--accessions", "SRR123", "SRR456", "--check-pairs"]
+            ["--fastq-folder", "custom_fastq", "--accessions", "SRR123", "SRR456", "--check-pairs", "--md5"]
         )
 
         assert args.fastq_folder == "custom_fastq"
         assert args.accessions == ["SRR123", "SRR456"]
         assert args.check_pairs
+        assert args.md5
 
     def test_find_accession_dirs_all(self, tmp_path):
         """Test finding all accession directories."""
@@ -472,22 +474,14 @@ class TestSRAValidateCommand:
         fastq_file = acc_dir / "test.fastq"
         fastq_file.write_text("@read1\nACGT\n+\n!!!!\n")
 
-        # Mock SeqIO import within the method
-        def mock_import(name, *args, **kwargs):
-            if name == "Bio":
-                mock_bio = Mock()
-                mock_bio.SeqIO = Mock()
-                mock_bio.SeqIO.parse.return_value = [Mock()]  # Mock valid records
-                return mock_bio
-            return __import__(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=mock_import):
-            result = command._validate_directory(acc_dir)
+        result = command._validate_directory(acc_dir)
 
         assert result["accession"] == "SRR123"
         assert result["status"] == "PASSED"
         assert result["issues"] == "None"
+        assert result["issues_list"] == []
         assert result["num_files"] == 1
+        assert result["checks"] == ["empty_files", "format", "completeness"]
 
     @patch("builtins.print")
     def test_validate_directory_empty_files(self, mock_print, tmp_path):
@@ -507,49 +501,209 @@ class TestSRAValidateCommand:
         assert "Empty file: test.fastq" in result["issues"]
 
     @patch("builtins.print")
-    def test_validate_directory_paired_end_mismatch(self, mock_print, tmp_path):
-        """Test validation with mismatched paired-end files."""
+    def test_validate_directory_mate_count_mismatch(self, mock_print, tmp_path):
+        """A paired-end dataset whose mates have different read counts is flagged, with the
+        read counts named in the message."""
         command = SRAValidateCommand()
 
         acc_dir = tmp_path / "SRR123"
         acc_dir.mkdir()
 
-        # Create mismatched paired-end files
-        (acc_dir / "test_R1.fastq").write_text("content")
-        (acc_dir / "test_R2.fastq").write_text("content")
-        (acc_dir / "test2_R1.fastq").write_text("content")
-        # Missing test2_R2.fastq
+        (acc_dir / "SRR123_1.fastq").write_text("@r\nACGT\n+\nIIII\n" * 2)
+        (acc_dir / "SRR123_2.fastq").write_text("@r\nACGT\n+\nIIII\n" * 1)
 
         result = command._validate_directory(acc_dir, check_pairs=True)
 
         assert result["status"] == "FAILED"
-        assert "Mismatched paired-end files" in result["issues"]
+        assert "mate files differ (2 vs 1)" in result["issues"]
+        assert "mate_counts" in result["checks"]
+
+    @patch("metaquest.cli.commands.sra_enhanced.cached_stats")
+    @patch("metaquest.cli.commands.sra_enhanced.count_fastq_reads")
+    @patch("builtins.print")
+    def test_validate_directory_mate_count_uses_cached_stats(self, mock_print, mock_count, mock_cached, tmp_path):
+        """When a cached stats record is available, mate counts come from its
+        ``reads_per_file`` rather than a fresh ``count_fastq_reads`` pass."""
+        mock_cached.return_value = {"reads_per_file": {"SRR123_1.fastq": 5, "SRR123_2.fastq": 5}}
+
+        command = SRAValidateCommand()
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "SRR123_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR123_2.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        result = command._validate_directory(acc_dir, check_pairs=True)
+
+        assert result["status"] == "PASSED"
+        mock_count.assert_not_called()
 
     @patch("builtins.print")
-    def test_validate_directory_format_error(self, mock_print, tmp_path):
-        """Test validation with FASTQ format errors."""
+    def test_validate_directory_format_error_broken_header(self, mock_print, tmp_path):
+        """A file whose first line is not a FASTQ header is caught."""
         command = SRAValidateCommand()
 
         acc_dir = tmp_path / "SRR123"
         acc_dir.mkdir()
 
         fastq_file = acc_dir / "test.fastq"
-        fastq_file.write_text("invalid fastq content")
+        fastq_file.write_text("invalid fastq content\nACGT\n+\nIIII\n")
 
-        # Mock SeqIO to raise an exception
-        def mock_import(name, *args, **kwargs):
-            if name == "Bio":
-                mock_bio = Mock()
-                mock_bio.SeqIO = Mock()
-                mock_bio.SeqIO.parse.side_effect = Exception("Format error")
-                return mock_bio
-            return __import__(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=mock_import):
-            result = command._validate_directory(acc_dir)
+        result = command._validate_directory(acc_dir)
 
         assert result["status"] == "FAILED"
         assert "FASTQ format error" in result["issues"]
+        assert "header does not start with" in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_format_error_length_mismatch(self, mock_print, tmp_path):
+        """A first record whose sequence and quality strings differ in length is caught."""
+        command = SRAValidateCommand()
+
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+
+        fastq_file = acc_dir / "test.fastq"
+        fastq_file.write_text("@read1\nACGTACGT\n+\nIII\n")
+
+        result = command._validate_directory(acc_dir)
+
+        assert result["status"] == "FAILED"
+        assert "sequence/quality length mismatch" in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_format_check_does_not_read_a_large_file_in_full(self, mock_print, tmp_path):
+        """The first-record shape check never falls back to a full-file read: a large file
+        with a broken header is rejected without ``count_fastq_reads`` (a full streaming
+        pass) ever being called."""
+        command = SRAValidateCommand()
+
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+
+        fastq_file = acc_dir / "test.fastq"
+        # A large file (many valid-looking records) but a broken first header.
+        fastq_file.write_text("not-a-header\n" + ("@r\nACGT\n+\nIIII\n" * 50000))
+
+        with patch("metaquest.cli.commands.sra_enhanced.count_fastq_reads") as mock_count:
+            result = command._validate_directory(acc_dir)
+
+        assert result["status"] == "FAILED"
+        assert "header does not start with" in result["issues"]
+        mock_count.assert_not_called()
+
+    @patch("builtins.print")
+    def test_validate_directory_partial_sidecar_reports_spots(self, mock_print, tmp_path):
+        """A store-linked accession whose sidecar records a partial download is failed with
+        the reads-on-disk-vs-spots-at-NCBI message."""
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR123.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(
+            store_acc_dir / "SRR123.json",
+            Sidecar(
+                accession="SRR123",
+                state="partial",
+                reads_per_mate=5,
+                ncbi={"spots": 100},
+            ),
+        )
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.symlink_to(store_acc_dir)
+
+        command = SRAValidateCommand()
+        result = command._validate_directory(acc_dir)
+
+        assert result["status"] == "FAILED"
+        assert "partial: 5 reads on disk vs 100 spots at NCBI" in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_registry_verdict_truncated_reports_spots(self, mock_print, tmp_path):
+        """A plain project directory (no store sidecar) falls back to the registry's own
+        download verdict for the same completeness check."""
+        from metaquest.data.registry import Registry
+
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "SRR123.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        registry = Registry()
+        registry.datasets["SRR123"] = {
+            "download": {"complete": {"verdict": "truncated", "reads_r1": 5, "expected_spots": 100}}
+        }
+
+        command = SRAValidateCommand()
+        result = command._validate_directory(acc_dir, registry)
+
+        assert result["status"] == "FAILED"
+        assert "partial: 5 reads on disk vs 100 spots at NCBI" in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_md5_mismatch(self, mock_print, tmp_path):
+        """--md5 fails a file whose content no longer matches the sidecar's recorded md5."""
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
+        store_acc_dir.mkdir(parents=True)
+        fastq_path = store_acc_dir / "SRR123.fastq"
+        fastq_path.write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(
+            store_acc_dir / "SRR123.json",
+            Sidecar(
+                accession="SRR123",
+                files=[{"name": "SRR123.fastq", "bytes": fastq_path.stat().st_size, "md5": "0" * 32, "reads": 1}],
+            ),
+        )
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.symlink_to(store_acc_dir)
+
+        command = SRAValidateCommand()
+        result = command._validate_directory(acc_dir, check_md5=True)
+
+        assert result["status"] == "FAILED"
+        assert "md5 mismatch: SRR123.fastq" in result["issues"]
+        assert "md5" in result["checks"]
+
+    @patch("builtins.print")
+    def test_validate_directory_md5_match_passes(self, mock_print, tmp_path):
+        """--md5 passes when the file's md5 matches the sidecar's recorded value."""
+        from metaquest.store.sidecar import Sidecar, md5_file, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
+        store_acc_dir.mkdir(parents=True)
+        fastq_path = store_acc_dir / "SRR123.fastq"
+        fastq_path.write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(
+            store_acc_dir / "SRR123.json",
+            Sidecar(
+                accession="SRR123",
+                files=[
+                    {
+                        "name": "SRR123.fastq",
+                        "bytes": fastq_path.stat().st_size,
+                        "md5": md5_file(fastq_path),
+                        "reads": 1,
+                    }
+                ],
+            ),
+        )
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.symlink_to(store_acc_dir)
+
+        command = SRAValidateCommand()
+        result = command._validate_directory(acc_dir, check_md5=True)
+
+        assert result["status"] == "PASSED"
 
     @patch("builtins.print")
     def test_print_validation_results_success(self, mock_print):
@@ -638,7 +792,9 @@ class TestSRAValidateCommand:
                 "accession": "SRR123",
                 "status": "PASSED",
                 "issues": "None",
+                "issues_list": [],
                 "num_files": 1,
+                "checks": ["empty_files", "format", "completeness"],
             }
             result = command.execute(args)
 
@@ -647,6 +803,7 @@ class TestSRAValidateCommand:
         assert registry["datasets"]["SRR123"]["analyses"]["validate"]["summary"] == {
             "passed": True,
             "files": 1,
+            "issues": [],
         }
 
     @patch("builtins.print")
@@ -739,7 +896,39 @@ class TestSRAValidateCommand:
         assert registry_after["datasets"]["SRR123"]["analyses"]["validate"]["summary"] == {
             "passed": True,
             "files": 1,
+            "issues": [],
         }
+
+    @patch("builtins.print")
+    def test_execute_records_failing_issues_in_registry_summary(self, mock_print, tmp_path):
+        """A failed accession's registry summary carries the raw issue list, not just the
+        joined display string, and names the checks that ran."""
+        command = SRAValidateCommand()
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "test.fastq").touch()  # empty file: fails the "empty_files" check
+        registry_path = tmp_path / "metaquest_registry.json"
+
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accessions=None,
+            check_pairs=False,
+            md5=False,
+            registry=str(registry_path),
+            data_root=None,
+        )
+
+        result = command.execute(args)
+
+        assert result == 1
+        registry = json.loads(registry_path.read_text())
+        summary = registry["datasets"]["SRR123"]["analyses"]["validate"]["summary"]
+        assert summary["passed"] is False
+        assert summary["files"] == 1
+        assert summary["issues"] == ["Empty file: test.fastq"]
 
     @patch("builtins.print")
     def test_execute_folder_not_exists(self, mock_print):

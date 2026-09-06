@@ -8,10 +8,12 @@ analysis, comparative dataset analysis, and interactive reporting dashboards.
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from metaquest.cli.base import BaseCommand
 from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
+from metaquest.data.sra import fastq_files
+from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.sra import (
     SRADatasetAnalyzer,
     SRAReportGenerator,
@@ -20,6 +22,7 @@ from metaquest.sra import (
 )
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
+from metaquest.store.stats import cached_stats, compute_dataset_stats, store_stats
 from metaquest.store.usage import record_usage_safe
 from metaquest.utils.browser import open_in_browser
 
@@ -199,7 +202,34 @@ class SRAQualityProfileCommand(BaseCommand):
             self._print_quality_profile(profile)
         if args.detailed_reports:
             self._write_detailed_report(profile, output_dir)
+        self._cache_stats(accession_file)
         return profile
+
+    @staticmethod
+    def _cache_stats(accession_file) -> None:
+        """Compute (or reuse) the shared FASTQ stats record and write it back to the store
+        sidecar, when ``accession_file`` resolves to a store-linked accession directory.
+
+        A no-op for a plain project folder (no sidecar to update), when the cached record's
+        signature already matches the files on disk, or when ``accession_file`` cannot be
+        resolved to a real directory at all (e.g. a test double standing in for one) --
+        this is a cache warm-up alongside profiling, never something profiling should fail
+        over.
+        """
+        try:
+            acc_dir = Path(accession_file).parent
+            sidecar_path = _resolved_sidecar_path(acc_dir)
+            if sidecar_path is None:
+                return
+            if cached_stats(acc_dir, sidecar_path) is not None:
+                return
+            files: List[Union[str, Path]] = list(fastq_files(acc_dir))
+            if not files:
+                return
+            stats = compute_dataset_stats(files)
+            store_stats(sidecar_path, stats)
+        except Exception as e:
+            logger.debug("Could not cache dataset stats for %s: %s", accession_file, e)
 
     @staticmethod
     def _summary_stats(profiles):

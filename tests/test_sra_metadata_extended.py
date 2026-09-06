@@ -654,6 +654,46 @@ class TestGenerateStatisticsReport:
         df = pd.read_csv(output_file)
         assert df.loc[0, "total_reads"] == 999999
 
+    def test_generate_statistics_writes_back_computed_stats_to_sidecar(self, tmp_path):
+        """A linked accession whose sidecar has no cached stats yet gets one written back
+        after sra_stats runs, so a later command can reuse it without re-parsing the FASTQ
+        files."""
+        from metaquest.store.sidecar import read_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
+        store_acc_dir.mkdir(parents=True)
+        fastq_file = store_acc_dir / "SRR001.fastq"
+        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
+
+        sidecar_path = store_acc_dir / "SRR001.json"
+        write_sidecar(sidecar_path, Sidecar(accession="SRR001"))  # no stats recorded yet
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_link = fastq_folder / "SRR001"
+        acc_link.symlink_to(store_acc_dir)
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file)
+
+        sidecar = read_sidecar(sidecar_path)
+        assert sidecar.stats
+        assert sidecar.stats["reads_total"] == 2
+        assert sidecar.stats_computed is not None
+
+    def test_generate_statistics_without_a_store_writes_no_sidecar(self, tmp_path):
+        """A plain project folder (no store link) is unaffected: no sidecar is created."""
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR001"
+        acc_dir.mkdir()
+        (acc_dir / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file)
+
+        assert not (acc_dir / "SRR001.json").exists()
+
 
 # ============================================================================
 # TEST CLASS: API Request Error Handling
