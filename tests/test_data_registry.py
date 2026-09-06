@@ -385,6 +385,16 @@ class TestScanners:
         assert summarise_contigs(fa) == {"contigs": 2, "total_bp": 10, "n50": 8, "largest": 8}
         assert summarise_contigs(tmp_path / "missing.fa") == {"contigs": 0, "total_bp": 0, "n50": 0, "largest": 0}
 
+    def test_scan_downloads_ignores_transient_temp_folder(self, tmp_path):
+        """A <acc>_temp folder holding a partial FASTQ must not count as a downloaded accession."""
+        fastq_dir = tmp_path / "fastq"
+        _fastq(fastq_dir / "SRR1" / "SRR1_1.fastq")
+        _fastq(fastq_dir / "SRR2_temp" / "SRR2_temp_1.fastq")
+
+        found = reg.scan_downloads(fastq_dir)
+
+        assert list(found.keys()) == ["SRR1"]
+
     def test_count_fastq_reads_plain_and_gz(self, tmp_path):
         assert reg.count_fastq_reads(_fastq(tmp_path / "a.fastq", reads=3)) == 3
         assert reg.count_fastq_reads(_fastq(tmp_path / "b.fastq.gz", reads=5, gz=True)) == 5
@@ -470,6 +480,17 @@ class TestScanners:
         assert report.untracked_fastq == ["SRR7"]
         assert report.empty_assembly_dirs == [("SRR2", "GCF_1")]
         assert r.datasets["SRR2"]["download"]["state"] == "missing"
+
+    def test_bootstrap_from_disk_ignores_transient_temp_folder(self, tmp_path):
+        """A <acc>_temp folder must never be recorded as a downloaded accession."""
+        paths = _project(tmp_path)
+        _fastq(paths.fastq / "SRR1" / "SRR1_1.fastq")
+        _fastq(paths.fastq / "SRR2_temp" / "SRR2_temp_1.fastq")
+
+        r = reg.bootstrap_from_disk(paths)
+
+        assert r.datasets["SRR1"]["download"]["state"] == "downloaded"
+        assert "SRR2_temp" not in r.datasets
 
     def test_to_dataframes(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")

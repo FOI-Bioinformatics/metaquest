@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
-from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files
+from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -578,11 +578,18 @@ def split_extract_filename(name: str, genome_ids: Sequence[str]) -> Optional[Tup
 
 
 def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
-    """Accession -> (number of FASTQ files, total bytes) for every per-accession folder with reads."""
+    """Accession -> (number of FASTQ files, total bytes) for every per-accession folder with reads.
+
+    Transient folders (``<acc>_temp``, ``.sra-cache``) are skipped even when they hold a
+    partial FASTQ file, so an in-progress or failed download is never mistaken for a
+    downloaded accession.
+    """
     found: Dict[str, Tuple[int, int]] = {}
     if not fastq_folder.is_dir():
         return found
     for folder in sorted(p for p in fastq_folder.iterdir() if p.is_dir()):
+        if is_transient_folder(folder.name):
+            continue
         if accession_has_fastq(folder):
             files = [p for p in folder.glob("*.fastq*") if p.is_file()]
             found[folder.name] = (len(files), sum(p.stat().st_size for p in files))

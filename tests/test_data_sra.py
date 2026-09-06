@@ -29,6 +29,7 @@ from metaquest.data.sra import (
     parse_verdict_message,
     classify_download_error,
     default_max_workers,
+    is_transient_folder,
 )
 
 
@@ -457,7 +458,7 @@ class TestHandleDownloadOutput:
         assert not temp_path.exists()
 
     def test_handle_download_output_no_fastq_files(self, tmp_path):
-        """Test when no FASTQ files are found."""
+        """No FASTQ files found: message is classified and the temp folder is kept for inspection."""
         temp_path = tmp_path / "temp"
         output_path = tmp_path / "output"
         temp_path.mkdir()
@@ -470,9 +471,10 @@ class TestHandleDownloadOutput:
                 success, message = _handle_download_output(temp_path, output_path)
 
         assert success is False
-        assert "No FASTQ files created" in message
+        assert message == "unknown: No FASTQ files created"
         mock_logger.error.assert_called()
-        mock_rmtree.assert_called_once_with(temp_path)
+        mock_rmtree.assert_not_called()
+        assert temp_path.exists()
 
     def test_handle_download_output_rmdir_error(self, tmp_path):
         """Test handling rmtree error during cleanup."""
@@ -782,6 +784,25 @@ class TestDefaultMaxWorkers:
         assert default_max_workers(16) == 1
 
 
+class TestIsTransientFolder:
+    """Test is_transient_folder pure helper."""
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("SRR123_temp", True),
+            ("SRR000000_temp", True),
+            (".sra-cache", True),
+            ("SRR123", False),
+            ("SRR123_temporary", False),
+            ("temp", False),
+            ("SRR123.sra-cache", False),
+        ],
+    )
+    def test_is_transient_folder(self, name, expected):
+        assert is_transient_folder(name) == expected
+
+
 class TestCheckExistingDownloads:
     """Test _check_existing_downloads function."""
 
@@ -912,7 +933,7 @@ class TestRetryFailedDownloads:
         with patch("metaquest.data.sra.download_accession") as mock_download:
             mock_download.side_effect = [(True, "Retry success 1"), (True, "Retry success 2")]
 
-            retried_successful, updated_failed = _retry_failed_downloads(
+            retried_successful, updated_failed, abort_reason = _retry_failed_downloads(
                 failed_accessions,
                 max_retries=2,
                 fastq_path=tmp_path,
@@ -924,6 +945,7 @@ class TestRetryFailedDownloads:
         assert download_results == {"SRR123": "Retry 1: Retry success 1", "SRR456": "Retry 1: Retry success 2"}
         assert len(updated_failed) == 0
         assert retried_successful == 2
+        assert abort_reason is None
 
     def test_retry_failed_downloads_uses_force_false(self, tmp_path):
         """A retry must not wipe a partially-downloaded temp folder, so it must pass force=False."""
@@ -954,7 +976,7 @@ class TestRetryFailedDownloads:
             with patch("metaquest.data.sra.time.sleep") as mock_sleep:
                 mock_download.side_effect = [(True, "Retry success"), (False, "Retry failed")]
 
-                retried_successful, updated_failed = _retry_failed_downloads(
+                retried_successful, updated_failed, abort_reason = _retry_failed_downloads(
                     failed_accessions,
                     max_retries=2,
                     fastq_path=tmp_path,
@@ -966,6 +988,7 @@ class TestRetryFailedDownloads:
         assert download_results == {"SRR123": "Retry 1: Retry success", "SRR456": "Retry 2 error: "}
         assert updated_failed == ["SRR456"]
         assert retried_successful == 1
+        assert abort_reason is None
         mock_sleep.assert_called_once_with(1)
 
     def test_retry_failed_downloads_skips_not_found(self, tmp_path):
@@ -976,7 +999,7 @@ class TestRetryFailedDownloads:
         with patch("metaquest.data.sra.download_accession") as mock_download:
             mock_download.return_value = (True, "Retry success")
 
-            retried_successful, updated_failed = _retry_failed_downloads(
+            retried_successful, updated_failed, abort_reason = _retry_failed_downloads(
                 failed_accessions,
                 max_retries=1,
                 fastq_path=tmp_path,
@@ -996,6 +1019,7 @@ class TestRetryFailedDownloads:
         )
         assert updated_failed == ["SRR404"]
         assert retried_successful == 1
+        assert abort_reason is None
 
     def test_retry_failed_downloads_sleeps_exponentially_between_rounds(self, tmp_path):
         """Between retry rounds, sleep 2**attempt seconds so a flaky network gets a backoff."""
@@ -1017,23 +1041,46 @@ class TestRetryFailedDownloads:
 
         assert mock_sleep.call_args_list == [call(1), call(2)]
 
-    def test_retry_failed_downloads_disk_full_raises(self, tmp_path):
-        """A disk-full failure must abort the whole retry run instead of continuing."""
-        failed_accessions = ["SRR123"]
+    def test_retry_failed_downloads_disk_full_aborts_without_raising(self, tmp_path):
+        """A disk-full failure aborts the run but must not raise, so the caller keeps its state."""
+        failed_accessions = ["SRR1", "SRR2", "SRR3"]
         download_results = {}
+        notified = []
+
+        def _on_result(accession, success, message):
+            notified.append((accession, success, message))
 
         with patch("metaquest.data.sra.download_accession") as mock_download:
-            mock_download.return_value = (False, "disk-full: No space left on device")
+            with patch("metaquest.data.sra.time.sleep") as mock_sleep:
+                mock_download.return_value = (False, "disk-full: No space left on device")
 
-            with pytest.raises(DataAccessError, match="Disk full"):
-                _retry_failed_downloads(
+                retried_successful, updated_failed, abort_reason = _retry_failed_downloads(
                     failed_accessions,
                     max_retries=2,
                     fastq_path=tmp_path,
                     num_threads=4,
                     temp_folder=None,
                     download_results=download_results,
+                    on_result=_on_result,
                 )
+
+        # Only the triggering accession is actually attempted; the rest of the round is
+        # marked failed without ever calling download_accession.
+        mock_download.assert_called_once()
+        assert retried_successful == 0
+        assert abort_reason == "disk-full"
+        assert updated_failed == ["SRR1", "SRR2", "SRR3"]
+        assert download_results["SRR1"] == "Retry 1: disk-full: No space left on device"
+        assert download_results["SRR2"] == "disk-full: not attempted"
+        assert download_results["SRR3"] == "disk-full: not attempted"
+        # Every accession in the round is still notified, including the ones never attempted.
+        assert notified == [
+            ("SRR1", False, "Retry 1: disk-full: No space left on device"),
+            ("SRR2", False, "disk-full: not attempted"),
+            ("SRR3", False, "disk-full: not attempted"),
+        ]
+        # No further retry round runs, so no backoff sleep either.
+        mock_sleep.assert_not_called()
 
 
 class TestHandleDownloadFailure:
@@ -1091,6 +1138,44 @@ class TestDownloadSra:
 
         assert isinstance(result, dict)
         mock_check.assert_called_once()
+
+    def test_download_sra_propagates_abort_reason(self, tmp_path):
+        """A disk-full abort reported by the retry pass surfaces as stats['aborted']."""
+        accessions_file = tmp_path / "accessions.txt"
+        output_folder = tmp_path / "downloads"
+        accessions_file.write_text("SRR123\n")
+
+        with patch("metaquest.data.sra._check_existing_downloads") as mock_check:
+            with patch("metaquest.data.sra._download_with_retries") as mock_retries:
+                with patch("metaquest.data.sra._handle_download_failure"):
+                    mock_check.return_value = ([], ["SRR123"], [])
+                    mock_retries.return_value = (
+                        0,
+                        1,
+                        ["SRR123"],
+                        {"SRR123": "disk-full: not attempted"},
+                        "disk-full",
+                    )
+
+                    result = download_sra(output_folder, accessions_file)
+
+        assert result["aborted"] == "disk-full"
+        assert result["failed"] == 1
+
+    def test_download_sra_aborted_is_none_when_run_completes_normally(self, tmp_path):
+        accessions_file = tmp_path / "accessions.txt"
+        output_folder = tmp_path / "downloads"
+        accessions_file.write_text("SRR123\n")
+
+        with patch("metaquest.data.sra._check_existing_downloads") as mock_check:
+            with patch("metaquest.data.sra._download_with_retries") as mock_retries:
+                with patch("metaquest.data.sra._handle_download_failure"):
+                    mock_check.return_value = ([], ["SRR123"], [])
+                    mock_retries.return_value = (1, 0, [], {"SRR123": "Downloaded 1 files"}, None)
+
+                    result = download_sra(output_folder, accessions_file)
+
+        assert result["aborted"] is None
 
     def test_download_sra_with_blacklist(self, tmp_path):
         """Test downloading with blacklist filtering."""

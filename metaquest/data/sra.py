@@ -67,6 +67,17 @@ def default_max_workers(num_threads: int) -> int:
     return min(MAX_CONCURRENT_DOWNLOADS, max(1, cpu_count // max(1, num_threads)), DEFAULT_MAX_WORKERS)
 
 
+def is_transient_folder(name: str) -> bool:
+    """True for a folder name that is a download-in-progress artifact, not a real accession.
+
+    Covers the ``<acc>_temp`` folder ``download_accession`` builds into (kept on disk after a
+    failure for inspection, see its except blocks) and fasterq-dump's own on-disk cache
+    directory (``.sra-cache``). Neither should be counted as a downloaded accession by
+    ``scan_downloads`` or the status command's on-disk inventory.
+    """
+    return name.endswith("_temp") or name == ".sra-cache"
+
+
 def _safe_rmtree(path: Path) -> None:
     """Remove a directory tree if present, logging on failure instead of raising."""
     try:
@@ -363,9 +374,9 @@ def _handle_download_output(temp_path, output_path, expected_spots: Optional[int
     found = fastq_files(temp_path)
     if not found:
         logger.error("No FASTQ files created despite successful command execution")
-        # Clean up temp directory
-        shutil.rmtree(temp_path)
-        return False, "No FASTQ files created"
+        # Kept for inspection, consistent with download_accession's failure paths.
+        message = "No FASTQ files created"
+        return False, f"{classify_download_error(message)}: {message}"
 
     # Move files to the final location
     # First ensure the output directory exists
@@ -465,18 +476,20 @@ def download_accession(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
-        # The <acc>_temp folder is left in place (not removed) so a subsequent attempt can
-        # resume into fasterq-dump's own temp cache rather than starting from scratch.
+        # <acc>_temp is kept for inspection; a new attempt starts clean (the _safe_rmtree
+        # above always wipes it before the next fasterq-dump run, so this is not a resume).
         message = f"Download failed: {e.stderr}"
         return False, f"{classify_download_error(message)}: {message}"
 
     except SecurityError as e:
         logger.error(f"Security error downloading {accession}: {e}")
+        # <acc>_temp is kept for inspection; a new attempt starts clean.
         message = f"Security error: {e}"
         return False, f"{classify_download_error(message)}: {message}"
 
     except Exception as e:
         logger.error(f"Error downloading {accession}: {e}")
+        # <acc>_temp is kept for inspection; a new attempt starts clean.
         message = f"Download failed: {str(e)}"
         return False, f"{classify_download_error(message)}: {message}"
 
@@ -598,19 +611,21 @@ def _retry_failed_downloads(
         redownload_truncated: Forwarded to ``download_accession`` for each retry
 
     Returns:
-        Tuple of (retried_successful, failed_accessions)
-
-    Raises:
-        DataAccessError: If any retry attempt fails with a disk-full error; this aborts the
-            whole run rather than continuing to retry other accessions.
+        Tuple of (retried_successful, failed_accessions, abort_reason). ``abort_reason`` is
+        ``"disk-full"`` when a retry attempt hit a disk-full error: the accession that hit it
+        is recorded as failed and notified like any other failure, every other accession still
+        queued in that round is marked failed with the message ``"disk-full: not attempted"``
+        (and notified too) without ever calling ``download_accession``, and no further retry
+        round runs. ``abort_reason`` is ``None`` when every round ran to completion normally.
     """
     if max_retries <= 0 or not failed_accessions:
-        return 0, failed_accessions
+        return 0, failed_accessions, None
 
     logger.info(f"Retrying {len(failed_accessions)} failed downloads")
     retry_count = 0
     retried_successful = 0
     expected_spots = expected_spots or {}
+    abort_reason: Optional[str] = None
 
     for retry in range(max_retries):
         if not failed_accessions:
@@ -634,7 +649,7 @@ def _retry_failed_downloads(
 
         logger.info(f"Retry attempt {retry + 1}/{max_retries}")
 
-        for accession in retry_batch:
+        for index, accession in enumerate(retry_batch):
             retry_count += 1
             try:
                 success, message = download_accession(
@@ -658,18 +673,29 @@ def _retry_failed_downloads(
             if success:
                 retried_successful += 1
                 logger.info(f"Successfully downloaded {accession} on retry {retry + 1}")
-            else:
-                failed_accessions.append(accession)
-                logger.warning(f"Failed to download {accession} on retry {retry + 1}: {message}")
-                if classify_download_error(message) == "disk-full":
-                    raise DataAccessError(f"Disk full while downloading {accession}: {message}")
+                _notify_result(on_result, accession, success, download_results[accession])
+                continue
 
+            failed_accessions.append(accession)
+            logger.warning(f"Failed to download {accession} on retry {retry + 1}: {message}")
             _notify_result(on_result, accession, success, download_results[accession])
+
+            if classify_download_error(message) == "disk-full":
+                abort_reason = "disk-full"
+                logger.error(f"Disk full while downloading {accession}; aborting remaining retries")
+                for not_attempted in retry_batch[index + 1 :]:
+                    download_results[not_attempted] = "disk-full: not attempted"
+                    failed_accessions.append(not_attempted)
+                    _notify_result(on_result, not_attempted, False, download_results[not_attempted])
+                break
+
+        if abort_reason:
+            break
 
         if failed_accessions and retry < max_retries - 1:
             time.sleep(2**retry)
 
-    return retried_successful, failed_accessions
+    return retried_successful, failed_accessions, abort_reason
 
 
 def _handle_download_failure(fastq_path, failed_accessions):
@@ -770,13 +796,16 @@ def _download_with_retries(
     on_result: Optional[Callable[[str, bool, str], None]] = None,
     expected_spots: Optional[Dict[str, int]] = None,
     redownload_truncated: bool = False,
-) -> Tuple[int, int, List[str], Dict[str, Any]]:
+) -> Tuple[int, int, List[str], Dict[str, Any], Optional[str]]:
     """Run the parallel downloads and optional retry pass.
 
-    Returns (successful_count, failed_count, failed_accessions, download_results).
+    Returns (successful_count, failed_count, failed_accessions, download_results, abort_reason).
+    ``abort_reason`` is ``"disk-full"`` when a retry hit a disk-full error (see
+    ``_retry_failed_downloads``), else ``None``.
     """
     failed_accessions: list = []
     download_results: dict = {}
+    abort_reason: Optional[str] = None
     successful_count, failed_count = _execute_parallel_downloads(
         accessions_to_download,
         fastq_path,
@@ -792,7 +821,7 @@ def _download_with_retries(
     )
 
     if max_retries > 0 and failed_accessions:
-        retried_successful, failed_accessions = _retry_failed_downloads(
+        retried_successful, failed_accessions, abort_reason = _retry_failed_downloads(
             failed_accessions,
             max_retries,
             fastq_path,
@@ -808,7 +837,7 @@ def _download_with_retries(
         if retried_successful > 0:
             logger.info(f"Successfully downloaded {retried_successful} accessions on retry")
 
-    return successful_count, failed_count, failed_accessions, download_results
+    return successful_count, failed_count, failed_accessions, download_results, abort_reason
 
 
 def download_sra(
@@ -913,7 +942,7 @@ def download_sra(
             accessions_to_download = accessions_to_download[:max_downloads]
 
         # Download accessions in parallel, with an optional retry pass
-        successful_count, failed_count, failed_accessions, download_results = _download_with_retries(
+        successful_count, failed_count, failed_accessions, download_results, abort_reason = _download_with_retries(
             accessions_to_download,
             fastq_path,
             num_threads,
@@ -934,6 +963,8 @@ def download_sra(
         logger.info(f"  Newly downloaded: {successful_count}")
         logger.info(f"  Failed downloads: {failed_count}")
 
+        if abort_reason:
+            logger.error(f"Download run aborted: {abort_reason}")
         if failed_count > 0:
             logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable " "automatic retry.")
             _handle_download_failure(fastq_path, failed_accessions)
@@ -949,6 +980,7 @@ def download_sra(
             "already_downloaded_accessions": sorted(str(a) for a in already_downloaded),
             "blacklisted_accessions": sorted(str(a) for a in blacklisted),
             "skipped_accessions": sorted(str(a) for a in skipped_accessions),
+            "aborted": abort_reason,
         }
 
         return download_stats

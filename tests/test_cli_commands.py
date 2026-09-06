@@ -649,6 +649,47 @@ class TestDownloadSraCommand:
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
+    def test_execute_reports_disk_full_abort(self, mock_command, _which, tmp_path, caplog):
+        """A disk-full abort logs the reason distinctly and returns 1, even though outcomes are recorded."""
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", False, "disk-full: No space left on device")
+            kwargs["on_result"]("SRR2", False, "disk-full: not attempted")
+            return {
+                "total": 2,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 0,
+                "failed": 2,
+                "failed_accessions": ["SRR1", "SRR2"],
+                "aborted": "disk-full",
+            }
+
+        mock_command.side_effect = fake_download_sra
+        command = DownloadSraCommand()
+        args = argparse.Namespace(
+            accessions_file="accessions.txt",
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=2,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+
+        with caplog.at_level("ERROR"):
+            result = command.execute(args)
+
+        assert result == 1
+        assert "disk-full" in caplog.text
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_metaquest_error(self, mock_command, _which, tmp_path):
         """A MetaQuestError from the backend is caught and returns 1."""
         mock_command.side_effect = MetaQuestError("backend boom")

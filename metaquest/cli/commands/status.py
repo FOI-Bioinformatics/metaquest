@@ -33,7 +33,7 @@ from metaquest.data.registry import (
     stage_counts,
     to_dataframes,
 )
-from metaquest.data.sra import accession_has_fastq
+from metaquest.data.sra import accession_has_fastq, is_transient_folder
 
 
 class StatusCommand(BaseCommand):
@@ -133,7 +133,9 @@ class StatusCommand(BaseCommand):
         genomes_dir = Path(args.genomes_folder)
 
         if fastq_dir.is_dir():
-            on_disk_fastq = sorted(d.name for d in fastq_dir.iterdir() if accession_has_fastq(d))
+            on_disk_fastq = sorted(
+                d.name for d in fastq_dir.iterdir() if not is_transient_folder(d.name) and accession_has_fastq(d)
+            )
         else:
             on_disk_fastq = []
         on_disk_meta = sorted(p.name[: -len("_metadata.xml")] for p in meta_dir.glob("*_metadata.xml"))

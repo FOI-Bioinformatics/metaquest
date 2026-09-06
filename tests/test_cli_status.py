@@ -121,6 +121,26 @@ class TestStatusCommand:
         assert report["wanted"]["total"] == 2
         assert report["wanted"]["fastq_missing"] == ["SRR2"]
 
+    def test_on_disk_inventory_ignores_transient_temp_folder(self, capsys):
+        """A <acc>_temp folder holding a partial FASTQ must not inflate the on-disk count."""
+        cmd = StatusCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_tree(tmp)
+            (root / "fastq" / "SRR2_temp").mkdir(parents=True)
+            (root / "fastq" / "SRR2_temp" / "SRR2_temp_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            result = cmd.execute(
+                _args(
+                    root / "metaquest_registry.json",
+                    fastq_folder=str(root / "fastq"),
+                    metadata_folder=str(root / "metadata"),
+                    genomes_folder=str(root / "genomes"),
+                    json=True,
+                )
+            )
+        assert result == 0
+        report = json.loads(capsys.readouterr().out)
+        assert report["on_disk"]["fastq_accessions"] == 1
+
     def test_parsed_containment_supplies_wanted_list(self, capsys):
         cmd = StatusCommand()
         with tempfile.TemporaryDirectory() as tmp:

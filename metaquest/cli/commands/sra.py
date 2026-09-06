@@ -281,6 +281,13 @@ class DownloadSraCommand(BaseCommand):
                     self._write_report(args.report_file, download_stats)
                     self.logger.info("Download report written to %s", args.report_file)
 
+            if not args.dry_run and download_stats.get("aborted"):
+                self.logger.error(
+                    "Download run aborted (%s); accessions attempted before the abort were " "still recorded above",
+                    download_stats["aborted"],
+                )
+                return 1
+
             if not args.dry_run and download_stats["failed"] > 0:
                 self._report_failed_downloads(args, download_stats)
                 return 1
