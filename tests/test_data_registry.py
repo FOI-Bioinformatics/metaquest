@@ -198,6 +198,99 @@ class TestNanToNone:
         assert reg.nan_to_none("SRR1") == "SRR1"
 
 
+class TestProjectRelativePaths:
+    """A registry's paths are recorded relative to its own file, so a project can be moved."""
+
+    def test_project_root_is_the_registry_files_parent(self, tmp_path):
+        r = reg.load_registry(tmp_path / "sub" / "metaquest_registry.json")
+        assert reg.project_root(r) == (tmp_path / "sub").resolve()
+
+    def test_project_root_falls_back_to_cwd_when_unbound(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        r = reg.Registry()
+        assert r.path is None
+        assert reg.project_root(r) == tmp_path.resolve()
+
+    def test_resolve_project_path_round_trip(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        inside = tmp_path / "genomes" / "GCF_1.fna"
+        stored = reg._project_relative(inside, reg.project_root(r))
+        assert not Path(stored).is_absolute()
+        assert reg.resolve_project_path(r, stored) == inside.resolve()
+
+    def test_resolve_project_path_leaves_an_absolute_value_unchanged(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        outside = tmp_path.parent / "elsewhere" / "GCF_2.fna"
+        assert reg.resolve_project_path(r, str(outside)) == outside
+
+    def test_record_genome_stores_a_relative_path_under_the_project_root(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        fasta = tmp_path / "genomes" / "GCF_1.fna"
+        manifest = tmp_path / "manifest.csv"
+        reg.record_genome(r, "GCF_1", fasta, manifest)
+        recorded = r.genomes["GCF_1"]["fasta"]
+        assert recorded == "genomes/GCF_1.fna"
+        assert reg.resolve_project_path(r, recorded) == fasta.resolve()
+        assert r.genomes["GCF_1"]["manifest"] == "manifest.csv"
+
+    def test_record_genome_keeps_an_absolute_path_outside_the_project_root(self, tmp_path):
+        r = reg.load_registry(tmp_path / "project" / "metaquest_registry.json")
+        outside_fasta = tmp_path / "shared_refs" / "GCF_1.fna"
+        reg.record_genome(r, "GCF_1", outside_fasta, outside_fasta)
+        recorded = r.genomes["GCF_1"]["fasta"]
+        assert Path(recorded).is_absolute()
+        assert Path(recorded) == outside_fasta.resolve()
+
+    def test_recorded_download_files_are_project_relative(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        _fastq(tmp_path / "fastq" / "SRR1" / "SRR1_1.fastq")
+        reg.record_download(r, "SRR1", "downloaded", tmp_path / "fastq")
+        path = r.datasets["SRR1"]["download"]["files"][0]["path"]
+        assert path == "fastq/SRR1/SRR1_1.fastq"
+
+    def test_recorded_metadata_analysis_extraction_assembly_are_project_relative(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_metadata(r, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {})
+        reg.record_analysis(r, "SRR1", "sra_stats", tmp_path / "reports" / "sra_statistics.csv", {})
+        reg.record_extraction(
+            r,
+            "SRR1",
+            "GCF_1",
+            [tmp_path / "targeted" / "SRR1" / "GCF_1_1.fastq.gz"],
+            10,
+            False,
+            {"genome_fasta": tmp_path / "genomes" / "GCF_1.fna", "preset": "sr", "threshold": 0.1},
+        )
+        reg.record_assembly(
+            r, "SRR1", "GCF_1", tmp_path / "targeted" / "SRR1" / "GCF_1_assembly", {"contigs": 1}, "v1.2.9", {}
+        )
+        assert r.datasets["SRR1"]["metadata"]["xml"] == "metadata/SRR1_metadata.xml"
+        assert r.datasets["SRR1"]["analyses"]["sra_stats"]["output"] == "reports/sra_statistics.csv"
+        extraction = r.datasets["SRR1"]["extractions"]["GCF_1"]
+        assert extraction["genome_fasta"] == "genomes/GCF_1.fna"
+        assert extraction["files"] == ["targeted/SRR1/GCF_1_1.fastq.gz"]
+        assert extraction["assembly"]["dir"] == "targeted/SRR1/GCF_1_assembly"
+
+    def test_absolute_entries_from_an_older_registry_still_resolve(self, tmp_path):
+        """A pre-existing registry with absolute paths (written before this change) is
+        unaffected: resolve_project_path returns an absolute value unchanged."""
+        target = tmp_path / "metaquest_registry.json"
+        absolute_fasta = tmp_path / "genomes" / "GCF_1.fna"
+        target.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "created": "2026-01-01T00:00:00+00:00",
+                    "updated": "2026-01-01T00:00:00+00:00",
+                    "genomes": {"GCF_1": {"fasta": str(absolute_fasta), "manifest": ""}},
+                    "datasets": {},
+                }
+            )
+        )
+        r = reg.load_registry(target)
+        assert reg.resolve_project_path(r, r.genomes["GCF_1"]["fasta"]) == absolute_fasta
+
+
 class TestRecords:
     def test_screening_selection_exclusion(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")

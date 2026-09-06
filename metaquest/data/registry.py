@@ -71,6 +71,49 @@ class Registry:
     path: Optional[Path] = None
 
 
+def project_root(registry: Registry) -> Path:
+    """The project root a registry's paths are recorded relative to: its file's parent folder.
+
+    A registry not yet bound to a file (before its first save, e.g. mid-``bootstrap_from_disk``)
+    falls back to the current working directory, so a path recorded at that point resolves the
+    same way once the registry is later bound and saved from the same directory.
+    """
+    if registry.path is not None:
+        return registry.path.parent.resolve()
+    return Path.cwd().resolve()
+
+
+def _project_relative(path: Union[str, Path], root: Path) -> str:
+    """The form to record for ``path``: relative to ``root`` when inside it, else absolute.
+
+    Keeps a project's registry movable: renaming or relocating the project directory does not
+    break paths recorded under it. A path outside the project root (for example a genome FASTA
+    shared from elsewhere on disk) has no project-relative form, so it is kept absolute.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def resolve_project_path(registry: Registry, value: Union[str, Path]) -> Path:
+    """Resolve one path recorded in the registry against its project root.
+
+    An absolute recorded value is returned unchanged, so entries written by a MetaQuest
+    version before this change (always absolute) keep resolving correctly. A relative value
+    is joined to ``project_root``. For a registry written by an older version, whose relative
+    paths were relative to the working directory of that run, this still resolves correctly in
+    the common case, since that working directory is normally where the registry file itself
+    lived, which is exactly the project root computed here. Callers with a value that may be
+    ``None`` (an optional recorded field) must check that themselves before calling.
+    """
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return project_root(registry) / path
+
+
 @dataclass
 class ReconcileReport:
     recorded_missing: List[str] = field(default_factory=list)
@@ -242,7 +285,12 @@ def record_screening(
 
 def record_genome(registry: Registry, genome_id: str, fasta: Union[str, Path], manifest: Union[str, Path]) -> None:
     """Record where a target genome's FASTA lives, and the manifest it came from."""
-    registry.genomes[genome_id] = {"fasta": str(fasta), "manifest": str(manifest), "date": _now()}
+    root = project_root(registry)
+    registry.genomes[genome_id] = {
+        "fasta": _project_relative(fasta, root),
+        "manifest": _project_relative(manifest, root),
+        "date": _now(),
+    }
 
 
 def record_selection(
@@ -360,13 +408,13 @@ def clear_exclusion(registry: Registry, accession: str) -> None:
         record["exclusion"] = {"excluded": False, "reason": "", "source": "user", "date": _now()}
 
 
-def _file_entries(paths: Iterable[Path]) -> List[Dict[str, Any]]:
+def _file_entries(paths: Iterable[Path], root: Path) -> List[Dict[str, Any]]:
     entries = []
     for path in paths:
         stat = path.stat()
         entries.append(
             {
-                "path": str(path),
+                "path": _project_relative(path, root),
                 "bytes": stat.st_size,
                 "mtime": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
             }
@@ -395,7 +443,7 @@ def record_download(
         download["attempts"] = int(download.get("attempts", 0)) + 1
     files: List[Dict[str, Any]] = []
     if state == "downloaded":
-        files = _file_entries(fastq_files(Path(fastq_dir) / accession))
+        files = _file_entries(fastq_files(Path(fastq_dir) / accession), project_root(registry))
     download.update(
         {
             "state": state,
@@ -428,7 +476,7 @@ def _to_int_or_none(value: Any) -> Optional[int]:
 
 
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
-    record: Dict[str, Any] = {"xml": str(xml_path), "date": _now()}
+    record: Dict[str, Any] = {"xml": _project_relative(xml_path, project_root(registry)), "date": _now()}
     for key in (
         "run_size",
         "run_md5",
@@ -450,7 +498,7 @@ def record_analysis(
 ) -> None:
     upsert_dataset(registry, accession).setdefault("analyses", {})[analysis] = {
         "date": _now(),
-        "output": str(output),
+        "output": _project_relative(output, project_root(registry)),
         "summary": dict(summary),
     }
 
@@ -464,16 +512,18 @@ def record_extraction(
     unequal_mates: bool,
     params: Dict[str, Any],
 ) -> None:
+    root = project_root(registry)
     extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
     previous = extractions.get(genome_id, {})
+    genome_fasta = params.get("genome_fasta")
     extractions[genome_id] = {
         "date": _now(),
-        "genome_fasta": params.get("genome_fasta"),
+        "genome_fasta": _project_relative(genome_fasta, root) if genome_fasta is not None else None,
         "preset": params.get("preset"),
         "threshold": params.get("threshold"),
         "mapped_reads": int(mapped_reads),
         "unequal_mates": bool(unequal_mates),
-        "files": [str(p) for p in files],
+        "files": [_project_relative(p, root) for p in files],
         "assembly": previous.get("assembly"),
     }
     registry.genomes.setdefault(genome_id, {})
@@ -493,7 +543,7 @@ def record_assembly(
     entry.pop("inferred", None)
     entry["assembly"] = {
         "date": _now(),
-        "dir": str(assembly_dir),
+        "dir": _project_relative(assembly_dir, project_root(registry)),
         "contigs": int(stats.get("contigs", 0)),
         "total_bp": int(stats.get("total_bp", 0)),
         "n50": int(stats.get("n50", 0)),

@@ -285,6 +285,26 @@ class TestStatusWithRegistry:
         extract = next(s for s in out["next"] if "extract_target_reads" in s["command"])
         assert f"--genome-fasta {tmp_path / 'refs' / 'wMel.fna'}" in extract["command"]
 
+    def test_a_moved_project_still_reports_the_recorded_genome_fasta(self, tmp_path, capsys):
+        """A registry recorded under the old project location still resolves its genome FASTA
+        after the project directory is renamed, since the path is stored relative to the
+        registry file rather than to the working directory at record time."""
+        old_root = tmp_path / "a"
+        _project_tree(old_root)
+        StatusCommand().execute(_status_args(old_root, init=True))
+        seeded = load_registry(old_root / "metaquest_registry.json")
+        record_genome(seeded, "GCF_1", old_root / "refs" / "wMel.fna", old_root / "manifest.csv")
+        save_registry(seeded)
+        capsys.readouterr()
+
+        new_root = tmp_path / "b"
+        old_root.rename(new_root)
+
+        StatusCommand().execute(_status_args(new_root, next=True))
+        out = json.loads(capsys.readouterr().out)
+        extract = next(s for s in out["next"] if "extract_target_reads" in s["command"])
+        assert f"--genome-fasta {new_root / 'refs' / 'wMel.fna'}" in extract["command"]
+
     def test_next_drops_excluded_and_already_extracted_accessions(self, tmp_path, capsys):
         _project_tree(tmp_path)
         StatusCommand().execute(_status_args(tmp_path, init=True, accessions_file=str(tmp_path / "accessions.txt")))

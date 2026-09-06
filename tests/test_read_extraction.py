@@ -403,6 +403,42 @@ class TestExtractionIdempotency:
         mock_run.assert_not_called()
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_resolved_record_still_matches_after_the_project_directory_is_renamed(self, mock_run, tmp_path):
+        """The CLI resolves a registry record's stored path against the project root before
+        calling extract_target_reads; once resolved to an absolute path, the record still
+        matches even though the project directory has since been renamed."""
+        mock_run.side_effect = _fake_tools({})
+        old_root = tmp_path / "a"
+        old_root.mkdir()
+        _make_tree(old_root, paired=True)
+        new_root = tmp_path / "b"
+        old_root.rename(new_root)
+        genome = new_root / "GCF_1.fna"
+        # What the CLI computes: the record's stored ("GCF_1.fna") path resolved against the
+        # project's current (post-rename) location.
+        record = {
+            "SRR1": {
+                "genome_fasta": str(genome),
+                "preset": "sr",
+                "threshold": 0.5,
+                "mapped_reads": 0,
+                "files": [],
+                "unequal_mates": False,
+            }
+        }
+        results = extract_target_reads(
+            parsed_containment=new_root / "parsed_containment.txt",
+            genome_id="GCF_1",
+            genome_fasta=genome,
+            fastq_folder=new_root / "fastq",
+            output_folder=new_root / "targeted",
+            threshold=0.5,
+            already_done=record,
+        )
+        assert results["SRR1"].skipped is True
+        mock_run.assert_not_called()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_dry_run_reports_would_be_skips(self, mock_run, caplog):
         mock_run.side_effect = _fake_tools({})
         with tempfile.TemporaryDirectory() as tmp:

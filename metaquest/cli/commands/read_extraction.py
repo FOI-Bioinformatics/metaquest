@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
@@ -18,11 +18,13 @@ from metaquest.data.read_extraction import (
     summarise_contigs,
 )
 from metaquest.data.registry import (
+    Registry,
     extraction_record,
     load_registry,
     record_assembly,
     record_extraction,
     registry_transaction,
+    resolve_project_path,
 )
 
 
@@ -101,6 +103,26 @@ class ExtractTargetReadsCommand(BaseCommand):
             )
 
     @staticmethod
+    def _resolved_extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
+        """The recorded extraction for one sample, with its ``genome_fasta`` and ``files``
+        resolved against the project root.
+
+        The registry stores these paths relative to its own location so the project can be
+        moved; ``extract_target_reads`` and its ``_record_matches`` helper know nothing about
+        the registry or its project root, so the paths must already be absolute (or otherwise
+        directly usable) by the time they reach it.
+        """
+        record = extraction_record(registry, accession, genome_id)
+        if record is None:
+            return None
+        resolved = dict(record)
+        genome_fasta = record.get("genome_fasta")
+        if genome_fasta is not None:
+            resolved["genome_fasta"] = str(resolve_project_path(registry, genome_fasta))
+        resolved["files"] = [str(resolve_project_path(registry, p)) for p in record.get("files", [])]
+        return resolved
+
+    @staticmethod
     def _has_assembly_record(args: argparse.Namespace, accession: str) -> bool:
         """True when the registry already holds an assembly block for this sample and genome."""
         record = extraction_record(load_registry(args.registry), accession, args.genome_id) or {}
@@ -166,7 +188,7 @@ class ExtractTargetReadsCommand(BaseCommand):
             already_done = {
                 acc: rec
                 for acc in registry.datasets
-                if (rec := extraction_record(registry, acc, args.genome_id)) is not None
+                if (rec := self._resolved_extraction_record(registry, acc, args.genome_id)) is not None
             }
 
             results = extract_target_reads(

@@ -510,3 +510,46 @@ class TestExtractTargetReadsCommand:
             tools_after_forced_run = [c.args[0] for c in mock_run.call_args_list[calls_before_forced:]]
             assert "minimap2" in tools_after_forced_run
             assert "samtools" in tools_after_forced_run
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_second_run_skips_after_the_project_directory_is_renamed(self, mock_run, tmp_path):
+        """The registry stores paths relative to itself, so a project directory renamed
+        between two runs still lets the second run recognise the earlier extraction."""
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        old_root = tmp_path / "a"
+        old_root.mkdir()
+        root, table, genome = _tree(old_root)
+        registry_file = root / "registry.json"
+        rc = cmd.execute(
+            _args(
+                str(old_root),
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                registry=str(registry_file),
+            )
+        )
+        assert rc == 0
+        calls_before = len(mock_run.call_args_list)
+
+        new_root = tmp_path / "b"
+        old_root.rename(new_root)
+        registry_file = new_root / "registry.json"
+        rc = cmd.execute(
+            _args(
+                str(new_root),
+                parsed_containment=str(new_root / "parsed_containment.txt"),
+                genome_fasta=str(new_root / "GCF_1.fna"),
+                fastq_folder=str(new_root / "fastq"),
+                output_folder=str(new_root / "targeted"),
+                threshold=0.5,
+                registry=str(registry_file),
+            )
+        )
+        assert rc == 0
+        tools_after_rename = [c.args[0] for c in mock_run.call_args_list[calls_before:]]
+        assert "minimap2" not in tools_after_rename
+        assert "samtools" not in tools_after_rename

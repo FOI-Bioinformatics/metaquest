@@ -124,7 +124,9 @@ class TestSRAQualityProfileCommand:
         registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
         analysis = registry["datasets"]["SRR001"]["analyses"]["quality"]
         assert analysis["summary"] == {"grade": "good", "total_reads": 1000, "gc_content": 0.45}
-        assert analysis["output"] == str(tmp_path / "output" / "quality_summary.json")
+        # output/ lives under the project root (the registry's own folder), so the registry
+        # records it relative to it, which keeps the project movable.
+        assert analysis["output"] == "output/quality_summary.json"
 
     def test_execute_batch_mode(self, tmp_path):
         """Test batch profiling mode."""
@@ -176,7 +178,8 @@ class TestSRAQualityProfileCommand:
         registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
         for acc in ("SRR001", "SRR002"):
             analysis = registry["datasets"][acc]["analyses"]["quality"]
-            assert analysis["output"] == str(tmp_path / "output" / f"{acc}_quality_profile.json")
+            # Same project-relative recording as above.
+            assert analysis["output"] == f"output/{acc}_quality_profile.json"
 
     def test_execute_missing_fastq_marks_failed(self, tmp_path):
         """Accessions with no FASTQ files are recorded as failed and yield exit 1."""

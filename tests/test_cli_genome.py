@@ -541,8 +541,10 @@ class TestGenomePrepareCommand:
         assert cmd.execute(args) == 0
         genomes = json.loads(registry_file.read_text())["genomes"]
         assert set(genomes) == {"GCF_000006945.2", "wMel"}
-        assert genomes["GCF_000006945.2"]["fasta"] == str(tmp_path / "GCF_000006945.2.fna")
-        assert genomes["GCF_000006945.2"]["manifest"] == str(manifest)
+        # Both files live under the project root (the registry's own folder), so the registry
+        # records them relative to it, which keeps the project movable.
+        assert genomes["GCF_000006945.2"]["fasta"] == "GCF_000006945.2.fna"
+        assert genomes["GCF_000006945.2"]["manifest"] == "manifest.csv"
         assert genomes["wMel"]["date"]
 
     def test_configure_parser_has_registry(self):

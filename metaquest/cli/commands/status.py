@@ -29,6 +29,7 @@ from metaquest.data.registry import (
     query,
     reconcile,
     registry_path,
+    resolve_project_path,
     save_registry,
     stage_counts,
     to_dataframes,
@@ -252,7 +253,7 @@ class StatusCommand(BaseCommand):
         """The genome's FASTA: the recorded one, else a file on disk, else the conventional name."""
         recorded = (registry.genomes.get(genome_id) or {}).get("fasta")
         if recorded:
-            return Path(recorded)
+            return resolve_project_path(registry, recorded)
         for pattern in GENOME_FASTA_GLOBS:
             candidate = paths.genomes / pattern.replace("*", genome_id)
             if candidate.exists():

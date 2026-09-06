@@ -258,7 +258,9 @@ class TestSRAStatsCommand:
         registry = json.loads(registry_path.read_text())
         for acc, total_reads in (("SRR1", 1000), ("SRR2", 2000)):
             analysis = registry["datasets"][acc]["analyses"]["sra_stats"]
-            assert analysis["output"] == str(report_path)
+            # report_path lives under the project root (the registry's own folder), so the
+            # registry records it relative to it, which keeps the project movable.
+            assert analysis["output"] == "stats.csv"
             assert analysis["summary"]["total_reads"] == total_reads
 
     @patch("builtins.print")
