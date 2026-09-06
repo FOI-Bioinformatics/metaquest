@@ -2,6 +2,9 @@
 Tests for metaquest.data.sra module.
 """
 
+import gzip
+import json
+
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -19,6 +22,11 @@ from metaquest.data.sra import (
     _handle_download_failure,
     download_sra,
     _find_paired_reads,
+    accession_has_fastq,
+    fastq_files,
+    count_fastq_reads,
+    verify_download,
+    parse_verdict_message,
 )
 
 
@@ -170,6 +178,239 @@ class TestCheckExistingDownload:
         assert result is False
         mock_logger.warning.assert_called()
 
+    def test_check_existing_download_dangling_symlink(self, tmp_path):
+        """A broken symlink left by an interrupted run must be cleared, never raise."""
+        output_path = tmp_path / "downloads" / "SRR123"
+        output_path.parent.mkdir(parents=True)
+        output_path.symlink_to(tmp_path / "gone-target")
+
+        result = _check_existing_download(output_path, force=False)
+
+        assert result is False
+        assert not output_path.is_symlink()
+
+    def test_check_existing_download_symlinked_empty_directory_is_unlinked(self, tmp_path):
+        """A symlink to an empty directory is unlinked, not rmdir'd (rmdir rejects symlinks)."""
+        real_dir = tmp_path / "real_empty"
+        real_dir.mkdir()
+        output_path = tmp_path / "downloads" / "SRR123"
+        output_path.parent.mkdir(parents=True)
+        output_path.symlink_to(real_dir)
+
+        result = _check_existing_download(output_path, force=False)
+
+        assert result is False
+        assert not output_path.is_symlink()
+
+    def test_check_existing_download_redownload_truncated_forces_fresh(self, tmp_path):
+        """force=True (standing in for a truncated accession) removes the directory."""
+        output_path = tmp_path / "downloads" / "SRR123"
+        output_path.mkdir(parents=True)
+        (output_path / "SRR123.fastq").write_text("partial")
+
+        result = _check_existing_download(output_path, force=True)
+
+        assert result is False
+        assert not output_path.exists()
+
+
+class TestFastqFiles:
+    """Test fastq_files, the single source of truth for what counts as a FASTQ file on disk."""
+
+    def test_returns_sorted_nonempty_matches(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1_2.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR1_empty.fastq").write_text("")
+        (acc_dir / "notes.txt").write_text("not fastq")
+
+        result = fastq_files(acc_dir)
+
+        assert [p.name for p in result] == ["SRR1_1.fastq", "SRR1_2.fastq"]
+
+    def test_matches_fq_gz(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        with gzip.open(acc_dir / "SRR1.fq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+
+        assert [p.name for p in fastq_files(acc_dir)] == ["SRR1.fq.gz"]
+
+    def test_missing_directory_returns_empty(self, tmp_path):
+        assert fastq_files(tmp_path / "missing") == []
+
+    def test_follows_symlinked_directory(self, tmp_path):
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        (real_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        link = tmp_path / "SRR1"
+        link.symlink_to(real_dir)
+
+        assert [p.name for p in fastq_files(link)] == ["SRR1_1.fastq"]
+
+
+class TestAccessionHasFastq:
+    """Test accession_has_fastq, the single source of truth for "already downloaded"."""
+
+    def test_false_for_zero_byte_file(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.fastq").write_text("")
+        assert accession_has_fastq(acc_dir) is False
+
+    def test_true_for_fq_gz(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        with gzip.open(acc_dir / "SRR1.fq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+        assert accession_has_fastq(acc_dir) is True
+
+    def test_false_when_sidecar_marks_partial(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR1.json").write_text(json.dumps({"state": "partial"}))
+        assert accession_has_fastq(acc_dir) is False
+
+    def test_false_when_sidecar_marks_failed_or_downloading(self, tmp_path):
+        for state in ("failed", "downloading"):
+            acc_dir = tmp_path / f"SRR_{state}"
+            acc_dir.mkdir()
+            (acc_dir / f"{acc_dir.name}.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            (acc_dir / f"{acc_dir.name}.json").write_text(json.dumps({"state": state}))
+            assert accession_has_fastq(acc_dir) is False
+
+    def test_true_when_sidecar_marks_complete(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR1.json").write_text(json.dumps({"state": "complete"}))
+        assert accession_has_fastq(acc_dir) is True
+
+    def test_true_when_sidecar_is_unreadable(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR1.json").write_text("not valid json{")
+        assert accession_has_fastq(acc_dir) is True
+
+    def test_false_for_missing_directory(self, tmp_path):
+        assert accession_has_fastq(tmp_path / "missing") is False
+
+
+class TestCountFastqReads:
+    """count_fastq_reads: a chunked binary newline count, // 4 per FASTQ record."""
+
+    def test_plain_and_gz(self, tmp_path):
+        plain = tmp_path / "a.fastq"
+        plain.write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(3)))
+        assert count_fastq_reads(plain) == 3
+
+        gz = tmp_path / "b.fastq.gz"
+        with gzip.open(gz, "wt") as handle:
+            handle.write("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
+        assert count_fastq_reads(gz) == 5
+
+    def test_multiple_internal_blocks(self, tmp_path):
+        """A file over 1 MiB must still be counted correctly across chunk boundaries."""
+        record = "@r{0}\n" + "A" * 32 + "\n+\n" + "I" * 32 + "\n"
+        path = tmp_path / "big.fastq"
+        with open(path, "w") as handle:
+            for i in range(20000):
+                handle.write(record.format(i))
+        assert path.stat().st_size > 1024 * 1024
+        assert count_fastq_reads(path) == 20000
+
+
+class TestVerifyDownload:
+    """verify_download: reads_r1 against NCBI's expected spot count."""
+
+    def _acc_dir(self, tmp_path, name="SRR1"):
+        acc_dir = tmp_path / name
+        acc_dir.mkdir()
+        (acc_dir / f"{name}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        return acc_dir
+
+    def test_truncated(self, tmp_path, monkeypatch):
+        acc_dir = self._acc_dir(tmp_path)
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 300000)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=48000000)
+
+        assert result["verdict"] == "truncated"
+        assert result["reads_r1"] == 300000
+        assert result["expected_spots"] == 48000000
+        assert result["ratio"] == round(300000 / 48000000, 4)
+
+    def test_complete(self, tmp_path, monkeypatch):
+        acc_dir = self._acc_dir(tmp_path)
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 999)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=1000)
+
+        assert result["verdict"] == "complete"
+        assert result["ratio"] == 0.999
+
+    def test_complete_at_exact_threshold(self, tmp_path, monkeypatch):
+        acc_dir = self._acc_dir(tmp_path)
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 990)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=1000)
+
+        assert result["verdict"] == "complete"
+
+    def test_truncated_just_below_threshold(self, tmp_path, monkeypatch):
+        acc_dir = self._acc_dir(tmp_path)
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 989)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=1000)
+
+        assert result["verdict"] == "truncated"
+
+    def test_unverified_when_spots_unknown(self, tmp_path):
+        acc_dir = self._acc_dir(tmp_path)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=None)
+
+        assert result["verdict"] == "unverified"
+        assert result["ratio"] is None
+        assert result["expected_spots"] is None
+
+    def test_bytes_total_sums_fastq_files(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR1_2.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        expected_bytes = sum(p.stat().st_size for p in acc_dir.glob("*.fastq"))
+
+        result = verify_download("SRR1", acc_dir, expected_spots=None)
+
+        assert result["bytes_total"] == expected_bytes
+
+
+class TestParseVerdictMessage:
+    def test_complete(self):
+        result = parse_verdict_message("Downloaded 2 files, complete (300000 of 300000 spots)")
+        assert result == {"verdict": "complete", "reads_r1": 300000, "expected_spots": 300000, "ratio": 1.0}
+
+    def test_truncated(self):
+        result = parse_verdict_message("Downloaded 1 files, truncated (300000 of 48000000 spots)")
+        assert result["verdict"] == "truncated"
+        assert result["reads_r1"] == 300000
+        assert result["expected_spots"] == 48000000
+
+    def test_truncated_with_retry_prefix(self):
+        result = parse_verdict_message("Retry 1: Downloaded 1 files, truncated (300000 of 48000000 spots)")
+        assert result["verdict"] == "truncated"
+
+    def test_unverified(self):
+        assert parse_verdict_message("Downloaded 2 files, unverified") == {"verdict": "unverified"}
+
+    def test_unrelated_message_returns_none(self):
+        assert parse_verdict_message("Download failed: timeout") is None
+        assert parse_verdict_message("already exists") is None
+
 
 class TestHandleDownloadOutput:
     """Test _handle_download_output function."""
@@ -225,6 +466,44 @@ class TestHandleDownloadOutput:
 
         assert success is True
         mock_logger.warning.assert_called()
+
+    def test_handle_download_output_complete_verdict(self, tmp_path, monkeypatch):
+        temp_path = tmp_path / "temp"
+        output_path = tmp_path / "output" / "SRR123"
+        temp_path.mkdir()
+        (temp_path / "SRR123_1.fastq").write_text("@seq1\nACGT\n+\nIIII\n")
+        (temp_path / "SRR123_2.fastq").write_text("@seq2\nTGCA\n+\nIIII\n")
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 300000)
+
+        success, message = _handle_download_output(temp_path, output_path, expected_spots=300000)
+
+        assert success is True
+        assert message == "Downloaded 2 files, complete (300000 of 300000 spots)"
+
+    def test_handle_download_output_truncated_verdict_logs_warning(self, tmp_path, monkeypatch):
+        temp_path = tmp_path / "temp"
+        output_path = tmp_path / "output" / "SRR123"
+        temp_path.mkdir()
+        (temp_path / "SRR123_1.fastq").write_text("@seq1\nACGT\n+\nIIII\n")
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 300000)
+
+        with patch("metaquest.data.sra.logger") as mock_logger:
+            success, message = _handle_download_output(temp_path, output_path, expected_spots=48000000)
+
+        assert success is True
+        assert message == "Downloaded 1 files, truncated (300000 of 48000000 spots)"
+        mock_logger.warning.assert_called()
+
+    def test_handle_download_output_unverified_without_expected_spots(self, tmp_path):
+        temp_path = tmp_path / "temp"
+        output_path = tmp_path / "output" / "SRR123"
+        temp_path.mkdir()
+        (temp_path / "SRR123_1.fastq").write_text("@seq1\nACGT\n+\nIIII\n")
+
+        success, message = _handle_download_output(temp_path, output_path)
+
+        assert success is True
+        assert message == "Downloaded 1 files, unverified"
 
 
 class TestDownloadAccession:
@@ -343,6 +622,43 @@ class TestDownloadAccession:
         assert (tmp_path / "scratch").resolve() in SecureSubprocess._extra_roots
         SecureSubprocess._extra_roots.clear()
 
+    def test_download_accession_passes_expected_spots_to_handle_output(self, tmp_path):
+        """expected_spots reaches _handle_download_output so the verdict can be computed."""
+        output_folder = tmp_path / "downloads"
+
+        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                with patch("metaquest.data.sra._handle_download_output") as mock_handle:
+                    mock_prep.return_value = tmp_path / "temp"
+                    mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+                    mock_handle.return_value = (True, "Downloaded 1 files, complete (10 of 10 spots)")
+
+                    download_accession("SRR123", output_folder, expected_spots=10)
+
+        mock_handle.assert_called_once()
+        assert mock_handle.call_args.kwargs.get("expected_spots") == 10 or 10 in mock_handle.call_args.args
+
+    def test_download_accession_redownload_truncated_forces_fresh_download(self, tmp_path):
+        """A prior partial download on disk must not short-circuit as 'already exists'."""
+        output_folder = tmp_path / "downloads"
+        output_path = output_folder / "SRR123"
+        output_path.mkdir(parents=True)
+        (output_path / "SRR123.fastq").write_text("partial")
+
+        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                with patch("metaquest.data.sra._handle_download_output") as mock_handle:
+                    mock_prep.return_value = tmp_path / "temp"
+                    mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+                    mock_handle.return_value = (True, "Downloaded 1 files, complete (10 of 10 spots)")
+
+                    success, message = download_accession(
+                        "SRR123", output_folder, force=False, redownload_truncated=True
+                    )
+
+        assert "already exists" not in message
+        mock_run.assert_called_once()
+
 
 class TestCheckExistingDownloads:
     """Test _check_existing_downloads function."""
@@ -384,6 +700,21 @@ class TestCheckExistingDownloads:
             )
 
         assert to_download == accessions
+        assert already_downloaded == []
+
+    def test_check_existing_downloads_truncated_accession_is_not_already_downloaded(self, tmp_path):
+        """An accession with a 'truncated' registry verdict must be redownloaded, not skipped."""
+        output_folder = tmp_path / "downloads"
+        (output_folder / "SRR123").mkdir(parents=True)
+        (output_folder / "SRR123" / "SRR123.fastq").write_text("partial")
+
+        accessions = ["SRR123", "SRR456"]
+
+        already_downloaded, to_download, blacklisted = _check_existing_downloads(
+            accessions, output_folder, force=False, truncated_accessions={"SRR123"}
+        )
+
+        assert to_download == ["SRR123", "SRR456"]
         assert already_downloaded == []
 
 
@@ -675,6 +1006,61 @@ class TestDownloadSra:
         acc.write_text("SRR1\nSRR2\n")
         stats = download_sra(tmp_path / "fastq", acc, dry_run=True, blacklist_accessions={"SRR2"})
         assert stats["blacklisted_accessions"] == ["SRR2"]
+
+    def test_expected_spots_reaches_download_accession_per_accession(self, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        calls = {}
+
+        def fake_download_accession(accession, *args, **kwargs):
+            calls[accession] = kwargs.get("expected_spots")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=fake_download_accession):
+            download_sra(tmp_path / "fastq", acc, expected_spots={"SRR1": 1000})
+
+        assert calls == {"SRR1": 1000, "SRR2": None}
+
+    def test_download_sra_records_verdict_through_on_result(self, tmp_path, monkeypatch):
+        """A real download_accession run (files created, verified) reports its verdict via on_result."""
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        fastq_folder = tmp_path / "fastq"
+
+        def fake_run_secure(executable, args, **kwargs):
+            out_dir = Path(args[args.index("-O") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        seen = []
+        monkeypatch.setattr("metaquest.utils.security.SecureSubprocess.run_secure", fake_run_secure)
+        monkeypatch.setattr("metaquest.data.sra.count_fastq_reads", lambda path: 1)
+
+        download_sra(
+            fastq_folder,
+            acc,
+            expected_spots={"SRR1": 2},
+            on_result=lambda a, ok, msg: seen.append((a, ok, msg)),
+        )
+
+        assert seen == [("SRR1", True, "Downloaded 1 files, truncated (1 of 2 spots)")]
+
+    def test_truncated_accessions_are_redownloaded_not_skipped(self, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        fastq_folder = tmp_path / "fastq"
+        (fastq_folder / "SRR1").mkdir(parents=True)
+        (fastq_folder / "SRR1" / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        with patch(
+            "metaquest.data.sra.download_accession", return_value=(True, "Downloaded 1 files, complete (2 of 2 spots)")
+        ) as mock_download:
+            stats = download_sra(fastq_folder, acc, truncated_accessions={"SRR1"})
+
+        mock_download.assert_called_once()
+        assert stats["already_downloaded"] == 0
+        assert stats["successful"] == 1
 
 
 class TestFindPairedReads:

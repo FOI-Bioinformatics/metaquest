@@ -183,6 +183,9 @@ ASSEMBLY_EXTENSIONS = [".fasta", ".fa", ".fna", ".fasta.gz", ".fa.gz"]
 # FASTA file patterns accepted as genome inputs (plain and gzipped).
 GENOME_FASTA_GLOBS = ("*.fna", "*.fna.gz", "*.fasta", "*.fasta.gz", "*.fa", "*.fa.gz")
 
+# FASTQ file patterns accepted as read inputs (plain and gzipped).
+FASTQ_GLOBS = ("*.fastq", "*.fastq.gz", "*.fq", "*.fq.gz")
+
 # Most screening entries the registry keeps per target genome; the lowest containments
 # beyond this are dropped, so a broad search does not bloat the project journal.
 DEFAULT_REGISTRY_MAX_SCREENED = 5000

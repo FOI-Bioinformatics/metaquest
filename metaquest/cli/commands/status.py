@@ -341,6 +341,19 @@ class StatusCommand(BaseCommand):
         return ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items()))
 
     @staticmethod
+    def _download_verdicts(registry: Registry) -> Dict[str, List[str]]:
+        """Accessions whose recorded completeness verdict is "truncated" or "unverified"."""
+        truncated = []
+        unverified = []
+        for acc, record in registry.datasets.items():
+            verdict = (record.get("download") or {}).get("complete", {}).get("verdict")
+            if verdict == "truncated":
+                truncated.append(acc)
+            elif verdict == "unverified":
+                unverified.append(acc)
+        return {"truncated": sorted(truncated), "unverified": sorted(unverified)}
+
+    @staticmethod
     def _print_stages(stages: Dict[str, Any], registry: Registry) -> None:
         print("\nStages")
         print("======")
@@ -352,6 +365,9 @@ class StatusCommand(BaseCommand):
             info = stages[stage]
             detail = details.get(stage)
             print(f"  {stage:<10s} : {info['count']}" + (f"   {detail}" if detail else ""))
+        truncated = StatusCommand._download_verdicts(registry)["truncated"]
+        if truncated:
+            print(f"  truncated downloads: {len(truncated)} (" + ", ".join(truncated) + ")")
 
     @staticmethod
     def _print_genomes(genomes: Dict[str, Any]) -> None:
@@ -486,6 +502,7 @@ class StatusCommand(BaseCommand):
             }
             counts = stage_counts(registry)
             report["stages"] = {s: {"count": counts["stages"][s], "accessions": query(registry, s)} for s in STAGES}
+            report["downloads"] = self._download_verdicts(registry)
             report["genomes"] = self._genome_report(registry, paths, args.genome, counts)
             report["drift"] = self._drift_report(drift) if drift else {}
             if args.next:

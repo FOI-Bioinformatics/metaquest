@@ -29,7 +29,7 @@ from metaquest.cli.commands.samples import SingleSampleCommand
 from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.registry import load_registry, record_download, record_exclusion, save_registry
+from metaquest.data.registry import load_registry, record_download, record_exclusion, record_metadata, save_registry
 
 
 class TestUseBranchwaterCommand:
@@ -406,6 +406,20 @@ class TestDownloadSraCommand:
         assert args.max_workers == 4
         assert args.dry_run is False
         assert args.force is False
+        assert args.verify_downloads is True
+        assert args.redownload_truncated is False
+
+    def test_configure_parser_verify_downloads_flags(self):
+        """--no-verify-downloads flips the default; --redownload-truncated is off by default."""
+        command = DownloadSraCommand()
+        parser = argparse.ArgumentParser()
+        command.configure_parser(parser)
+
+        args = parser.parse_args(["--accessions-file", "a.txt", "--no-verify-downloads"])
+        assert args.verify_downloads is False
+
+        args = parser.parse_args(["--accessions-file", "a.txt", "--redownload-truncated"])
+        assert args.redownload_truncated is True
 
     def test_configure_parser_with_options(self):
         """Test parser with optional arguments."""
@@ -483,6 +497,9 @@ class TestDownloadSraCommand:
             "temp_folder": None,
             "blacklist": None,
             "blacklist_accessions": set(),
+            "expected_spots": {},
+            "redownload_truncated": False,
+            "truncated_accessions": set(),
         }
 
     @patch("metaquest.cli.commands.sra.download_sra")
@@ -748,6 +765,164 @@ class TestDownloadSraCommand:
         # The failed_accessions.txt written by the fake download_sra (standing in for the
         # data layer) is untouched by the CLI.
         assert failed_file.read_text() == "SRR2\n"
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_verdict_from_message_is_recorded_in_registry(self, mock_download, _which, tmp_path):
+        """The verdict encoded in on_result's message ends up as download.complete in the registry."""
+        fastq_folder = tmp_path / "fastq"
+        registry_path = tmp_path / "metaquest_registry.json"
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, "Downloaded 1 files, truncated (300000 of 48000000 spots)")
+            return {
+                "total": 1,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 1,
+                "failed": 0,
+                "failed_accessions": [],
+            }
+
+        mock_download.side_effect = fake_download_sra
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+        datasets = json.loads(registry_path.read_text())["datasets"]
+        assert datasets["SRR1"]["download"]["complete"]["verdict"] == "truncated"
+        assert datasets["SRR1"]["download"]["complete"]["reads_r1"] == 300000
+        assert datasets["SRR1"]["download"]["complete"]["expected_spots"] == 48000000
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_expected_spots_read_from_registry_metadata(self, mock_download, _which, tmp_path):
+        """--verify-downloads (the default) reads run_total_spots from the registry into expected_spots."""
+        registry_path = tmp_path / "metaquest_registry.json"
+        seeded = load_registry(registry_path)
+        record_metadata(seeded, "SRR1", tmp_path / "SRR1.xml", {"run_total_spots": 12345})
+        save_registry(seeded)
+
+        mock_download.return_value = {
+            "total": 1,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 0,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+            verify_downloads=True,
+        )
+
+        DownloadSraCommand().execute(args)
+        assert mock_download.call_args.kwargs["expected_spots"] == {"SRR1": 12345}
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_no_verify_downloads_passes_no_expected_spots(self, mock_download, _which, tmp_path):
+        registry_path = tmp_path / "metaquest_registry.json"
+        seeded = load_registry(registry_path)
+        record_metadata(seeded, "SRR1", tmp_path / "SRR1.xml", {"run_total_spots": 12345})
+        save_registry(seeded)
+
+        mock_download.return_value = {
+            "total": 1,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 0,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+            verify_downloads=False,
+        )
+
+        DownloadSraCommand().execute(args)
+        assert mock_download.call_args.kwargs["expected_spots"] is None
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_redownload_truncated_computes_set_from_registry_verdicts(self, mock_download, _which, tmp_path):
+        registry_path = tmp_path / "metaquest_registry.json"
+        seeded = load_registry(registry_path)
+        record_download(seeded, "SRR1", "downloaded", tmp_path / "fastq")
+        seeded.datasets["SRR1"]["download"]["complete"] = {"verdict": "truncated"}
+        record_download(seeded, "SRR2", "downloaded", tmp_path / "fastq")
+        seeded.datasets["SRR2"]["download"]["complete"] = {"verdict": "complete"}
+        save_registry(seeded)
+
+        mock_download.return_value = {
+            "total": 2,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 0,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\nSRR2\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_path),
+            redownload_truncated=True,
+        )
+
+        DownloadSraCommand().execute(args)
+        assert mock_download.call_args.kwargs["truncated_accessions"] == {"SRR1"}
+        assert mock_download.call_args.kwargs["redownload_truncated"] is True
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")

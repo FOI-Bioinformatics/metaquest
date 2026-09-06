@@ -4,20 +4,27 @@ SRA data handling for MetaQuest.
 This module provides functions for downloading and processing SRA data.
 """
 
+import gzip
+import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
-from metaquest.core.constants import FAILED_ACCESSIONS_FILE
+from metaquest.core.constants import FAILED_ACCESSIONS_FILE, FASTQ_GLOBS
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
+
+# Ratio of downloaded reads to NCBI's recorded run_total_spots at or above which a download
+# counts as complete rather than truncated.
+COMPLETE_RATIO_THRESHOLD = 0.99
 
 
 def _safe_rmtree(path: Path) -> None:
@@ -45,15 +52,124 @@ def _notify_result(
         logger.warning(f"Recording the result for {accession} failed: {e}")
 
 
-def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
-    """Return True if the per-accession directory holds at least one FASTQ file.
+def fastq_files(acc_dir: Union[str, Path]) -> List[Path]:
+    """Non-empty FASTQ files directly in ``acc_dir``, sorted by name.
 
-    This is the single source of truth for "this accession is already
-    downloaded" used across the download and status paths (a per-accession
-    subdirectory containing any ``*.fastq*`` file).
+    Matches ``FASTQ_GLOBS`` (plain and gzipped ``.fastq``/``.fq``). A directory that does not
+    exist (or a dangling symlink) yields an empty list; a symlinked directory is followed
+    since ``Path.is_dir``/``Path.glob`` already resolve it transparently. A zero-byte file
+    (e.g. left behind by an interrupted download) is never returned.
     """
     acc_path = Path(acc_dir)
-    return acc_path.is_dir() and any(acc_path.glob("*.fastq*"))
+    if not acc_path.is_dir():
+        return []
+    found = set()
+    for pattern in FASTQ_GLOBS:
+        for candidate in acc_path.glob(pattern):
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                found.add(candidate)
+    return sorted(found)
+
+
+def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
+    """Return True if the per-accession directory holds at least one usable FASTQ file.
+
+    This is the single source of truth for "this accession is already
+    downloaded" used across the download and status paths. A sidecar
+    ``<acc_dir>/<acc_dir.name>.json`` recording an in-progress or failed state
+    (``partial``, ``failed`` or ``downloading``) overrides an otherwise
+    present-looking directory, so a half-written or restarted download is not
+    mistaken for a finished one.
+    """
+    acc_path = Path(acc_dir)
+    if not fastq_files(acc_path):
+        return False
+
+    sidecar = acc_path / f"{acc_path.name}.json"
+    if sidecar.exists():
+        try:
+            state = json.loads(sidecar.read_text()).get("state")
+        except Exception:
+            state = None
+        if state in ("partial", "failed", "downloading"):
+            return False
+
+    return True
+
+
+def count_fastq_reads(path: Union[str, Path]) -> int:
+    """Count FASTQ records in ``path`` via a chunked binary newline count (4 lines/record).
+
+    Reads in 1 MiB blocks so a large FASTQ file is never loaded into memory, and counts
+    raw ``b"\\n"`` bytes rather than decoding text, which is both faster and immune to
+    encoding errors in a corrupted file. Works for both gzip-compressed and plain files.
+    """
+    opener = gzip.open if str(path).endswith(".gz") else open
+    block_size = 1024 * 1024
+    total_newlines = 0
+    with opener(path, "rb") as handle:
+        while True:
+            block = handle.read(block_size)
+            if not block:
+                break
+            total_newlines += block.count(b"\n")
+    return total_newlines // 4
+
+
+def verify_download(
+    accession: str,
+    acc_dir: Union[str, Path],
+    expected_spots: Optional[int],
+    expected_bytes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Compare what actually downloaded for ``accession`` against NCBI's recorded spot count.
+
+    ``reads_r1`` is the read count of the first FASTQ file found (mate 1 for paired data, the
+    only file for single-end data). The verdict is ``"complete"`` when the ratio of
+    downloaded reads to ``expected_spots`` is at least ``COMPLETE_RATIO_THRESHOLD``,
+    ``"truncated"`` below that, and ``"unverified"`` when ``expected_spots`` is unknown
+    (e.g. NCBI metadata was never fetched for this accession).
+    """
+    files = fastq_files(acc_dir)
+    reads_r1 = count_fastq_reads(files[0]) if files else 0
+    bytes_total = sum(p.stat().st_size for p in files)
+
+    ratio: Optional[float]
+    if expected_spots:
+        ratio = round(reads_r1 / expected_spots, 4)
+        verdict = "complete" if ratio >= COMPLETE_RATIO_THRESHOLD else "truncated"
+    else:
+        ratio = None
+        verdict = "unverified"
+
+    return {
+        "reads_r1": reads_r1,
+        "expected_spots": expected_spots,
+        "ratio": ratio,
+        "verdict": verdict,
+        "bytes_total": bytes_total,
+    }
+
+
+_VERDICT_MESSAGE_RE = re.compile(r"(complete|truncated) \((\d+) of (\d+) spots\)")
+
+
+def parse_verdict_message(message: str) -> Optional[Dict[str, Any]]:
+    """Recover the verdict dict encoded in a download result message by ``_handle_download_output``.
+
+    The ``on_result`` callback contract only carries a plain message string across the
+    download/registry boundary, so the CLI recovers the verdict from it rather than the data
+    layer reaching into the registry directly. Returns ``None`` for a message that carries no
+    verdict (a failure message, or "already exists").
+    """
+    match = _VERDICT_MESSAGE_RE.search(message)
+    if match:
+        verdict, reads_r1, expected_spots = match.group(1), int(match.group(2)), int(match.group(3))
+        ratio = round(reads_r1 / expected_spots, 4) if expected_spots else 0.0
+        return {"verdict": verdict, "reads_r1": reads_r1, "expected_spots": expected_spots, "ratio": ratio}
+    if "unverified" in message:
+        return {"verdict": "unverified"}
+    return None
 
 
 def _read_blacklist_files(blacklist_files):
@@ -125,6 +241,21 @@ def _prepare_temp_folder(temp_folder):
         return None
 
 
+def _remove_stale_entry(output_path: Path) -> None:
+    """Remove whatever is at ``output_path`` (a directory tree or a dangling/valid symlink).
+
+    ``rmdir``/``rmtree`` reject a symlink (even one pointing at an empty directory) on most
+    platforms, so a symlink is always ``unlink``'d instead.
+    """
+    try:
+        if output_path.is_symlink():
+            output_path.unlink()
+        else:
+            shutil.rmtree(output_path)
+    except Exception as e:
+        logger.warning(f"Could not remove {output_path}: {e}")
+
+
 def _check_existing_download(output_path, force):
     """
     Check if the accession is already downloaded.
@@ -136,44 +267,56 @@ def _check_existing_download(output_path, force):
     Returns:
         True if already downloaded, False otherwise
     """
-    import shutil
+    # A dangling symlink (e.g. left by an interrupted run) reports False from `.exists()`
+    # even though the directory entry itself is still there; clear it so a fresh download can
+    # create a real directory at this path instead of failing on FileExistsError.
+    if output_path.is_symlink() and not output_path.exists():
+        try:
+            output_path.unlink()
+        except Exception as e:
+            logger.warning(f"Could not remove dangling symlink {output_path}: {e}")
+        return False
 
     if force and output_path.exists():
         # Force redownload - remove existing directory
-        try:
-            shutil.rmtree(output_path)
+        _remove_stale_entry(output_path)
+        if not output_path.exists():
             logger.info(f"Removed existing directory for force redownload: {output_path}")
-        except Exception as e:
-            logger.warning(f"Could not remove directory for force redownload {output_path}: {e}")
         return False
 
     if not force and output_path.exists():
         if accession_has_fastq(output_path):
             return True
 
-        # Found empty directory, will redownload
+        # Found empty (or not-yet-complete) directory, will redownload.
         try:
-            output_path.rmdir()
+            if output_path.is_symlink():
+                output_path.unlink()
+            else:
+                output_path.rmdir()
         except Exception as e:
             logger.warning(f"Could not remove empty directory {output_path}: {e}")
 
     return False
 
 
-def _handle_download_output(temp_path, output_path):
+def _handle_download_output(temp_path, output_path, expected_spots: Optional[int] = None):
     """
-    Move downloaded files from temp path to output path.
+    Move downloaded files from temp path to output path, then verify completeness.
 
     Args:
         temp_path: Path to temporary folder
         output_path: Path to output directory
+        expected_spots: NCBI's recorded total_spots for this accession, if known
 
     Returns:
-        Tuple of (success, message)
+        Tuple of (success, message); the message carries the completeness verdict
+        (``"... complete (n of m spots)"``, ``"... truncated (n of m spots)"``, or
+        ``"... unverified"`` when ``expected_spots`` is unknown).
     """
     # Check if files were actually created
-    fastq_files = list(temp_path.glob("*.fastq*"))
-    if not fastq_files:
+    found = fastq_files(temp_path)
+    if not found:
         logger.error("No FASTQ files created despite successful command execution")
         # Clean up temp directory
         shutil.rmtree(temp_path)
@@ -183,7 +326,7 @@ def _handle_download_output(temp_path, output_path):
     # First ensure the output directory exists
     output_path.mkdir(parents=True, exist_ok=True)
 
-    for file in fastq_files:
+    for file in found:
         shutil.move(str(file), str(output_path / file.name))
 
     # Remove the temporary directory
@@ -192,8 +335,20 @@ def _handle_download_output(temp_path, output_path):
     except Exception as e:
         logger.warning(f"Could not remove temp directory {temp_path}: {e}")
 
-    logger.info(f"Successfully downloaded: {len(fastq_files)} files")
-    return True, f"Downloaded {len(fastq_files)} files"
+    logger.info(f"Successfully downloaded: {len(found)} files")
+
+    verdict = verify_download(output_path.name, output_path, expected_spots=expected_spots)
+    if verdict["verdict"] == "unverified":
+        return True, f"Downloaded {len(found)} files, unverified"
+
+    spots_note = f"({verdict['reads_r1']} of {verdict['expected_spots']} spots)"
+    message = f"Downloaded {len(found)} files, {verdict['verdict']} {spots_note}"
+    if verdict["verdict"] == "truncated":
+        logger.warning(
+            f"Truncated download for {output_path.name}: {verdict['reads_r1']} of "
+            f"{verdict['expected_spots']} spots (ratio {verdict['ratio']})"
+        )
+    return True, message
 
 
 def download_accession(
@@ -202,6 +357,8 @@ def download_accession(
     num_threads: int = 4,
     force: bool = False,
     temp_folder: Optional[Union[str, Path]] = None,
+    expected_spots: Optional[int] = None,
+    redownload_truncated: bool = False,
 ) -> Tuple[bool, str]:
     """
     Download a single SRA accession using fasterq-dump.
@@ -212,6 +369,11 @@ def download_accession(
         num_threads: Number of threads to use for download
         force: If True, redownload even if files exist
         temp_folder: Directory for temporary files
+        expected_spots: NCBI's recorded total_spots for this accession, used to verify
+            completeness once the download finishes
+        redownload_truncated: If True, treat an existing on-disk copy the same as ``force``
+            (i.e. wipe it and redownload) rather than skipping it as already present; used
+            for an accession whose registry verdict was "truncated"
 
     Returns:
         Tuple of (success, message)
@@ -220,7 +382,7 @@ def download_accession(
     SecureSubprocess.add_allowed_root(Path(output_folder))
 
     # Check if already downloaded
-    if _check_existing_download(output_path, force):
+    if _check_existing_download(output_path, force or redownload_truncated):
         logger.info(f"Skipping {accession}, FASTQ files already exist")
         return True, "already exists"
 
@@ -254,7 +416,7 @@ def download_accession(
         SecureSubprocess.run_secure("fasterq-dump", args)
 
         # Handle download output
-        return _handle_download_output(temp_path, output_path)
+        return _handle_download_output(temp_path, output_path, expected_spots=expected_spots)
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
@@ -282,6 +444,7 @@ def _check_existing_downloads(
     fastq_path: Path,
     force: bool,
     blacklisted_accessions: Optional[Set[str]] = None,
+    truncated_accessions: Optional[Set[str]] = None,
 ) -> Tuple[List[str], List[str], List[str]]:
     """
     Check which accessions need downloading and which are already downloaded or blacklisted.
@@ -291,6 +454,9 @@ def _check_existing_downloads(
         fastq_path: Path to FASTQ directory
         force: Whether to force redownload
         blacklisted_accessions: Set of blacklisted accessions
+        truncated_accessions: Accessions whose registry verdict is "truncated"; treated like
+            ``force`` for that one accession, so a partial download on disk is redownloaded
+            rather than counted as already present
 
     Returns:
         Tuple of (already_downloaded, to_download, blacklisted)
@@ -301,13 +467,15 @@ def _check_existing_downloads(
 
     if blacklisted_accessions is None:
         blacklisted_accessions = set()
+    if truncated_accessions is None:
+        truncated_accessions = set()
 
     for acc in accessions:
         if acc in blacklisted_accessions:
             blacklisted.append(acc)
             continue
 
-        if not force and accession_has_fastq(fastq_path / acc):
+        if not force and acc not in truncated_accessions and accession_has_fastq(fastq_path / acc):
             already_downloaded.append(acc)
         else:
             to_download.append(acc)
@@ -365,6 +533,8 @@ def _retry_failed_downloads(
     temp_folder,
     download_results,
     on_result: Optional[Callable[[str, bool, str], None]] = None,
+    expected_spots: Optional[Dict[str, int]] = None,
+    redownload_truncated: bool = False,
 ):
     """
     Retry failed downloads.
@@ -377,6 +547,8 @@ def _retry_failed_downloads(
         temp_folder: Temporary folder path
         download_results: Dictionary to store results
         on_result: Optional callback invoked with (accession, success, message) after each retry
+        expected_spots: Per-accession NCBI total_spots, used to verify completeness
+        redownload_truncated: Forwarded to ``download_accession`` for each retry
 
     Returns:
         Tuple of (retried_successful, failed_accessions)
@@ -387,6 +559,7 @@ def _retry_failed_downloads(
     logger.info(f"Retrying {len(failed_accessions)} failed downloads")
     retry_count = 0
     retried_successful = 0
+    expected_spots = expected_spots or {}
 
     for retry in range(max_retries):
         if not failed_accessions:
@@ -405,6 +578,8 @@ def _retry_failed_downloads(
                     num_threads,
                     force=True,
                     temp_folder=temp_folder,
+                    expected_spots=expected_spots.get(accession),
+                    redownload_truncated=redownload_truncated,
                 )
             except Exception as e:
                 failed_accessions.append(accession)
@@ -462,12 +637,24 @@ def _execute_parallel_downloads(
     download_results,
     failed_accessions,
     on_result: Optional[Callable[[str, bool, str], None]] = None,
+    expected_spots: Optional[Dict[str, int]] = None,
+    redownload_truncated: bool = False,
 ):
     """Download accessions concurrently and tally results. Returns (successful, failed)."""
+    expected_spots = expected_spots or {}
     futures_results: list = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(download_accession, acc, fastq_path, num_threads, force, temp_folder): acc
+            executor.submit(
+                download_accession,
+                acc,
+                fastq_path,
+                num_threads,
+                force,
+                temp_folder,
+                expected_spots=expected_spots.get(acc),
+                redownload_truncated=redownload_truncated,
+            ): acc
             for acc in accessions
         }
         for future in as_completed(futures):
@@ -511,6 +698,8 @@ def _download_with_retries(
     temp_folder,
     max_retries,
     on_result: Optional[Callable[[str, bool, str], None]] = None,
+    expected_spots: Optional[Dict[str, int]] = None,
+    redownload_truncated: bool = False,
 ) -> Tuple[int, int, List[str], Dict[str, Any]]:
     """Run the parallel downloads and optional retry pass.
 
@@ -528,6 +717,8 @@ def _download_with_retries(
         download_results,
         failed_accessions,
         on_result,
+        expected_spots,
+        redownload_truncated,
     )
 
     if max_retries > 0 and failed_accessions:
@@ -539,6 +730,8 @@ def _download_with_retries(
             temp_folder,
             download_results,
             on_result,
+            expected_spots,
+            redownload_truncated,
         )
         successful_count += retried_successful
         failed_count -= retried_successful
@@ -561,6 +754,9 @@ def download_sra(
     blacklist: Optional[List[Union[str, Path]]] = None,
     blacklist_accessions: Optional[Set[str]] = None,
     on_result: Optional[Callable[[str, bool, str], None]] = None,
+    expected_spots: Optional[Dict[str, int]] = None,
+    redownload_truncated: bool = False,
+    truncated_accessions: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -580,6 +776,14 @@ def download_sra(
             joined with any accessions read from ``blacklist``
         on_result: Optional callback invoked with (accession, success, message) on the main
             thread as each download (and each retry) completes
+        expected_spots: Per-accession NCBI ``run_total_spots``, used to verify each download's
+            completeness once it finishes; an accession missing from this mapping is reported
+            as "unverified" rather than "complete"/"truncated"
+        redownload_truncated: Forwarded to every ``download_accession`` call so a partial copy
+            left on disk by a prior truncated attempt is wiped and redownloaded rather than
+            reused
+        truncated_accessions: Accessions whose registry verdict is "truncated"; excluded from
+            ``already_downloaded`` so they are redownloaded even though files exist on disk
 
     Returns:
         Dictionary with download statistics
@@ -606,7 +810,7 @@ def download_sra(
 
         # Check which accessions need downloading
         already_downloaded, accessions_to_download, blacklisted = _check_existing_downloads(
-            all_accessions, fastq_path, force, blacklisted_accessions
+            all_accessions, fastq_path, force, blacklisted_accessions, truncated_accessions
         )
 
         logger.info(f"{len(already_downloaded)} accessions already downloaded")
@@ -640,7 +844,16 @@ def download_sra(
 
         # Download accessions in parallel, with an optional retry pass
         successful_count, failed_count, failed_accessions, download_results = _download_with_retries(
-            accessions_to_download, fastq_path, num_threads, max_workers, force, temp_folder, max_retries, on_result
+            accessions_to_download,
+            fastq_path,
+            num_threads,
+            max_workers,
+            force,
+            temp_folder,
+            max_retries,
+            on_result,
+            expected_spots,
+            redownload_truncated,
         )
 
         # Log final summary

@@ -12,7 +12,7 @@ from pathlib import Path
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.registry import Registry, load_registry, query, record_download, registry_transaction
-from metaquest.data.sra import download_sra
+from metaquest.data.sra import download_sra, parse_verdict_message
 
 
 class DownloadSraCommand(BaseCommand):
@@ -93,6 +93,24 @@ class DownloadSraCommand(BaseCommand):
             "--registry",
             default=None,
             help="Path to the project registry file (defaults to the nearest metaquest_registry.json)",
+        )
+        parser.add_argument(
+            "--verify-downloads",
+            dest="verify_downloads",
+            action="store_true",
+            default=True,
+            help="Verify each download's read count against NCBI's recorded total spots (default: on)",
+        )
+        parser.add_argument(
+            "--no-verify-downloads",
+            dest="verify_downloads",
+            action="store_false",
+            help="Skip completeness verification against NCBI spot counts",
+        )
+        parser.add_argument(
+            "--redownload-truncated",
+            action="store_true",
+            help="Redownload accessions whose registry verdict is 'truncated' rather than skipping them",
         )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
@@ -178,16 +196,43 @@ class DownloadSraCommand(BaseCommand):
                 )
                 return 1
 
+            verify_downloads = getattr(args, "verify_downloads", True)
+            redownload_truncated = getattr(args, "redownload_truncated", False)
+
             excluded: set = set()
+            expected_spots: dict = {}
+            truncated: set = set()
             on_result = None
             fastq_dir = Path(args.fastq_folder)
 
             if not args.dry_run:
-                excluded = set(query(load_registry(args.registry), "excluded"))
+                project_registry = load_registry(args.registry)
+                excluded = set(query(project_registry, "excluded"))
+
+                if verify_downloads:
+                    for acc, record in project_registry.datasets.items():
+                        spots = (record.get("metadata") or {}).get("run_total_spots")
+                        if spots is not None:
+                            expected_spots[acc] = spots
+
+                if redownload_truncated:
+                    truncated = {
+                        acc
+                        for acc, record in project_registry.datasets.items()
+                        if (record.get("download") or {}).get("complete", {}).get("verdict") == "truncated"
+                    }
 
                 def _record_result(accession: str, success: bool, message: str) -> None:
                     with registry_transaction(args.registry) as reg:
-                        record_download(reg, accession, "downloaded" if success else "failed", fastq_dir, message)
+                        complete = parse_verdict_message(message) if success else None
+                        record_download(
+                            reg,
+                            accession,
+                            "downloaded" if success else "failed",
+                            fastq_dir,
+                            message,
+                            complete=complete,
+                        )
 
                 on_result = _record_result
 
@@ -204,6 +249,9 @@ class DownloadSraCommand(BaseCommand):
                 blacklist=args.blacklist,
                 blacklist_accessions=excluded,
                 on_result=on_result,
+                expected_spots=expected_spots if verify_downloads else None,
+                redownload_truncated=redownload_truncated,
+                truncated_accessions=truncated,
             )
 
             if args.dry_run:

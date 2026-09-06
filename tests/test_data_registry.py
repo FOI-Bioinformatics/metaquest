@@ -179,6 +179,17 @@ class TestRecords:
         assert r.datasets["SRR4"]["download"]["state"] == "downloaded"
         assert r.datasets["SRR4"]["download"]["attempts"] == 0
 
+    def test_record_download_stores_and_preserves_the_completeness_verdict(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        verdict = {"verdict": "truncated", "reads_r1": 300000, "expected_spots": 48000000, "ratio": 0.0063}
+        reg.record_download(r, "SRR1", "downloaded", tmp_path / "fastq", complete=verdict)
+        assert r.datasets["SRR1"]["download"]["complete"] == verdict
+
+        # A later call with no verdict (e.g. a skip recorded with no real attempt) must not
+        # erase the verdict already on file.
+        reg.record_download(r, "SRR1", "downloaded", tmp_path / "fastq", attempt=False)
+        assert r.datasets["SRR1"]["download"]["complete"] == verdict
+
     def test_screening_source_and_threshold_are_per_genome(self, tmp_path):
         """A later screening from another source must not overwrite the first genome's provenance."""
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
@@ -368,6 +379,16 @@ class TestScanners:
     def test_count_fastq_reads_plain_and_gz(self, tmp_path):
         assert reg.count_fastq_reads(_fastq(tmp_path / "a.fastq", reads=3)) == 3
         assert reg.count_fastq_reads(_fastq(tmp_path / "b.fastq.gz", reads=5, gz=True)) == 5
+
+    def test_count_fastq_reads_across_chunk_boundaries(self, tmp_path):
+        """The chunked binary reader must still count correctly for a file over 1 MiB."""
+        record = "@r{0}\n" + "A" * 32 + "\n+\n" + "I" * 32 + "\n"
+        path = tmp_path / "big.fastq"
+        with open(path, "w") as handle:
+            for i in range(20000):
+                handle.write(record.format(i))
+        assert path.stat().st_size > 1024 * 1024
+        assert reg.count_fastq_reads(path) == 20000
 
     def test_split_extract_filename(self):
         genomes = ["GCF_000008025.1", "wMel_ref_1"]

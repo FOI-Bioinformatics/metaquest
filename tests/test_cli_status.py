@@ -366,3 +366,33 @@ class TestStatusWithRegistry:
         StatusCommand().execute(_status_args(tmp_path, json=False))
         out = capsys.readouterr().out
         assert "Local inventory" in out and "Stages" in out and "screened" in out and "GCF_1" in out
+
+    def test_downloads_report_lists_truncated_and_unverified(self, tmp_path, capsys):
+        """report['downloads'] surfaces registry verdicts; stages.downloaded is unaffected."""
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        seeded.datasets["SRR1"]["download"]["complete"] = {"verdict": "truncated"}
+        seeded.datasets["SRR2"]["download"]["complete"] = {"verdict": "unverified"}
+        save_registry(seeded)
+        capsys.readouterr()
+
+        rc = StatusCommand().execute(_status_args(tmp_path))
+        out = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert out["downloads"]["truncated"] == ["SRR1"]
+        assert out["downloads"]["unverified"] == ["SRR2"]
+        assert out["stages"]["downloaded"]["count"] == 2
+
+    def test_text_report_shows_truncated_downloads_line(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        seeded.datasets["SRR1"]["download"]["complete"] = {"verdict": "truncated"}
+        save_registry(seeded)
+        capsys.readouterr()
+
+        StatusCommand().execute(_status_args(tmp_path, json=False))
+        out = capsys.readouterr().out
+        assert "truncated downloads: 1 (SRR1)" in out

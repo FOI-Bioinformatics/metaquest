@@ -8,7 +8,6 @@ taken from the registry alone; ``status`` re-checks the filesystem and the
 scanners here rebuild or reconcile the journal from what is on disk.
 """
 
-import gzip
 import json
 import logging
 import os
@@ -22,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.read_extraction import summarise_contigs
-from metaquest.data.sra import accession_has_fastq
+from metaquest.data.sra import accession_has_fastq, count_fastq_reads
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -362,11 +361,14 @@ def record_download(
     fastq_dir: Union[str, Path],
     message: str = "",
     attempt: bool = True,
+    complete: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record a download outcome; ``state`` is downloaded, failed, missing or skipped.
 
     ``attempt`` counts this call against ``attempts``; pass ``False`` when recording a
     state without an actual download attempt (e.g. a file found already present on disk).
+    ``complete`` is the completeness verdict from ``metaquest.data.sra.verify_download``
+    (via ``parse_verdict_message``); when omitted, any verdict already on file is left as is.
     """
     download = upsert_dataset(registry, accession).setdefault("download", {"attempts": 0})
     if attempt and state in ("downloaded", "failed"):
@@ -383,6 +385,8 @@ def record_download(
             "message": message,
         }
     )
+    if complete is not None:
+        download["complete"] = complete
     download.pop("inferred", None)
 
 
@@ -550,14 +554,6 @@ def known_genome_ids(registry: Registry) -> Set[str]:
 
 
 # -------------------------------------------------------------------- scanners
-
-
-def count_fastq_reads(path: Union[str, Path]) -> int:
-    if str(path).endswith(".gz"):
-        with gzip.open(path, "rt") as handle:
-            return sum(1 for _ in handle) // 4
-    with open(path, "rt") as handle:
-        return sum(1 for _ in handle) // 4
 
 
 def split_extract_filename(name: str, genome_ids: Sequence[str]) -> Optional[Tuple[str, str]]:
