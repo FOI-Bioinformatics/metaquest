@@ -88,7 +88,10 @@ def _project_relative(path: Union[str, Path], root: Path) -> str:
 
     Keeps a project's registry movable: renaming or relocating the project directory does not
     break paths recorded under it. A path outside the project root (for example a genome FASTA
-    shared from elsewhere on disk) has no project-relative form, so it is kept absolute.
+    shared from elsewhere on disk) has no project-relative form, so it is kept absolute. A path
+    under a symlinked folder resolves to the real (target) location, so a project folder linked
+    into an external store records that store's absolute path here; the store-relative name used
+    to look the dataset up in the store is recorded separately by the store-linking feature.
     """
     resolved = Path(path).resolve()
     try:
@@ -803,9 +806,19 @@ def bootstrap_from_disk(
     paths: ProjectPaths,
     accessions_file: Optional[Union[str, Path]] = None,
     parsed_containment: Optional[Union[str, Path]] = None,
+    target_path: Optional[Path] = None,
 ) -> Registry:
-    """Rebuild a registry from what is on disk; every reconstructed block carries ``"inferred": true``."""
-    registry = Registry()
+    """Rebuild a registry from what is on disk; every reconstructed block carries ``"inferred": true``.
+
+    ``target_path`` is the file the caller intends to save this registry to (``status --init``
+    passes ``registry_file``); it is bound to the registry before any writer below runs, so every
+    path recorded during bootstrap is already relative to the right project root, even when
+    ``--registry`` points somewhere other than the working directory. Left as ``None`` (a caller
+    with no file in mind, e.g. the in-memory report built when no registry exists yet), the
+    writers fall back to the working directory as the project root, same as an unbound
+    ``Registry()``.
+    """
+    registry = Registry(path=target_path)
     if paths.matches.is_dir():
         _screening_from_matches(registry, paths.matches)
     _bootstrap_selection(registry, accessions_file, parsed_containment)

@@ -16,6 +16,7 @@ from metaquest.data.read_extraction import (
     resolve_assembly_threads,
     select_samples_for_genome,
 )
+from metaquest.data.registry import load_registry, record_extraction, resolve_project_path, save_registry
 from helpers_extraction import _fake_tools
 
 
@@ -404,36 +405,55 @@ class TestExtractionIdempotency:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_resolved_record_still_matches_after_the_project_directory_is_renamed(self, mock_run, tmp_path):
-        """The CLI resolves a registry record's stored path against the project root before
-        calling extract_target_reads; once resolved to an absolute path, the record still
-        matches even though the project directory has since been renamed."""
+        """A registry record is written under the project's original location, the project
+        directory is then renamed, and the registry (now loaded from the new location) is
+        resolved through resolve_project_path exactly as the CLI does; the resolved record
+        must still match so extract_target_reads skips instead of remapping."""
         mock_run.side_effect = _fake_tools({})
         old_root = tmp_path / "a"
         old_root.mkdir()
         _make_tree(old_root, paired=True)
+        genome = old_root / "GCF_1.fna"
+        extracted_dir = old_root / "targeted" / "SRR1"
+        extracted_dir.mkdir(parents=True)
+        extracted_files = [extracted_dir / "GCF_1_1.fastq.gz", extracted_dir / "GCF_1_2.fastq.gz"]
+        for f in extracted_files:
+            f.write_text("@r\nACGT\n+\nIIII\n")
+
+        registry_file = old_root / "metaquest_registry.json"
+        registry = load_registry(registry_file)
+        record_extraction(
+            registry,
+            "SRR1",
+            "GCF_1",
+            extracted_files,
+            42,
+            False,
+            {"genome_fasta": genome, "preset": "sr", "threshold": 0.5},
+        )
+        save_registry(registry)
+
         new_root = tmp_path / "b"
         old_root.rename(new_root)
-        genome = new_root / "GCF_1.fna"
-        # What the CLI computes: the record's stored ("GCF_1.fna") path resolved against the
-        # project's current (post-rename) location.
-        record = {
+
+        reloaded = load_registry(new_root / "metaquest_registry.json")
+        stored = reloaded.datasets["SRR1"]["extractions"]["GCF_1"]
+        resolved_record = {
             "SRR1": {
-                "genome_fasta": str(genome),
-                "preset": "sr",
-                "threshold": 0.5,
-                "mapped_reads": 0,
-                "files": [],
-                "unequal_mates": False,
+                **stored,
+                "genome_fasta": str(resolve_project_path(reloaded, stored["genome_fasta"])),
+                "files": [str(resolve_project_path(reloaded, p)) for p in stored["files"]],
             }
         }
+
         results = extract_target_reads(
             parsed_containment=new_root / "parsed_containment.txt",
             genome_id="GCF_1",
-            genome_fasta=genome,
+            genome_fasta=new_root / "GCF_1.fna",
             fastq_folder=new_root / "fastq",
             output_folder=new_root / "targeted",
             threshold=0.5,
-            already_done=record,
+            already_done=resolved_record,
         )
         assert results["SRR1"].skipped is True
         mock_run.assert_not_called()

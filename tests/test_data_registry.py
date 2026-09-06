@@ -641,6 +641,29 @@ class TestScanners:
         assert report.empty_assembly_dirs == [("SRR2", "GCF_1")]
         assert r.datasets["SRR2"]["download"]["state"] == "missing"
 
+    def test_bootstrap_binds_the_registry_path_before_recording_so_paths_survive_a_different_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        """status --init with --registry pointing elsewhere must not record paths relative to
+        the working directory: bootstrap_from_disk binds the registry to its intended file
+        (via target_path) before any writer runs, so every recorded path is already relative to
+        the right project root."""
+        paths = _project(tmp_path)
+        _fastq(paths.fastq / "SRR1" / "SRR1_1.fastq")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        registry_file = tmp_path / "metaquest_registry.json"
+        r = reg.bootstrap_from_disk(paths, target_path=registry_file)
+        reg.save_registry(r)
+
+        loaded = reg.load_registry(registry_file)
+        recorded = loaded.datasets["SRR1"]["download"]["files"][0]["path"]
+        resolved = reg.resolve_project_path(loaded, recorded)
+        assert resolved == (paths.fastq / "SRR1" / "SRR1_1.fastq").resolve()
+        assert resolved.exists()
+
     def test_bootstrap_from_disk_ignores_transient_temp_folder(self, tmp_path):
         """A <acc>_temp folder must never be recorded as a downloaded accession."""
         paths = _project(tmp_path)

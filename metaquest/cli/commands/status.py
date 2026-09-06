@@ -510,8 +510,7 @@ class StatusCommand(BaseCommand):
             if existed:
                 registry = load_registry(registry_file)
             else:
-                registry = bootstrap_from_disk(paths, args.accessions_file, args.parsed_containment)
-                registry.path = registry_file
+                registry = bootstrap_from_disk(paths, args.accessions_file, args.parsed_containment, registry_file)
                 if args.init:
                     save_registry(registry)
                     self.logger.info("Registry written to %s", registry_file)
