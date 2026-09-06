@@ -32,6 +32,7 @@ from metaquest.data.sra import (
     parse_verdict_message,
     classify_download_error,
     default_max_workers,
+    fasterq_dump_version,
     is_transient_folder,
     compress_fastq,
 )
@@ -1786,3 +1787,305 @@ class TestDownloadSra:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+class TestDownloadSraStore:
+    """download_sra with a shared store: link what is already there, download what is not."""
+
+    @staticmethod
+    def _store(tmp_path):
+        from metaquest.store.layout import init_store
+
+        return init_store(tmp_path / "store")
+
+    @staticmethod
+    def _accessions(tmp_path, *accessions):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("".join(f"{a}\n" for a in accessions))
+        return acc
+
+    @staticmethod
+    def _store_dataset(paths, accession="SRR1", state="complete"):
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        acc_dir = paths.sra / accession
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(acc_dir / f"{accession}.json", Sidecar(accession=accession, state=state))
+        return acc_dir
+
+    @staticmethod
+    def _fake_download(calls):
+        """A download_accession stand-in that writes one FASTQ under <output_folder>/<acc>."""
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append((accession, Path(output_folder), kwargs))
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        return _download
+
+    def test_complete_in_store_links_without_downloading(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths)
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert calls == []
+        assert stats["successful"] == 1
+        assert stats["results"]["SRR1"].startswith("linked from store")
+        assert (fastq_folder / "SRR1").is_symlink()
+        assert (fastq_folder / "SRR1").resolve() == (paths.sra / "SRR1").resolve()
+
+    def test_unverified_sidecar_also_links(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="unverified")
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert calls == []
+        assert stats["successful"] == 1
+        assert (fastq_folder / "SRR1").is_symlink()
+
+    def test_absent_downloads_into_the_store_and_links(self, tmp_path):
+        from metaquest.store.catalog import Catalog
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert len(calls) == 1
+        accession, output_folder, kwargs = calls[0]
+        assert accession == "SRR1"
+        assert output_folder == paths.sra
+        assert Path(kwargs["staging_folder"]) == paths.tmp
+        assert stats["successful"] == 1
+        assert stats["results"]["SRR1"].endswith("; stored")
+        assert "Downloaded 1 files, unverified" in stats["results"]["SRR1"]
+
+        sidecar = read_sidecar(paths.sra / "SRR1" / "SRR1.json")
+        assert sidecar is not None and sidecar.accession == "SRR1"
+        assert sidecar.compression == "none"
+        with Catalog(paths) as catalog:
+            assert catalog.get_dataset("SRR1") is not None
+        assert (fastq_folder / "SRR1").is_symlink()
+        assert not (paths.locks / "SRR1.lock").exists()
+
+    def test_gzipped_store_download_records_gzip_compression(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            with gzip.open(acc_dir / f"{accession}_1.fastq.gz", "wt") as handle:
+                handle.write("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=_download):
+            download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert read_sidecar(paths.sra / "SRR1" / "SRR1.json").compression == "gzip"
+
+    def test_store_download_uses_metadata_xml_for_expected_spots(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+        project_metadata = tmp_path / "project" / "metadata"
+        project_metadata.mkdir(parents=True)
+        (project_metadata / "SRR1_metadata.xml").write_text(
+            '<RunSet><RUN total_spots="1" total_bases="4" size="10"/></RunSet>'
+        )
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            download_sra(
+                fastq_folder,
+                self._accessions(tmp_path, "SRR1"),
+                store=paths,
+                store_metadata=project_metadata,
+                max_retries=0,
+            )
+
+        sidecar = read_sidecar(paths.sra / "SRR1" / "SRR1.json")
+        assert sidecar.ncbi["spots"] == 1
+        assert sidecar.completeness["verdict"] == "complete"
+        assert sidecar.state == "complete"
+
+    def test_partial_in_store_is_redownloaded_when_resume_partial(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert len(calls) == 1
+        # The replacement is built beside the store, then moved over the partial copy.
+        assert calls[0][1] == paths.tmp
+        assert stats["successful"] == 1
+        assert read_sidecar(paths.sra / "SRR1" / "SRR1.json").state == "complete"
+        assert (fastq_folder / "SRR1").is_symlink()
+        assert not (paths.tmp / "SRR1").exists()
+
+    def test_files_without_a_sidecar_are_redownloaded(self, tmp_path):
+        paths = self._store(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert len(calls) == 1
+
+    def test_partial_in_store_is_refused_without_resume_partial(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(
+                fastq_folder,
+                self._accessions(tmp_path, "SRR1"),
+                store=paths,
+                resume_partial=False,
+                max_retries=0,
+            )
+
+        assert calls == []
+        assert stats["failed"] == 1
+        assert "rerun with --resume-partial" in stats["results"]["SRR1"]
+        assert not (fastq_folder / "SRR1").exists()
+
+    def test_accept_partial_links_the_partial_copy(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(
+                fastq_folder,
+                self._accessions(tmp_path, "SRR1"),
+                store=paths,
+                resume_partial=False,
+                accept_partial=True,
+                max_retries=0,
+            )
+
+        assert calls == []
+        assert stats["successful"] == 1
+        assert stats["results"]["SRR1"].startswith("linked from store")
+        assert (fastq_folder / "SRR1").is_symlink()
+
+    def test_failed_store_download_keeps_the_partial_copy(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+
+        with patch("metaquest.data.sra.download_accession", return_value=(False, "network: Download failed: timeout")):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert stats["failed"] == 1
+        assert (paths.sra / "SRR1" / "SRR1_1.fastq").exists()
+        assert not (fastq_folder / "SRR1").exists()
+
+    def test_second_project_links_without_downloading_again(self, tmp_path):
+        paths = self._store(tmp_path)
+        first = tmp_path / "project_a" / "fastq"
+        second = tmp_path / "project_b" / "fastq"
+        acc = self._accessions(tmp_path, "SRR1")
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            download_sra(first, acc, store=paths, max_retries=0)
+            download_sra(second, acc, store=paths, max_retries=0)
+
+        assert len(calls) == 1
+        assert (first / "SRR1").resolve() == (second / "SRR1").resolve() == (paths.sra / "SRR1").resolve()
+
+    def test_link_mode_copy_copies_instead_of_linking(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths)
+        fastq_folder = tmp_path / "project" / "fastq"
+
+        with patch("metaquest.data.sra.download_accession", side_effect=AssertionError("no download expected")):
+            download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, link_mode="copy", max_retries=0)
+
+        assert (fastq_folder / "SRR1").is_dir() and not (fastq_folder / "SRR1").is_symlink()
+
+    def test_an_existing_project_link_counts_as_already_downloaded(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths)
+        fastq_folder = tmp_path / "project" / "fastq"
+        from metaquest.store.link import link_dataset
+
+        link_dataset(fastq_folder, "SRR1", paths)
+
+        with patch("metaquest.data.sra.download_accession", side_effect=AssertionError("no download expected")):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert stats["already_downloaded_accessions"] == ["SRR1"]
+
+    def test_a_link_to_a_partial_dataset_is_not_already_downloaded(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+        from metaquest.store.link import link_dataset
+
+        link_dataset(fastq_folder, "SRR1", paths)
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert stats["already_downloaded_accessions"] == []
+        assert len(calls) == 1
+
+    def test_without_a_store_nothing_changes(self, tmp_path):
+        fastq_folder = tmp_path / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), max_retries=0)
+
+        assert calls[0][1] == fastq_folder
+        assert stats["results"]["SRR1"] == "Downloaded 1 files, unverified"
+
+
+class TestFasterqDumpVersion:
+    """The tool version recorded in a store dataset's sidecar."""
+
+    def test_returns_the_last_non_empty_line(self):
+        with patch(
+            "metaquest.utils.security.SecureSubprocess.run_secure",
+            return_value=Mock(stdout="\nfasterq-dump : 3.0.10\n"),
+        ) as mock_run:
+            assert fasterq_dump_version() == "fasterq-dump : 3.0.10"
+        mock_run.assert_called_once_with("fasterq-dump", ["--version"])
+
+    def test_returns_empty_when_the_tool_cannot_be_run(self):
+        with patch("metaquest.utils.security.SecureSubprocess.run_secure", side_effect=SecurityError("not installed")):
+            assert fasterq_dump_version() == ""

@@ -14,12 +14,15 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_MAX_WORKERS, FAILED_ACCESSIONS_FILE, FASTQ_GLOBS, MAX_CONCURRENT_DOWNLOADS
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.security import SecureSubprocess
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: metaquest.store imports this module
+    from metaquest.store.layout import StorePaths
 
 logger = logging.getLogger(__name__)
 
@@ -600,6 +603,14 @@ def _discard_cached_archive(cache_path: Path, accession: str, message: str) -> N
         logger.info(f"{accession}: archive removed so the next attempt fetches it again")
 
 
+def _staging_root(output_folder: Union[str, Path], staging_folder: Optional[Union[str, Path]]) -> Path:
+    """Where a download's ``<accession>_temp`` build folder goes: ``staging_folder`` if given,
+    else beside the output. Registering it as an allowed root lets fasterq-dump write there."""
+    root = Path(staging_folder or output_folder)
+    SecureSubprocess.add_allowed_root(root)
+    return root
+
+
 def download_accession(
     accession: str,
     output_folder: Union[str, Path],
@@ -612,6 +623,7 @@ def download_accession(
     use_prefetch: bool = True,
     keep_sra: bool = False,
     compress: bool = True,
+    staging_folder: Optional[Union[str, Path]] = None,
 ) -> Tuple[bool, str]:
     """
     Download a single SRA accession using prefetch + fasterq-dump --split-3.
@@ -636,12 +648,16 @@ def download_accession(
             verified download rather than deleting it
         compress: If True, gzip each downloaded FASTQ file once the completeness verdict
             has been computed
+        staging_folder: Folder the ``<accession>_temp`` build directory is created in;
+            defaults to ``output_folder``. The shared store points it at the store's own
+            ``tmp`` folder so a half-written download never sits among finished datasets
 
     Returns:
         Tuple of (success, message)
     """
     output_path = Path(output_folder) / accession
     SecureSubprocess.add_allowed_root(Path(output_folder))
+    staging_path = _staging_root(output_folder, staging_folder)
     cache_path = Path(sra_cache) if sra_cache else Path(output_folder) / ".sra-cache"
 
     # Check if already downloaded
@@ -657,7 +673,7 @@ def download_accession(
         logger.info(f"Removed the cached archive for {accession} so the redownload fetches it again")
 
     # Create a fresh temporary folder for download
-    temp_path = Path(output_folder) / f"{accession}_temp"
+    temp_path = staging_path / f"{accession}_temp"
     _safe_rmtree(temp_path)
     temp_path.mkdir(parents=True, exist_ok=True)
 
@@ -725,6 +741,224 @@ def download_accession(
         # Clean up auto-created temp directory (from tempfile.mkdtemp)
         if temp_folder_path and not temp_folder:
             _safe_rmtree(temp_folder_path)
+
+
+def fasterq_dump_version() -> str:
+    """The installed fasterq-dump's version string, or an empty string if it cannot be run.
+
+    Recorded in a store dataset's sidecar so a later reader knows which tool produced the
+    files. The tool prints its name and version on separate lines, so the last non-empty
+    line is used.
+    """
+    try:
+        result = SecureSubprocess.run_secure("fasterq-dump", ["--version"])
+        lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        return lines[-1] if lines else ""
+    except Exception as e:
+        logger.debug(f"Could not read the fasterq-dump version: {e}")
+        return ""
+
+
+# Sidecar states that mean the store's copy is usable as it stands: verified against NCBI's
+# spot count, or downloaded without a spot count to check it against.
+STORE_READY_STATES = ("complete", "unverified")
+
+
+def _metadata_xml(folders, accession: str) -> Optional[Path]:
+    """The first ``<accession>_metadata.xml`` found in ``folders``, or None."""
+    if folders is None:
+        candidates: List[Union[str, Path]] = []
+    elif isinstance(folders, (str, Path)):
+        candidates = [folders]
+    else:
+        candidates = list(folders)
+    for folder in candidates:
+        xml = Path(folder) / f"{accession}_metadata.xml"
+        if xml.is_file():
+            return xml
+    return None
+
+
+def _store_state(store, accession: str) -> str:
+    """What the store holds for ``accession``: ``ready``, ``incomplete`` or ``absent``.
+
+    ``incomplete`` covers a sidecar recording a partial, failed or in-progress download, and
+    also files sitting there with no sidecar at all, which is what an interrupted run leaves
+    behind and cannot be trusted without re-fetching.
+    """
+    from metaquest.store.layout import sidecar_path, sra_dir
+    from metaquest.store.sidecar import read_sidecar
+
+    sidecar_file = sidecar_path(store, accession)
+    if sidecar_file.is_file():
+        sidecar = read_sidecar(sidecar_file)
+        state = sidecar.state if sidecar else None
+        return "ready" if state in STORE_READY_STATES else "incomplete"
+    return "incomplete" if fastq_files(sra_dir(store, accession)) else "absent"
+
+
+def _link_result(accession: str, project_fastq: Path, store, link_mode: str, note: str) -> Tuple[bool, str]:
+    """Link the store's copy into the project and report how many files it holds."""
+    from metaquest.store.link import link_dataset
+
+    link = link_dataset(project_fastq, accession, store, mode=link_mode)
+    return True, f"linked from store{note}, {len(fastq_files(link))} files"
+
+
+def _store_precheck(
+    accession: str,
+    project_fastq: Path,
+    store,
+    link_mode: str,
+    accept_partial: bool,
+    resume_partial: bool,
+) -> Optional[Tuple[bool, str]]:
+    """Decide what the store alone can settle for ``accession``, without any network call.
+
+    Returns a result when the dataset is already usable (linked), or when it is incomplete
+    and the caller asked not to resume it; returns None when it must be downloaded.
+    """
+    state = _store_state(store, accession)
+    if state == "ready":
+        return _link_result(accession, project_fastq, store, link_mode, "")
+    if state == "incomplete" and not resume_partial:
+        if accept_partial:
+            return _link_result(accession, project_fastq, store, link_mode, " (partial)")
+        return False, f"partial in store; rerun with --resume-partial to finish {accession}"
+    return None
+
+
+def _store_fetch(
+    accession: str,
+    project_fastq: Path,
+    store,
+    link_mode: str,
+    store_metadata,
+    **download_kwargs,
+) -> Tuple[bool, str]:
+    """Download ``accession`` into the store, describe it, and link the project to it.
+
+    An existing (incomplete) copy is replaced only once the new download has succeeded: the
+    replacement is built beside the store in its ``tmp`` folder and moved over the old one,
+    so a failed resume leaves the partial copy exactly as it was.
+    """
+    from metaquest.store.catalog import catalog_write
+    from metaquest.store.layout import sidecar_path, sra_dir
+    from metaquest.store.link import link_dataset
+    from metaquest.store.sidecar import build_sidecar, ncbi_from_metadata_xml, write_sidecar
+
+    target = sra_dir(store, accession)
+    replacing = target.exists()
+    staged = store.tmp / accession
+    download_kwargs["force"] = replacing
+    download_kwargs.setdefault("sra_cache", None)
+    if download_kwargs["sra_cache"] is None:
+        download_kwargs["sra_cache"] = store.tmp / ".sra-cache"
+
+    success, message = download_accession(
+        accession,
+        store.tmp if replacing else store.sra,
+        staging_folder=store.tmp,
+        **download_kwargs,
+    )
+
+    if not success:
+        if replacing:
+            _safe_rmtree(staged)
+        return False, message
+
+    if replacing:
+        _safe_rmtree(target)
+        shutil.move(str(staged), str(target))
+
+    files = fastq_files(target)
+    compression = "gzip" if any(path.name.endswith(".gz") for path in files) else "none"
+    xml = _metadata_xml(store_metadata, accession) or _metadata_xml(store.metadata, accession)
+    ncbi = ncbi_from_metadata_xml(xml) if xml is not None else {}
+
+    sidecar = build_sidecar(accession, target, ncbi, fasterq_dump_version(), compression)
+    write_sidecar(sidecar_path(store, accession), sidecar)
+    with catalog_write(store) as catalog:
+        catalog.upsert_dataset(sidecar)
+
+    link_dataset(project_fastq, accession, store, mode=link_mode)
+    return True, f"{message}; stored"
+
+
+def _store_download(
+    accession: str,
+    project_fastq: Union[str, Path],
+    store,
+    link_mode: str = "auto",
+    accept_partial: bool = False,
+    resume_partial: bool = True,
+    store_metadata=None,
+    force: bool = False,
+    **download_kwargs,
+) -> Tuple[bool, str]:
+    """Get ``accession`` for this project through the shared store.
+
+    The store holds one copy of every dataset; the project only ever gets a link to it. A
+    copy that is already there is linked without touching the network. Otherwise the store's
+    per-accession lock is taken, the sidecar is checked again (another project may have
+    finished the download while this one waited), and the download runs into the store.
+    """
+    from metaquest.data.registry import _acquire_lock
+    from metaquest.store.layout import lock_path
+
+    project_path = Path(project_fastq)
+    for directory in (store.sra, store.tmp, store.locks):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if not force:
+            settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
+            if settled is not None:
+                return settled
+
+        lock = lock_path(store, accession)
+        _acquire_lock(lock)
+        try:
+            if not force:
+                settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
+                if settled is not None:
+                    return settled
+            return _store_fetch(
+                accession, project_path, store, link_mode, store_metadata, force=force, **download_kwargs
+            )
+        finally:
+            lock.unlink(missing_ok=True)
+    except DataAccessError as e:
+        logger.error(f"Store download failed for {accession}: {e}")
+        return False, f"store error: {e}"
+
+
+def _store_downloader(store, link_mode: str, accept_partial: bool, resume_partial: bool, store_metadata):
+    """A ``download_accession``-shaped callable that routes every download through the store.
+
+    The download loops call it with the project's FASTQ folder as ``output_folder``, which is
+    where the link is created; the files themselves land in the store. Returns None when no
+    store is configured, which leaves the loops downloading into the project folder as before.
+    """
+    if store is None:
+        return None
+
+    def _download(accession, output_folder, num_threads=4, force=False, temp_folder=None, **kwargs):
+        return _store_download(
+            accession,
+            output_folder,
+            store,
+            link_mode=link_mode,
+            accept_partial=accept_partial,
+            resume_partial=resume_partial,
+            store_metadata=store_metadata,
+            force=force,
+            num_threads=num_threads,
+            temp_folder=temp_folder,
+            **kwargs,
+        )
+
+    return _download
 
 
 def _check_existing_downloads(
@@ -827,6 +1061,7 @@ def _retry_failed_downloads(
     use_prefetch: bool = True,
     keep_sra: bool = False,
     compress: bool = True,
+    downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
 ):
     """
     Retry failed downloads.
@@ -845,6 +1080,9 @@ def _retry_failed_downloads(
         use_prefetch: Forwarded to ``download_accession`` for each retry
         keep_sra: Forwarded to ``download_accession`` for each retry
         compress: Forwarded to ``download_accession`` for each retry
+        downloader: Callable used in place of ``download_accession``; the shared store
+            passes one that links the project to the store's copy instead of downloading
+            into the project folder
 
     Returns:
         Tuple of (retried_successful, failed_accessions, abort_reason). ``abort_reason`` is
@@ -888,7 +1126,7 @@ def _retry_failed_downloads(
         for index, accession in enumerate(retry_batch):
             retry_count += 1
             try:
-                success, message = download_accession(
+                success, message = (downloader or download_accession)(
                     accession,
                     fastq_path,
                     num_threads,
@@ -979,14 +1217,20 @@ def _execute_parallel_downloads(
     use_prefetch: bool = True,
     keep_sra: bool = False,
     compress: bool = True,
+    downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
 ):
-    """Download accessions concurrently and tally results. Returns (successful, failed)."""
+    """Download accessions concurrently and tally results. Returns (successful, failed).
+
+    ``downloader`` replaces ``download_accession`` when the project reads through a shared
+    store; it takes the same arguments so the tally, retries and callbacks are unchanged.
+    """
     expected_spots = expected_spots or {}
     futures_results: list = []
+    worker = downloader or download_accession
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                download_accession,
+                worker,
                 acc,
                 fastq_path,
                 num_threads,
@@ -1048,6 +1292,7 @@ def _download_with_retries(
     use_prefetch: bool = True,
     keep_sra: bool = False,
     compress: bool = True,
+    downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
 ) -> Tuple[int, int, List[str], Dict[str, Any], Optional[str]]:
     """Run the parallel downloads and optional retry pass.
 
@@ -1074,6 +1319,7 @@ def _download_with_retries(
         use_prefetch,
         keep_sra,
         compress,
+        downloader,
     )
 
     if max_retries > 0 and failed_accessions:
@@ -1091,6 +1337,7 @@ def _download_with_retries(
             use_prefetch,
             keep_sra,
             compress,
+            downloader,
         )
         successful_count += retried_successful
         failed_count -= retried_successful
@@ -1120,6 +1367,11 @@ def download_sra(
     use_prefetch: bool = True,
     keep_sra: bool = False,
     compress: bool = True,
+    store: Optional["StorePaths"] = None,
+    link_mode: str = "auto",
+    accept_partial: bool = False,
+    resume_partial: bool = True,
+    store_metadata: Optional[Union[str, Path, Sequence[Union[str, Path]]]] = None,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -1155,6 +1407,19 @@ def download_sra(
             after a successful, verified download instead of deleting it
         compress: Forwarded to every ``download_accession`` call; gzip each downloaded FASTQ
             file once its completeness verdict has been computed
+        store: Layout of a shared data store. When given, every dataset is downloaded once
+            into ``<store>/sra/<ACC>`` and this project's ``fastq/<ACC>`` becomes a link to
+            it; a dataset another project already downloaded is linked without any network
+            call
+        link_mode: How the project points at the store: ``auto``, ``relative``, ``absolute``
+            or ``copy`` (see ``metaquest.store.link.link_dataset``)
+        accept_partial: Link a store copy whose download is incomplete instead of refusing
+            it; only consulted when ``resume_partial`` is off
+        resume_partial: Download an incomplete store copy again rather than refusing to use
+            it
+        store_metadata: One folder, or an ordered list of folders, searched for
+            ``<ACC>_metadata.xml`` to record NCBI's spot count in the dataset's sidecar; the
+            store's own metadata folder is always tried last
 
     Returns:
         Dictionary with download statistics
@@ -1216,6 +1481,10 @@ def download_sra(
             logger.info(f"Limiting to {max_downloads} downloads")
             accessions_to_download = accessions_to_download[:max_downloads]
 
+        # With a shared store, every download goes through it: the store keeps the only copy
+        # and the project gets a link to it.
+        downloader = _store_downloader(store, link_mode, accept_partial, resume_partial, store_metadata)
+
         # Download accessions in parallel, with an optional retry pass
         successful_count, failed_count, failed_accessions, download_results, abort_reason = _download_with_retries(
             accessions_to_download,
@@ -1232,6 +1501,7 @@ def download_sra(
             use_prefetch,
             keep_sra,
             compress,
+            downloader,
         )
 
         # Log final summary

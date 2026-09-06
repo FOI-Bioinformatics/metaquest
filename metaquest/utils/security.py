@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # tool consumes the following token as its value.
 BOOLEAN_FLAGS: Dict[str, FrozenSet[str]] = {
     "fasterq-dump": frozenset(
-        {"--progress", "--split-files", "--split-3", "--skip-technical", "--include-technical", "--force"}
+        {"--progress", "--split-files", "--split-3", "--skip-technical", "--include-technical", "--force", "--version"}
     ),
     "prefetch": frozenset({"--progress", "--resume", "--version"}),
     "pigz": frozenset({"-f", "-k", "--version"}),

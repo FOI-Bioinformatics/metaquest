@@ -6,16 +6,30 @@ import argparse
 import csv
 import os
 import shutil
-from typing import Optional
+from typing import Callable, Optional
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.registry import Registry, load_registry, query, record_download, registry_transaction
+from metaquest.data.registry import (
+    Registry,
+    load_registry,
+    project_root,
+    query,
+    record_download,
+    registry_transaction,
+)
 from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_message
+from metaquest.store.layout import StorePaths, store_paths
+from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
+
+# Markers the data layer puts in a result message for a dataset the shared store provided
+# (linked from a copy already there) or received (downloaded into it by this run).
+STORE_LINKED_PREFIX = "linked from store"
+STORE_SAVED_SUFFIX = "; stored"
 
 
 class DownloadSraCommand(BaseCommand):
@@ -146,6 +160,28 @@ class DownloadSraCommand(BaseCommand):
             action="store_false",
             help="Leave downloaded FASTQ files uncompressed",
         )
+        parser.add_argument(
+            "--link-mode",
+            choices=list(LINK_MODES),
+            default="auto",
+            help=(
+                "How this project points at a dataset in the shared store: a relative or "
+                "absolute symlink, a copy of the folder, or auto (relative when the store "
+                "and the project share a parent folder)"
+            ),
+        )
+        parser.add_argument(
+            "--accept-partial",
+            action="store_true",
+            help="Use a store dataset whose download is incomplete instead of refusing it",
+        )
+        parser.add_argument(
+            "--no-resume-partial",
+            dest="resume_partial",
+            action="store_false",
+            default=True,
+            help="Do not download an incomplete store dataset again",
+        )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
         """Log the summary for a dry run."""
@@ -208,12 +244,25 @@ class DownloadSraCommand(BaseCommand):
             return
         record_download(reg, acc, "skipped", fastq_dir, message)
 
-    def _record_run_outcomes(self, args: argparse.Namespace, stats: dict, fastq_dir: Path) -> None:
+    def _record_run_outcomes(
+        self, args: argparse.Namespace, stats: dict, fastq_dir: Path, store: Optional[StorePaths] = None
+    ) -> None:
         """Record the outcomes the download loop could not report, one transaction per accession."""
         for acc in stats.get("already_downloaded_accessions", []):
+            from_store = store is not None and is_store_link(fastq_dir / acc, store)
             with registry_transaction(args.registry) as reg:
                 if reg.datasets.get(acc, {}).get("download", {}).get("state") != "downloaded":
-                    record_download(reg, acc, "downloaded", fastq_dir, attempt=False)
+                    record_download(
+                        reg,
+                        acc,
+                        "downloaded",
+                        fastq_dir,
+                        attempt=False,
+                        source="store" if from_store else None,
+                        store_name=acc if from_store else None,
+                    )
+                    if from_store:
+                        self._mark_linked(reg, acc)
         for acc in stats.get("blacklisted_accessions", []):
             with registry_transaction(args.registry) as reg:
                 self._record_skip(reg, acc, "blacklisted", fastq_dir)
@@ -242,16 +291,67 @@ class DownloadSraCommand(BaseCommand):
             )
         return max_workers
 
-    def _resolve_and_log_store_root(self, args: argparse.Namespace, project_registry: Registry) -> Optional[Path]:
-        """Resolve the shared data store root (if any) and log it; behaviour is otherwise unchanged.
-
-        Only logs the root for now; the store write path (linking a download into the
-        store) is wired up in a later change.
-        """
+    def _resolve_store(self, args: argparse.Namespace, project_registry: Registry) -> Optional[StorePaths]:
+        """Resolve the shared data store (if any), log it, and return its on-disk layout."""
         store_root = resolve_store_root(args.data_root, project_registry.store.get("root"))
-        if store_root is not None:
-            self.logger.info("Using shared data store at %s", store_root)
-        return store_root
+        if store_root is None:
+            return None
+        self.logger.info("Using shared data store at %s", store_root)
+        return store_paths(store_root)
+
+    def _result_recorder(self, args: argparse.Namespace, fastq_dir: Path) -> Callable[[str, bool, str], None]:
+        """The callback the download loop uses to record each accession's outcome.
+
+        A dataset linked from the shared store is recorded as downloaded without counting an
+        attempt against it, since no download ran; one this run downloaded into the store
+        counts as an attempt like any other. Both are added to the project's list of linked
+        datasets.
+        """
+
+        def _record_result(accession: str, success: bool, message: str) -> None:
+            linked = bool(success) and message.startswith(STORE_LINKED_PREFIX)
+            from_store = linked or (bool(success) and message.endswith(STORE_SAVED_SUFFIX))
+            with registry_transaction(args.registry) as reg:
+                complete = parse_verdict_message(message) if success else None
+                record_download(
+                    reg,
+                    accession,
+                    "downloaded" if success else "failed",
+                    fastq_dir,
+                    message,
+                    attempt=not linked,
+                    complete=complete,
+                    source="store" if from_store else None,
+                    store_name=accession if from_store else None,
+                )
+                if from_store:
+                    self._mark_linked(reg, accession)
+
+        return _record_result
+
+    @staticmethod
+    def _mark_linked(reg: Registry, accession: str) -> None:
+        """Add ``accession`` to the registry's list of datasets this project links from the store."""
+        linked = set(reg.store.get("linked") or [])
+        linked.add(accession)
+        reg.store["linked"] = sorted(linked)
+
+    def _store_options(self, args: argparse.Namespace, store: Optional[StorePaths], registry: Registry) -> dict:
+        """The store-related keyword arguments for ``download_sra``, empty without a store.
+
+        NCBI's spot count for an accession is read from the project's own metadata folder
+        when it has one, since that is where ``download_metadata`` writes; the store's
+        metadata folder is the fallback.
+        """
+        if store is None:
+            return {}
+        return {
+            "store": store,
+            "link_mode": getattr(args, "link_mode", "auto"),
+            "accept_partial": getattr(args, "accept_partial", False),
+            "resume_partial": getattr(args, "resume_partial", True),
+            "store_metadata": [project_root(registry) / "metadata", store.metadata],
+        }
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -277,7 +377,7 @@ class DownloadSraCommand(BaseCommand):
             fastq_dir = Path(args.fastq_folder)
 
             project_registry = load_registry(args.registry)
-            self._resolve_and_log_store_root(args, project_registry)
+            store = self._resolve_store(args, project_registry)
 
             if not args.dry_run:
                 excluded = set(query(project_registry, "excluded"))
@@ -295,19 +395,7 @@ class DownloadSraCommand(BaseCommand):
                         if (record.get("download") or {}).get("complete", {}).get("verdict") == "truncated"
                     }
 
-                def _record_result(accession: str, success: bool, message: str) -> None:
-                    with registry_transaction(args.registry) as reg:
-                        complete = parse_verdict_message(message) if success else None
-                        record_download(
-                            reg,
-                            accession,
-                            "downloaded" if success else "failed",
-                            fastq_dir,
-                            message,
-                            complete=complete,
-                        )
-
-                on_result = _record_result
+                on_result = self._result_recorder(args, fastq_dir)
 
             download_stats = download_sra(
                 fastq_folder=args.fastq_folder,
@@ -329,13 +417,14 @@ class DownloadSraCommand(BaseCommand):
                 use_prefetch=use_prefetch,
                 keep_sra=keep_sra,
                 compress=compress,
+                **self._store_options(args, store, project_registry),
             )
 
             if args.dry_run:
                 self._log_dry_run_summary(args, download_stats)
             else:
                 self._log_download_summary(download_stats)
-                self._record_run_outcomes(args, download_stats, fastq_dir)
+                self._record_run_outcomes(args, download_stats, fastq_dir, store)
 
                 if args.report_file:
                     self._write_report(args.report_file, download_stats)

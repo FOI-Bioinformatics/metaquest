@@ -7,6 +7,7 @@ focusing on argument parsing, validation, and proper delegation.
 
 import argparse
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1298,6 +1299,263 @@ class TestDownloadSraCommand:
 
         assert result == 0
         assert any(str(store_root.resolve()) in message for message in caplog.messages)
+
+    # ------------------------------------------------------------ shared store
+
+    def test_configure_parser_store_flags(self):
+        """--link-mode, --accept-partial and --no-resume-partial default sensibly and parse."""
+        parser = argparse.ArgumentParser()
+        DownloadSraCommand().configure_parser(parser)
+
+        args = parser.parse_args(["--accessions-file", "a.txt"])
+        assert args.link_mode == "auto"
+        assert args.accept_partial is False
+        assert args.resume_partial is True
+
+        args = parser.parse_args(
+            ["--accessions-file", "a.txt", "--link-mode", "copy", "--accept-partial", "--no-resume-partial"]
+        )
+        assert args.link_mode == "copy"
+        assert args.accept_partial is True
+        assert args.resume_partial is False
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_store_paths_and_link_options_reach_download_sra(self, mock_download, _which, tmp_path):
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        init_store(store_root)
+        mock_download.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=str(store_root),
+            link_mode="relative",
+            accept_partial=True,
+            resume_partial=False,
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        kwargs = mock_download.call_args.kwargs
+        assert kwargs["store"].root == store_root.resolve()
+        assert kwargs["link_mode"] == "relative"
+        assert kwargs["accept_partial"] is True
+        assert kwargs["resume_partial"] is False
+        assert Path(kwargs["store_metadata"][0]) == tmp_path / "metadata"
+        assert Path(kwargs["store_metadata"][1]) == store_root.resolve() / "metadata"
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_no_store_leaves_the_download_call_unchanged(self, mock_download, _which, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        monkeypatch.delenv("METAQUEST_DATA", raising=False)
+        mock_download.return_value = {
+            "total": 1,
+            "to_download": 1,
+            "already_downloaded": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+        }
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        args = argparse.Namespace(
+            accessions_file=str(acc),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+        assert "store" not in mock_download.call_args.kwargs
+
+    @pytest.mark.parametrize(
+        "message,attempts",
+        [("linked from store, 1 files", 0), ("Downloaded 1 files, complete (1 of 1 spots); stored", 1)],
+    )
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_store_backed_results_record_source_and_linked_list(
+        self, mock_download, _which, tmp_path, message, attempts
+    ):
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        os.symlink(acc_dir, fastq_folder / "SRR1")
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, message)
+            return {
+                "total": 1,
+                "to_download": 1,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 1,
+                "failed": 0,
+                "failed_accessions": [],
+                "results": {"SRR1": message},
+            }
+
+        mock_download.side_effect = fake_download_sra
+        registry_file = tmp_path / "metaquest_registry.json"
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=str(store_root),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        written = json.loads(registry_file.read_text())
+        download = written["datasets"]["SRR1"]["download"]
+        assert download["state"] == "downloaded"
+        assert download["source"] == "store"
+        assert download["store_name"] == "SRR1"
+        assert download["attempts"] == attempts
+        assert written["store"]["linked"] == ["SRR1"]
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_a_plain_download_is_not_recorded_as_store_backed(self, mock_download, _which, tmp_path):
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        init_store(store_root)
+        fastq_folder = tmp_path / "fastq"
+        (fastq_folder / "SRR1").mkdir(parents=True)
+        (fastq_folder / "SRR1" / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, "Downloaded 1 files, unverified")
+            return {
+                "total": 1,
+                "to_download": 1,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 1,
+                "failed": 0,
+                "failed_accessions": [],
+                "results": {"SRR1": "Downloaded 1 files, unverified"},
+            }
+
+        mock_download.side_effect = fake_download_sra
+        registry_file = tmp_path / "metaquest_registry.json"
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=str(store_root),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        written = json.loads(registry_file.read_text())
+        assert "source" not in written["datasets"]["SRR1"]["download"]
+        assert written["store"].get("linked", []) == []
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_an_already_linked_dataset_is_recorded_as_store_backed(self, mock_download, _which, tmp_path):
+        """A link left by an earlier run is recorded with its source, not as a plain download."""
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        os.symlink(acc_dir, fastq_folder / "SRR1")
+
+        mock_download.return_value = {
+            "total": 1,
+            "to_download": 0,
+            "already_downloaded": 1,
+            "blacklisted": 0,
+            "successful": 0,
+            "failed": 0,
+            "failed_accessions": [],
+            "results": {},
+            "already_downloaded_accessions": ["SRR1"],
+        }
+        registry_file = tmp_path / "metaquest_registry.json"
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=str(store_root),
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        written = json.loads(registry_file.read_text())
+        assert written["datasets"]["SRR1"]["download"]["source"] == "store"
+        assert written["store"]["linked"] == ["SRR1"]
 
 
 class TestSingleSampleCommand:

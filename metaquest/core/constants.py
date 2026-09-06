@@ -70,6 +70,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "--skip-technical",
             "--include-technical",
             "--force",
+            "--version",
         },
         "description": "NCBI SRA data download tool",
     },
