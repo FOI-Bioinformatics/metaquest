@@ -413,6 +413,41 @@ class TestArgumentParsing:
             call_args = mock_run.call_args[0][0]
             assert "SRR000001" in call_args
 
+    def test_prefetch_progress_does_not_swallow_accession(self):
+        """prefetch --progress is boolean; the accession stays a validated positional."""
+        cmd = SecureSubprocess._build_validated_command("prefetch", ["--progress", "SRR1"])
+        assert cmd == ["prefetch", "--progress", "SRR1"]
+
+    def test_fasterq_dump_split_3_accepts_sra_path_positional(self, tmp_path, monkeypatch):
+        """--split-3 is boolean for fasterq-dump; a .sra positional is path-validated."""
+        monkeypatch.chdir(tmp_path)
+        sra_dir = tmp_path / "SRR1"
+        sra_dir.mkdir()
+        sra_file = sra_dir / "SRR1.sra"
+        sra_file.write_text("data")
+
+        cmd = SecureSubprocess._build_validated_command("fasterq-dump", ["--split-3", "--threads", "4", str(sra_file)])
+        assert cmd == ["fasterq-dump", "--split-3", "--threads", "4", str(sra_file.resolve())]
+
+    def test_pigz_parallel_force_allowed(self, tmp_path, monkeypatch):
+        """pigz -p <n> -f <file> is an allowed command."""
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "reads.fastq"
+        target.write_text("data")
+
+        cmd = SecureSubprocess._build_validated_command("pigz", ["-p", "4", "-f", str(target)])
+        assert cmd == ["pigz", "-p", "4", "-f", str(target.resolve())]
+
+    def test_minimap2_boolean_a_does_not_swallow_x_flag(self):
+        """minimap2 -a is boolean; the following -x flag must not be consumed as its value."""
+        cmd = SecureSubprocess._build_validated_command("minimap2", ["-a", "-x", "sr"])
+        assert cmd == ["minimap2", "-a", "-x", "sr"]
+
+    def test_prefetch_unknown_positional_rejected(self):
+        """A positional for prefetch that is neither an accession nor a .sra path is rejected."""
+        with pytest.raises(SecurityError):
+            SecureSubprocess._build_validated_command("prefetch", ["--progress", "not-an-accession"])
+
 
 class TestDefensiveGuards:
     """Cover the defensive error branches that normal inputs cannot reach."""

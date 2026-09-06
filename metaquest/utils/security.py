@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, FrozenSet, List, Optional, Union
 
 from metaquest.core.exceptions import SecurityError
 from metaquest.core.validation import validate_accession
@@ -24,15 +24,26 @@ from metaquest.core.constants import (
 
 logger = logging.getLogger(__name__)
 
-# fasterq-dump flags that never take a value; any other allowlisted fasterq-dump
-# flag consumes the following token as its value.
-FASTERQ_DUMP_BOOLEAN_FLAGS = frozenset(
-    {"--progress", "--split-files", "--skip-technical", "--include-technical", "--force"}
-)
+# Per-tool flags that never take a value; any other allowlisted flag for that
+# tool consumes the following token as its value.
+BOOLEAN_FLAGS: Dict[str, FrozenSet[str]] = {
+    "fasterq-dump": frozenset(
+        {"--progress", "--split-files", "--split-3", "--skip-technical", "--include-technical", "--force"}
+    ),
+    "prefetch": frozenset({"--progress", "--resume", "--version"}),
+    "pigz": frozenset({"-f", "-k", "--version"}),
+    "minimap2": frozenset({"-a", "--version"}),
+    "samtools": frozenset({"-b", "-c", "--version"}),
+    "megahit": frozenset({"--no-mercy", "--version"}),
+}
+# Kept for backward compatibility with any caller importing the old name.
+FASTERQ_DUMP_BOOLEAN_FLAGS = BOOLEAN_FLAGS["fasterq-dump"]
 # fasterq-dump flags whose value must be a non-negative integer.
 FASTERQ_DUMP_INTEGER_FLAGS = frozenset({"--threads"})
 # Flags (any tool) whose value is a filesystem path and must pass validate_path.
 PATH_VALUE_FLAGS = frozenset({"-O", "-o", "--out-dir", "--temp", "-1", "-2", "-0", "-s"})
+# Tools whose positional argument is either an SRA accession or a .sra file path.
+SRA_POSITIONAL_TOOLS = frozenset({"fasterq-dump", "prefetch"})
 
 
 class SecureSubprocess:
@@ -179,7 +190,7 @@ class SecureSubprocess:
                 cls.validate_parameter(executable, arg)
                 cmd.append(arg)
 
-                takes_value = not (executable == "fasterq-dump" and arg in FASTERQ_DUMP_BOOLEAN_FLAGS)
+                takes_value = arg not in BOOLEAN_FLAGS.get(executable, frozenset())
                 if takes_value and i + 1 < len(args) and not args[i + 1].startswith("-"):
                     i += 1
                     value = args[i]
@@ -190,9 +201,13 @@ class SecureSubprocess:
                             raise SecurityError(f"Invalid integer value for {arg}: {value}")
                     cmd.append(value)
             else:
-                # Positional argument: for fasterq-dump this is the SRA accession.
-                if executable == "fasterq-dump":
-                    arg = cls.validate_accession_for_subprocess(arg)
+                # Positional argument: for fasterq-dump and prefetch this is either
+                # the SRA accession or a path to an already-downloaded .sra file.
+                if executable in SRA_POSITIONAL_TOOLS:
+                    if arg.endswith(".sra"):
+                        arg = str(cls.validate_path(arg))
+                    else:
+                        arg = cls.validate_accession_for_subprocess(arg)
                 cmd.append(arg)
 
             i += 1

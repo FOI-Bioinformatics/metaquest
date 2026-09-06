@@ -66,11 +66,31 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "-O",
             "--temp",
             "--split-files",
+            "--split-3",
             "--skip-technical",
             "--include-technical",
             "--force",
         },
         "description": "NCBI SRA data download tool",
+    },
+    "prefetch": {
+        "safe_params": {
+            "-O",
+            "--max-size",
+            "--progress",
+            "--resume",
+            "--version",
+        },
+        "description": "NCBI SRA prefetch (downloads the .sra archive)",
+    },
+    "pigz": {
+        "safe_params": {
+            "-p",
+            "-f",
+            "-k",
+            "--version",
+        },
+        "description": "Parallel gzip",
     },
     "megahit": {
         "safe_params": {
