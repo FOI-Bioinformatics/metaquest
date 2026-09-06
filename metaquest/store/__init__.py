@@ -30,6 +30,7 @@ from metaquest.store.sidecar import (
     read_sidecar,
     write_sidecar,
 )
+from metaquest.store.catalog import Catalog, catalog_write
 
 __all__ = [
     "StorePaths",
@@ -49,4 +50,6 @@ __all__ = [
     "ncbi_from_metadata_xml",
     "read_sidecar",
     "write_sidecar",
+    "Catalog",
+    "catalog_write",
 ]
