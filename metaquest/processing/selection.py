@@ -107,6 +107,8 @@ def select_accessions_ranked(
         raise ProcessingError("genome_id and genome_ids are mutually exclusive")
     if require not in ("any", "all"):
         raise ProcessingError(f"Unknown require '{require}'. Choose one of: any, all")
+    if top_n is not None and top_n < 1:
+        raise ProcessingError("--top-n must be a positive integer")
 
     table_path = Path(parsed_containment)
     if not table_path.exists():

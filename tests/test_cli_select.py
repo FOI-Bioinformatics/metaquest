@@ -120,6 +120,24 @@ def test_argparse_rejects_genome_id_with_genome_ids():
         )
 
 
+def test_argparse_rejects_top_n_zero():
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["select_datasets", "--top-n", "0"])
+
+
+def test_argparse_rejects_top_n_negative():
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["select_datasets", "--top-n", "-1"])
+
+
 def test_registry_records_ranked_selection(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\n")

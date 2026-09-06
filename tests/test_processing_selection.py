@@ -130,6 +130,18 @@ def test_require_invalid_value_raises(tables):
         select_accessions(cont, genome_ids=["GCF_A", "GCF_B"], threshold=0.1, require="both")
 
 
+def test_top_n_zero_raises(tables):
+    cont, _ = tables
+    with pytest.raises(ProcessingError, match="--top-n must be a positive integer"):
+        select_accessions(cont, threshold=0.0, top_n=0)
+
+
+def test_top_n_negative_raises(tables):
+    cont, _ = tables
+    with pytest.raises(ProcessingError, match="--top-n must be a positive integer"):
+        select_accessions(cont, threshold=0.0, top_n=-1)
+
+
 def test_select_accessions_ranked_returns_accession_column_value(tables):
     cont, _ = tables
     ranked = select_accessions_ranked(cont, threshold=0.5)

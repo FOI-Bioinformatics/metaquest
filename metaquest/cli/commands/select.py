@@ -11,6 +11,14 @@ from metaquest.data.registry import load_registry, query, record_selection, save
 from metaquest.processing.selection import select_accessions_ranked
 
 
+def _positive_int(value: str) -> int:
+    """argparse type for --top-n: rejects zero and negative values with a clear message."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"--top-n must be a positive integer, got {value!r}")
+    return parsed
+
+
 class SelectDatasetsCommand(BaseCommand):
     """Write the accessions that meet a containment threshold (and optional metadata filter)."""
 
@@ -48,7 +56,7 @@ class SelectDatasetsCommand(BaseCommand):
         )
         parser.add_argument(
             "--top-n",
-            type=int,
+            type=_positive_int,
             default=None,
             help=f"Keep only the top N accessions after filtering (suggested default: {DEFAULT_TOP_N})",
         )
