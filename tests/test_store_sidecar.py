@@ -222,6 +222,22 @@ def test_ncbi_from_metadata_xml(tmp_path):
     assert ncbi["files"] == [{"name": "SRR1", "md5": "abc"}]
 
 
-def test_ncbi_from_metadata_xml_missing_file_returns_empty(tmp_path):
+def test_ncbi_from_metadata_xml_missing_file_returns_empty(tmp_path, caplog):
     xml_path = tmp_path / "missing.xml"
-    assert ncbi_from_metadata_xml(xml_path) == {}
+
+    with caplog.at_level(logging.WARNING):
+        assert ncbi_from_metadata_xml(xml_path) == {}
+
+    assert "Could not read NCBI metadata" in caplog.text
+    assert "missing.xml" in caplog.text
+
+
+def test_ncbi_from_metadata_xml_corrupt_xml_returns_empty(tmp_path, caplog):
+    xml_path = tmp_path / "corrupt.xml"
+    xml_path.write_text("<EXPERIMENT_PACKAGE_SET><unclosed>")
+
+    with caplog.at_level(logging.WARNING):
+        assert ncbi_from_metadata_xml(xml_path) == {}
+
+    assert "Could not read NCBI metadata" in caplog.text
+    assert "corrupt.xml" in caplog.text

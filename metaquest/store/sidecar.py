@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -190,12 +191,12 @@ def ncbi_from_metadata_xml(xml_path: Union[str, Path]) -> Dict[str, Any]:
     (int when present and numeric, else None); ``layout`` from ``Experiment_Library_Layout``;
     ``files`` holds one ``{"name", "md5"}`` entry built from ``Run_Filename``/``Run_MD5`` when
     either is present, else an empty list. Returns ``{}`` when the XML file is missing or
-    unparsable (``parse_metadata_xml`` already logs a warning in that case).
+    unparsable, logging a warning here since ``parse_metadata_xml`` itself only raises.
     """
     try:
         parsed = parse_metadata_xml(xml_path)
-    except (OSError, ValueError, Exception) as e:
-        logger.warning(f"Could not parse metadata XML {xml_path}: {e}")
+    except (OSError, ValueError, ET.ParseError) as e:
+        logger.warning(f"Could not read NCBI metadata from {xml_path}: {e}")
         return {}
     if not parsed:
         return {}
