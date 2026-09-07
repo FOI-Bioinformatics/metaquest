@@ -222,5 +222,6 @@ they never touch a real store or the user's configuration file.
 | Assemble | megahit | assembling the extracted reads |
 | Analyse | seqkit (optional) | faster read statistics for `sra_stats` and `sra_profile_quality` |
 
-The README's installation section lists them; `environment.yml` installs all of them together with
-MetaQuest (pigz and seqkit are commented as optional additions).
+The README's installation section lists them; `environment.yml` installs sra-tools, pigz,
+ncbi-datasets-cli, minimap2, samtools, megahit and sourmash by default (pigz is a real dependency, not
+optional there), and comments out `seqkit` as one additional, optional line.

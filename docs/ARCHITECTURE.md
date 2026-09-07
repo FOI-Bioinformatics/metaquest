@@ -101,10 +101,15 @@ each other and each is small enough to test alone:
   before removing anything from the project, so a copy always exists somewhere during the operation;
   compares byte content when an accession is already in the store so nothing is duplicated.
 - **usage**: writes one row per (accession, project, genome, stage) the first and last time each
-  combination is used, and reports stale projects (whose registry is gone or whose `project.id` no
-  longer matches what the catalogue recorded).
+  combination is used, along with the hostname it ran on, and reports stale projects (whose registry
+  is gone, whose `project.id` no longer matches what the catalogue recorded, or that were last seen
+  from a different host than the one running the check). On a store shared between machines, a project
+  active elsewhere still looks stale from here; `store_gc` leaves a stale project's datasets alone
+  unless `--include-stale` is given.
 - **locks**: a per-accession lock file with a heartbeat, so two projects downloading the same accession
-  at once cooperate rather than corrupt each other's work; a lock with no recent heartbeat is taken over.
+  at once cooperate rather than corrupt each other's work; a lock with no heartbeat for 10 minutes
+  (`DATASET_LOCK_STALE_SECONDS`) is treated as abandoned and taken over. `--lock-wait` on `download_sra`
+  and `store_adopt` bounds how long each waits for another project's lock before giving up.
 - **stats**: computes and caches the per-dataset statistics block (streaming exact read and base
   counts, plus a sample for per-read metrics such as GC content), invalidated when the FASTQ file's size
   or modification time changes; used by `sra_stats`, `sra_validate` and `sra_profile_quality`.

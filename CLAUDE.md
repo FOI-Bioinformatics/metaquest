@@ -101,10 +101,12 @@ Store discovery rules for agents:
    `METAQUEST_DATA` and `XDG_CONFIG_HOME`/`HOME`, so a test run never reads or writes the developer's
    actual store or `~/.config/metaquest/config.toml`. Follow this pattern for any new store test.
 3. **Explicit-path staging**: `store_adopt` copies a dataset into the store before removing anything
-   from the project (peak disk use during adoption is roughly twice the dataset's compressed size),
-   and only replaces the project folder with a symlink once the store copy is verified. New code that
-   moves data into or within the store should stage the same way rather than renaming in place, so an
-   interruption never leaves a dataset with no complete copy anywhere.
+   from the project, so adoption briefly holds up to three copies of one accession (the project's
+   original, a staging copy, and the store's copy) and needs at least twice the folder's size free on
+   the store's filesystem before it starts (`metaquest/store/adopt.py:242-248`), only replacing the
+   project folder with a symlink once the store copy is verified. New code that moves data into or
+   within the store should stage the same way rather than renaming in place, so an interruption never
+   leaves a dataset with no complete copy anywhere.
 
 ### Plugin Development
 - Format plugins inherit from base Plugin class in `plugins/base.py`

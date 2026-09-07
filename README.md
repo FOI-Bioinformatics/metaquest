@@ -261,8 +261,25 @@ Inside a project, each linked accession appears as `fastq/<ACCESSION>`, a symlin
 `<data-root>/sra/<ACCESSION>` (relative when the store and project share a parent folder, absolute
 otherwise; override with `--link-mode`). `store_init` and `store_adopt` add `fastq/` to the project's
 `.gitignore` when the project is a git repository. `store_link` and `store_unlink` manage one link at a
-time; `store_verify` checks a dataset's files against its recorded size, md5 or NCBI spot count;
-`store_reindex` rebuilds the SQLite catalogue from the sidecar files if it is ever lost.
+time; `store_verify` checks a dataset's files against its recorded size, md5 (`--md5`) or NCBI spot
+count (`--spots`), and `--fix-state` rewrites the sidecar and catalogue entry when a check finds a
+mismatch; `store_reindex` rebuilds the SQLite catalogue from the sidecar files if it is ever lost.
+`store_gc` never removes a dataset a project still links or another run is working on; `--older-than
+DAYS` restricts it to datasets downloaded at least that many days ago, `--keep-partial` never removes a
+`partial` dataset, and it also reports (and, with `--yes`, removes) leftover temp artifacts under the
+store's `tmp/` folder left by an interrupted download or adoption.
+
+A per-accession lock (`locks/<ACCESSION>.lock`, with a heartbeat) stops two projects from downloading
+the same accession into the store at once; a lock with no heartbeat for 10 minutes is treated as
+abandoned and taken over. `--lock-wait SECONDS` bounds how long `download_sra` and `store_adopt` wait
+for another project's lock on the same accession before giving up (default: wait indefinitely).
+
+On a store shared over a network filesystem or between machines, each project records the hostname it
+last ran on; a project not seen from the current machine looks stale here even when it is still active
+on another one. `store_gc` leaves a stale project's datasets alone unless `--include-stale` is given,
+since staleness is only ever judged from the machine running the command. The catalogue uses a rollback
+journal rather than WAL on such filesystems, trading some write throughput for correctness when several
+hosts write to it at once.
 
 Every stored dataset carries a completeness verdict: `complete` (the read count per mate matches NCBI's
 recorded spot count, at or above a 0.99 ratio), `partial` (fewer reads than expected; not used by
@@ -270,10 +287,15 @@ recorded spot count, at or above a 0.99 ratio), `partial` (fewer reads than expe
 `--no-resume-partial`), or `unverified` (the expected spot count is not known; usable by default).
 `store_verify --spots` and `status --reconcile` compute a verdict for a dataset that lacks one.
 
-`--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_stats`,
-`sra_validate`, `sra_profile_quality`, `sra_compare`, `sra_dashboard`, and `extract_target_reads`; it
-never replaces `--fastq-folder`, which still names where the project expects its reads (as a folder or
-as the store's symlink).
+A download into the store runs `prefetch` (fixed at `--max-size 100G`) before `fasterq-dump`; if the
+kept `.sra` archive or a temporary build folder grow past 1 GB combined, the download summary warns and
+names the folder, and `store_gc --dry-run` separately lists such leftovers as removal candidates.
+
+`--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_stats`, `sra_validate`,
+`sra_profile_quality`, and `extract_target_reads`; it never replaces `--fastq-folder`, which still names
+where the project expects its reads (as a folder or as the store's symlink). `sra_compare` and
+`sra_dashboard` do not take `--data-root` themselves; instead they reuse quality profiles a store-aware
+`sra_profile_quality` run already saved, via `--quality-profiles`.
 
 ### 11. Targeted Read Extraction Before Assembly
 
@@ -373,6 +395,11 @@ metaquest blacklist --remove SRR2517418
 ```
 
 ### SRA Quality Profiling
+
+`sra_profile_quality`, `sra_compare` and `sra_dashboard` name the FASTQ folder with `--fastq-dir`,
+while the rest of the pipeline (`download_sra`, `sra_stats`, `sra_validate`, `extract_target_reads`,
+`status`) uses `--fastq-folder`; both flags point at the same kind of folder, one per-accession
+directory of downloaded reads, the naming just differs by command.
 
 Generate comprehensive quality profiles for downloaded SRA datasets:
 
