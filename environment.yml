@@ -12,5 +12,6 @@ dependencies:
   - samtools
   - megahit
   - sourmash
+  # - seqkit  # optional: faster read statistics for sra_stats and sra_profile_quality
   - pip:
       - -e .

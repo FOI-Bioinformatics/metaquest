@@ -94,4 +94,42 @@ print(f'status.json ok: selected={selected} excluded={excluded}')
 print(f'registry rebuild ok: recorded datasets={recorded_count} rebuilt datasets={rebuilt_count}')
 " || { echo "FAIL status.json stage counts"; exit 1; }
 
+# Shared data store walkthrough. Runs with HOME redirected under $WORK and METAQUEST_DATA unset, so
+# store discovery never falls back to the real user config or a real store; --data-root is explicit
+# on every call instead.
+STORE_HOME="$WORK/store_home"
+mkdir -p "$STORE_HOME"
+STORE_ROOT="$WORK/store"
+N_SELECTED="$(wc -l < accessions.txt | tr -d ' ')"
+
+echo "store_init"
+(
+    unset METAQUEST_DATA
+    export HOME="$STORE_HOME"
+    metaquest store_init --data-root "$STORE_ROOT"
+)
+
+echo "download_sra --dry-run --data-root (store)"
+(
+    unset METAQUEST_DATA
+    export HOME="$STORE_HOME"
+    metaquest download_sra --accessions-file accessions.txt --dry-run --data-root "$STORE_ROOT" 2>&1 \
+        | tee store_download_dry_run.log
+)
+grep -q "would download $N_SELECTED of $N_SELECTED datasets" store_download_dry_run.log \
+    || { echo "FAIL store dry-run did not report would download $N_SELECTED of $N_SELECTED datasets"; exit 1; }
+
+echo "store_status --json"
+(
+    unset METAQUEST_DATA
+    export HOME="$STORE_HOME"
+    metaquest store_status --json --data-root "$STORE_ROOT" | tee store_status.json
+)
+grep -q '"projects": 1' store_status.json || { echo "FAIL store_status --json: expected \"projects\": 1"; exit 1; }
+
+echo "select_datasets --top-n 5"
+metaquest select_datasets --threshold 0.95 --top-n 5 --output accessions_top5.txt
+check accessions_top5.txt
+test "$(wc -l < accessions_top5.txt)" -eq 5 || { echo "FAIL accessions_top5.txt: expected 5 lines"; exit 1; }
+
 echo "All steps passed (outputs in $WORK)"

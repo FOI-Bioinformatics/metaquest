@@ -54,6 +54,25 @@ metaquest use_branchwater --branchwater-folder branchwater --matches-folder matc
 A run that returns zero matches is reported as a warning, not an error; verify the index with a genome
 known to be abundant in metagenomes before trusting an empty result.
 
+### Retries and the response cache
+
+A `branchwater_search` request that fails with a network or server error retries automatically, up to 4
+attempts with a growing backoff between them; a 4xx client error other than a rate limit fails at once
+instead of retrying. A successful response is cached under `.branchwater-cache/` next to the output CSV,
+keyed by the genome, containment threshold, sourmash parameters and server URL, so repeating the same
+search reads the cache instead of querying again:
+
+```bash
+metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1   # caches
+metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1   # reads the cache
+metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1 --refresh  # forces a new query
+metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1 --no-cache  # never reads or writes the cache
+```
+
+`--max-cache-age-days N` treats a cached entry older than N days as absent. There is no default
+expiry, so a cache entry is otherwise reused until `--refresh` or `--no-cache` is used, or the cache
+file is deleted by hand.
+
 ## Advanced Filtering and Thresholds
 
 ### Containment steps
@@ -66,6 +85,24 @@ metaquest parse_containment --matches-folder matches --step-size 0.05
 metaquest select_datasets --threshold 0.9 --output accessions.txt
 metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.9
 ```
+
+### The details table
+
+`parse_containment` also writes `parsed_containment_details.tsv`, one row per (accession, genome) pair
+that appears in a match file, with the columns that `parsed_containment.txt` does not carry:
+
+| Column | Meaning |
+|---|---|
+| `accession` | SRA run accession |
+| `genome_id` | target genome the row's containment refers to |
+| `containment` | containment value for this accession and genome |
+| `cANI` | Branchwater's estimated average nucleotide identity for the match |
+| `biosample`, `bioproject` | NCBI sample and project identifiers, when Branchwater reports them |
+| `assay_type`, `organism` | sequencing assay and the organism label from the metagenome record |
+| `geo_loc_name`, `lat_lon` | geographic label and coordinates, when present |
+
+Use this table when a downstream step needs cANI or sample provenance; `parsed_containment.txt` stays
+the samples-by-genomes matrix the rest of the pipeline reads.
 
 ## What the registry records
 

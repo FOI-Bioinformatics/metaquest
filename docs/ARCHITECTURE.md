@@ -72,6 +72,47 @@ genome is capped (`--registry-max-screened`). Presence is never taken from the r
 than done. Writes are atomic (a temporary file renamed into place) and serialized with a lock file
 to avoid concurrent corruption.
 
+The registry file carries a `version` field, currently 2. A schema 1 file loads unchanged; any key the
+newer schema added is absent and defaults to an empty value. Schema 2 adds two top-level keys: `project`
+(`id`, `name`, `path`, `created`, `organisms[]`, `genome_ids[]`), which makes a project self-describing,
+and `store` (`root`, `mode`, `linked[]`), which records the shared data store this project uses, if any.
+Every path a project registry stores is written relative to the project root when it lies inside that
+root, and absolute otherwise, so moving the project directory does not break the registry.
+
+#### Shared data store
+`metaquest/store` is a package, not a single module, because the store's concerns are independent of
+each other and each is small enough to test alone:
+
+- **resolve**: finds the store root, in order, from `--data-root`, `METAQUEST_DATA`, `store.root` in
+  the project registry, and `[store] data_root` in `~/.config/metaquest/config.toml`; also reads and
+  writes that config file.
+- **layout**: the store's on-disk shape (`metaquest_store.json` marker, `catalog.sqlite`, `locks/`,
+  `tmp/`, `sra/<accession>/`) and the paths derived from it.
+- **sidecar**: reads and writes `<accession>.json` next to each dataset's files: state, layout,
+  compression, per-file size and md5, read and base counts, the NCBI spot and base counts used for the
+  completeness verdict, and the cached `stats` block described below.
+- **catalog**: the SQLite database (`datasets`, `files`, `projects`, `usage` tables, plus an
+  `unused_datasets` view) that lets a query answer "which projects used this accession" or "how many
+  bytes belong to this organism" without walking every sidecar; falls back from WAL to a rollback
+  journal on filesystems (network shares in particular) that do not support WAL.
+- **link**: creates and removes the per-accession symlink from a project's `fastq/` folder into the
+  store, chooses a relative or absolute target, and detects a dangling link.
+- **adopt**: folds an existing per-project `fastq/` folder into the store: copies each accession in
+  before removing anything from the project, so a copy always exists somewhere during the operation;
+  compares byte content when an accession is already in the store so nothing is duplicated.
+- **usage**: writes one row per (accession, project, genome, stage) the first and last time each
+  combination is used, and reports stale projects (whose registry is gone or whose `project.id` no
+  longer matches what the catalogue recorded).
+- **locks**: a per-accession lock file with a heartbeat, so two projects downloading the same accession
+  at once cooperate rather than corrupt each other's work; a lock with no recent heartbeat is taken over.
+- **stats**: computes and caches the per-dataset statistics block (streaming exact read and base
+  counts, plus a sample for per-read metrics such as GC content), invalidated when the FASTQ file's size
+  or modification time changes; used by `sra_stats`, `sra_validate` and `sra_profile_quality`.
+
+Nothing outside `metaquest/store` depends on its internal layout; other layers call its public
+functions (`resolve_store_root`, `link_dataset`, `record_usage_safe`, and so on) and otherwise treat a
+project with no store configured exactly as it behaved before the store existed.
+
 #### Plugin System
 The plugin system enables extensibility:
 - Format plugins for different file formats
@@ -94,6 +135,8 @@ The plugin system enables extensibility:
 - **sra**: Functions for downloading and working with SRA data
 - **registry**: The project journal (`metaquest_registry.json`); records dataset state and
   re-checks presence against the filesystem
+- **store** (`metaquest/store/`): The shared data store package, described in "Shared data store"
+  below; a project that never runs `store_init` never touches it
 
 #### Processing Components
 

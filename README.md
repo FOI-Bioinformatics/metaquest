@@ -34,10 +34,12 @@ Download and assembly steps call command-line tools that are not Python packages
 
 | Tool | Used by |
 |---|---|
-| `fasterq-dump` (sra-tools) | `download_sra` |
+| `fasterq-dump`, `prefetch` (sra-tools) | `download_sra` (prefetch first, then fasterq-dump; `--no-prefetch` skips prefetch) |
+| `pigz` (optional) | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
 | `datasets` (ncbi-datasets-cli) | `genome_download`, `genome_prepare`, `download_test_genome` |
 | `minimap2`, `samtools` | `extract_target_reads` |
 | `megahit` | `extract_target_reads --assemble` |
+| `seqkit` (optional) | `sra_stats`, `sra_profile_quality` (faster read statistics; falls back to a plain Python reader when absent) |
 
 `environment.yml` installs all of them together with MetaQuest:
 
@@ -76,6 +78,12 @@ pass `--signature file.sig` instead of the FASTA.
 Alternatively, search at [https://branchwater.sourmash.bio/](https://branchwater.sourmash.bio/) in a
 browser, download the CSV, and save it to the same folder.
 
+A search that fails with a transient network or server error retries automatically (4 attempts with
+backoff). A repeated search with the same genome, thresholds and server reads a cached response from
+`.branchwater-cache/` next to the output CSV instead of querying again; `--no-cache` disables the cache
+for one run, `--refresh` forces a new query and updates the cache, and `--max-cache-age-days N` expires
+a cached entry older than N days.
+
 ### 2. Process Branchwater Files
 
 Process the downloaded files to prepare them for the MetaQuest pipeline:
@@ -95,7 +103,7 @@ You can extract basic metadata directly from Branchwater CSV files without downl
 metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater/files --metadata-folder metadata
 ```
 
-> Note: a few Branchwater columns are renamed to canonical names in the output — in
+> Note: a few Branchwater columns are renamed to canonical names in the output; in
 > particular `organism` becomes `Sample_Scientific_Name`. Use the output column names
 > (e.g. `--metadata-column Sample_Scientific_Name`) in later `count_metadata` /
 > `single_sample` steps.
@@ -227,6 +235,46 @@ match CSVs always keep every hit.
 Commit `metaquest_registry.json` with your project if you want the decisions to travel with the
 results.
 
+### Shared data store
+
+A second organism project studying the same metagenomes does not need its own copy of the reads.
+`metaquest/store` keeps one gzip-compressed copy of each SRA accession, tracked in a small SQLite
+catalogue, and links it into every project that uses it.
+
+A store must exist before `download_sra` links a dataset or `store_adopt` runs; without one, every
+command behaves as it does today, with plain per-project folders. MetaQuest finds the store root in
+this order: the `--data-root` flag, then the `METAQUEST_DATA` environment variable, then `store.root`
+recorded in the project registry, then `[store] data_root` in `~/.config/metaquest/config.toml`
+(honouring `$XDG_CONFIG_HOME`). If the configured root is unreachable, `status` and the analysis
+commands warn and continue without the store; `download_sra` and the `store_*` commands stop.
+
+```bash
+metaquest store_init --data-root /data/metaquest_store --set-default   # create a store, remember it
+metaquest store_adopt --fastq-folder fastq --dry-run                   # preview folding this project in
+metaquest store_adopt --fastq-folder fastq --move                      # move reads into the store, link back
+metaquest store_status --json                                          # dataset and byte counts
+metaquest store_usage --accession SRR11011981                          # which projects used this run
+metaquest store_gc --dry-run                                           # candidates for removal, nothing deleted
+```
+
+Inside a project, each linked accession appears as `fastq/<ACCESSION>`, a symlink to
+`<data-root>/sra/<ACCESSION>` (relative when the store and project share a parent folder, absolute
+otherwise; override with `--link-mode`). `store_init` and `store_adopt` add `fastq/` to the project's
+`.gitignore` when the project is a git repository. `store_link` and `store_unlink` manage one link at a
+time; `store_verify` checks a dataset's files against its recorded size, md5 or NCBI spot count;
+`store_reindex` rebuilds the SQLite catalogue from the sidecar files if it is ever lost.
+
+Every stored dataset carries a completeness verdict: `complete` (the read count per mate matches NCBI's
+recorded spot count, at or above a 0.99 ratio), `partial` (fewer reads than expected; not used by
+`download_sra` unless `--accept-partial` is given, and re-downloaded by default unless
+`--no-resume-partial`), or `unverified` (the expected spot count is not known; usable by default).
+`store_verify --spots` and `status --reconcile` compute a verdict for a dataset that lacks one.
+
+`--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_stats`,
+`sra_validate`, `sra_profile_quality`, `sra_compare`, `sra_dashboard`, and `extract_target_reads`; it
+never replaces `--fastq-folder`, which still names where the project expects its reads (as a folder or
+as the store's symlink).
+
 ### 11. Targeted Read Extraction Before Assembly
 
 To assemble only the reads relevant to a target genome (a small, targeted assembly rather than a
@@ -252,6 +300,13 @@ On macOS the assembly defaults to a single thread, because megahit 1.2.9's paral
 is unstable on recent macOS releases (mapping with minimap2/samtools still uses `--threads`). Override
 the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
 
+Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally
+discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
+20 is reasonable for a close relative of the target genome, but a divergent strain can genuinely map
+with a low MAPQ, so raising the threshold can discard real matches. `--assembly-preset` selects
+megahit's `--presets` value: `meta-sensitive` (the default, suited to these small targeted read sets),
+`meta-large`, or `default` (no `--presets` flag).
+
 A sample already extracted or assembled with the same genome FASTA, preset, and threshold is skipped
 on a rerun, including samples that mapped zero reads; an assembly folder with no contigs is reported
 as interrupted with a hint to rerun. Pass `--force` to redo extraction and assembly regardless.
@@ -264,7 +319,13 @@ as interrupted with a hint to rerun. Pass `--force` to redo extraction and assem
 metaquest select_datasets --threshold 0.9 --output accessions.txt
 metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
     --metadata-column geo_loc_name_country_calc --metadata-value France --output accessions.txt
+metaquest select_datasets --threshold 0.9 --top-n 20 --output accessions.txt
 ```
+
+`--top-n N` keeps only the N accessions with the highest containment after every other filter is
+applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
+is given), and `--skip-downloaded` additionally drops accessions the registry already records as
+downloaded, useful when re-running selection on an expanded search.
 
 `accessions.txt` is the input for `download_sra`, which writes `fastq/<accession>/<accession>_1.fastq`
 (and `_2` for paired runs), the layout `status`, `sra_stats`, `sra_profile_quality`, `sra_dashboard`
@@ -285,6 +346,19 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 `blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
 `docs/SRA_ENHANCED_FEATURES.md`.
+
+By default, `download_sra` runs `prefetch` before `fasterq-dump` (`--no-prefetch` reverts to calling
+`fasterq-dump` directly) and gzip-compresses the resulting FASTQ files (`--no-compress` leaves them
+plain; pigz is used for compression when installed, otherwise Python's gzip module). `--sra-cache DIR`
+sets where prefetch keeps its downloaded `.sra` archives (default `<fastq-folder>/.sra-cache`); pass
+`--keep-sra` to retain a verified archive instead of deleting it after conversion.
+`--verify-downloads` (on by default; `--no-verify-downloads` turns it off) compares each download's
+read count against NCBI's recorded spot count and records a verdict in the registry: `complete` (ratio
+at or above 0.99), `truncated` (fewer reads than expected), or `unverified` (the expected spot count is
+not known). This check runs even for a project with no store configured. `--redownload-truncated`
+re-fetches an accession whose registry verdict is `truncated` instead of skipping it on a rerun; a
+dataset held in the shared store instead carries the store's own verdict (`complete`, `partial`, or
+`unverified`, described in "Shared data store" above).
 
 On a real run, `download_sra` also honours the project registry: accessions excluded with
 `blacklist` are skipped automatically, without needing `--blacklist blacklist.txt` on every call
@@ -316,6 +390,13 @@ metaquest sra_profile_quality \
     --fastq-dir fastq \
     --include-contamination
 ```
+
+Read totals are always exact; per-read metrics such as GC content, quality and length are computed
+from a sample of the reads, `--sample-size` per dataset (default 10000), drawn uniformly across the
+file by default or from just the start with `--sampler head`. `sra_stats` takes the same
+`--sample-size` flag for the same reason. The sample is cached in the store sidecar and reused by
+`sra_stats`, `sra_validate` and `sra_profile_quality` alike until the underlying file's size or
+modification time changes.
 
 ### Interactive SRA Dashboards
 
@@ -470,14 +551,14 @@ MetaQuest follows modern Python development practices with comprehensive testing
 
 ### Current Status
 - **Test Coverage**: 88%+ overall (from 53% baseline, 199 new tests added)
-- **CLI Commands**: 100% coverage, including intelligent SRA commands at 86% ✅
-- **Data Layer**: 93-99% coverage for all core modules (sra_metadata, taxonomy) ✅
-- **Core Processing**: 92-99% coverage with comprehensive edge case testing ✅
-- **SRA Advanced Features**: 95% coverage for reporting, quality profiling, and analytics ✅
-- **Visualization Plugins**: Bar chart plugin at 99% coverage ✅
-- **Integration Tests**: 12 end-to-end workflow tests ✅
-- **Performance Benchmarks**: 25 tests with pytest-benchmark for regression detection ✅
-- **Code Quality**: All linting checks passing ✅
+- **CLI Commands**: 100% coverage, including intelligent SRA commands at 86%
+- **Data Layer**: 93-99% coverage for all core modules (sra_metadata, taxonomy)
+- **Core Processing**: 92-99% coverage with comprehensive edge case testing
+- **SRA Advanced Features**: 95% coverage for reporting, quality profiling, and analytics
+- **Visualization Plugins**: Bar chart plugin at 99% coverage
+- **Integration Tests**: 12 end-to-end workflow tests
+- **Performance Benchmarks**: 25 tests with pytest-benchmark for regression detection
+- **Code Quality**: All linting checks passing
 
 ### Recent Enhancements (September-October 2025)
 Significant improvements have been implemented across the codebase:

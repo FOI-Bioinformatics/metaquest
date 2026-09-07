@@ -76,6 +76,36 @@ The SRA package provides three analysis commands:
 - `sra_dashboard` - Interactive HTML dashboard generation
 - `sra_compare` - Statistical comparison between dataset groups
 
+### Store Commands
+`metaquest/store/` (package: `resolve`, `layout`, `sidecar`, `catalog`, `link`, `adopt`, `usage`,
+`locks`, `stats`) and `metaquest/cli/commands/store.py` implement a shared data store: one copy of
+each downloaded SRA accession, reused by every project that links into it. Nine commands, registered
+under the "Store" group in `cli/main.py`:
+- `store_init` - create a store at `--data-root`, record the project's use of it
+- `store_status` - dataset and byte counts, stale projects
+- `store_reindex` - rebuild the SQLite catalogue from the sidecar files on disk
+- `store_adopt` - fold an existing project `fastq/` folder into the store (`--move` or `--copy`)
+- `store_verify` - check a dataset's files against its recorded size, md5 (`--md5`), or NCBI spot
+  count (`--spots`)
+- `store_link` / `store_unlink` - add or remove one accession's project symlink
+- `store_usage` - which projects and genomes used a given accession, or which datasets are unused
+- `store_gc` - report (or, with `--yes`, remove) datasets nothing references any more
+
+Store discovery rules for agents:
+1. **Store required before linking**: `download_sra` only links a dataset and `store_adopt` only
+   runs once a store exists, found via `--data-root`, `METAQUEST_DATA`, `store.root` in the project
+   registry, or `~/.config/metaquest/config.toml`. A project that never runs `store_init` (and has
+   none of those set) behaves exactly as it did before the store existed; do not assume a store is
+   present.
+2. **Tests never touch a real store**: every store test uses a `tmp_path` store and monkeypatches
+   `METAQUEST_DATA` and `XDG_CONFIG_HOME`/`HOME`, so a test run never reads or writes the developer's
+   actual store or `~/.config/metaquest/config.toml`. Follow this pattern for any new store test.
+3. **Explicit-path staging**: `store_adopt` copies a dataset into the store before removing anything
+   from the project (peak disk use during adoption is roughly twice the dataset's compressed size),
+   and only replaces the project folder with a symlink once the store copy is verified. New code that
+   moves data into or within the store should stage the same way rather than renaming in place, so an
+   interruption never leaves a dataset with no complete copy anywhere.
+
 ### Plugin Development
 - Format plugins inherit from base Plugin class in `plugins/base.py`
 - Register with `format_registry` for file format handlers
@@ -98,12 +128,12 @@ Each step records its outcome in the project registry (`metaquest_registry.json`
 ### Code Quality Standards & Current Status
 
 #### Current Quality Status (October 2025)
-- **✅ All linting checks passing** - No flake8 violations
-- **✅ Code formatting consistent** - Black formatting applied
-- **✅ Make check passes** - All quality gates working
-- **✅ Test suite stability achieved** - All 995 tests passing consistently
-- **✅ Runtime warnings eliminated** - Numerical computation warnings resolved
-- **✅ API compatibility maintained** - DataFrame deprecation warnings addressed
+- **All linting checks passing** - No flake8 violations
+- **Code formatting consistent** - Black formatting applied
+- **Make check passes** - All quality gates working
+- **Test suite stability achieved** - All 995 tests passing consistently
+- **Runtime warnings eliminated** - Numerical computation warnings resolved
+- **API compatibility maintained** - DataFrame deprecation warnings addressed
 
 #### Quality Requirements
 - **Line length**: 120 characters maximum (configured in pyproject.toml)
@@ -148,7 +178,7 @@ Each step records its outcome in the project registry (`metaquest_registry.json`
 
 ### Test Infrastructure Components
 
-#### Core Testing Achievements ✅ 
+#### Core Testing Achievements 
 - **Statistical Computing**: Numerical edge cases properly handled
 - **API Compatibility**: Future-proof implementation with current libraries
 - **Error Propagation**: Comprehensive exception handling across modules
@@ -209,8 +239,8 @@ def test_command_execution(mock_file_operations):
 The project includes comprehensive integration testing:
 1. `local_test.sh` - Basic end-to-end CLI testing with sample data
 2. `tests/test_integration_simple.py` - 12 integration tests covering:
-   - SRA metadata workflows (retrieval → CSV export → visualization)
-   - FASTQ processing pipelines (statistics → reports → visualization)
+   - SRA metadata workflows (retrieval -> CSV export -> visualization)
+   - FASTQ processing pipelines (statistics -> reports -> visualization)
    - Multi-sample comparison workflows
    - Data export to multiple formats
    - Error handling in complete workflows
@@ -295,17 +325,17 @@ When working on MetaQuest, follow this priority order:
 
 ### Success Metrics for Development Work
 
-#### Recently Completed ✅ (September-October 2025)
+#### Recently Completed (September-October 2025)
 - [x] **Intelligent SRA package implemented** - Complete next-generation SRA capabilities
 - [x] **All linting issues resolved** - Clean, consistent codebase
-- [x] **CLI commands fully tested** (0% → 100% coverage)
-- [x] **Core processing tested** (0% → 92-99% coverage)
+- [x] **CLI commands fully tested** (0% -> 100% coverage)
+- [x] **Core processing tested** (0% -> 92-99% coverage)
 - [x] **Data layer testing completed** - Key modules at 93-99% coverage
 - [x] **Test coverage improvement session** - Added 199 comprehensive tests across 8 files
 - [x] **Critical modules improved to 86-99%** - sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy
 - [x] **Integration test suite created** - 12 end-to-end workflow tests
 - [x] **Performance benchmarks established** - 25 tests with pytest-benchmark
-- [x] **Overall project coverage improved** (24% → 53% → 88%+)
+- [x] **Overall project coverage improved** (24% -> 53% -> 88%+)
 - [x] **Orphan code removed** - Clean architecture maintained
 
 #### Advanced SRA Features Achievements
