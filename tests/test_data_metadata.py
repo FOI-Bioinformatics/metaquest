@@ -5,7 +5,8 @@ Tests for metaquest.data.metadata module.
 import pytest
 import pandas as pd
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
+from urllib.error import HTTPError, URLError
 import xml.etree.ElementTree as ET
 
 from metaquest.core.exceptions import DataAccessError, ValidationError
@@ -14,6 +15,9 @@ from metaquest.data.metadata import (
     _download_single_metadata,
     download_metadata,
     _download_accessions_metadata,
+    _download_batch_metadata,
+    _pace_requests,
+    _split_efetch_packages,
     _extract_metadata_fields,
     _extract_sample_attributes,
     parse_metadata,
@@ -21,6 +25,26 @@ from metaquest.data.metadata import (
     get_unique_sample_attributes,
     check_metadata_attributes,
 )
+
+
+def _http_error(code, reason="Error"):
+    """Build a urllib HTTPError with the given status code, as Entrez.efetch would raise."""
+    return HTTPError("https://eutils.ncbi.nlm.nih.gov/", code, reason, hdrs=None, fp=None)
+
+
+def _package_xml(accessions_and_attrs):
+    """Build a minimal efetch response with one EXPERIMENT_PACKAGE per accession.
+
+    ``accessions_and_attrs`` is a list of (accession, {attr: value}) pairs.
+    """
+    root = ET.Element("EXPERIMENT_PACKAGE_SET")
+    for accession, attrs in accessions_and_attrs:
+        package = ET.SubElement(root, "EXPERIMENT_PACKAGE")
+        run_set = ET.SubElement(package, "RUN_SET")
+        run = ET.SubElement(run_set, "RUN", accession=accession, **attrs)
+        identifiers = ET.SubElement(run, "IDENTIFIERS")
+        ET.SubElement(identifiers, "PRIMARY_ID").text = accession
+    return ET.tostring(root, encoding="unicode")
 
 
 class TestGetUniqueAccessions:
@@ -118,7 +142,7 @@ class TestDownloadSingleMetadata:
             mock_handle.read.return_value = mock_response
             mock_efetch.return_value = mock_handle
 
-            with patch("time.sleep"):  # Speed up test
+            with patch("metaquest.data.metadata._pace_requests"):
                 success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
 
         assert success is True
@@ -126,17 +150,34 @@ class TestDownloadSingleMetadata:
         assert result.name == "SRR123_metadata.xml"
         assert result.read_text() == mock_response.decode()
 
-    def test_download_single_metadata_http_error(self, tmp_path):
-        """Test handling HTTP errors with retry."""
+    def test_download_single_metadata_404_is_final(self, tmp_path):
+        """A 404 on a single accession is a final failure, never retried."""
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
 
-        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=Exception("HTTP 500")):
-            with patch("time.sleep"):  # Speed up test
-                success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=_http_error(404)) as mock_efetch:
+            with patch("metaquest.data.metadata._pace_requests"):
+                with patch("time.sleep") as mock_sleep:
+                    success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
 
         assert success is False
-        assert "Failed after 3 retries" in result
+        assert result == "HTTP 404: not found at NCBI"
+        mock_efetch.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    def test_download_single_metadata_503_retried_then_fails(self, tmp_path):
+        """A 503 is retried up to 3 times with exponential backoff, then fails."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=_http_error(503)):
+            with patch("metaquest.data.metadata._pace_requests"):
+                with patch("time.sleep") as mock_sleep:
+                    success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
+
+        assert success is False
+        assert result == "HTTP 503 after 3 attempts"
+        assert mock_sleep.call_args_list == [call(2), call(4), call(8)]
 
     def test_download_single_metadata_partial_retry(self, tmp_path):
         """Test successful download after one retry."""
@@ -149,13 +190,37 @@ class TestDownloadSingleMetadata:
             # First call fails, second succeeds
             mock_handle = MagicMock()
             mock_handle.read.return_value = mock_response
-            mock_efetch.side_effect = [Exception("Network error"), mock_handle]
+            mock_efetch.side_effect = [URLError("Network error"), mock_handle]
 
-            with patch("time.sleep"):  # Speed up test
-                success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
+            with patch("metaquest.data.metadata._pace_requests"):
+                with patch("time.sleep"):
+                    success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
 
         assert success is True
         assert isinstance(result, Path)
+
+    def test_download_single_metadata_api_key_set_on_entrez(self, tmp_path):
+        """Entrez.api_key equals the given key during the call; None leaves it None."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+        mock_response = b"<?xml version='1.0'?><root>test metadata</root>"
+
+        seen_keys = []
+
+        def fake_efetch(**kwargs):
+            from metaquest.data.metadata import Entrez
+
+            seen_keys.append(Entrez.api_key)
+            handle = MagicMock()
+            handle.read.return_value = mock_response
+            return handle
+
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=fake_efetch):
+            with patch("metaquest.data.metadata._pace_requests"):
+                _download_single_metadata("SRR123", metadata_path, "test@example.com", api_key="my-key")
+                _download_single_metadata("SRR124", metadata_path, "test@example.com", api_key=None)
+
+        assert seen_keys == ["my-key", None]
 
 
 class TestDownloadMetadata:
@@ -232,14 +297,17 @@ class TestDownloadMetadata:
 
         calls = []
 
-        def fake_single(accession, metadata_path, entrez_email):
-            calls.append(accession)
-            xml_path = metadata_path / f"{accession}_metadata.xml"
-            xml_path.write_text("<root/>")
-            return True, xml_path
+        def fake_batch(batch, metadata_path, email, api_key):
+            calls.extend(batch)
+            successes = {}
+            for accession in batch:
+                xml_path = metadata_path / f"{accession}_metadata.xml"
+                xml_path.write_text("<root/>")
+                successes[accession] = xml_path
+            return successes, {}
 
         with patch("metaquest.data.metadata.validate_folder") as mock_validate_folder:
-            with patch("metaquest.data.metadata._download_single_metadata", side_effect=fake_single):
+            with patch("metaquest.data.metadata._download_batch_metadata", side_effect=fake_batch):
                 result = download_metadata(
                     "test@example.com",
                     "does-not-exist",
@@ -250,6 +318,27 @@ class TestDownloadMetadata:
         mock_validate_folder.assert_not_called()
         assert sorted(calls) == ["SRR1", "SRR2", "SRR3"]
         assert set(result) == {"SRR1", "SRR2", "SRR3"}
+
+    def test_download_metadata_batch_size_out_of_range_raises(self, tmp_path):
+        """batch_size outside 1-500 raises ValueError, not DataAccessError."""
+        with pytest.raises(ValueError):
+            download_metadata("test@example.com", tmp_path, tmp_path, batch_size=0)
+        with pytest.raises(ValueError):
+            download_metadata("test@example.com", tmp_path, tmp_path, batch_size=501)
+
+    def test_download_metadata_passes_api_key_and_batch_size(self, tmp_path):
+        """api_key and batch_size reach _download_accessions_metadata."""
+        matches_dir = tmp_path / "matches"
+        metadata_dir = tmp_path / "metadata"
+        matches_dir.mkdir()
+        (matches_dir / "genome1.csv").write_text("acc,containment,organism\nSRR123,0.95,E. coli")
+
+        with patch("metaquest.data.metadata._download_accessions_metadata") as mock_download:
+            mock_download.return_value = {}
+            download_metadata("test@example.com", matches_dir, metadata_dir, api_key="my-key", batch_size=5)
+
+        assert mock_download.call_args.kwargs["api_key"] == "my-key"
+        assert mock_download.call_args.kwargs["batch_size"] == 5
 
 
 class TestDownloadAccessionsMetadata:
@@ -262,17 +351,21 @@ class TestDownloadAccessionsMetadata:
 
         accessions = ["SRR123", "SRR456"]
 
-        with patch("metaquest.data.metadata._download_single_metadata") as mock_download:
-            mock_download.side_effect = [
-                (True, metadata_path / "SRR123_metadata.xml"),
-                (True, metadata_path / "SRR456_metadata.xml"),
-            ]
+        with patch("metaquest.data.metadata._download_batch_metadata") as mock_download:
+            mock_download.return_value = (
+                {
+                    "SRR123": metadata_path / "SRR123_metadata.xml",
+                    "SRR456": metadata_path / "SRR456_metadata.xml",
+                },
+                {},
+            )
 
             result = _download_accessions_metadata(accessions, metadata_path, "test@example.com", 2)
 
         assert len(result) == 2
         assert "SRR123" in result
         assert "SRR456" in result
+        mock_download.assert_called_once_with(accessions, metadata_path, "test@example.com", None)
 
     def test_download_accessions_metadata_partial_failure(self, tmp_path):
         """Test handling partial download failures."""
@@ -281,8 +374,8 @@ class TestDownloadAccessionsMetadata:
 
         accessions = ["SRR123", "SRR456"]
 
-        with patch("metaquest.data.metadata._download_single_metadata") as mock_download:
-            mock_download.side_effect = [(True, metadata_path / "SRR123_metadata.xml"), (False, "Download failed")]
+        with patch("metaquest.data.metadata._download_batch_metadata") as mock_download:
+            mock_download.return_value = ({"SRR123": metadata_path / "SRR123_metadata.xml"}, {"SRR456": "not found"})
 
             with patch("metaquest.data.metadata.logger") as mock_logger:
                 result = _download_accessions_metadata(accessions, metadata_path, "test@example.com", 2)
@@ -291,6 +384,234 @@ class TestDownloadAccessionsMetadata:
         assert "SRR123" in result
         assert "SRR456" not in result
         mock_logger.error.assert_called()
+
+    def test_download_accessions_metadata_sets_entrez_email_and_api_key(self, tmp_path):
+        """Entrez.email and Entrez.api_key are set once before any batch is fetched."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+
+        with patch("metaquest.data.metadata._download_batch_metadata", return_value=({}, {})):
+            from metaquest.data.metadata import Entrez
+
+            _download_accessions_metadata(["SRR1"], metadata_path, "test@example.com", 1, api_key="my-key")
+            assert Entrez.email == "test@example.com"
+            assert Entrez.api_key == "my-key"
+
+            _download_accessions_metadata(["SRR1"], metadata_path, "test@example.com", 1, api_key=None)
+            assert Entrez.api_key is None
+
+    def test_download_accessions_metadata_batches_by_batch_size(self, tmp_path):
+        """5 accessions with batch_size=2 make 3 efetch calls (batches of 2, 2, 1)."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+        accessions = [f"SRR{i}" for i in range(5)]
+
+        with patch("metaquest.data.metadata._download_batch_metadata", return_value=({}, {})) as mock_download:
+            _download_accessions_metadata(accessions, metadata_path, "test@example.com", 5, batch_size=2)
+
+        assert mock_download.call_count == 3
+        called_batches = [c.args[0] for c in mock_download.call_args_list]
+        assert called_batches == [accessions[0:2], accessions[2:4], accessions[4:5]]
+
+
+class TestDownloadBatchMetadata:
+    """Test _download_batch_metadata: one efetch call per batch, split into per-accession files."""
+
+    def test_batch_of_three_with_shared_experiment_package(self, tmp_path):
+        """Three accessions in one response, two sharing a package with two RUNs: three files."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+
+        root = ET.Element("EXPERIMENT_PACKAGE_SET")
+        shared_package = ET.SubElement(root, "EXPERIMENT_PACKAGE")
+        run_set = ET.SubElement(shared_package, "RUN_SET")
+        for accession, spots, size in (("SRR1", "100", "1000"), ("SRR2", "150", "1500")):
+            run = ET.SubElement(run_set, "RUN", accession=accession, total_spots=spots, size=size)
+            ET.SubElement(ET.SubElement(run, "IDENTIFIERS"), "PRIMARY_ID").text = accession
+
+        solo_package = ET.SubElement(root, "EXPERIMENT_PACKAGE")
+        solo_run_set = ET.SubElement(solo_package, "RUN_SET")
+        solo_run = ET.SubElement(solo_run_set, "RUN", accession="SRR3", total_spots="300", size="3000")
+        ET.SubElement(ET.SubElement(solo_run, "IDENTIFIERS"), "PRIMARY_ID").text = "SRR3"
+
+        xml_text = ET.tostring(root, encoding="unicode")
+        mock_handle = MagicMock()
+        mock_handle.read.return_value = xml_text.encode()
+
+        with patch("metaquest.data.metadata.Entrez.efetch", return_value=mock_handle) as mock_efetch:
+            with patch("metaquest.data.metadata._pace_requests"):
+                successes, failures = _download_batch_metadata(
+                    ["SRR1", "SRR2", "SRR3"], metadata_path, "test@example.com", None
+                )
+
+        assert mock_efetch.call_count == 1
+        assert failures == {}
+        assert set(successes) == {"SRR1", "SRR2", "SRR3"}
+        for accession, spots, size in (("SRR1", "100", "1000"), ("SRR2", "150", "1500"), ("SRR3", "300", "3000")):
+            parsed = parse_metadata_xml(successes[accession])
+            assert parsed["Run_ID"] == accession
+            assert parsed["Run_Total_Spots"] == spots
+            assert parsed["Run_Size"] == size
+
+    def test_accession_missing_from_response_is_reported_failed(self, tmp_path):
+        """An accession NCBI doesn't return is a failure, and efetch was called only once."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+
+        xml_text = _package_xml([("SRR1", {"total_spots": "10"}), ("SRR2", {"total_spots": "20"})])
+        mock_handle = MagicMock()
+        mock_handle.read.return_value = xml_text.encode()
+
+        with patch("metaquest.data.metadata.Entrez.efetch", return_value=mock_handle) as mock_efetch:
+            with patch("metaquest.data.metadata._pace_requests"):
+                successes, failures = _download_batch_metadata(
+                    ["SRR1", "SRR2", "SRR4"], metadata_path, "test@example.com", None
+                )
+
+        assert mock_efetch.call_count == 1
+        assert set(successes) == {"SRR1", "SRR2"}
+        assert failures == {"SRR4": "not in the NCBI response"}
+
+    def test_404_on_batch_falls_back_to_single_calls(self, tmp_path):
+        """A 404 on a batch of more than one accession falls back to per-accession fetches."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+        batch = ["SRR1", "SRR2", "SRR3"]
+
+        def fake_efetch(**kwargs):
+            if "," in kwargs["id"]:
+                raise _http_error(404)
+            accession = kwargs["id"]
+            handle = MagicMock()
+            handle.read.return_value = _package_xml([(accession, {})]).encode()
+            return handle
+
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=fake_efetch) as mock_efetch:
+            with patch("metaquest.data.metadata.Entrez.email", "test@example.com"):
+                with patch("metaquest.data.metadata._pace_requests"):
+                    successes, failures = _download_batch_metadata(batch, metadata_path, "test@example.com", None)
+
+        assert failures == {}
+        assert set(successes) == set(batch)
+        # One batch call plus one call per accession in the fallback.
+        assert mock_efetch.call_count == 1 + len(batch)
+
+    def test_404_on_single_accession_batch_is_final(self, tmp_path):
+        """A 404 on a batch of exactly one accession is a final failure, not retried."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=_http_error(404)) as mock_efetch:
+            with patch("metaquest.data.metadata._pace_requests"):
+                with patch("time.sleep") as mock_sleep:
+                    successes, failures = _download_batch_metadata(["SRR1"], metadata_path, "test@example.com", None)
+
+        assert successes == {}
+        assert failures == {"SRR1": "HTTP 404: not found at NCBI"}
+        mock_efetch.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    def test_503_retried_three_times_then_fails(self, tmp_path):
+        """A 503 is retried with sleeps 2, 4, 8 and then fails the whole batch."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+        batch = ["SRR1", "SRR2"]
+
+        with patch("metaquest.data.metadata.Entrez.efetch", side_effect=_http_error(503)):
+            with patch("metaquest.data.metadata._pace_requests"):
+                with patch("time.sleep") as mock_sleep:
+                    successes, failures = _download_batch_metadata(batch, metadata_path, "test@example.com", None)
+
+        assert successes == {}
+        assert failures == {accession: "HTTP 503 after 3 attempts" for accession in batch}
+        assert mock_sleep.call_args_list == [call(2), call(4), call(8)]
+
+    def test_success_path_sleeps_only_through_pace_requests(self, tmp_path):
+        """The only sleep on the success path is the one _pace_requests issues."""
+        metadata_path = tmp_path / "metadata"
+        metadata_path.mkdir()
+
+        xml_text = _package_xml([("SRR1", {"total_spots": "10"})])
+        mock_handle = MagicMock()
+        mock_handle.read.return_value = xml_text.encode()
+
+        with patch("metaquest.data.metadata.Entrez.efetch", return_value=mock_handle):
+            with patch("metaquest.data.metadata._pace_requests") as mock_pace:
+                with patch("time.sleep") as mock_sleep:
+                    successes, failures = _download_batch_metadata(
+                        ["SRR1"], metadata_path, "test@example.com", "my-key"
+                    )
+
+        assert failures == {}
+        mock_pace.assert_called_once_with("my-key")
+        mock_sleep.assert_not_called()
+
+
+class TestSplitEfetchPackages:
+    """Test _split_efetch_packages directly."""
+
+    def test_splits_shared_package_into_independent_documents(self):
+        xml_text = _package_xml([("SRR1", {"total_spots": "10"}), ("SRR2", {"total_spots": "20"})])
+        result = _split_efetch_packages(xml_text, {"SRR1", "SRR2"})
+
+        assert set(result) == {"SRR1", "SRR2"}
+        for accession in ("SRR1", "SRR2"):
+            root = ET.fromstring(result[accession])
+            assert root.tag == "EXPERIMENT_PACKAGE_SET"
+            runs = root.findall(".//RUN")
+            assert len(runs) == 1
+            assert runs[0].get("accession") == accession
+
+    def test_ignores_accessions_not_in_wanted_set(self):
+        xml_text = _package_xml([("SRR1", {}), ("SRR2", {})])
+        result = _split_efetch_packages(xml_text, {"SRR1"})
+        assert set(result) == {"SRR1"}
+
+    def test_missing_accession_absent_from_result(self):
+        xml_text = _package_xml([("SRR1", {})])
+        result = _split_efetch_packages(xml_text, {"SRR1", "SRR9"})
+        assert set(result) == {"SRR1"}
+
+    def test_includes_xml_declaration(self):
+        xml_text = _package_xml([("SRR1", {})])
+        result = _split_efetch_packages(xml_text, {"SRR1"})
+        assert result["SRR1"].startswith("<?xml")
+
+
+class TestPaceRequests:
+    """Test _pace_requests: sleeps only enough to respect the per-key rate limit."""
+
+    def test_sleeps_remaining_delay_without_api_key(self):
+        import metaquest.data.metadata as metadata_module
+
+        with patch("metaquest.data.metadata.time.monotonic", side_effect=[100.1, 100.34]):
+            with patch("metaquest.data.metadata.time.sleep") as mock_sleep:
+                metadata_module._last_request_time = 100.0
+                _pace_requests(None)
+
+        mock_sleep.assert_called_once()
+        assert mock_sleep.call_args.args[0] == pytest.approx(0.24, abs=1e-6)
+
+    def test_sleeps_remaining_delay_with_api_key(self):
+        import metaquest.data.metadata as metadata_module
+
+        with patch("metaquest.data.metadata.time.monotonic", side_effect=[100.05, 100.1]):
+            with patch("metaquest.data.metadata.time.sleep") as mock_sleep:
+                metadata_module._last_request_time = 100.0
+                _pace_requests("my-key")
+
+        mock_sleep.assert_called_once()
+        assert mock_sleep.call_args.args[0] == pytest.approx(0.05, abs=1e-6)
+
+    def test_no_sleep_when_delay_already_elapsed(self):
+        import metaquest.data.metadata as metadata_module
+
+        with patch("metaquest.data.metadata.time.monotonic", side_effect=[101.0, 101.0]):
+            with patch("metaquest.data.metadata.time.sleep") as mock_sleep:
+                metadata_module._last_request_time = 100.0
+                _pace_requests(None)
+
+        mock_sleep.assert_not_called()
 
 
 class TestExtractMetadataFields:

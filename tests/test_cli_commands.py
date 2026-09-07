@@ -287,8 +287,9 @@ class TestDownloadMetadataCommand:
         assert "download" in command.help.lower()
         assert "metadata" in command.help.lower()
 
-    def test_configure_parser(self):
+    def test_configure_parser(self, monkeypatch):
         """Test parser configuration."""
+        monkeypatch.delenv("NCBI_API_KEY", raising=False)
         command = DownloadMetadataCommand()
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
@@ -300,6 +301,18 @@ class TestDownloadMetadataCommand:
         assert args.metadata_folder == "metadata"
         assert args.threshold == 0.0
         assert args.dry_run is False
+        assert args.api_key is None
+        assert args.batch_size == 200
+
+    def test_configure_parser_api_key_defaults_from_environment(self, monkeypatch):
+        """--api-key defaults to the NCBI_API_KEY environment variable."""
+        monkeypatch.setenv("NCBI_API_KEY", "env-key")
+        command = DownloadMetadataCommand()
+        parser = argparse.ArgumentParser()
+        command.configure_parser(parser)
+
+        args = parser.parse_args(["--email", "test@example.com"])
+        assert args.api_key == "env-key"
 
     def test_configure_parser_with_options(self):
         """Test parser with optional arguments."""
@@ -318,11 +331,17 @@ class TestDownloadMetadataCommand:
                 "--threshold",
                 "0.5",
                 "--dry-run",
+                "--api-key",
+                "cli-key",
+                "--batch-size",
+                "50",
             ]
         )
 
         assert args.threshold == 0.5
         assert args.dry_run is True
+        assert args.api_key == "cli-key"
+        assert args.batch_size == 50
 
     @patch("metaquest.cli.commands.metadata.download_metadata")
     def test_execute(self, mock_command, tmp_path):
@@ -337,6 +356,8 @@ class TestDownloadMetadataCommand:
             threshold=0.0,
             dry_run=False,
             accessions_file=None,
+            api_key=None,
+            batch_size=200,
             registry=str(tmp_path / "metaquest_registry.json"),
         )
 
@@ -349,6 +370,8 @@ class TestDownloadMetadataCommand:
             threshold=0.0,
             dry_run=False,
             accessions_file=None,
+            api_key=None,
+            batch_size=200,
         )
 
     def test_execute_records_metadata_in_registry(self, tmp_path):
@@ -365,15 +388,20 @@ class TestDownloadMetadataCommand:
             threshold=0.0,
             dry_run=False,
             accessions_file=str(accessions_file),
+            api_key=None,
+            batch_size=200,
             registry=str(tmp_path / "metaquest_registry.json"),
         )
 
-        def fake_download(accession, metadata_path, entrez_email):
-            xml_path = metadata_path / f"{accession}_metadata.xml"
-            xml_path.write_text("<root/>")
-            return True, xml_path
+        def fake_batch(batch, metadata_path, email, api_key):
+            successes = {}
+            for accession in batch:
+                xml_path = metadata_path / f"{accession}_metadata.xml"
+                xml_path.write_text("<root/>")
+                successes[accession] = xml_path
+            return successes, {}
 
-        with patch("metaquest.data.metadata._download_single_metadata", side_effect=fake_download):
+        with patch("metaquest.data.metadata._download_batch_metadata", side_effect=fake_batch):
             result = command.execute(args)
 
         assert result == 0
@@ -394,6 +422,8 @@ class TestDownloadMetadataCommand:
             threshold=0.0,
             dry_run=True,
             accessions_file=str(accessions_file),
+            api_key=None,
+            batch_size=200,
             registry=str(tmp_path / "metaquest_registry.json"),
         )
 
@@ -2460,6 +2490,8 @@ class TestDownloadMetadataSharesWithTheStore:
             threshold=0.0,
             dry_run=False,
             accessions_file=None,
+            api_key=None,
+            batch_size=200,
             registry=str(tmp_path / "metaquest_registry.json"),
             data_root=str(store_root) if store_root else None,
         )

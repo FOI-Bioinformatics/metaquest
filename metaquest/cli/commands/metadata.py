@@ -3,6 +3,7 @@ Metadata-related CLI commands.
 """
 
 import argparse
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Dict
@@ -62,6 +63,17 @@ class DownloadMetadataCommand(BaseCommand):
             default=None,
             help="File of accessions to fetch metadata for; replaces the matches folder scan",
         )
+        parser.add_argument(
+            "--api-key",
+            default=os.environ.get("NCBI_API_KEY"),
+            help="NCBI API key for a higher rate limit (default: the NCBI_API_KEY environment variable)",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=200,
+            help="Accessions per NCBI request, from 1 to 500 (default: 200)",
+        )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
 
@@ -94,6 +106,8 @@ class DownloadMetadataCommand(BaseCommand):
                 threshold=args.threshold,
                 dry_run=args.dry_run,
                 accessions_file=args.accessions_file,
+                api_key=args.api_key,
+                batch_size=args.batch_size,
             )
             if not args.dry_run and downloaded:
                 registry = load_registry(args.registry)

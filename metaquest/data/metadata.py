@@ -4,16 +4,18 @@ Metadata handling for MetaQuest.
 This module provides functions for downloading and processing metadata from NCBI.
 """
 
+import copy
 import logging
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import time
 import pandas as pd
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from Bio import Entrez
 from lxml import etree
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.core.validation import validate_folder
@@ -23,6 +25,80 @@ logger = logging.getLogger(__name__)
 
 # Maximum number of retries for failed downloads
 MAX_RETRIES = 3
+
+# Maximum accessions per single Entrez.efetch call; NCBI's own guidance caps URL-based
+# id lists well below this, so this is a defensive ceiling rather than a tuned optimum.
+MAX_BATCH_SIZE = 500
+
+# Minimum seconds between successive NCBI requests, without and with an API key
+# (NCBI allows roughly 3 requests/second without a key and 10/second with one).
+_RATE_LIMIT_DELAY_NO_KEY = 0.34
+_RATE_LIMIT_DELAY_WITH_KEY = 0.1
+
+# Monotonic timestamp of the previous NCBI request, module-level so pacing holds across
+# batches within one process.
+_last_request_time = 0.0
+
+
+def _pace_requests(api_key: Optional[str]) -> None:
+    """Sleep only long enough to respect NCBI's rate limit since the previous request.
+
+    This replaces a flat per-accession sleep: batching already cuts the number of requests,
+    so the only sleep left on the success path is the minimum gap NCBI expects between calls.
+    """
+    global _last_request_time
+    delay = _RATE_LIMIT_DELAY_WITH_KEY if api_key else _RATE_LIMIT_DELAY_NO_KEY
+    elapsed = time.monotonic() - _last_request_time
+    if elapsed < delay:
+        time.sleep(delay - elapsed)
+    _last_request_time = time.monotonic()
+
+
+def _write_metadata_file(metadata_path: Path, accession: str, content: str) -> Path:
+    """Write one accession's metadata XML atomically (temp name, then ``os.replace``)."""
+    target = metadata_path / f"{accession}_metadata.xml"
+    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+    tmp.write_text(content)
+    os.replace(tmp, target)
+    return target
+
+
+def _split_efetch_packages(xml_text: str, wanted: Set[str]) -> Dict[str, str]:
+    """Split a multi-accession efetch response into one XML document per wanted run accession.
+
+    NCBI's batched efetch response is one ``EXPERIMENT_PACKAGE_SET`` holding one
+    ``EXPERIMENT_PACKAGE`` per experiment; a package's ``RUN_SET`` can carry more than one
+    ``RUN`` when several requested accessions share an experiment. For each wanted run, this
+    returns a deep copy of its package whose ``RUN_SET`` keeps only that run, wrapped back in
+    an ``EXPERIMENT_PACKAGE_SET`` with an XML declaration, so the result parses exactly like
+    today's single-accession response (``parse_metadata_xml`` / ``_extract_metadata_fields``
+    read ``.//RUN`` and its attributes unchanged).
+
+    Returns ``{accession: xml_string}`` for the wanted accessions actually found; accessions
+    absent from the response are simply missing from the result.
+    """
+    root = ET.fromstring(xml_text)
+    found: Dict[str, str] = {}
+
+    for package in root.findall("EXPERIMENT_PACKAGE"):
+        for run_element in package.findall(".//RUN"):
+            accession = run_element.get("accession")
+            if not accession or accession not in wanted or accession in found:
+                continue
+
+            package_copy = copy.deepcopy(package)
+            run_set = package_copy.find("RUN_SET")
+            if run_set is not None:
+                for run in list(run_set.findall("RUN")):
+                    if run.get("accession") != accession:
+                        run_set.remove(run)
+
+            package_set = ET.Element("EXPERIMENT_PACKAGE_SET")
+            package_set.append(package_copy)
+            xml_bytes = ET.tostring(package_set, encoding="UTF-8", xml_declaration=True)
+            found[accession] = xml_bytes.decode("utf-8")
+
+    return found
 
 
 def _get_unique_accessions(matches_folder, threshold):
@@ -80,54 +156,55 @@ def _read_accessions_file(path: Union[str, Path]) -> List[str]:
     return [ln.strip() for ln in Path(path).read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
 
 
-def _download_single_metadata(accession, metadata_path, entrez_email):
+def _download_single_metadata(
+    accession: str, metadata_path: Path, entrez_email: str, api_key: Optional[str] = None
+) -> Tuple[bool, Any]:
     """
     Download metadata for a single accession.
+
+    Used both directly (one accession requested on its own) and as the fallback path when a
+    batch response is rejected outright and each of its accessions must be re-fetched alone.
 
     Args:
         accession: SRA accession
         metadata_path: Path to save metadata
         entrez_email: Email for NCBI API
+        api_key: Optional NCBI API key, for the pacing delay and higher rate limits
 
     Returns:
-        Tuple of (success, path or error)
+        Tuple of (success, path or error message)
     """
-    metadata_file = metadata_path / f"{accession}_metadata.xml"
-    retries = 0
-    max_retries = 3
+    # Bio.Entrez's email/api_key module attributes default to None with no annotation, so mypy
+    # infers their type as exactly None; these assignments are the documented Biopython usage.
+    Entrez.email = entrez_email  # type: ignore[assignment]
+    Entrez.api_key = api_key  # type: ignore[assignment]
 
-    while retries < max_retries:
+    last_error_message = f"Failed after {MAX_RETRIES} attempts"
+
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
+            _pace_requests(api_key)
             logger.info(f"Downloading metadata for {accession}")
-
-            # Fetch metadata from NCBI
-            Entrez.email = entrez_email
             handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
             try:
                 metadata = handle.read().decode()
             finally:
                 handle.close()
-
-            # Save metadata to file
-            with open(metadata_file, "w") as f:
-                f.write(metadata)
-
-            # Be nice to NCBI servers
-            time.sleep(0.5)
-
-            return True, metadata_file
+            return True, _write_metadata_file(metadata_path, accession, metadata)
 
         except HTTPError as e:
-            retries += 1
-            logger.warning(f"Error downloading {accession}, retrying ({retries}/{max_retries}): {e}")
-            time.sleep(2**retries)  # Exponential backoff
+            if e.code in (400, 404):
+                return False, f"HTTP {e.code}: not found at NCBI"
+            last_error_message = f"HTTP {e.code} after {MAX_RETRIES} attempts"
+            logger.warning(f"Error downloading {accession}, retrying ({attempt}/{MAX_RETRIES}): {e}")
+            time.sleep(2**attempt)
 
-        except Exception as e:
-            retries += 1
-            logger.warning(f"Error downloading {accession}, retrying ({retries}/{max_retries}): {e}")
-            time.sleep(2**retries)
+        except (URLError, OSError) as e:
+            last_error_message = str(e)
+            logger.warning(f"Error downloading {accession}, retrying ({attempt}/{MAX_RETRIES}): {e}")
+            time.sleep(2**attempt)
 
-    return False, f"Failed after {max_retries} retries"
+    return False, last_error_message
 
 
 def download_metadata(
@@ -137,9 +214,14 @@ def download_metadata(
     threshold: float = 0.0,
     dry_run: bool = False,
     accessions_file: Optional[Union[str, Path]] = None,
+    api_key: Optional[str] = None,
+    batch_size: int = 200,
 ) -> Dict[str, Path]:
     """
     Download metadata for SRA accessions found in match files, or from an explicit list.
+
+    Accessions are fetched from NCBI in batches (one ``Entrez.efetch`` call per batch) rather
+    than one request per accession, which is both faster and gentler on NCBI's rate limits.
 
     Args:
         email: Email address for NCBI API
@@ -149,13 +231,19 @@ def download_metadata(
         dry_run: If True, only count accessions without downloading
         accessions_file: When given, the wanted accessions come from this file's
             non-empty, non-comment lines and the matches folder is not read.
+        api_key: Optional NCBI API key; raises the rate limit and is used for every request.
+        batch_size: Accessions per ``Entrez.efetch`` call, from 1 to 500.
 
     Returns:
         Dictionary mapping accessions to metadata file paths
 
     Raises:
+        ValueError: If batch_size is outside 1 to 500.
         DataAccessError: If the download fails
     """
+    if not 1 <= batch_size <= MAX_BATCH_SIZE:
+        raise ValueError(f"batch_size must be between 1 and {MAX_BATCH_SIZE}, got {batch_size}")
+
     try:
         metadata_path = ensure_directory(metadata_folder)
 
@@ -182,45 +270,130 @@ def download_metadata(
             logger.info("Dry run, not downloading metadata")
             return {}
 
-        # Download metadata for each accession
-        return _download_accessions_metadata(accessions_to_download, metadata_path, email, to_download_count)
+        # Download metadata for each accession, in batches
+        return _download_accessions_metadata(
+            accessions_to_download, metadata_path, email, to_download_count, api_key=api_key, batch_size=batch_size
+        )
 
     except Exception as e:
         raise DataAccessError(f"Error downloading metadata: {e}")
 
 
-def _download_accessions_metadata(accessions_to_download, metadata_path, email, total_count):
+def _download_accessions_individually(
+    batch: List[str], metadata_path: Path, email: str, api_key: Optional[str]
+) -> Tuple[Dict[str, Path], Dict[str, str]]:
+    """Fetch each accession in ``batch`` with its own ``efetch`` call.
+
+    Used when a batched request comes back rejected outright (NCBI does not recognize one of
+    the accessions in it), so each accession is re-tried on its own to isolate the bad one.
     """
-    Download metadata for multiple accessions.
+    successes: Dict[str, Path] = {}
+    failures: Dict[str, str] = {}
+    for accession in batch:
+        success, result = _download_single_metadata(accession, metadata_path, email, api_key)
+        if success:
+            successes[accession] = result
+        else:
+            failures[accession] = result
+    return successes, failures
+
+
+def _download_batch_metadata(
+    batch: List[str], metadata_path: Path, email: str, api_key: Optional[str]
+) -> Tuple[Dict[str, Path], Dict[str, str]]:
+    """Fetch one batch of accessions with a single ``efetch`` call and split the response.
+
+    Args:
+        batch: Accessions to fetch together, joined into one comma-separated ``id`` parameter.
+        metadata_path: Folder to write each accession's split-out XML file into.
+        email: Email for NCBI API, forwarded to the single-accession fallback.
+        api_key: Optional NCBI API key, forwarded to the pacing helper.
+
+    Returns:
+        Tuple of (``{accession: path}`` for successes, ``{accession: reason}`` for failures).
+    """
+    wanted = set(batch)
+    id_string = ",".join(batch)
+    last_failures = {accession: f"Failed after {MAX_RETRIES} attempts" for accession in batch}
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            _pace_requests(api_key)
+            logger.info(f"Downloading metadata for {len(batch)} accession(s)")
+            handle = Entrez.efetch(db="sra", id=id_string, retmode="xml")
+            try:
+                xml_text = handle.read().decode()
+            finally:
+                handle.close()
+
+            packages = _split_efetch_packages(xml_text, wanted)
+            successes = {
+                accession: _write_metadata_file(metadata_path, accession, packages[accession])
+                for accession in batch
+                if accession in packages
+            }
+            failures = {accession: "not in the NCBI response" for accession in batch if accession not in packages}
+            return successes, failures
+
+        except HTTPError as e:
+            if e.code in (400, 404):
+                if len(batch) > 1:
+                    return _download_accessions_individually(batch, metadata_path, email, api_key)
+                return {}, {batch[0]: f"HTTP {e.code}: not found at NCBI"}
+            if e.code == 429 or 500 <= e.code < 600:
+                last_failures = {accession: f"HTTP {e.code} after {MAX_RETRIES} attempts" for accession in batch}
+                logger.warning(f"Error fetching batch, retrying ({attempt}/{MAX_RETRIES}): {e}")
+                time.sleep(2**attempt)
+                continue
+            return {}, {accession: f"HTTP {e.code}: {e.reason}" for accession in batch}
+
+        except (URLError, OSError) as e:
+            last_failures = {accession: str(e) for accession in batch}
+            logger.warning(f"Error fetching batch, retrying ({attempt}/{MAX_RETRIES}): {e}")
+            time.sleep(2**attempt)
+
+    return {}, last_failures
+
+
+def _download_accessions_metadata(
+    accessions_to_download: List[str],
+    metadata_path: Path,
+    email: str,
+    total_count: int,
+    api_key: Optional[str] = None,
+    batch_size: int = 200,
+) -> Dict[str, Path]:
+    """
+    Download metadata for multiple accessions, fetched in batches.
 
     Args:
         accessions_to_download: List of accessions to download
         metadata_path: Path to save metadata
         email: Email for NCBI API
         total_count: Total number of accessions to download
+        api_key: Optional NCBI API key
+        batch_size: Accessions per ``Entrez.efetch`` call
 
     Returns:
-        Dictionary mapping accessions to metadata file paths
+        Dictionary mapping accessions to metadata file paths, for successes only.
     """
-    result_files = {}
-    downloaded_count = 0
-    failed_count = 0
+    # See the note on _download_single_metadata about Bio.Entrez's None-typed attributes.
+    Entrez.email = email  # type: ignore[assignment]
+    Entrez.api_key = api_key  # type: ignore[assignment]
 
-    for accession in accessions_to_download:
-        success, result = _download_single_metadata(accession, metadata_path, email)
+    result_files: Dict[str, Path] = {}
+    failures: Dict[str, str] = {}
+    batches = [accessions_to_download[i : i + batch_size] for i in range(0, len(accessions_to_download), batch_size)]
 
-        if success:
-            result_files[accession] = result
-            downloaded_count += 1
+    for batch in batches:
+        batch_successes, batch_failures = _download_batch_metadata(batch, metadata_path, email, api_key)
+        result_files.update(batch_successes)
+        failures.update(batch_failures)
 
-            # Log progress periodically
-            if downloaded_count % 10 == 0:
-                logger.info(f"Downloaded {downloaded_count}/{total_count}")
-        else:
-            failed_count += 1
-            logger.error(f"Failed to download {accession}: {result}")
+    logger.info(f"Fetched {len(batches)} batches: {len(result_files)} metadata files, {len(failures)} failures")
+    for accession, reason in failures.items():
+        logger.error(f"Failed to download {accession}: {reason}")
 
-    logger.info(f"Downloaded {downloaded_count} metadata files with {failed_count} failures")
     return result_files
 
 
