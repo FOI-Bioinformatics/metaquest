@@ -1,6 +1,7 @@
 """Tests for targeted read extraction (metaquest.data.read_extraction)."""
 
 import gzip
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -9,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from metaquest.core.exceptions import DataAccessError, ProcessingError
+from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
 from metaquest.data.read_extraction import (
     ExtractionResult,
     _run_minimap2,
@@ -283,10 +284,61 @@ class TestBuildIndex:
         with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
             first = build_index(genome, "sr", index_dir)
             assert len(state["calls"]) == 1
-            assert state["calls"][0] == ("minimap2", ["-x", "sr", "-d", str(first), str(genome)])
+            executable, args = state["calls"][0]
+            assert executable == "minimap2"
+            # Built under a temporary name and moved into place, so a concurrent run never
+            # reads a half-written index.
+            assert args[:3] == ["-x", "sr", "-d"]
+            assert args[3].startswith(f"{first}.tmp.")
+            assert args[4] == str(genome)
+            assert first.is_file()
             again = build_index(genome, "sr", index_dir)
         assert again == first
         assert len(state["calls"]) == 1  # the FASTA has not changed, so the index is reused
+        assert not list(index_dir.glob("*.tmp.*"))
+
+    def test_index_rebuilt_for_a_different_genome_with_the_same_name(self, tmp_path):
+        """Two genome files can share a stem, so the index is keyed on the FASTA's identity.
+
+        The second FASTA deliberately carries an older mtime, which is what a copy restored
+        from a tarball or moved with ``cp -p`` looks like; an mtime comparison alone would
+        map it against the first genome's index.
+        """
+        old = tmp_path / "genomes_v1" / "wMel.fna"
+        new = tmp_path / "genomes_v2" / "wMel.fna"
+        old.parent.mkdir(parents=True)
+        new.parent.mkdir(parents=True)
+        old.write_text(">old\nAAAACCCC\n")
+        new.write_text(">new\nCCCC\n")
+        past = old.stat().st_mtime - 3600
+        os.utime(new, (past, past))
+
+        index_dir = tmp_path / ".index"
+        state = {}
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+            first = build_index(old, "sr", index_dir)
+            second = build_index(new, "sr", index_dir)
+
+        assert first == second  # same stem, so the same index path
+        assert len([c for c in state["calls"] if "-d" in c[1]]) == 2
+        record = json.loads(index_dir.joinpath("wMel.sr.mmi.json").read_text())
+        assert record["fasta"] == str(new.resolve())
+
+    def test_a_failed_build_leaves_no_index(self, tmp_path):
+        genome = tmp_path / "g.fna"
+        genome.write_text(">s\nACGT\n")
+        index_dir = tmp_path / ".index"
+
+        def failing_build(executable, args, **kwargs):
+            Path(args[args.index("-d") + 1]).write_bytes(b"half")  # a partial index
+            raise SecurityError("minimap2 refused the command")
+
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=failing_build):
+            with pytest.raises(SecurityError):
+                build_index(genome, "sr", index_dir)
+
+        assert not (index_dir / "g.sr.mmi").exists()
+        assert not list(index_dir.glob("*.tmp.*"))
 
     def test_index_rebuilt_when_fasta_touched_newer(self, tmp_path):
         genome = tmp_path / "g.fna"

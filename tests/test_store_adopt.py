@@ -18,10 +18,16 @@ def _write_fastq(path: Path, text: str = "@r\nACGT\n+\nIIII\n") -> None:
     path.write_text(text)
 
 
-def _write_fastq_gz(path: Path, text: str = "@r\nACGT\n+\nIIII\n") -> None:
+def _write_fastq_gz(path: Path, text: str = "@r\nACGT\n+\nIIII\n", mtime: int = 0) -> None:
+    """Write ``text`` gzipped, with a fixed header timestamp by default.
+
+    ``gzip.open`` stamps the current wall-clock second into the gzip header, so two calls
+    that straddle a second boundary produce different bytes for identical reads. Pinning
+    ``mtime`` keeps a test's two copies byte-identical unless it asks for otherwise.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(path, "wt") as handle:
-        handle.write(text)
+    with gzip.GzipFile(path, "wb", mtime=mtime) as handle:
+        handle.write(text.encode())
 
 
 class TestAdoptFresh:
@@ -123,9 +129,9 @@ class TestAdoptFresh:
 
 
 class TestAdoptDedupAndConflict:
-    def _seed_store_dataset(self, paths, accession, text="@r\nACGT\n+\nIIII\n"):
+    def _seed_store_dataset(self, paths, accession, text="@r\nACGT\n+\nIIII\n", mtime=0):
         acc_dir = sra_dir(paths, accession)
-        _write_fastq_gz(acc_dir / f"{accession}.fastq.gz", text)
+        _write_fastq_gz(acc_dir / f"{accession}.fastq.gz", text, mtime=mtime)
         sidecar = build_sidecar(accession, acc_dir, {}, "adopted", "gzip")
         write_sidecar(sidecar_path(paths, accession), sidecar)
         with catalog_write(paths) as cat:
@@ -144,6 +150,24 @@ class TestAdoptDedupAndConflict:
 
         assert report.deduplicated == ["SRR1"]
         assert report.adopted == []
+        assert (project_fastq / "SRR1").is_symlink()
+
+    def test_same_reads_gzipped_at_different_times_are_deduplicated(self, tmp_path):
+        """Two gzip copies of the same reads differ in raw bytes: the header carries the
+        compression time and the original file name, and a different compressor or level
+        changes the body too. Two projects that each compressed the same download are a
+        duplicate, not a conflict.
+        """
+        paths = init_store(tmp_path / "store")
+        self._seed_store_dataset(paths, "SRR1", mtime=1_000_000_000)
+
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq_gz(project_fastq / "SRR1" / "SRR1.fastq.gz", mtime=1_000_000_001)
+
+        report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.deduplicated == ["SRR1"]
+        assert report.conflicts == []
         assert (project_fastq / "SRR1").is_symlink()
 
     def test_identical_content_dedups_across_differing_compression(self, tmp_path):

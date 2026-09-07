@@ -5,6 +5,7 @@ re-parsing every read on its own.
 """
 
 import gzip
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -189,6 +190,126 @@ class TestStoreStats:
     def test_noop_when_sidecar_file_missing(self, tmp_path):
         store_stats(tmp_path / "missing.json", {"reads_total": 1})
         assert not (tmp_path / "missing.json").exists()
+
+
+class TestStoreStatsConcurrency:
+    """A statistics write must not clobber what another project published meanwhile."""
+
+    def _store_sidecar(self, tmp_path, state="partial"):
+        """A store rooted at ``tmp_path/store`` holding one accession's sidecar."""
+        from metaquest.store.layout import init_store, sidecar_path as dataset_sidecar_path, sra_dir
+
+        paths = init_store(tmp_path / "store")
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        path = dataset_sidecar_path(paths, "SRR1")
+        write_sidecar(path, Sidecar(accession="SRR1", state=state))
+        return paths, path
+
+    def test_a_concurrent_state_change_survives_the_statistics_write(self, tmp_path):
+        """A statistics write only replaces the two statistics fields.
+
+        Computing the record takes seconds to minutes on a real dataset. Whatever another
+        project published for the same accession in that time -- a completed re-download,
+        with its new state and file list -- is still there afterwards.
+        """
+        _, sidecar_path = self._store_sidecar(tmp_path, state="partial")
+
+        published = read_sidecar(sidecar_path)  # another project re-downloads and publishes
+        published.state = "complete"
+        published.files = [{"name": "SRR1_1.fastq", "bytes": 1, "md5": "x", "reads": 48000000}]
+        write_sidecar(sidecar_path, published)
+
+        store_stats(sidecar_path, {"reads_total": 1, "signature": {}})
+
+        after = read_sidecar(sidecar_path)
+        assert after.state == "complete"
+        assert [f["name"] for f in after.files] == ["SRR1_1.fastq"]
+        assert after.stats["reads_total"] == 1
+
+    def test_the_lock_is_held_across_the_read_and_the_write(self, tmp_path, monkeypatch):
+        """Another sidecar writer is excluded for the whole read-modify-write.
+
+        That exclusion is what stops a concurrent publish being overwritten: without it, a
+        download or ``store_verify --fix-state`` running under the same lock could write
+        between this function's read and its write.
+        """
+        from metaquest.core.exceptions import DataAccessError
+        from metaquest.store import locks as locks_module
+        from metaquest.store import stats as stats_module
+        from metaquest.store.locks import dataset_lock
+
+        paths, sidecar_path = self._store_sidecar(tmp_path)
+        monkeypatch.setattr(locks_module, "LOCK_POLL_SECONDS", 0.001)
+        observed = {}
+        real_write = stats_module._write_stats
+
+        def write_while_another_writer_tries(path, stats):
+            try:
+                with dataset_lock(paths, "SRR1", wait_seconds=0.002):
+                    observed["other_writer"] = "acquired the lock"
+            except DataAccessError:
+                observed["other_writer"] = "blocked"
+            real_write(path, stats)
+
+        with patch.object(stats_module, "_write_stats", side_effect=write_while_another_writer_tries):
+            store_stats(sidecar_path, {"reads_total": 7, "signature": {}})
+
+        assert observed["other_writer"] == "blocked"
+        assert read_sidecar(sidecar_path).stats["reads_total"] == 7
+
+    def test_the_write_takes_the_dataset_lock(self, tmp_path):
+        from metaquest.store import stats as stats_module
+
+        paths, sidecar_path = self._store_sidecar(tmp_path)
+        held = []
+
+        def record_lock(lock_paths, accession, wait_seconds=0.0):
+            held.append((lock_paths.root, accession, wait_seconds))
+            return nullcontext(tmp_path)
+
+        with patch.object(stats_module, "dataset_lock", side_effect=record_lock):
+            store_stats(sidecar_path, {"reads_total": 7, "signature": {}})
+
+        assert held == [(paths.root, "SRR1", stats_module.STATS_LOCK_WAIT_SECONDS)]
+        assert read_sidecar(sidecar_path).stats["reads_total"] == 7
+
+    def test_a_locked_dataset_skips_the_cache_with_a_warning(self, tmp_path, caplog, monkeypatch):
+        """A download holding the lock for hours must not stall the analysis that asked for
+        the statistics: the record is simply not cached this time."""
+        import logging
+
+        from metaquest.store import locks as locks_module
+        from metaquest.store.layout import lock_path
+
+        paths, sidecar_path = self._store_sidecar(tmp_path)
+        lock_path(paths, "SRR1").write_text('{"pid": 999, "host": "other-host", "started": "now"}')
+
+        monkeypatch.setattr(locks_module, "LOCK_POLL_SECONDS", 0.01)
+        monkeypatch.setattr("metaquest.store.stats.STATS_LOCK_WAIT_SECONDS", 0.02)
+
+        with caplog.at_level(logging.WARNING):
+            store_stats(sidecar_path, {"reads_total": 7, "signature": {}})
+
+        assert read_sidecar(sidecar_path).stats == {}
+        assert "Not caching statistics for SRR1" in caplog.text
+        assert "other-host" in caplog.text
+
+    def test_a_sidecar_outside_a_store_is_written_without_a_lock(self, tmp_path):
+        """A sidecar beside a plain project folder has no store lock directory to use."""
+        from metaquest.store import stats as stats_module
+
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        sidecar_path = acc_dir / "SRR1.json"
+        write_sidecar(sidecar_path, Sidecar(accession="SRR1"))
+
+        with patch.object(stats_module, "dataset_lock") as lock:
+            store_stats(sidecar_path, {"reads_total": 3, "signature": {}})
+
+        lock.assert_not_called()
+        assert read_sidecar(sidecar_path).stats["reads_total"] == 3
 
 
 class TestSeqkitPath:

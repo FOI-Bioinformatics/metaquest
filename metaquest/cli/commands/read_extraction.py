@@ -10,6 +10,7 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     ExtractionResult,
+    _record_matches,
     _sample_reads,
     assemble_extracted_reads,
     assembly_coverage,
@@ -32,10 +33,24 @@ from metaquest.data.registry import (
     upsert_dataset,
 )
 from metaquest.data.sra import count_fastq_reads
+from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
+from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
 from metaquest.utils.security import missing_tools
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type for --min-mapq: a mapping quality is never negative.
+
+    Without this, ``--min-mapq -5`` reaches samtools as ``-q -5``, where the security layer
+    rejects ``-5`` as an unknown flag only after minimap2 has already run.
+    """
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"--min-mapq must be zero or a positive integer, got {value!r}")
+    return parsed
 
 
 class ExtractTargetReadsCommand(BaseCommand):
@@ -75,7 +90,7 @@ class ExtractTargetReadsCommand(BaseCommand):
         parser.add_argument("--threads", type=int, default=4, help="Threads for minimap2 and samtools")
         parser.add_argument(
             "--min-mapq",
-            type=int,
+            type=_non_negative_int,
             default=0,
             help=(
                 "Minimum mapping quality kept, in addition to dropping secondary/supplementary "
@@ -144,39 +159,108 @@ class ExtractTargetReadsCommand(BaseCommand):
         cannot be reached is a warning, not a reason to stop."""
         return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
 
+    @staticmethod
+    def _mate_signature(reads: List[Path]) -> List[List[Any]]:
+        """``[[name, size bytes, mtime], ...]`` for the mate files a count was taken from."""
+        signature = []
+        for path in reads:
+            stat = path.stat()
+            signature.append([path.name, stat.st_size, stat.st_mtime])
+        return signature
+
+    def _counts_from_store(self, accession: str, reads: List[Path]) -> Optional[Tuple[int, int]]:
+        """The mate counts from the dataset's shared statistics record, when it has one.
+
+        The record is size/mtime invalidated against the files on disk, so unlike the
+        registry's own copy it cannot describe a download that has since been replaced.
+        """
+        acc_dir = reads[0].parent
+        cached = cached_stats(acc_dir, _resolved_sidecar_path(acc_dir))
+        reads_per_file = (cached or {}).get("reads_per_file") or {}
+        first, second = (reads_per_file.get(path.name) for path in reads)
+        if first is None or second is None:
+            return None
+        return int(first), int(second)
+
+    def _cached_registry_counts(
+        self, registry: Registry, accession: str, reads: List[Path]
+    ) -> Optional[Tuple[int, int]]:
+        """The registry's recorded mate pair, but only while it still describes these files.
+
+        The pair is stored with a signature of the files it was counted from. A sample
+        re-downloaded since (``--resume-partial`` completing a truncated pair) no longer
+        matches, and the stale pair is ignored: an unequal pair would otherwise force
+        single-end mapping of a now-complete paired run.
+        """
+        download = registry.datasets.get(accession, {}).get("download") or {}
+        cached = download.get("mate_reads")
+        if cached is None or len(cached) != 2:
+            return None
+        if download.get("mate_reads_signature") != self._mate_signature(reads):
+            self.logger.debug("%s: the recorded mate counts no longer match the files on disk", accession)
+            return None
+        return int(cached[0]), int(cached[1])
+
     def _mate_counts(
         self, args: argparse.Namespace, registry: Registry, selected: List[str]
     ) -> Dict[str, Tuple[int, int]]:
         """Accession -> (mate 1 reads, mate 2 reads) for every selected sample with both mate
         files present on disk.
 
-        A pair already recorded on the registry's download entry (``download.mate_reads``,
-        from an earlier run) is reused as is; otherwise the files are counted now and the
-        pair is cached there so a later run does not recount them. Counting is best-effort:
-        a file that cannot be read (e.g. corrupted, or not really gzip despite its name) is
-        logged and skipped rather than stopping the extraction.
+        The counts come from the dataset's shared statistics record when it has one, then
+        from the registry's own recorded pair while its file signature still matches, and
+        otherwise from counting the files now, which is recorded with a signature so a later
+        run does not recount them. Counting is best-effort: a file that cannot be read (e.g.
+        corrupted, or not really gzip despite its name) is logged and skipped rather than
+        stopping the extraction.
         """
         counts: Dict[str, Tuple[int, int]] = {}
         for accession in selected:
-            download = registry.datasets.get(accession, {}).get("download") or {}
-            cached = download.get("mate_reads")
-            if cached is not None and len(cached) == 2:
-                counts[accession] = (int(cached[0]), int(cached[1]))
-                continue
             reads = _sample_reads(Path(args.fastq_folder), accession)
             if len(reads) != 2:
                 continue
             try:
-                n1, n2 = count_fastq_reads(reads[0]), count_fastq_reads(reads[1])
+                pair = self._counts_from_store(accession, reads) or self._cached_registry_counts(
+                    registry, accession, reads
+                )
+                if pair is not None:
+                    counts[accession] = pair
+                    continue
+                signature = self._mate_signature(reads)
+                pair = (count_fastq_reads(reads[0]), count_fastq_reads(reads[1]))
             except Exception as e:
                 self.logger.warning(
                     "Could not count reads in %s's mate files (%s); skipping the pre-count", accession, e
                 )
                 continue
-            counts[accession] = (n1, n2)
+            counts[accession] = pair
             with registry_transaction(args.registry) as reg:
-                upsert_dataset(reg, accession).setdefault("download", {"attempts": 0})["mate_reads"] = [n1, n2]
+                download = upsert_dataset(reg, accession).setdefault("download", {"attempts": 0})
+                download["mate_reads"] = [pair[0], pair[1]]
+                download["mate_reads_signature"] = signature
         return counts
+
+    def _samples_needing_mate_counts(
+        self, selected: List[str], already_done: Dict[str, Any], truncated: Dict[str, Any], args: argparse.Namespace
+    ) -> List[str]:
+        """The selected samples that will really be mapped, so only their mates are counted.
+
+        Counting reads both mate files of a sample, which is a streaming pass over every
+        byte; doing it for a sample that is about to be skipped as already extracted or as a
+        truncated download is pure cost.
+        """
+        genome_path = Path(args.genome_fasta)
+
+        def will_be_skipped(accession: str) -> bool:
+            record = already_done.get(accession)
+            done = (
+                record is not None
+                and not args.force
+                and _record_matches(record, genome_path, args.preset, args.threshold)
+            )
+            return done or (accession in truncated and not args.allow_truncated)
+
+        return [accession for accession in selected if not will_be_skipped(accession)]
 
     @staticmethod
     def _truncated_downloads(registry: Registry) -> Dict[str, Dict[str, Any]]:
@@ -362,11 +446,13 @@ class ExtractTargetReadsCommand(BaseCommand):
                 if (rec := self._resolved_extraction_record(registry, acc, args.genome_id)) is not None
             }
 
+            truncated_downloads = self._truncated_downloads(registry)
+
             mate_counts: Dict[str, Any] = {}
             if not args.dry_run:
                 selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
-                mate_counts = self._mate_counts(args, registry, selected)
-            truncated_downloads = self._truncated_downloads(registry)
+                to_count = self._samples_needing_mate_counts(selected, already_done, truncated_downloads, args)
+                mate_counts = self._mate_counts(args, registry, to_count)
 
             results = extract_target_reads(
                 parsed_containment=args.parsed_containment,

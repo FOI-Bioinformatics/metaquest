@@ -820,6 +820,135 @@ class TestExtractTargetReadsCommand:
             assert rc == 0
             data = json.loads(registry_file.read_text())
         assert data["datasets"]["SRR1"]["download"]["mate_reads"] == [3, 3]
+        signature = data["datasets"]["SRR1"]["download"]["mate_reads_signature"]
+        assert [entry[0] for entry in signature] == ["SRR1_1.fastq.gz", "SRR1_2.fastq.gz"]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_recounts_mates_after_the_files_change(self, mock_run):
+        """A pair counted from a truncated download must not survive the re-download that
+        fixed it: an unequal stale pair would force single-end mapping of a complete pair."""
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _gzip_tree(tmp, mate1_reads=3, mate2_reads=3)
+            registry_file = root / "registry.json"
+            registry = load_registry(registry_file)
+            # What an earlier run recorded from the truncated copy of these files.
+            registry.datasets["SRR1"] = {
+                "download": {
+                    "attempts": 1,
+                    "mate_reads": [10, 9],
+                    "mate_reads_signature": [["SRR1_1.fastq.gz", 1, 1.0], ["SRR1_2.fastq.gz", 1, 1.0]],
+                }
+            }
+            save_registry(registry)
+
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+
+        assert data["datasets"]["SRR1"]["download"]["mate_reads"] == [3, 3]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_reuses_the_store_statistics_record_for_the_mate_counts(self, mock_run):
+        """A store-backed accession already has exact per-file read counts; the mate pre-count
+        reuses them instead of streaming both files again."""
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+        from metaquest.store.stats import compute_dataset_stats
+
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _gzip_tree(tmp, mate1_reads=3, mate2_reads=3)
+            store_acc_dir = root / "store" / "sra" / "SRR1"
+            store_acc_dir.mkdir(parents=True)
+            project_acc_dir = root / "fastq" / "SRR1"
+            for path in sorted(project_acc_dir.iterdir()):
+                path.rename(store_acc_dir / path.name)
+            project_acc_dir.rmdir()
+            project_acc_dir.symlink_to(store_acc_dir)
+
+            record = compute_dataset_stats(sorted(store_acc_dir.iterdir()), use_seqkit=False)
+            write_sidecar(store_acc_dir / "SRR1.json", Sidecar(accession="SRR1", stats=record))
+
+            registry_file = root / "registry.json"
+            with patch("metaquest.cli.commands.read_extraction.count_fastq_reads") as counted:
+                rc = cmd.execute(
+                    _args(
+                        tmp,
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                        registry=str(registry_file),
+                    )
+                )
+
+        assert rc == 0
+        counted.assert_not_called()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_does_not_count_mates_of_a_sample_it_will_skip(self, mock_run):
+        """An already extracted sample is skipped, so reading both its mate files is pure cost."""
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _gzip_tree(tmp, mate1_reads=3, mate2_reads=3)
+            registry_file = root / "registry.json"
+            extracted = root / "targeted" / "SRR1"
+            extracted.mkdir(parents=True)
+            for name in ("GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"):
+                with gzip.open(extracted / name, "wt") as handle:
+                    handle.write("@r1\nACGT\n+\nIIII\n")
+            registry = load_registry(registry_file)
+            record_extraction(
+                registry,
+                "SRR1",
+                "GCF_1",
+                [extracted / "GCF_1_1.fastq.gz", extracted / "GCF_1_2.fastq.gz"],
+                7,
+                False,
+                {"genome_fasta": str(genome), "preset": "sr", "threshold": 0.5},
+            )
+            save_registry(registry)
+
+            with patch("metaquest.cli.commands.read_extraction.count_fastq_reads") as counted:
+                rc = cmd.execute(
+                    _args(
+                        tmp,
+                        parsed_containment=str(table),
+                        genome_fasta=str(genome),
+                        fastq_folder=str(root / "fastq"),
+                        output_folder=str(root / "targeted"),
+                        threshold=0.5,
+                        registry=str(registry_file),
+                    )
+                )
+
+        assert rc == 0
+        counted.assert_not_called()
+
+    def test_min_mapq_rejects_a_negative_value(self):
+        """A negative --min-mapq would reach samtools as an unknown flag, after minimap2 ran."""
+        parser = argparse.ArgumentParser()
+        ExtractTargetReadsCommand().configure_parser(parser)
+
+        required = ["--parsed-containment", "t.txt", "--genome-id", "G", "--genome-fasta", "g.fna"]
+        assert parser.parse_args(required + ["--min-mapq", "0"]).min_mapq == 0
+        assert parser.parse_args(required + ["--min-mapq", "20"]).min_mapq == 20
+        with pytest.raises(SystemExit):
+            parser.parse_args(required + ["--min-mapq", "-5"])
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_skips_a_truncated_download_unless_allowed(self, mock_run, caplog):

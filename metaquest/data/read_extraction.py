@@ -11,7 +11,9 @@ to filter and export the mapped reads. External tools run through
 """
 
 import gzip
+import json
 import logging
+import os
 import platform
 import re
 import shutil
@@ -89,19 +91,60 @@ def resolve_index_path(genome_fasta: Union[str, Path], preset: str, index_dir: U
     return Path(index_dir) / f"{Path(genome_fasta).stem}.{preset}.mmi"
 
 
+def _index_source(genome_path: Path) -> Dict[str, Any]:
+    """The identity of the FASTA an index was built from: resolved path, size and mtime."""
+    stat = genome_path.stat()
+    return {
+        "fasta": str(genome_path.resolve()),
+        "bytes": stat.st_size,
+        "mtime": stat.st_mtime,
+    }
+
+
+def _index_is_current(index_path: Path, source: Dict[str, Any]) -> bool:
+    """True when ``index_path`` exists and its record says it was built from ``source``.
+
+    The record is compared in full because the index is named after the FASTA's stem only:
+    a different genome with the same file name (a second assembly called ``wMel.fna``, a
+    copy restored from a tarball) would otherwise be mapped against the wrong index. An
+    mtime comparison alone does not catch it either, since ``cp -p``, ``mv``, ``rsync -a``
+    and tar all preserve an older mtime.
+    """
+    if not index_path.exists():
+        return False
+    record_path = index_path.with_suffix(index_path.suffix + ".json")
+    try:
+        recorded = json.loads(record_path.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(recorded, dict) and all(recorded.get(key) == value for key, value in source.items())
+
+
 def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[str, Path]) -> Path:
     """Build (or reuse) a minimap2 index for the target genome, shared across every sample.
 
-    The index lives at ``resolve_index_path(genome_fasta, preset, index_dir)`` and is
-    rebuilt only when the FASTA's mtime is newer than the index (or the index does not
-    exist yet), so a genome replaced between runs is picked up automatically.
+    The index lives at ``resolve_index_path(genome_fasta, preset, index_dir)``, with a
+    ``<index>.json`` record beside it naming the FASTA it was built from (resolved path,
+    size and mtime). It is reused only when all three still match, and rebuilt otherwise.
+
+    The build writes to a per-process temporary name and is moved into place, so a second
+    run against the same output folder either sees the previous index or none at all, never
+    a half-written one. A build that fails leaves no index behind.
     """
     genome_path = Path(genome_fasta)
     index_root = ensure_directory(index_dir)
     index_path = resolve_index_path(genome_path, preset, index_root)
-    if index_path.exists() and index_path.stat().st_mtime >= genome_path.stat().st_mtime:
+    source = _index_source(genome_path)
+    if _index_is_current(index_path, source):
         return index_path
-    SecureSubprocess.run_secure("minimap2", ["-x", preset, "-d", str(index_path), str(genome_path)])
+
+    staged = index_path.with_suffix(f"{index_path.suffix}.tmp.{os.getpid()}")
+    try:
+        SecureSubprocess.run_secure("minimap2", ["-x", preset, "-d", str(staged), str(genome_path)])
+        os.replace(staged, index_path)
+    finally:
+        staged.unlink(missing_ok=True)
+    index_path.with_suffix(index_path.suffix + ".json").write_text(json.dumps(source, indent=2))
     return index_path
 
 

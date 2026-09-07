@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_NUM_THREADS
+from metaquest.core.exceptions import DataAccessError
 from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_records
+from metaquest.store.layout import StorePaths, sidecar_path as dataset_sidecar_path, store_paths
+from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import read_sidecar, write_sidecar
 from metaquest.utils.security import SecureSubprocess
 
@@ -32,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 # Default reservoir sample size for the quality/GC/complexity part of the stats record.
 DEFAULT_SAMPLE_SIZE = 10000
+
+# How long ``store_stats`` waits for the dataset lock before giving up on the cache. A
+# download or adoption holding the lock runs for minutes to hours, and the statistics record
+# is only a cache, so waiting that out would stall an analysis for no benefit.
+STATS_LOCK_WAIT_SECONDS = 30.0
 
 # Read-length histogram buckets (inclusive bounds), matching the convention already used by
 # metaquest.sra.analytics's per-read length distribution; a length past the last bound falls
@@ -300,18 +308,61 @@ def cached_stats(acc_dir: Union[str, Path], sidecar_path: Optional[Union[str, Pa
     return sidecar.stats
 
 
-def store_stats(sidecar_path: Optional[Union[str, Path]], stats: Dict[str, Any]) -> None:
-    """Write ``stats`` into the sidecar at ``sidecar_path``, with a fresh ``stats_computed``.
+def _store_location(path: Path) -> Optional[Tuple[StorePaths, str]]:
+    """``(StorePaths, accession)`` when ``path`` is a store sidecar, else None.
 
-    A no-op when there is no sidecar to update (``sidecar_path`` is None, or names a sidecar
-    that does not exist) -- a project without a shared store then keeps the stats only in its
-    own analysis record rather than in a sidecar that was never created.
+    A store sidecar lives at ``<root>/sra/<ACC>/<ACC>.json``. The candidate root is taken
+    from the path's own position and the layout helpers are asked where that store would
+    keep this accession's sidecar; only an exact match is treated as a store, so a sidecar
+    written beside a plain project folder is left to the unlocked write below.
     """
-    if sidecar_path is None:
-        return
+    acc_dir = path.parent
+    accession = acc_dir.name
+    paths = store_paths(acc_dir.parent.parent)
+    if dataset_sidecar_path(paths, accession) != path:
+        return None
+    return paths, accession
+
+
+def _write_stats(sidecar_path: Union[str, Path], stats: Dict[str, Any]) -> None:
+    """Re-read the sidecar and write back ``stats`` and a fresh ``stats_computed``.
+
+    The sidecar is read here rather than reused from the caller because computing the
+    statistics takes seconds to minutes on a real dataset, during which another project may
+    have published a new state or file list for the same accession. Only the two statistics
+    fields are assigned, so everything else keeps whatever is on disk now.
+    """
     sidecar = read_sidecar(sidecar_path)
     if sidecar is None:
         return
     sidecar.stats = stats
     sidecar.stats_computed = datetime.now(timezone.utc).isoformat()
     write_sidecar(sidecar_path, sidecar)
+
+
+def store_stats(sidecar_path: Optional[Union[str, Path]], stats: Dict[str, Any]) -> None:
+    """Write ``stats`` into the sidecar at ``sidecar_path``, with a fresh ``stats_computed``.
+
+    A no-op when there is no sidecar to update (``sidecar_path`` is None, or names a sidecar
+    that does not exist) -- a project without a shared store then keeps the stats only in its
+    own analysis record rather than in a sidecar that was never created.
+
+    For a sidecar inside a store, the read-modify-write runs under the accession's dataset
+    lock, the same lock every other sidecar writer takes (download, adoption,
+    ``store_verify --fix-state``), so a statistics write cannot overwrite a state change
+    another project published meanwhile. The wait is bounded: a dataset locked by a running
+    download only loses the cache, which is recomputed on the next command, so the write is
+    skipped with a warning rather than blocking the analysis that asked for it.
+    """
+    if sidecar_path is None:
+        return
+    located = _store_location(Path(sidecar_path))
+    if located is None:
+        _write_stats(sidecar_path, stats)
+        return
+    paths, accession = located
+    try:
+        with dataset_lock(paths, accession, wait_seconds=STATS_LOCK_WAIT_SECONDS):
+            _write_stats(sidecar_path, stats)
+    except DataAccessError as e:
+        logger.warning("Not caching statistics for %s: %s", accession, e)

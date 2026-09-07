@@ -114,14 +114,33 @@ def _decompressed_md5(path: Union[str, Path]) -> str:
     return digest.hexdigest()
 
 
+def _content_matches(path: Path, store_path: Path, record: Dict[str, Any]) -> bool:
+    """True when ``path`` and the store copy hold the same reads, whatever their raw bytes.
+
+    Decompresses both sides, so it costs a full pass over each file; the callers use it only
+    when the cheap byte comparison cannot settle the question.
+    """
+    if not store_path.is_file():
+        return False
+    if _decompressed_md5(path) != _decompressed_md5(store_path):
+        return False
+    return count_fastq_reads(path) == record.get("reads")
+
+
 def _files_match(project_dir: Path, store_dir: Path, sidecar: Sidecar) -> bool:
     """True when ``project_dir`` holds the same reads the sidecar's store copy records.
 
     Files are paired by ``fastq_stem`` (e.g. ``SRR1_1``, not ``SRR1_1.fastq.gz``), so a plain
-    project copy matches a gzipped store copy of the same reads and vice versa. When both sides
-    share the same compression, compares the sidecar's recorded bytes/md5 directly (cheap, no
-    decompression); when they differ (a compressed size never equals a plain one), decompresses
-    both sides and compares content md5 and read count instead.
+    project copy matches a gzipped store copy of the same reads and vice versa. Compares the
+    sidecar's recorded bytes and md5 first, which settles an identical copy without
+    decompressing anything.
+
+    Raw bytes are not decisive for two gzip files: the gzip header carries the compression
+    time and the original file name, and a different compressor or level changes the body,
+    so the same reads compressed twice differ byte for byte. A gzip pair whose recorded md5
+    does not match therefore falls back to the decompressed comparison, as a pair with
+    different compression on the two sides already does. Only that fallback can tell a
+    duplicate from a genuine conflict here.
     """
     project_files = {fastq_stem(p): p for p in fastq_files(project_dir)}
     sidecar_files = {fastq_stem(Path(str(entry.get("name") or ""))): entry for entry in sidecar.files}
@@ -130,20 +149,14 @@ def _files_match(project_dir: Path, store_dir: Path, sidecar: Sidecar) -> bool:
     for stem, path in project_files.items():
         record = sidecar_files[stem]
         record_name = str(record.get("name") or "")
-        if str(path).endswith(".gz") == record_name.endswith(".gz"):
-            if path.stat().st_size != record.get("bytes"):
+        compressed = str(path).endswith(".gz")
+        if compressed == record_name.endswith(".gz"):
+            if path.stat().st_size == record.get("bytes") and md5_file(path) == record.get("md5"):
+                continue
+            if not compressed:
+                # Two plain files: the bytes are the content, so a mismatch is a real one.
                 return False
-            if md5_file(path) != record.get("md5"):
-                return False
-            continue
-        # Compression differs: sizes are never comparable, so decompress both sides and compare
-        # content instead.
-        store_path = store_dir / record_name
-        if not store_path.is_file():
-            return False
-        if _decompressed_md5(path) != _decompressed_md5(store_path):
-            return False
-        if count_fastq_reads(path) != record.get("reads"):
+        if not _content_matches(path, store_dir / record_name, record):
             return False
     return True
 

@@ -488,6 +488,11 @@ def record_download(
         if store_name is not None:
             download["store_name"] = store_name
     download.pop("inferred", None)
+    # The mate read counts cached by extract_target_reads describe the files this entry
+    # replaces, so they cannot survive a new attempt or state. Keeping them would let a pair
+    # counted from a truncated download force single-end mapping of the complete one.
+    download.pop("mate_reads", None)
+    download.pop("mate_reads_signature", None)
 
 
 def set_download_verdict(registry: Registry, accession: str, verdict: Dict[str, Any]) -> None:

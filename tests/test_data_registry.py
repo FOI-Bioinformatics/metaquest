@@ -348,6 +348,20 @@ class TestRecords:
         reg.record_download(r, "SRR1", "downloaded", tmp_path / "fastq", attempt=False)
         assert r.datasets["SRR1"]["download"]["complete"] == verdict
 
+    def test_record_download_drops_the_cached_mate_read_counts(self, tmp_path):
+        """The mate counts extract_target_reads caches describe the files this outcome
+        replaces. A pair counted from a truncated download surviving the re-download that
+        fixed it would force single-end mapping of a now-complete pair."""
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        download = reg.upsert_dataset(r, "SRR1").setdefault("download", {"attempts": 0})
+        download["mate_reads"] = [10, 9]
+        download["mate_reads_signature"] = [["SRR1_1.fastq.gz", 1, 1.0], ["SRR1_2.fastq.gz", 1, 1.0]]
+
+        reg.record_download(r, "SRR1", "downloaded", tmp_path / "fastq")
+
+        assert "mate_reads" not in r.datasets["SRR1"]["download"]
+        assert "mate_reads_signature" not in r.datasets["SRR1"]["download"]
+
     def test_set_download_verdict_only_touches_complete(self, tmp_path):
         """Unlike record_download, set_download_verdict must not reset date, files, bytes_total,
         message, source or store_name; it only sets the completeness verdict."""
