@@ -17,13 +17,14 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from metaquest.core.exceptions import DataAccessError, ProcessingError
+from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
@@ -156,14 +157,20 @@ def _run_minimap2(
     reference: Path,
     genome_fasta: Path,
     reads: List[Path],
-) -> Any:
+) -> subprocess.CompletedProcess:
     """Align ``reads`` against the prebuilt index, retrying once against the FASTA directly
-    if the index fails (e.g. it was built by an incompatible minimap2 version)."""
+    if the index fails (e.g. it was built by an incompatible minimap2 version).
+
+    Only the failures a tool run can produce are retried: a non-zero exit
+    (``CalledProcessError``), a rejected or timed-out command (``SecurityError``), and a
+    filesystem error. A ``KeyboardInterrupt`` or a programming error is not a reason to run
+    minimap2 a second time, so it propagates.
+    """
     read_args = [str(r) for r in reads]
     args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(reference), *read_args]
     try:
         return SecureSubprocess.run_secure("minimap2", args)
-    except Exception as exc:
+    except (subprocess.CalledProcessError, SecurityError, DataAccessError, OSError) as exc:
         logger.warning(
             "%s: minimap2 failed against the prebuilt index %s (%s); retrying against the FASTA directly",
             accession,
@@ -908,7 +915,9 @@ def assembly_coverage(
     not the caller ever reads them.
 
     Returns:
-        ``{"reads_mapped": int, "mapping_rate": Optional[float], "mean_depth_estimate": float}``
+        ``{"reads_mapped": int, "mapping_rate": Optional[float],
+        "mean_depth_estimate": Optional[float]}``, with ``mean_depth_estimate`` None when the
+        assembly has no contigs to spread the mapped bases over.
     """
     work_root = Path(work_dir)
     sam_path = work_root / "coverage.sam"
@@ -931,7 +940,10 @@ def assembly_coverage(
     mapping_rate = reads_mapped / mapped_reads if mapped_reads else None
     avg_read_len = _average_read_length(reads[0]) if reads else 0.0
     total_bp = summarise_contigs(contigs)["total_bp"]
-    mean_depth_estimate = (reads_mapped * avg_read_len / total_bp) if total_bp else 0.0
+    # An assembly with no contigs has no depth to report; 0.0 would read as a measured
+    # depth of zero, which is a different statement. ``mapping_rate`` says None for the
+    # same reason when the mapped-read count is unknown.
+    mean_depth_estimate = (reads_mapped * avg_read_len / total_bp) if total_bp else None
 
     return {
         "reads_mapped": reads_mapped,

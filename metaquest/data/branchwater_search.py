@@ -243,6 +243,10 @@ def search_index(
             raise DataAccessError(f"Branchwater search failed: {e}") from e
         if response.status_code != 200:
             raise DataAccessError(f"Branchwater search returned HTTP {response.status_code}: {response.text[:200]}")
+        # A response with no charset in its Content-Type (or a non-text content type) leaves
+        # encoding unset, and iter_lines then yields bytes, which csv.reader rejects with an
+        # error that is not a MetaQuestError. The server sends UTF-8 CSV either way.
+        response.encoding = response.encoding or "utf-8"
         lines = list(response.iter_lines(decode_unicode=True))
         matches = _parse_search_rows(lines)
         text = "\n".join(lines)

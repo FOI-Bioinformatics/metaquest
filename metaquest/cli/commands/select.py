@@ -129,7 +129,10 @@ class SelectDatasetsCommand(BaseCommand):
                 registry,
                 accessions,
                 {
-                    "column": args.genome_id or "max_containment",
+                    # The column the ranking actually used, which for --genome-ids is the
+                    # combined label select_accessions_ranked builds (e.g. "A+B"), not the
+                    # single --genome-id this falls back to when nothing was selected.
+                    "column": ranked[0][1] if ranked else (args.genome_id or "max_containment"),
                     "threshold": args.threshold,
                     "metadata_column": args.metadata_column,
                     "metadata_value": args.metadata_value,

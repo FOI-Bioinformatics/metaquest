@@ -3,6 +3,7 @@
 import gzip
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -872,6 +873,21 @@ class TestAssembleExtractedReads:
             assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, keep_intermediate=True)
             assert (out / "intermediate_contigs").exists()
 
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_a_reused_assembly_keeps_its_intermediate_contigs(self, mock_run):
+        """The reuse path returns before the cleanup, so a kept folder is not removed by a
+        later run that does not reassemble."""
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "asm"
+            assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, keep_intermediate=True)
+            assert (out / "intermediate_contigs").exists()
+
+            _, ran = assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out)
+
+            assert ran is False
+            assert (out / "intermediate_contigs").exists()
+
 
 class TestResolveAssemblyThreads:
     def test_explicit_request_wins(self, monkeypatch):
@@ -898,7 +914,8 @@ class TestRunMinimap2Retry:
         sam_path = tmp_path / "out.sam"
         reads = [tmp_path / "r1.fastq.gz"]
         ok_result = MagicMock(returncode=0, stdout="", stderr="")
-        mock_run.side_effect = [RuntimeError("index built by an incompatible minimap2 version"), ok_result]
+        # What a minimap2 that rejects the index actually raises: a non-zero exit.
+        mock_run.side_effect = [subprocess.CalledProcessError(1, "minimap2"), ok_result]
 
         with caplog.at_level("WARNING"):
             result = _run_minimap2("SRR1", "sr", 4, sam_path, index_path, genome, reads)
@@ -910,6 +927,36 @@ class TestRunMinimap2Retry:
         assert second_call.args[0] == "minimap2" and str(genome) in second_call.args[1]
         assert str(index_path) not in second_call.args[1]
         assert "retrying against the FASTA directly" in caplog.text
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_a_rejected_command_also_falls_back(self, mock_run, tmp_path):
+        ok_result = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [SecurityError("command timed out"), ok_result]
+
+        result = _run_minimap2(
+            "SRR1", "sr", 4, tmp_path / "out.sam", tmp_path / "g.sr.mmi", tmp_path / "g.fna", [tmp_path / "r1.fastq"]
+        )
+
+        assert result is ok_result
+        assert mock_run.call_count == 2
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_an_interrupt_is_not_swallowed_by_the_fallback(self, mock_run, tmp_path):
+        """Ctrl-C is not a reason to run minimap2 a second time."""
+        mock_run.side_effect = KeyboardInterrupt()
+
+        with pytest.raises(KeyboardInterrupt):
+            _run_minimap2(
+                "SRR1",
+                "sr",
+                4,
+                tmp_path / "out.sam",
+                tmp_path / "g.sr.mmi",
+                tmp_path / "g.fna",
+                [tmp_path / "r1.fastq"],
+            )
+
+        assert mock_run.call_count == 1
 
 
 class TestSummariseContigsRicherStats:
@@ -986,6 +1033,20 @@ class TestAssemblyCoverage:
 
         assert assembly_coverage(contigs, [reads_file], "sr", 2, tmp_path, mapped_reads=None)["mapping_rate"] is None
         assert assembly_coverage(contigs, [reads_file], "sr", 2, tmp_path, mapped_reads=0)["mapping_rate"] is None
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_mean_depth_is_none_for_an_assembly_with_no_contigs(self, mock_run, tmp_path):
+        """No contigs means no depth to report, which 0.0 would misstate as a measurement."""
+        mock_run.side_effect = _fake_tools({})
+        contigs = tmp_path / "final.contigs.fa"
+        contigs.write_text("")
+        reads_file = tmp_path / "r.fastq.gz"
+        with gzip.open(reads_file, "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+
+        result = assembly_coverage(contigs, [reads_file], "sr", 2, tmp_path, mapped_reads=10)
+
+        assert result["mean_depth_estimate"] is None
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_minimap2_and_samtools_args_shape(self, mock_run, tmp_path):

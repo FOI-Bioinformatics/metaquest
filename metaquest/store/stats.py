@@ -152,8 +152,10 @@ def _parse_seqkit_table(stdout: str, files: List[Path]) -> Dict[str, Dict[str, A
 
     Columns are located by name in the header row rather than by fixed position, since a
     seqkit version may add columns; a comma in a numeric field (some builds format large
-    counts that way even in ``-T`` mode) is stripped before conversion. Raises ``ValueError``
-    when the expected columns or row count are not found, which the caller treats as a
+    counts that way even in ``-T`` mode) is stripped before conversion. Rows are matched to
+    the input files by the ``file`` column rather than by output order, which ``-j`` makes no
+    promises about. Raises ``ValueError`` when the expected columns or row count are not
+    found, or when a row names a file that was not asked for, which the caller treats as a
     seqkit failure and falls back to the streaming count.
     """
     lines = [line for line in stdout.splitlines() if line.strip()]
@@ -162,17 +164,21 @@ def _parse_seqkit_table(stdout: str, files: List[Path]) -> Dict[str, Dict[str, A
 
     header = lines[0].split("\t")
     index = {name: i for i, name in enumerate(header)}
-    if not all(name in index for name in _REQUIRED_SEQKIT_COLUMNS):
+    if not all(name in index for name in (*_REQUIRED_SEQKIT_COLUMNS, "file")):
         raise ValueError(f"seqkit stats output missing expected columns: {header}")
 
     data_lines = lines[1:]
     if len(data_lines) != len(files):
         raise ValueError(f"seqkit stats row count ({len(data_lines)}) did not match input file count ({len(files)})")
 
+    by_name = {file_path.name: file_path for file_path in files}
     rows: Dict[str, Dict[str, Any]] = {}
-    for file_path, line in zip(files, data_lines):
+    for line in data_lines:
         cols = line.split("\t")
-        rows[file_path.name] = {
+        name = Path(cols[index["file"]]).name
+        if name not in by_name:
+            raise ValueError(f"seqkit stats reported a file that was not requested: {name}")
+        rows[name] = {
             "num_seqs": int(cols[index["num_seqs"]].replace(",", "")),
             "sum_len": int(cols[index["sum_len"]].replace(",", "")),
             "min_len": int(cols[index["min_len"]].replace(",", "")),

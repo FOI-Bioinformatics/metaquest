@@ -340,6 +340,41 @@ class TestSeqkitPath:
         assert stats["min_read_length"] == 10
         assert stats["max_read_length"] == 10
 
+    def test_rows_are_matched_to_files_by_name_not_output_order(self, tmp_path):
+        """``seqkit stats -j`` makes no promise about row order, and swapping two mates'
+        counts would misreport each file."""
+        mate1 = tmp_path / "SRR1_1.fastq"
+        mate2 = tmp_path / "SRR1_2.fastq"
+        _write_fastq(mate1, ["ACGTACGTAC"] * 20)
+        _write_fastq(mate2, ["ACGTACGTAC"] * 30)
+
+        table = (
+            "file\tformat\ttype\tnum_seqs\tsum_len\tmin_len\tavg_len\tmax_len\n"
+            f"{mate2}\tFASTQ\tDNA\t30\t300\t10\t10.0\t10\n"  # second file reported first
+            f"{mate1}\tFASTQ\tDNA\t20\t200\t10\t10.0\t10\n"
+        )
+
+        with patch("metaquest.store.stats.shutil.which", return_value="/usr/bin/seqkit"):
+            with patch("metaquest.store.stats.SecureSubprocess.run_secure", return_value=Mock(stdout=table)):
+                stats = compute_dataset_stats([mate1, mate2], sample_size=1000, use_seqkit=True)
+
+        assert stats["reads_per_file"] == {"SRR1_1.fastq": 20, "SRR1_2.fastq": 30}
+        assert stats["reads_total"] == 50
+
+    def test_a_row_naming_an_unrequested_file_falls_back(self, tmp_path):
+        fastq = tmp_path / "SRR1.fastq"
+        _write_fastq(fastq, ["ACGTACGTAC"] * 5)
+        table = (
+            "file\tformat\ttype\tnum_seqs\tsum_len\tmin_len\tavg_len\tmax_len\n"
+            "somewhere/else.fastq\tFASTQ\tDNA\t999\t9990\t10\t10.0\t10\n"
+        )
+
+        with patch("metaquest.store.stats.shutil.which", return_value="/usr/bin/seqkit"):
+            with patch("metaquest.store.stats.SecureSubprocess.run_secure", return_value=Mock(stdout=table)):
+                stats = compute_dataset_stats([fastq], sample_size=1000, use_seqkit=True)
+
+        assert stats["reads_total"] == 5  # the streaming count, not seqkit's row
+
     def test_falls_back_when_seqkit_not_installed(self, tmp_path):
         fastq = tmp_path / "SRR1.fastq"
         _write_fastq(fastq, ["ACGTACGTAC"] * 5)

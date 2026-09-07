@@ -20,7 +20,6 @@ from metaquest.data.sra import (
     count_fastq_reads,
     fastq_files,
     fastq_stem,
-    iter_fastq_records,
 )
 from metaquest.data.sra_metadata import (
     SRAMetadataClient,
@@ -312,7 +311,9 @@ class SRAValidateCommand(BaseCommand):
         parser.add_argument(
             "--md5",
             action="store_true",
-            help="Verify each file's md5 against the store sidecar (no-op without one)",
+            help="Re-hash each FASTQ file and compare it with the md5 the store recorded for "
+            "that file when it was stored, which detects a file changed or corrupted since "
+            "(no-op for a dataset without a store sidecar)",
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
@@ -330,42 +331,45 @@ class SRAValidateCommand(BaseCommand):
         return [f"Empty file: {f.name}" for f in fastq_files if f.stat().st_size == 0]
 
     @staticmethod
-    def _first_header_starts_with_at(path: Path) -> bool:
-        """Peek the first line of ``path`` (gzip aware) and report whether it looks like a
-        FASTQ header. A cheap, bounded read: at most one line, regardless of file size."""
+    def _first_record_issue(path: Path) -> Optional[str]:
+        """The problem with ``path``'s first FASTQ record, or None when it looks right.
+
+        Opens the file once (gzip aware) and reads four lines: the '@' header, the sequence,
+        the '+' separator and a quality string of the same length. A large corrupted file is
+        never parsed beyond that.
+        """
         opener = gzip.open if str(path).endswith(".gz") else open
         with opener(path, "rt") as handle:
-            return handle.readline().startswith("@")
+            header = handle.readline()
+            if not header:
+                return f"No valid FASTQ records in {path.name}"
+            if not header.startswith("@"):
+                return f"FASTQ format error in {path.name}: header does not start with '@'"
+            seq, plus, qual = handle.readline(), handle.readline(), handle.readline()
+        if not seq or not plus or not qual:
+            return f"FASTQ format error in {path.name}: the first record is incomplete"
+        if not plus.startswith("+"):
+            return f"FASTQ format error in {path.name}: the third line does not start with '+'"
+        if len(seq.rstrip("\r\n")) != len(qual.rstrip("\r\n")):
+            return f"FASTQ format error in {path.name}: sequence/quality length mismatch"
+        return None
 
     @staticmethod
     def _fastq_format_issues(acc_dir: Path) -> list:
         """Issue for any FASTQ file in ``acc_dir`` whose first record is malformed.
 
-        Every file is checked (gzip aware, via ``metaquest.data.sra.fastq_files``), but only
-        its first record: a '@' header, peeked directly since ``iter_fastq_records`` does not
-        expose header text, and a sequence/quality pair of equal length pulled from
-        ``iter_fastq_records`` and stopped after one record via closing the generator. A large
-        corrupted file is never fully parsed.
+        Every file is checked (gzip aware, via ``metaquest.data.sra.fastq_files``), not only
+        the first, since a download can leave one good mate and one broken one.
         """
         issues = []
         for f in fastq_files(acc_dir):
             try:
-                if not SRAValidateCommand._first_header_starts_with_at(f):
-                    issues.append(f"FASTQ format error in {f.name}: header does not start with '@'")
-                    continue
-                records = iter_fastq_records(f)
-                try:
-                    record = next(records, None)
-                finally:
-                    records.close()
-                if record is None:
-                    issues.append(f"No valid FASTQ records in {f.name}")
-                    continue
-                seq, qual = record
-                if len(seq) != len(qual):
-                    issues.append(f"FASTQ format error in {f.name}: sequence/quality length mismatch")
+                issue = SRAValidateCommand._first_record_issue(f)
             except (ValueError, OSError) as e:
                 issues.append(f"FASTQ format error in {f.name}: {e}")
+                continue
+            if issue is not None:
+                issues.append(issue)
         return issues
 
     @staticmethod
@@ -430,8 +434,13 @@ class SRAValidateCommand(BaseCommand):
 
     @staticmethod
     def _md5_issues(acc_dir: Path) -> list:
-        """Issue for any FASTQ file whose md5 does not match the store sidecar's recorded
-        value. A no-op when there is no sidecar to compare against."""
+        """Issue for any FASTQ file whose md5 no longer matches the one the store recorded.
+
+        The comparison is against the sidecar's own ``files[].md5``, computed over the stored
+        FASTQ file when it was downloaded or adopted, so it detects a file changed or
+        corrupted since. It is not NCBI's md5, which covers the ``.sra`` archive rather than
+        the FASTQ files extracted from it and so can never match one. A no-op when there is
+        no sidecar to compare against."""
         sidecar_path = _resolved_sidecar_path(acc_dir)
         if sidecar_path is None:
             return []
@@ -473,10 +482,11 @@ class SRAValidateCommand(BaseCommand):
         issues = self._empty_file_issues(raw_files)
         issues += self._fastq_format_issues(acc_dir)
 
-        cached = cached_stats(acc_dir, _resolved_sidecar_path(acc_dir))
         if check_pairs:
+            # Only the mate-count check reads the statistics record, so a run without
+            # --check-pairs does not stat the files or read the sidecar for nothing.
             checks.append("mate_counts")
-            issues += self._mate_count_issues(acc_dir, cached)
+            issues += self._mate_count_issues(acc_dir, cached_stats(acc_dir, _resolved_sidecar_path(acc_dir)))
 
         checks.append("completeness")
         record = registry.datasets.get(acc_dir.name) if registry is not None else None

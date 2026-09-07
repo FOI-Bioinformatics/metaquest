@@ -580,6 +580,76 @@ class TestSRAValidateCommand:
         assert "header does not start with" in result["issues"]
 
     @patch("builtins.print")
+    def test_validate_directory_checks_every_file_not_just_the_first(self, mock_print, tmp_path):
+        """A download can leave one good mate and one broken one; both are checked."""
+        command = SRAValidateCommand()
+
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "SRR123_1.fastq").write_text("@read1\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR123_2.fastq").write_text("not-a-header\nACGT\n+\nIIII\n")
+
+        result = command._validate_directory(acc_dir)
+
+        assert result["status"] == "FAILED"
+        assert "SRR123_2.fastq" in result["issues"]
+        assert "SRR123_1.fastq" not in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_reads_a_gz_first_record(self, mock_print, tmp_path):
+        """The first-record check is gzip aware in both directions: a valid gzipped file
+        passes and a broken one is caught, without decompressing the whole file."""
+        import gzip as gzip_module
+
+        command = SRAValidateCommand()
+
+        good = tmp_path / "SRR1"
+        good.mkdir()
+        with gzip_module.open(good / "SRR1.fastq.gz", "wt") as handle:
+            handle.write("@read1\nACGT\n+\nIIII\n")
+        assert command._validate_directory(good)["status"] == "PASSED"
+
+        bad = tmp_path / "SRR2"
+        bad.mkdir()
+        with gzip_module.open(bad / "SRR2.fastq.gz", "wt") as handle:
+            handle.write("@read1\nACGTACGT\n+\nIII\n")
+        result = command._validate_directory(bad)
+        assert result["status"] == "FAILED"
+        assert "sequence/quality length mismatch" in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_md5_without_a_sidecar_is_a_no_op(self, mock_print, tmp_path):
+        """A plain project folder has no recorded md5 to compare against, so --md5 passes
+        rather than failing every file."""
+        command = SRAValidateCommand()
+
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "SRR123.fastq").write_text("@read1\nACGT\n+\nIIII\n")
+
+        result = command._validate_directory(acc_dir, check_md5=True)
+
+        assert result["status"] == "PASSED"
+        assert "md5" in result["checks"]
+
+    @patch("builtins.print")
+    def test_validate_directory_reads_the_statistics_record_only_for_check_pairs(self, mock_print, tmp_path):
+        """Without --check-pairs nothing needs the record, so the sidecar is not read."""
+        command = SRAValidateCommand()
+
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "SRR123_1.fastq").write_text("@read1\nACGT\n+\nIIII\n")
+        (acc_dir / "SRR123_2.fastq").write_text("@read1\nACGT\n+\nIIII\n")
+
+        with patch("metaquest.cli.commands.sra_enhanced.cached_stats") as mock_cached:
+            command._validate_directory(acc_dir)
+            mock_cached.assert_not_called()
+
+            command._validate_directory(acc_dir, check_pairs=True)
+            mock_cached.assert_called_once()
+
+    @patch("builtins.print")
     def test_validate_directory_format_error_length_mismatch(self, mock_print, tmp_path):
         """A first record whose sequence and quality strings differ in length is caught."""
         command = SRAValidateCommand()

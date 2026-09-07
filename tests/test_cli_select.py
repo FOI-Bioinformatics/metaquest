@@ -147,3 +147,24 @@ def test_registry_records_ranked_selection(tmp_path, monkeypatch):
     data = json.loads(registry_path.read_text())
     ranked = data["datasets"]["SRR1"]["selection"]["ranked"]
     assert ranked == [{"accession": "SRR1", "rank": 1, "column": "max_containment", "value": 0.9}]
+
+
+def test_registry_records_the_combined_column_for_genome_ids(tmp_path, monkeypatch):
+    """--genome-ids ranks on a combined column, and that is what the criteria must name.
+
+    Recording the single --genome-id fallback here would describe a ranking that never ran.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(
+        "\tGCF_A\tGCF_B\tmax_containment\nSRR1\t0.9\t0.7\t0.9\nSRR2\t0.1\t0.1\t0.1\n"
+    )
+    registry_path = tmp_path / "metaquest_registry.json"
+    rc = SelectDatasetsCommand().execute(
+        _args(tmp_path, genome_ids=["GCF_A", "GCF_B"], require="any", registry=str(registry_path))
+    )
+
+    assert rc == 0
+    data = json.loads(registry_path.read_text())
+    column = data["datasets"]["SRR1"]["selection"]["ranked"][0]["column"]
+    assert data["datasets"]["SRR1"]["selection"]["criteria"]["column"] == column
+    assert "GCF_A" in column and "GCF_B" in column

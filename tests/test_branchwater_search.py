@@ -138,6 +138,7 @@ class TestSessionFactory:
         for scheme in ("https://", "http://"):
             adapter = session.adapters[scheme]
             assert adapter.max_retries.total == 4
+            assert adapter.max_retries.backoff_factor == 2
             assert set(adapter.max_retries.status_forcelist) == {429, 500, 502, 503, 504}
             assert "POST" in adapter.max_retries.allowed_methods
 
@@ -154,6 +155,28 @@ class TestSearchIndex:
         assert kwargs["json"] == {"threshold": 0.1, "signature": SIG_OBJECT}
         assert kwargs["timeout"] == 600
         assert kwargs["stream"] is True
+
+    @patch("metaquest.data.branchwater_search._session")
+    def test_a_response_without_a_charset_is_still_parsed(self, mock_session_factory):
+        """requests leaves ``encoding`` unset when the response declares no charset, and
+        ``iter_lines(decode_unicode=True)`` then yields bytes, which csv.reader rejects with
+        an error that is not a MetaQuestError."""
+        text = "SRA accession,containment\nSRR1,0.5\n"
+        session = MagicMock()
+        response = Mock(status_code=200, text=text, encoding=None)
+
+        def iter_lines(*args, **kwargs):
+            # What requests does: decode only when an encoding is known.
+            if response.encoding is None:
+                return iter([line.encode() for line in text.splitlines()])
+            return iter(text.splitlines())
+
+        response.iter_lines.side_effect = iter_lines
+        session.post.return_value = response
+        mock_session_factory.return_value = session
+
+        assert search_index(SIG_OBJECT, 0.1) == [("SRR1", 0.5)]
+        assert response.encoding == "utf-8"
 
     @patch("metaquest.data.branchwater_search._session")
     def test_http_error_raises(self, mock_session_factory):
