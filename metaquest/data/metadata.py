@@ -574,14 +574,23 @@ def parse_metadata_xml(path: Union[str, Path]) -> Dict[str, Any]:
     """Parse one NCBI efetch metadata XML file into the same fields ``parse_metadata`` extracts per record.
 
     The single-file counterpart to ``parse_metadata``, used to read one already-downloaded metadata
-    file. Raises ET.ParseError on XML syntax errors or ValueError on extraction errors so the caller
-    can handle them with appropriate logging.
+    file. Raises OSError when the file is missing, ET.ParseError on XML syntax errors, or ValueError
+    on extraction errors, so the caller can handle them with appropriate logging. Also folds in this
+    file's own SAMPLE_ATTRIBUTE tags (e.g. ``collection_date``), the same way ``parse_metadata``
+    does per file, so a single-file parse and a folder-wide parse of the same file agree.
     """
     xml_path = Path(path)
     if not xml_path.is_file():
         raise OSError(f"Metadata XML file not found: {xml_path}")
     tree = ET.parse(str(xml_path))
-    return _extract_metadata_fields(tree, xml_path)
+    metadata_dict = _extract_metadata_fields(tree, xml_path)
+    attribute_tags = [
+        tag
+        for tag in (attribute.findtext("TAG") for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE"))
+        if tag is not None
+    ]
+    metadata_dict.update(_extract_sample_attributes(tree, attribute_tags))
+    return metadata_dict
 
 
 def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Path]) -> pd.DataFrame:

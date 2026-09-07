@@ -24,6 +24,7 @@ from metaquest.cli.commands.metadata import (
     ParseMetadataCommand,
     CountMetadataCommand,
     PlotMetadataCountsCommand,
+    _metadata_fields,
 )
 from metaquest.cli.commands.sra import DownloadSraCommand
 from metaquest.cli.commands.samples import SingleSampleCommand
@@ -598,6 +599,12 @@ class TestDownloadMetadataCommand:
       <SAMPLE_NAME>
         <SCIENTIFIC_NAME>Test organism</SCIENTIFIC_NAME>
       </SAMPLE_NAME>
+      <SAMPLE_ATTRIBUTES>
+        <SAMPLE_ATTRIBUTE>
+          <TAG>collection_date</TAG>
+          <VALUE>2020-01-01</VALUE>
+        </SAMPLE_ATTRIBUTE>
+      </SAMPLE_ATTRIBUTES>
     </SAMPLE>
     <EXPERIMENT>
       <IDENTIFIERS><PRIMARY_ID>EXP999</PRIMARY_ID></IDENTIFIERS>
@@ -656,16 +663,25 @@ class TestDownloadMetadataCommand:
         parse_registry = json.loads((tmp_path / "metaquest_registry_parse.json").read_text())
         parse_metadata_rec = parse_registry["datasets"]["SRR999"]["metadata"]
 
-        # Verify both commands record identical fields except date and xml
-        field_keys = [
-            "run_total_spots",
-            "run_md5",
-            "run_size",
-            "organism",
-            "platform",
-            "library_layout",
-            "library_strategy",
-        ]
+        # Verify both commands record identical fields except date and xml. field_keys is
+        # derived from _metadata_fields' own source-column mapping (fed a row with every
+        # source column populated) rather than hand-written, so a field added to that mapping
+        # is automatically covered here too.
+        all_source_columns = {
+            "Run_Size": "x",
+            "Run_MD5": "x",
+            "Run_Total_Spots": "1",
+            "Run_Total_Bases": "1",
+            "Experiment_Library_Strategy": "x",
+            "Sample_Scientific_Name": "x",
+            "collection_date": "x",
+            "Experiment_Library_Layout": "x",
+            "Platform": "x",
+        }
+        field_keys = sorted(_metadata_fields(all_source_columns).keys())
+        assert field_keys == sorted(
+            key for key in download_metadata_rec if key not in ("date", "xml")
+        ), "field_keys must cover every key record_metadata writes besides date and xml"
         for key in field_keys:
             assert download_metadata_rec.get(key) == parse_metadata_rec.get(
                 key
