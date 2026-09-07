@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -55,7 +56,7 @@ def _metadata_fields(row: Mapping[str, Any]) -> Dict[str, Any]:
         ("platform", "Platform"),
         ("library_strategy", "Experiment_Library_Strategy"),
     ):
-        value = row.get(column) if isinstance(row, dict) else row.get(column)
+        value = row.get(column)
         if value is not None:
             fields[field] = nan_to_none(value)
     return fields
@@ -153,7 +154,7 @@ class DownloadMetadataCommand(BaseCommand):
                     try:
                         parsed_dict = parse_metadata_xml(xml_path)
                         fields = _metadata_fields(parsed_dict)
-                    except (MetaQuestError, ValueError, OSError) as e:
+                    except (MetaQuestError, ValueError, OSError, ET.ParseError) as e:
                         self.logger.warning(
                             f"Could not parse metadata for {accession}: {e}; recorded the file path only"
                         )

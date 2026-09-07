@@ -192,7 +192,11 @@ def ncbi_from_metadata_xml(xml_path: Union[str, Path]) -> Dict[str, Any]:
     either is present, else an empty list. Returns ``{}`` when the XML file is missing or
     unparsable (``parse_metadata_xml`` already logs a warning in that case).
     """
-    parsed = parse_metadata_xml(xml_path)
+    try:
+        parsed = parse_metadata_xml(xml_path)
+    except (OSError, ValueError, Exception) as e:
+        logger.warning(f"Could not parse metadata XML {xml_path}: {e}")
+        return {}
     if not parsed:
         return {}
 

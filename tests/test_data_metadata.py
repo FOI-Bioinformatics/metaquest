@@ -1068,19 +1068,20 @@ class TestParseMetadataXml:
         assert result["Run_Filename"] == "SRR1"
         assert result["Experiment_Library_Layout"] == "PAIRED"
 
-    def test_parse_metadata_xml_missing_file_returns_empty_dict(self):
-        """A missing metadata file is not an error: parse_metadata_xml returns {} with a warning."""
-        result = parse_metadata_xml("/nonexistent/SRR1.xml")
-        assert result == {}
+    def test_parse_metadata_xml_missing_file_raises_oserror(self):
+        """A missing metadata file raises OSError."""
+        with pytest.raises(OSError, match="Metadata XML file not found"):
+            parse_metadata_xml("/nonexistent/SRR1.xml")
 
-    def test_parse_metadata_xml_unparsable_file_returns_empty_dict(self, tmp_path):
-        """A malformed XML file also returns {} rather than raising."""
+    def test_parse_metadata_xml_unparsable_file_raises_parseerror(self, tmp_path):
+        """A malformed XML file raises ET.ParseError."""
+        import xml.etree.ElementTree as ET
+
         xml_file = tmp_path / "bad.xml"
         xml_file.write_text("not xml at all <<<")
 
-        result = parse_metadata_xml(xml_file)
-
-        assert result == {}
+        with pytest.raises(ET.ParseError):
+            parse_metadata_xml(xml_file)
 
 
 if __name__ == "__main__":

@@ -572,13 +572,16 @@ class TestDownloadMetadataCommand:
         assert registry["datasets"]["SRR123"]["metadata"]["run_total_spots"] is None
         assert registry["datasets"]["SRR123"]["metadata"]["xml"].endswith("SRR123_metadata.xml")
 
+        # Check that warning was logged for malformed XML
+        assert "Could not parse metadata for SRR123" in caplog.text and "recorded the file path only" in caplog.text
+
         # Good XML: all fields should be recorded
         assert "SRR456" in registry["datasets"]
         assert registry["datasets"]["SRR456"]["metadata"]["run_total_spots"] == 5000
         assert registry["datasets"]["SRR456"]["metadata"]["run_md5"] == "xyz789"
 
     def test_download_and_parse_record_identical_fields(self, tmp_path):
-        """DownloadMetadataCommand and ParseMetadataCommand record identical field dicts."""
+        """DownloadMetadataCommand and ParseMetadataCommand record identical field dicts for same file."""
         metadata_folder = tmp_path / "metadata"
         metadata_folder.mkdir(parents=True)
 
@@ -638,16 +641,35 @@ class TestDownloadMetadataCommand:
             assert download_command.execute(download_args) == 0
 
         download_registry = json.loads((tmp_path / "metaquest_registry_download.json").read_text())
-        download_metadata = download_registry["datasets"]["SRR999"]["metadata"]
+        download_metadata_rec = download_registry["datasets"]["SRR999"]["metadata"]
 
-        # Both should have the same fields recorded
-        assert download_metadata["run_total_spots"] == 2000
-        assert download_metadata["run_md5"] == "same123"
-        assert download_metadata["run_size"] == "500"
-        assert download_metadata["organism"] == "Test organism"
-        assert download_metadata["platform"] == "ILLUMINA"
-        assert download_metadata["library_layout"] == "SINGLE"
-        assert download_metadata["library_strategy"] == "RNA-Seq"
+        # Test ParseMetadataCommand on the same XML file
+        parse_args = argparse.Namespace(
+            metadata_folder=str(metadata_folder),
+            metadata_table_file=str(tmp_path / "metadata_table.txt"),
+            registry=str(tmp_path / "metaquest_registry_parse.json"),
+        )
+
+        parse_command = ParseMetadataCommand()
+        assert parse_command.execute(parse_args) == 0
+
+        parse_registry = json.loads((tmp_path / "metaquest_registry_parse.json").read_text())
+        parse_metadata_rec = parse_registry["datasets"]["SRR999"]["metadata"]
+
+        # Verify both commands record identical fields except date and xml
+        field_keys = [
+            "run_total_spots",
+            "run_md5",
+            "run_size",
+            "organism",
+            "platform",
+            "library_layout",
+            "library_strategy",
+        ]
+        for key in field_keys:
+            assert download_metadata_rec.get(key) == parse_metadata_rec.get(
+                key
+            ), f"Mismatch for {key}: download={download_metadata_rec.get(key)} vs parse={parse_metadata_rec.get(key)}"
 
 
 class TestDownloadTestGenomeCommand:

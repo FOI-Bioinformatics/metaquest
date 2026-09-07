@@ -573,20 +573,14 @@ def _extract_sample_attributes(tree, unique_attributes):
 def parse_metadata_xml(path: Union[str, Path]) -> Dict[str, Any]:
     """Parse one NCBI efetch metadata XML file into the same fields ``parse_metadata`` extracts per record.
 
-    The single-file counterpart to ``parse_metadata``, used by the store sidecar to read one
-    already-downloaded metadata file rather than a whole folder. Returns ``{}`` with a logged
-    warning when the file is missing or cannot be parsed, rather than raising, since a missing
-    or corrupt metadata file should not stop the caller from building the rest of the sidecar.
+    The single-file counterpart to ``parse_metadata``, used to read one already-downloaded metadata
+    file. Raises ET.ParseError on XML syntax errors or ValueError on extraction errors so the caller
+    can handle them with appropriate logging.
     """
     xml_path = Path(path)
     if not xml_path.is_file():
-        logger.warning(f"Metadata XML file not found: {xml_path}")
-        return {}
-    try:
-        tree = ET.parse(str(xml_path))
-    except ET.ParseError as e:
-        logger.warning(f"Could not parse metadata XML file {xml_path}: {e}")
-        return {}
+        raise OSError(f"Metadata XML file not found: {xml_path}")
+    tree = ET.parse(str(xml_path))
     return _extract_metadata_fields(tree, xml_path)
 
 
