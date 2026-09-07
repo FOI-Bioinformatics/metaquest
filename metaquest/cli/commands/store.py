@@ -553,46 +553,53 @@ class StoreAdoptCommand(BaseCommand):
         # accession keeps its project folder exactly as it was, unlinked.
         newly_linked = sorted(set(report.adopted) | set(report.deduplicated))
         if newly_linked:
-            with registry_transaction(args.registry) as reg:
-                ensure_project_identity(reg)
-                for acc in newly_linked:
-                    complete = _sidecar_completeness(paths, acc)
-                    record_download(
-                        reg,
-                        acc,
-                        "downloaded",
-                        args.fastq_folder,
-                        attempt=False,
-                        complete=complete,
-                        source="store",
-                        store_name=acc,
-                    )
-                linked = set(reg.store.get("linked") or [])
-                linked.update(newly_linked)
-                reg.store["linked"] = sorted(linked)
-                usage_registry = reg
-            # Recorded outside the transaction: the catalogue lock is a separate wait, and
-            # holding the project's registry lock while queueing for it can time the registry
-            # write out.
-            record_usage_many(paths, usage_registry, [(acc, "", "linked", "store_adopt") for acc in newly_linked])
-            _gitignore_guard(Path.cwd(), self.logger)
+            self._record_linked(args, paths, newly_linked)
+        self._print_report(report)
+        return 0
 
+    @staticmethod
+    def _record_linked(args: argparse.Namespace, paths: StorePaths, newly_linked: List[str]) -> None:
+        """Point the registry's download records at the store and record the linked usage."""
+        with registry_transaction(args.registry) as reg:
+            ensure_project_identity(reg)
+            for acc in newly_linked:
+                complete = _sidecar_completeness(paths, acc)
+                record_download(
+                    reg,
+                    acc,
+                    "downloaded",
+                    args.fastq_folder,
+                    attempt=False,
+                    complete=complete,
+                    source="store",
+                    store_name=acc,
+                )
+            linked = set(reg.store.get("linked") or [])
+            linked.update(newly_linked)
+            reg.store["linked"] = sorted(linked)
+            usage_registry = reg
+        # Recorded outside the transaction: the catalogue lock is a separate wait, and
+        # holding the project's registry lock while queueing for it can time the registry
+        # write out.
+        record_usage_many(paths, usage_registry, [(acc, "", "linked", "store_adopt") for acc in newly_linked])
+        _gitignore_guard(Path.cwd(), logger)
+
+    def _print_report(self, report: Any) -> None:
         print(
             f"Adopted {len(report.adopted)}, copied {len(report.copied)}, "
             f"deduplicated {len(report.deduplicated)}, conflicts {len(report.conflicts)}, "
             f"skipped {len(report.skipped)}"
         )
-        if report.resumed:
-            print(f"Resumed after an interrupted run: {', '.join(sorted(report.resumed))}")
-        if report.foreign:
-            print(f"Left to their own project (no sidecar, not ours): {', '.join(sorted(report.foreign))}")
-        if report.in_progress:
-            print(f"In progress elsewhere: {', '.join(sorted(report.in_progress))}")
-        if report.refused:
-            print(f"Refused for lack of free space: {', '.join(sorted(report.refused))}")
+        for label, accessions in (
+            ("Resumed after an interrupted run", report.resumed),
+            ("Left to their own project (no sidecar, not ours)", report.foreign),
+            ("In progress elsewhere", report.in_progress),
+            ("Refused for lack of free space", report.refused),
+        ):
+            if accessions:
+                print(f"{label}: {', '.join(sorted(accessions))}")
         if report.conflicts:
             self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
-        return 0
 
 
 class StoreVerifyCommand(BaseCommand):
@@ -1507,31 +1514,42 @@ class StoreGcCommand(BaseCommand):
         if not args.yes:
             self.logger.info("Dry run: nothing removed; pass --yes to remove")
 
-        if args.yes:
-            removed_datasets: List[str] = []
-            for candidate in dataset_candidates:
-                accession = candidate["accession"]
-                _remove_path(sra_dir(paths, accession))
-                removed_datasets.append(accession)
-            if removed_datasets:
-                try:
-                    with catalog_write(paths) as catalog:
-                        for accession in removed_datasets:
-                            catalog.delete_dataset(accession)
-                except DataAccessError as e:
-                    self.logger.error(str(e))
-                    return 1
-
-            removed_leftovers: List[str] = []
-            for candidate in leftover_candidates:
-                _remove_path(candidate["path"])
-                removed_leftovers.append(str(candidate["path"]))
-
-            report["removed_datasets"] = removed_datasets
-            report["removed_leftovers"] = removed_leftovers
+        if args.yes and self._remove_candidates(paths, dataset_candidates, leftover_candidates, report) != 0:
+            return 1
 
         if args.json:
             print(json.dumps(report, indent=2))
         else:
             self._print_report(report, args.yes)
+        return 0
+
+    def _remove_candidates(
+        self,
+        paths: StorePaths,
+        dataset_candidates: List[Dict[str, Any]],
+        leftover_candidates: List[Dict[str, Any]],
+        report: Dict[str, Any],
+    ) -> int:
+        """Remove the candidate datasets and leftovers, recording what went in ``report``."""
+        removed_datasets: List[str] = []
+        for candidate in dataset_candidates:
+            accession = candidate["accession"]
+            _remove_path(sra_dir(paths, accession))
+            removed_datasets.append(accession)
+        if removed_datasets:
+            try:
+                with catalog_write(paths) as catalog:
+                    for accession in removed_datasets:
+                        catalog.delete_dataset(accession)
+            except DataAccessError as e:
+                self.logger.error(str(e))
+                return 1
+
+        removed_leftovers: List[str] = []
+        for candidate in leftover_candidates:
+            _remove_path(candidate["path"])
+            removed_leftovers.append(str(candidate["path"]))
+
+        report["removed_datasets"] = removed_datasets
+        report["removed_leftovers"] = removed_leftovers
         return 0

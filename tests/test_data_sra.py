@@ -5,6 +5,7 @@ Tests for metaquest.data.sra module.
 import gzip
 import inspect
 import json
+import shutil
 
 import pytest
 from pathlib import Path
@@ -1840,6 +1841,13 @@ class TestDownloadSra:
         fastq_folder = tmp_path / "fastq"
 
         def fake_run_secure(executable, args, **kwargs):
+            if executable == "pigz":
+                # The runner may have pigz installed (GitHub's Ubuntu images do); behave like it.
+                plain = Path(args[-1])
+                with open(plain, "rb") as src, gzip.open(str(plain) + ".gz", "wb") as dest:
+                    shutil.copyfileobj(src, dest)
+                plain.unlink()
+                return Mock(returncode=0, stdout="", stderr="")
             out_dir = Path(args[args.index("-O") + 1])
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
