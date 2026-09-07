@@ -431,6 +431,224 @@ class TestDownloadMetadataCommand:
         assert result == 0
         assert not (tmp_path / "metaquest_registry.json").exists()
 
+    def test_execute_records_parsed_metadata_fields(self, tmp_path):
+        """Downloaded metadata records include parsed fields (run_total_spots, run_md5, etc)."""
+        metadata_folder = tmp_path / "metadata"
+        metadata_folder.mkdir(parents=True)
+
+        # Create a test XML file with metadata
+        xml_content = """<?xml version="1.0"?>
+<EXPERIMENT_PACKAGE_SET>
+  <EXPERIMENT_PACKAGE>
+    <STUDY>
+      <IDENTIFIERS><PRIMARY_ID>PRJ123</PRIMARY_ID></IDENTIFIERS>
+      <DESCRIPTOR><STUDY_TITLE>Test Study</STUDY_TITLE></DESCRIPTOR>
+    </STUDY>
+    <SAMPLE>
+      <IDENTIFIERS><PRIMARY_ID>SAM123</PRIMARY_ID></IDENTIFIERS>
+      <SAMPLE_NAME>
+        <SCIENTIFIC_NAME>Escherichia coli</SCIENTIFIC_NAME>
+      </SAMPLE_NAME>
+    </SAMPLE>
+    <EXPERIMENT>
+      <IDENTIFIERS><PRIMARY_ID>EXP123</PRIMARY_ID></IDENTIFIERS>
+      <LIBRARY_DESCRIPTOR>
+        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+        <LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT>
+      </LIBRARY_DESCRIPTOR>
+      <PLATFORM><ILLUMINA/></PLATFORM>
+    </EXPERIMENT>
+    <RUN_SET>
+      <RUN accession="SRR123" total_spots="1234" total_bases="5678" size="999">
+        <IDENTIFIERS><PRIMARY_ID>SRR123</PRIMARY_ID></IDENTIFIERS>
+        <SRAFiles>
+          <SRAFile md5="abc123def456" filename="SRR123.fastq.gz"/>
+        </SRAFiles>
+      </RUN>
+    </RUN_SET>
+  </EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>
+"""
+        xml_path = metadata_folder / "SRR123_metadata.xml"
+        xml_path.write_text(xml_content)
+
+        command = DownloadMetadataCommand()
+        args = argparse.Namespace(
+            email="test@example.com",
+            matches_folder=str(tmp_path / "matches"),
+            metadata_folder=str(metadata_folder),
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=None,
+            api_key=None,
+            batch_size=200,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        mock_downloaded = {"SRR123": xml_path}
+        with patch("metaquest.cli.commands.metadata.download_metadata", return_value=mock_downloaded):
+            result = command.execute(args)
+
+        assert result == 0
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        assert "SRR123" in registry["datasets"]
+        metadata_record = registry["datasets"]["SRR123"]["metadata"]
+
+        # Check that parsed fields are recorded
+        assert metadata_record["run_total_spots"] == 1234
+        assert isinstance(metadata_record["run_total_spots"], int)
+        assert metadata_record["run_md5"] == "abc123def456"
+        assert metadata_record["run_size"] == "999"
+        assert metadata_record["organism"] == "Escherichia coli"
+        assert metadata_record["platform"] == "ILLUMINA"
+
+    def test_execute_records_malformed_xml_with_warning(self, tmp_path, caplog):
+        """Malformed XML logs a warning and records empty fields; download continues."""
+        metadata_folder = tmp_path / "metadata"
+        metadata_folder.mkdir(parents=True)
+
+        # Create a malformed XML file
+        xml_path_bad = metadata_folder / "SRR123_metadata.xml"
+        xml_path_bad.write_text("<invalid><xml>")
+
+        # Create a valid XML file
+        xml_content = """<?xml version="1.0"?>
+<EXPERIMENT_PACKAGE_SET>
+  <EXPERIMENT_PACKAGE>
+    <STUDY>
+      <IDENTIFIERS><PRIMARY_ID>PRJ456</PRIMARY_ID></IDENTIFIERS>
+      <DESCRIPTOR><STUDY_TITLE>Test Study</STUDY_TITLE></DESCRIPTOR>
+    </STUDY>
+    <SAMPLE>
+      <IDENTIFIERS><PRIMARY_ID>SAM456</PRIMARY_ID></IDENTIFIERS>
+      <SAMPLE_NAME>
+        <SCIENTIFIC_NAME>Bacillus subtilis</SCIENTIFIC_NAME>
+      </SAMPLE_NAME>
+    </SAMPLE>
+    <EXPERIMENT>
+      <IDENTIFIERS><PRIMARY_ID>EXP456</PRIMARY_ID></IDENTIFIERS>
+      <LIBRARY_DESCRIPTOR>
+        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+      </LIBRARY_DESCRIPTOR>
+    </EXPERIMENT>
+    <RUN_SET>
+      <RUN accession="SRR456" total_spots="5000" total_bases="10000" size="2000">
+        <IDENTIFIERS><PRIMARY_ID>SRR456</PRIMARY_ID></IDENTIFIERS>
+        <SRAFiles>
+          <SRAFile md5="xyz789" filename="SRR456.fastq.gz"/>
+        </SRAFiles>
+      </RUN>
+    </RUN_SET>
+  </EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>
+"""
+        xml_path_good = metadata_folder / "SRR456_metadata.xml"
+        xml_path_good.write_text(xml_content)
+
+        command = DownloadMetadataCommand()
+        args = argparse.Namespace(
+            email="test@example.com",
+            matches_folder=str(tmp_path / "matches"),
+            metadata_folder=str(metadata_folder),
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=None,
+            api_key=None,
+            batch_size=200,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        mock_downloaded = {"SRR123": xml_path_bad, "SRR456": xml_path_good}
+        with patch("metaquest.cli.commands.metadata.download_metadata", return_value=mock_downloaded):
+            result = command.execute(args)
+
+        assert result == 0
+        registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+
+        # Malformed XML: only xml path should be recorded
+        assert "SRR123" in registry["datasets"]
+        assert registry["datasets"]["SRR123"]["metadata"]["run_total_spots"] is None
+        assert registry["datasets"]["SRR123"]["metadata"]["xml"].endswith("SRR123_metadata.xml")
+
+        # Good XML: all fields should be recorded
+        assert "SRR456" in registry["datasets"]
+        assert registry["datasets"]["SRR456"]["metadata"]["run_total_spots"] == 5000
+        assert registry["datasets"]["SRR456"]["metadata"]["run_md5"] == "xyz789"
+
+    def test_download_and_parse_record_identical_fields(self, tmp_path):
+        """DownloadMetadataCommand and ParseMetadataCommand record identical field dicts."""
+        metadata_folder = tmp_path / "metadata"
+        metadata_folder.mkdir(parents=True)
+
+        # Create the same XML for both workflows
+        xml_content = """<?xml version="1.0"?>
+<EXPERIMENT_PACKAGE_SET>
+  <EXPERIMENT_PACKAGE>
+    <STUDY>
+      <IDENTIFIERS><PRIMARY_ID>PRJ999</PRIMARY_ID></IDENTIFIERS>
+      <DESCRIPTOR><STUDY_TITLE>Consistency Test</STUDY_TITLE></DESCRIPTOR>
+    </STUDY>
+    <SAMPLE>
+      <IDENTIFIERS><PRIMARY_ID>SAM999</PRIMARY_ID></IDENTIFIERS>
+      <SAMPLE_NAME>
+        <SCIENTIFIC_NAME>Test organism</SCIENTIFIC_NAME>
+      </SAMPLE_NAME>
+    </SAMPLE>
+    <EXPERIMENT>
+      <IDENTIFIERS><PRIMARY_ID>EXP999</PRIMARY_ID></IDENTIFIERS>
+      <LIBRARY_DESCRIPTOR>
+        <LIBRARY_STRATEGY>RNA-Seq</LIBRARY_STRATEGY>
+        <LIBRARY_LAYOUT><SINGLE/></LIBRARY_LAYOUT>
+      </LIBRARY_DESCRIPTOR>
+      <PLATFORM><ILLUMINA/></PLATFORM>
+    </EXPERIMENT>
+    <RUN_SET>
+      <RUN accession="SRR999" total_spots="2000" total_bases="4000" size="500">
+        <IDENTIFIERS><PRIMARY_ID>SRR999</PRIMARY_ID></IDENTIFIERS>
+        <SRAFiles>
+          <SRAFile md5="same123" filename="SRR999.fastq.gz"/>
+        </SRAFiles>
+      </RUN>
+    </RUN_SET>
+  </EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>
+"""
+        xml_path = metadata_folder / "SRR999_metadata.xml"
+        xml_path.write_text(xml_content)
+
+        # Test DownloadMetadataCommand
+        download_args = argparse.Namespace(
+            email="test@example.com",
+            matches_folder=str(tmp_path / "matches"),
+            metadata_folder=str(metadata_folder),
+            threshold=0.0,
+            dry_run=False,
+            accessions_file=None,
+            api_key=None,
+            batch_size=200,
+            registry=str(tmp_path / "metaquest_registry_download.json"),
+            data_root=None,
+        )
+
+        mock_downloaded = {"SRR999": xml_path}
+        download_command = DownloadMetadataCommand()
+        with patch("metaquest.cli.commands.metadata.download_metadata", return_value=mock_downloaded):
+            assert download_command.execute(download_args) == 0
+
+        download_registry = json.loads((tmp_path / "metaquest_registry_download.json").read_text())
+        download_metadata = download_registry["datasets"]["SRR999"]["metadata"]
+
+        # Both should have the same fields recorded
+        assert download_metadata["run_total_spots"] == 2000
+        assert download_metadata["run_md5"] == "same123"
+        assert download_metadata["run_size"] == "500"
+        assert download_metadata["organism"] == "Test organism"
+        assert download_metadata["platform"] == "ILLUMINA"
+        assert download_metadata["library_layout"] == "SINGLE"
+        assert download_metadata["library_strategy"] == "RNA-Seq"
+
 
 class TestDownloadTestGenomeCommand:
     """Test DownloadTestGenomeCommand."""

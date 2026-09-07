@@ -3,10 +3,11 @@ Metadata-related CLI commands.
 """
 
 import argparse
+import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import pandas as pd
 
@@ -17,11 +18,47 @@ from metaquest.data.metadata import (
     check_metadata_attributes,
     download_metadata,
     parse_metadata,
+    parse_metadata_xml,
 )
 from metaquest.data.registry import load_registry, nan_to_none, record_metadata, save_registry
 from metaquest.processing.counts import count_metadata
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.visualization.plots import plot_metadata_counts
+
+logger = logging.getLogger(__name__)
+
+
+def _metadata_fields(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Extract metadata fields from a parsed metadata dict or pandas row.
+
+    Maps the parsed XML field names (used by parse_metadata_xml) to the registry
+    field names (used by record_metadata). This mapping is shared by both
+    DownloadMetadataCommand and ParseMetadataCommand to ensure consistency.
+
+    Args:
+        row: Mapping with keys like "Run_Total_Spots", "Run_MD5", etc.
+            Can be a dict from parse_metadata_xml or a pandas Series.
+
+    Returns:
+        Dict with registry field names like "run_total_spots", "run_md5", etc.
+    """
+    fields: Dict[str, Any] = {}
+    for field, column in (
+        ("run_size", "Run_Size"),
+        ("run_md5", "Run_MD5"),
+        ("run_total_spots", "Run_Total_Spots"),
+        ("run_total_bases", "Run_Total_Bases"),
+        ("assay_type", "Experiment_Library_Strategy"),
+        ("organism", "Sample_Scientific_Name"),
+        ("collection_date", "collection_date"),
+        ("library_layout", "Experiment_Library_Layout"),
+        ("platform", "Platform"),
+        ("library_strategy", "Experiment_Library_Strategy"),
+    ):
+        value = row.get(column) if isinstance(row, dict) else row.get(column)
+        if value is not None:
+            fields[field] = nan_to_none(value)
+    return fields
 
 
 class DownloadMetadataCommand(BaseCommand):
@@ -112,7 +149,16 @@ class DownloadMetadataCommand(BaseCommand):
             if not args.dry_run and downloaded:
                 registry = load_registry(args.registry)
                 for accession, xml_path in downloaded.items():
-                    record_metadata(registry, accession, xml_path, {})
+                    # Parse the metadata XML and record parsed fields right away
+                    try:
+                        parsed_dict = parse_metadata_xml(xml_path)
+                        fields = _metadata_fields(parsed_dict)
+                    except (MetaQuestError, ValueError, OSError) as e:
+                        self.logger.warning(
+                            f"Could not parse metadata for {accession}: {e}; recorded the file path only"
+                        )
+                        fields = {}
+                    record_metadata(registry, accession, xml_path, fields)
                 save_registry(registry)
                 self._share_with_store(args, registry, downloaded)
             return 0
@@ -153,21 +199,7 @@ class ParseMetadataCommand(BaseCommand):
         accession = row.get("Run_ID")
         if accession is None or pd.isna(accession):
             return
-        fields: Dict[str, Any] = {}
-        for field, column in (
-            ("run_size", "Run_Size"),
-            ("run_md5", "Run_MD5"),
-            ("run_total_spots", "Run_Total_Spots"),
-            ("run_total_bases", "Run_Total_Bases"),
-            ("assay_type", "Experiment_Library_Strategy"),
-            ("organism", "Sample_Scientific_Name"),
-            ("collection_date", "collection_date"),
-            ("library_layout", "Experiment_Library_Layout"),
-            ("platform", "Platform"),
-            ("library_strategy", "Experiment_Library_Strategy"),
-        ):
-            if column in row.index:
-                fields[field] = nan_to_none(row.get(column))
+        fields = _metadata_fields(row)
         record_metadata(registry, str(accession), metadata_folder / f"{accession}_metadata.xml", fields)
 
     def execute(self, args: argparse.Namespace) -> int:
