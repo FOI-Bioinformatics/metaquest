@@ -439,10 +439,21 @@ class TestStatusWithRegistry:
         assert "column GCF_1" in out and "threshold 0.5" in out and "organism = soil" in out
         assert "16S amplicon: 2" in out
 
-    def test_export_tsv(self, tmp_path, capsys):
+    def test_export_tsv(self, tmp_path, capsys, caplog):
         _project_tree(tmp_path)
-        StatusCommand().execute(_status_args(tmp_path, init=True, export_tsv=str(tmp_path / "registry")))
+        extracted = tmp_path / "targeted" / "SRR1"
+        extracted.mkdir(parents=True)
+        for name in ("GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"):
+            with gzip.open(extracted / name, "wt") as handle:
+                handle.write("@r1\nACGT\n+\nIIII\n")
+
+        with caplog.at_level("INFO"):
+            StatusCommand().execute(_status_args(tmp_path, init=True, export_tsv=str(tmp_path / "registry")))
+
         assert (tmp_path / "registry_datasets.tsv").exists() and (tmp_path / "registry_extractions.tsv").exists()
+        ext = (tmp_path / "registry_extractions.tsv").read_text().splitlines()[0]
+        assert ext.startswith("accession\t")
+        assert "registry_datasets.tsv" in caplog.text and "registry_extractions.tsv" in caplog.text
 
     def test_text_report_shows_stage_matrix(self, tmp_path, capsys):
         _project_tree(tmp_path)

@@ -1,8 +1,9 @@
 """CLI command for targeted read extraction before assembly."""
 
 import argparse
+import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
@@ -30,6 +31,7 @@ from metaquest.data.registry import (
     record_extraction,
     registry_transaction,
     resolve_project_path,
+    scan_downloads,
     upsert_dataset,
 )
 from metaquest.data.sra import count_fastq_reads
@@ -256,11 +258,24 @@ class ExtractTargetReadsCommand(BaseCommand):
             done = (
                 record is not None
                 and not args.force
-                and _record_matches(record, genome_path, args.preset, args.threshold)
+                and _record_matches(record, genome_path, args.preset, args.threshold, min_mapq=args.min_mapq)
             )
             return done or (accession in truncated and not args.allow_truncated)
 
         return [accession for accession in selected if not will_be_skipped(accession)]
+
+    @staticmethod
+    def _available_accessions(args: argparse.Namespace, registry: Registry) -> Set[str]:
+        """Accessions the registry or the FASTQ folder itself says are downloaded.
+
+        Passed to ``extract_target_reads`` as ``available`` so a run over many screened-
+        but-not-downloaded samples reports one summary line instead of a warning per
+        missing sample.
+        """
+        recorded = {
+            acc for acc, rec in registry.datasets.items() if rec.get("download", {}).get("state") == "downloaded"
+        }
+        return recorded | set(scan_downloads(Path(args.fastq_folder)))
 
     @staticmethod
     def _truncated_downloads(registry: Registry) -> Dict[str, Dict[str, Any]]:
@@ -374,6 +389,11 @@ class ExtractTargetReadsCommand(BaseCommand):
         genome_length = fasta_length(args.genome_fasta)
         for accession, reads in with_reads.items():
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
+            # megahit needs FIFOs for its scratch files, which some filesystems (e.g. ExFAT)
+            # do not provide; --temp-folder points it elsewhere when given, else a folder
+            # under the assembly's own output directory is used and removed afterwards.
+            uses_default_tmp_dir = not args.temp_folder
+            tmp_dir = Path(args.temp_folder) if args.temp_folder else out_dir / ".megahit-tmp"
             _, ran = assemble_extracted_reads(
                 reads,
                 out_dir,
@@ -382,7 +402,10 @@ class ExtractTargetReadsCommand(BaseCommand):
                 force=args.force,
                 preset=args.assembly_preset,
                 keep_intermediate=args.keep_intermediate,
+                tmp_dir=tmp_dir,
             )
+            if uses_default_tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
             if not ran and self._has_assembly_record(args, accession):
                 # megahit did not run, so the recorded version and parameters still describe
                 # the assembly on disk; leave them alone.
@@ -447,6 +470,7 @@ class ExtractTargetReadsCommand(BaseCommand):
             }
 
             truncated_downloads = self._truncated_downloads(registry)
+            available = self._available_accessions(args, registry)
 
             mate_counts: Dict[str, Any] = {}
             if not args.dry_run:
@@ -473,6 +497,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 mate_counts=mate_counts,
                 truncated_downloads=truncated_downloads,
                 keep_sam=args.debug_keep_sam,
+                available=available,
             )
 
             if args.dry_run:

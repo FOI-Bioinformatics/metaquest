@@ -308,8 +308,11 @@ class StatusCommand(BaseCommand):
 
     def _export_tsv(self, registry: Registry, prefix: str) -> None:
         datasets_df, extractions_df = to_dataframes(registry)
-        write_csv(datasets_df, f"{prefix}_datasets.tsv", sep="\t")
-        write_csv(extractions_df, f"{prefix}_extractions.tsv", sep="\t")
+        datasets_path = f"{prefix}_datasets.tsv"
+        extractions_path = f"{prefix}_extractions.tsv"
+        write_csv(datasets_df, datasets_path, sep="\t")
+        write_csv(extractions_df, extractions_path, sep="\t", index=False)
+        self.logger.info("Wrote %s and %s", datasets_path, extractions_path)
 
     # -------------------------------------------------------------------- store
 

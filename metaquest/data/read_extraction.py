@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import pandas as pd
 
@@ -228,7 +228,9 @@ def selected_samples(parsed_containment: Union[str, Path], genome_id: str, thres
     return select_samples_for_genome(containment, genome_id, threshold)
 
 
-def _record_matches(record: Dict[str, Any], genome_path: Path, preset: str, threshold: float) -> bool:
+def _record_matches(
+    record: Dict[str, Any], genome_path: Path, preset: str, threshold: float, min_mapq: int = 0
+) -> bool:
     """True when a registry extraction record matches the current call and its files are still usable.
 
     A parameter that is absent or None is a wildcard. Records rebuilt from disk by
@@ -243,6 +245,9 @@ def _record_matches(record: Dict[str, Any], genome_path: Path, preset: str, thre
         return False
     recorded_threshold = record.get("threshold")
     if recorded_threshold is not None and float(recorded_threshold) != float(threshold):
+        return False
+    recorded_mapq = record.get("min_mapq")
+    if recorded_mapq is not None and int(recorded_mapq) != int(min_mapq):
         return False
     if record.get("mapped_reads") == 0:
         return True
@@ -450,12 +455,13 @@ def _map_and_extract(
         logger.warning("No reads from %s mapped to %s; nothing written", accession, genome_id)
         bam_path.unlink(missing_ok=True)
         return ExtractionResult([], 0, unequal, mapped_total=mapped_total)
+    mapq_clause = f" and MAPQ below {min_mapq}" if min_mapq > 0 else ""
     logger.info(
-        "%s: kept %d of %d mapped records (secondary/supplementary and MAPQ below %d removed: %d)",
+        "%s: kept %d of %d mapped records (secondary/supplementary%s removed: %d)",
         accession,
         mapped,
         mapped_total,
-        min_mapq,
+        mapq_clause,
         mapped_total - mapped,
     )
 
@@ -501,7 +507,11 @@ def _extract_one_sample(
     (no FASTQ files found for it). The shared minimap2 index is built on first use here and
     cached in ``reference_holder["reference"]`` for every later sample of this call.
     """
-    done = bool(record) and not force and _record_matches(record or {}, genome_path, preset, threshold)
+    done = (
+        bool(record) and not force and _record_matches(record or {}, genome_path, preset, threshold, min_mapq=min_mapq)
+    )
+    if record and not done and not force:
+        logger.info("%s: redoing extraction, recorded parameters differ from this call", accession)
     if done and not dry_run:
         result = _skipped_result(record or {})
         logger.info(
@@ -577,6 +587,7 @@ def extract_target_reads(
     mate_counts: Optional[Dict[str, Tuple[int, int]]] = None,
     truncated_downloads: Optional[Dict[str, Dict[str, Any]]] = None,
     keep_sam: bool = False,
+    available: Optional[Set[str]] = None,
 ) -> Dict[str, ExtractionResult]:
     """Extract reads mapping to a target genome for every qualifying sample.
 
@@ -614,6 +625,11 @@ def extract_target_reads(
             ``allow_truncated``.
         keep_sam: If True, keep the intermediate SAM alignment(s) instead of removing them
             once the filtered BAM exists (for debugging).
+        available: The accessions that actually have FASTQ files on disk. When given, a
+            selected sample that is not in it is left out of the run and counted rather than
+            logged individually, so a dry run over many thousands of screened-but-not-
+            downloaded samples prints one summary line instead of one warning per sample.
+            ``None`` (the default) checks each selected sample's FASTQ files as before.
 
     Returns:
         Mapping of accession to an ``ExtractionResult`` (empty files in dry-run).
@@ -636,6 +652,16 @@ def extract_target_reads(
     containment = pd.read_csv(table_path, sep="\t", index_col=0)
     samples = select_samples_for_genome(containment, genome_id, threshold)
     logger.info("%d sample(s) meet containment >= %.3f for %s", len(samples), threshold, genome_id)
+    if available is not None:
+        missing = [acc for acc in samples if acc not in available]
+        samples = [acc for acc in samples if acc in available]
+        if missing:
+            logger.info(
+                "%d of the %d selected sample(s) have no FASTQ under %s; skipped",
+                len(missing),
+                len(missing) + len(samples),
+                fastq_root,
+            )
 
     results: Dict[str, ExtractionResult] = {}
     output_root = Path(output_folder)
@@ -706,6 +732,52 @@ def resolve_assembly_threads(requested: Optional[int], fallback: int) -> int:
     return fallback
 
 
+def _megahit_args(
+    reads: List[Path],
+    out_dir: Path,
+    threads: int,
+    min_contig_len: Optional[int],
+    preset: Optional[str],
+    k_flags: Optional[Dict[str, int]],
+    tmp_dir: Optional[Path],
+) -> List[str]:
+    """Build the megahit argument list: input reads, thread count, k-mer/preset choice and
+    an optional ``--tmp-dir`` (created and allow-listed here when given).
+
+    Raises:
+        ProcessingError: If the number of reads is unsupported, or ``k_flags`` is given
+            together with a preset.
+    """
+    args: List[str] = []
+    if len(reads) == 2:
+        args += ["-1", str(reads[0]), "-2", str(reads[1])]
+    elif len(reads) == 1:
+        args += ["-r", str(reads[0])]
+    else:
+        raise ProcessingError(f"Expected 1 or 2 FASTQ files to assemble, got {len(reads)}")
+
+    args += ["--num-cpu-threads", str(threads), "-o", str(out_dir)]
+    if min_contig_len is not None:
+        args += ["--min-contig-len", str(min_contig_len)]
+
+    preset_active = preset not in (None, "default")
+    if k_flags and preset_active:
+        raise ProcessingError("megahit presets and explicit k values cannot be combined")
+    if k_flags:
+        for key, value in k_flags.items():
+            args += [f"--{key}", str(value)]
+    elif preset_active:
+        args += ["--presets", str(preset)]
+
+    if tmp_dir is not None:
+        tmp_dir = Path(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        SecureSubprocess.add_allowed_root(tmp_dir)
+        args += ["--tmp-dir", str(tmp_dir)]
+
+    return args
+
+
 def assemble_extracted_reads(
     reads: List[Path],
     output_dir: Union[str, Path],
@@ -715,6 +787,7 @@ def assemble_extracted_reads(
     preset: Optional[str] = "meta-sensitive",
     keep_intermediate: bool = False,
     k_flags: Optional[Dict[str, int]] = None,
+    tmp_dir: Optional[Path] = None,
 ) -> Tuple[Path, bool]:
     """Assemble a set of extracted FASTQ files with megahit.
 
@@ -741,6 +814,11 @@ def assemble_extracted_reads(
             leading dashes, e.g. ``{"k-min": 21}``), used instead of a preset. Combining
             this with a preset is rejected, since megahit's own k-mer choices for a
             preset and an explicit k-mer schedule cannot both apply.
+        tmp_dir: Where megahit writes its scratch files (``--tmp-dir``); defaults to
+            megahit's own choice (a folder under ``output_dir``) when not given. megahit
+            needs FIFOs for its scratch files, so a default that lands on a filesystem
+            without them (e.g. ExFAT) fails; pointing this at a POSIX filesystem works
+            around it.
 
     Returns:
         The megahit output directory and whether megahit actually ran (False when the
@@ -748,8 +826,8 @@ def assemble_extracted_reads(
 
     Raises:
         ProcessingError: If the number of reads is unsupported, the output directory
-            exists without contigs and ``force`` is not set, or ``k_flags`` is given
-            together with a preset.
+            exists without contigs and ``force`` is not set, ``k_flags`` is given
+            together with a preset, or megahit itself fails.
     """
     out_dir = Path(output_dir)
     contigs_path = out_dir / "final.contigs.fa"
@@ -762,30 +840,14 @@ def assemble_extracted_reads(
         if force:
             shutil.rmtree(out_dir, ignore_errors=True)
 
-    preset_active = preset not in (None, "default")
-    if k_flags and preset_active:
-        raise ProcessingError("megahit presets and explicit k values cannot be combined")
-
     SecureSubprocess.add_allowed_root(out_dir.parent)
-    args: List[str] = []
-    if len(reads) == 2:
-        args += ["-1", str(reads[0]), "-2", str(reads[1])]
-    elif len(reads) == 1:
-        args += ["-r", str(reads[0])]
-    else:
-        raise ProcessingError(f"Expected 1 or 2 FASTQ files to assemble, got {len(reads)}")
+    args = _megahit_args(reads, out_dir, threads, min_contig_len, preset, k_flags, tmp_dir)
 
-    args += ["--num-cpu-threads", str(threads), "-o", str(out_dir)]
-    if min_contig_len is not None:
-        args += ["--min-contig-len", str(min_contig_len)]
-
-    if k_flags:
-        for key, value in k_flags.items():
-            args += [f"--{key}", str(value)]
-    elif preset_active:
-        args += ["--presets", str(preset)]
-
-    SecureSubprocess.run_secure("megahit", args)
+    try:
+        SecureSubprocess.run_secure("megahit", args)
+    except subprocess.CalledProcessError as exc:
+        tail = "\n".join((exc.stderr or "").strip().splitlines()[-5:])
+        raise ProcessingError(f"megahit failed (exit {exc.returncode}) for {out_dir}:\n{tail}") from exc
     logger.info("Assembly written to %s", out_dir)
 
     if not keep_intermediate:
