@@ -3,7 +3,6 @@ Containment-related CLI commands.
 """
 
 import argparse
-from pathlib import Path
 from typing import List
 
 from metaquest.cli.base import BaseCommand
@@ -11,7 +10,7 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater import parse_containment_data
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED
 from metaquest.data.registry import record_screening_from_table, registry_transaction
-from metaquest.visualization.plots import plot_containment as viz_plot_containment
+from metaquest.visualization.plots import plot_containment as viz_plot_containment, plot_output_path
 
 
 class ParseContainmentCommand(BaseCommand):
@@ -145,9 +144,7 @@ class PlotContainmentCommand(BaseCommand):
                 plot_type=args.plot_type,
             )
             if fig is not None:
-                fmt = args.save_format or "png"
-                stem = Path(args.file_path).stem
-                output_path = Path(args.file_path).parent / f"{stem}_{args.plot_type}_{args.column}.{fmt}"
+                output_path = plot_output_path(args.file_path, args.plot_type, args.column, args.save_format)
                 self.logger.info("Plot saved to %s", output_path)
                 self.logger.info("Next: open %s to view the plot", output_path)
             return 0

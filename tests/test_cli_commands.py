@@ -2700,6 +2700,34 @@ class TestPlotContainmentCommand:
             plot_type="rank",
         )
 
+    @patch("metaquest.cli.commands.containment.viz_plot_containment")
+    def test_execute_logs_the_saved_path_and_a_next_hint(self, mock_command, caplog):
+        """The saved path the command logs must be the one _save_plot_if_needed actually
+        writes to; both are built from the shared plot_output_path helper so there is one
+        source of truth for the naming formula, not two copies that can drift apart."""
+        import matplotlib.pyplot as plt
+
+        mock_command.return_value = plt.figure()
+        command = PlotContainmentCommand()
+
+        args = argparse.Namespace(
+            file_path="parsed_containment.txt",
+            column="max_containment",
+            plot_type="rank",
+            title=None,
+            colors=None,
+            save_format="png",
+            threshold=None,
+            show_title=False,
+        )
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "parsed_containment_rank_max_containment.png" in caplog.text
+        assert "Next:" in caplog.text
+
 
 class TestPlotMetadataCountsCommand:
     """Test PlotMetadataCountsCommand."""
