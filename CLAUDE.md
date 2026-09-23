@@ -78,18 +78,27 @@ The SRA package provides three analysis commands:
 
 ### Store Commands
 `metaquest/store/` (package: `resolve`, `layout`, `sidecar`, `catalog`, `link`, `adopt`, `usage`,
-`locks`, `stats`) and `metaquest/cli/commands/store.py` implement a shared data store: one copy of
-each downloaded SRA accession, reused by every project that links into it. Nine commands, registered
-under the "Store" group in `cli/main.py`:
+`locks`, `stats`, `journal`) and `metaquest/cli/commands/store.py` implement a shared data store: one
+copy of each downloaded SRA accession, reused by every project that links into it. Nine commands,
+registered under the "Store" group in `cli/main.py`:
 - `store_init` - create a store at `--data-root`, record the project's use of it
-- `store_status` - dataset and byte counts, stale projects
-- `store_reindex` - rebuild the SQLite catalogue from the sidecar files on disk
-- `store_adopt` - fold an existing project `fastq/` folder into the store (`--move` or `--copy`)
+- `store_status` - dataset and byte counts, stale projects (`--verbose` also lists every dataset)
+- `store_reindex` - rebuild the SQLite catalogue from the sidecar files on disk, replaying the
+  append-only journal under `<data-root>/journal/` to restore project and usage records that sidecars
+  alone do not carry
+- `store_adopt` - fold an existing project `fastq/` folder into the store (`--move` links the project
+  folder to the store's copy; `--copy` leaves the project folder as it was, including on a duplicate;
+  an empty accession folder is refused either way)
 - `store_verify` - check a dataset's files against its recorded size, md5 (`--md5`), or NCBI spot
-  count (`--spots`)
+  count (`--spots`, which also falls back to `<data-root>/metadata/` and the calling project's
+  `metadata/` folder for an XML `download_metadata` wrote after the fact); `--fix-state` only promotes
+  a dataset to `complete` after its files have actually been read through, not on size/md5 alone;
+  `--rescan` rebuilds a dataset's recorded file list from what is on disk before checking
 - `store_link` / `store_unlink` - add or remove one accession's project symlink
 - `store_usage` - which projects and genomes used a given accession, or which datasets are unused
-- `store_gc` - report (or, with `--yes`, remove) datasets nothing references any more
+  (`--project`, `--organism`, `--unused`)
+- `store_gc` - report (or, with `--yes`, remove) datasets nothing references any more; refuses to run
+  when the catalogue holds datasets but no project records at all (run `store_reindex` first)
 
 Store discovery rules for agents:
 1. **Store required before linking**: `download_sra` only links a dataset and `store_adopt` only
@@ -103,10 +112,17 @@ Store discovery rules for agents:
 3. **Explicit-path staging**: `store_adopt` copies a dataset into the store before removing anything
    from the project, so adoption briefly holds up to three copies of one accession (the project's
    original, a staging copy, and the store's copy) and needs at least twice the folder's size free on
-   the store's filesystem before it starts (`metaquest/store/adopt.py:242-248`), only replacing the
-   project folder with a symlink once the store copy is verified. New code that moves data into or
-   within the store should stage the same way rather than renaming in place, so an interruption never
-   leaves a dataset with no complete copy anywhere.
+   the store's filesystem before it starts (`metaquest/store/adopt.py`, the free-space check around
+   the `disk_usage` call), only replacing the project folder with a symlink once the store copy is
+   verified (and never for `--copy`, which leaves the project folder alone). New code that moves data
+   into or within the store should stage the same way rather than renaming in place, so an interruption
+   never leaves a dataset with no complete copy anywhere.
+4. **Journal replay for usage records**: sidecars record a dataset's own state but nothing about which
+   projects used it; that lives only in the SQLite catalogue's `projects`/`usage` tables. `store_reindex`
+   rebuilds the catalogue from sidecars and then replays `<data-root>/journal/*.jsonl` (append-only,
+   written by every `upsert_project`/`record_usage` call) to restore those tables. Code that adds a new
+   way to record project or usage data should append to the journal the same way, or `store_reindex`
+   will silently lose it.
 
 ### Plugin Development
 - Format plugins inherit from base Plugin class in `plugins/base.py`

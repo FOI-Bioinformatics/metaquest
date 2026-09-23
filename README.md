@@ -61,6 +61,22 @@ make clean         # Clean build artifacts
 
 ## Usage with Branchwater
 
+### 0. Getting a Target Genome FASTA
+
+`branchwater_search` (step 1 below) sketches a genome FASTA, so a genome is needed first. Use
+`genome_prepare` to search GTDB by species or genus, download the matching assemblies, and write a
+manifest CSV (and a registry entry for each genome); `genome_download` also fetches assemblies by
+accession, species, or genus, but leaves the downloaded `genomes/ncbi_dataset.zip` where it lands and
+does not record anything in the registry:
+
+```bash
+metaquest genome_prepare --species "Lactobacillus crispatus" --output-dir genomes
+metaquest genome_download --accessions GCF_000006945.2 --output-dir genomes
+```
+
+`genome_search` looks up GTDB accessions without downloading anything (`--species`/`--genus`, `--all`
+for every genome instead of just representatives, `--format list`/`tsv`).
+
 ### 1. Getting Containment Files from Branchwater
 
 Search the Branchwater index directly from a genome. The command sketches the FASTA with sourmash
@@ -71,12 +87,15 @@ public search API and writes `branchwater/<genome>.csv` in the layout the next s
 metaquest branchwater_search --genome-fasta genomes/GCF_000008025.1.fna --threshold 0.1
 ```
 
-The CSV carries the accession, containment and cANI; the metadata columns are empty until step 5
-(`download_metadata`) fills them from NCBI. If you already have a k=21, scaled=1000 sourmash signature,
-pass `--signature file.sig` instead of the FASTA.
+The CSV carries the accession, containment and cANI, nothing else; the server is sent `--threshold` but
+is not always relied on to apply it, so the client drops any returned match below the threshold as well.
+If you already have a k=21, scaled=1000 sourmash signature, pass `--signature file.sig` instead of the
+FASTA.
 
 Alternatively, search at [https://branchwater.sourmash.bio/](https://branchwater.sourmash.bio/) in a
-browser, download the CSV, and save it to the same folder.
+browser, download the CSV, and save it to the same folder. A CSV from the web site carries extra sample
+columns (organism, biosample, collection date, and similar) that the API search does not return; step 3
+below only has something to extract when the CSV came from the web site.
 
 A search that fails with a transient network or server error retries automatically (4 attempts with
 backoff). A repeated search with the same genome, thresholds and server reads a cached response from
@@ -95,9 +114,17 @@ metaquest use_branchwater --branchwater-folder /path/to/branchwater/files --matc
 * `branchwater-folder`: The directory where Branchwater CSV files are located.
 * `matches-folder`: The directory where the processed files will be saved.
 
+A CSV that cannot be read (missing, unreadable, or the wrong format) makes `use_branchwater` exit with
+status 1 rather than skipping it silently; `parse_containment` and `extract_branchwater_metadata` do the
+same for a match file they cannot read.
+
 ### 3. Extract Basic Metadata from Branchwater Files (Optional)
 
-You can extract basic metadata directly from Branchwater CSV files without downloading from NCBI:
+You can extract basic metadata directly from Branchwater CSV files without downloading from NCBI, but
+only when the CSVs carry sample columns to begin with. A CSV from `branchwater_search` (the API path)
+has only the accession, containment, and cANI, so this step's output is just those two columns; a CSV
+downloaded from the Branchwater web site carries an `organism` column and similar sample fields, which
+this step does extract:
 
 ```bash
 metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater/files --metadata-folder metadata
@@ -106,7 +133,8 @@ metaquest extract_branchwater_metadata --branchwater-folder /path/to/branchwater
 > Note: a few Branchwater columns are renamed to canonical names in the output; in
 > particular `organism` becomes `Sample_Scientific_Name`. Use the output column names
 > (e.g. `--metadata-column Sample_Scientific_Name`) in later `count_metadata` /
-> `single_sample` steps.
+> `single_sample` steps. On the API path, `Sample_Scientific_Name` does not exist, since
+> there is no `organism` column to rename; use `download_metadata` (step 5) instead.
 
 ### 4. Summarizing Results
 
@@ -116,11 +144,15 @@ After processing the Branchwater files, you can summarize the results:
 metaquest parse_containment --matches-folder matches --parsed-containment-file parsed_containment.txt --summary-containment-file summary_containment.txt --step-size 0.05
 ```
 
-*Example output:* parsed_containment.txt (samples x genomes) and summary_containment.txt (counts per containment step).
+*Example output:* parsed_containment.txt (samples x genomes) and summary_containment.txt (counts per
+containment step, named here explicitly; the default summary file name is `top_containments.txt`, and
+the default `--step-size` is 0.1).
 
 ### 5. Downloading Metadata from NCBI (richer alternative to step 3)
 
-For more comprehensive metadata, you can download it from NCBI:
+For more comprehensive metadata, you can download it from NCBI. This writes one XML per accession into
+`metadata_folder`; it does not add columns to the Branchwater CSV or to `parsed_containment.txt`, and
+step 6 (`parse_metadata`) is what turns those XML files into a table:
 
 ```bash
 metaquest download_metadata --matches-folder matches --metadata-folder metadata --threshold 0.95 --email [EMAIL]
@@ -129,26 +161,41 @@ metaquest download_metadata --matches-folder matches --metadata-folder metadata 
 * `matches_folder`: Directory containing match files.
 * `metadata_folder`: Directory where the metadata files will be saved.
 * `threshold`: Only consider matches with containment at or above this threshold.
+* `--accessions-file`: Fetch metadata for exactly these accessions instead of scanning the matches
+  folder; the natural choice after `select_datasets` has already narrowed the list down.
+* `--batch-size`: Accessions per NCBI request, 1-500 (default 200); `--api-key` (or the `NCBI_API_KEY`
+  environment variable) raises the request rate limit.
+
+If you plan to run `download_sra` afterwards, run `download_metadata` first: `download_sra` can only
+compare a download's read count against NCBI's recorded spot count (the `complete`/`truncated`/
+`unverified` verdict) when that count is already on disk, either from this step or from a store's own
+metadata folder. Running `download_metadata` after the fact does not retroactively add a verdict to
+downloads that already finished; `store_verify --spots` (see "Shared data store" below) can compute one
+later, but only if a metadata XML for the accession exists somewhere it looks by then.
 
 ### 6. Parsing Metadata
 
-Once the metadata is downloaded, you can parse it to generate a more concise and readable format:
+Once the metadata is downloaded, you can parse it to generate a more concise and readable format. The
+default output name, `metadata_table.txt`, matters: `count_metadata`, `single_sample`, and
+`check_metadata_attributes` all look for a file by that exact name when no explicit metadata file is
+given (see step 8), so naming it something else here means passing that name explicitly to every later
+command too.
 
 ```bash
-metaquest parse_metadata --metadata-folder metadata --metadata-table-file parsed_metadata.txt
+metaquest parse_metadata --metadata-folder metadata --metadata-table-file metadata_table.txt
 ```
 
-*Example output:* parsed_metadata.txt
+*Example output:* metadata_table.txt
 
 ### 7. Check Metadata Attributes
 
 This step helps in understanding the distribution of metadata attributes:
 
 ```bash
-metaquest check_metadata_attributes --file-path parsed_metadata.txt --output-file parsed_metadata_overview.txt
+metaquest check_metadata_attributes --file-path metadata_table.txt --output-file metadata_table_overview.txt
 ```
 
-*Example output:* parsed_metadata_overview.txt
+*Example output:* metadata_table_overview.txt
 
 ### 8. Counting metadata values
 
@@ -160,13 +207,14 @@ step 3, so either metadata route works with the defaults:
 metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.9 --output-file metadata_counts.txt
 ```
 
-This writes `metadata_counts.txt` (one row per value, one column per genome) and `metadata_counts_stats.txt`.
+This writes `metadata_counts.txt` (default output name, one row per value, one column per genome) and
+`metadata_counts_stats.txt`. `--threshold` defaults to 0.5 when omitted.
 
 To instead see the distribution of genomes across datasets grouped by a metadata attribute, pass
 `--summary-file` and `--metadata-file` explicitly:
 
 ```bash
-metaquest count_metadata --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --metadata-column Sample_Scientific_Name --threshold 0.95 --output-file genome_counts.txt
+metaquest count_metadata --summary-file parsed_containment.txt --metadata-file metadata_table.txt --metadata-column Sample_Scientific_Name --threshold 0.95 --output-file genome_counts.txt
 ```
 
 *Example output:* genome_counts.txt
@@ -176,7 +224,7 @@ metaquest count_metadata --summary-file parsed_containment.txt --metadata-file p
 To analyze a single sample from the summary, you can use the `single_sample` command:
 
 ```bash
-metaquest single_sample --summary-file parsed_containment.txt --metadata-file parsed_metadata.txt --summary-column <genome column from parsed_containment.txt> --metadata-column Sample_Scientific_Name --threshold 0.95
+metaquest single_sample --summary-file parsed_containment.txt --metadata-file metadata_table.txt --summary-column <genome column from parsed_containment.txt> --metadata-column Sample_Scientific_Name --threshold 0.95
 ```
 
 ### 10. Checking What Is Already Available Locally
@@ -252,18 +300,40 @@ commands warn and continue without the store; `download_sra` and the `store_*` c
 metaquest store_init --data-root /data/metaquest_store --set-default   # create a store, remember it
 metaquest store_adopt --fastq-folder fastq --dry-run                   # preview folding this project in
 metaquest store_adopt --fastq-folder fastq --move                      # move reads into the store, link back
+metaquest store_adopt --fastq-folder fastq --copy                      # copy into the store, keep the project folder
 metaquest store_status --json                                          # dataset and byte counts
+metaquest store_status --verbose                                       # also list every dataset in the store
 metaquest store_usage --accession SRR11011981                          # which projects used this run
+metaquest store_usage --project my_project                             # every dataset that project has used
+metaquest store_usage --organism GCF_000008025.1                       # every dataset used for that target genome
+metaquest store_usage --unused                                         # datasets in the store with no recorded usage
 metaquest store_gc --dry-run                                           # candidates for removal, nothing deleted
 ```
+
+`store_adopt --move` (the default) removes each accession's project folder and replaces it with a link
+to the store's copy. `store_adopt --copy` leaves the project's folder exactly as it was, real and
+unlinked, whether the accession is freshly adopted or turns out to duplicate what the store already
+holds; a folder with no FASTQ files at all (an empty or interrupted download) is never adopted either
+way and is reported separately, not silently skipped.
 
 Inside a project, each linked accession appears as `fastq/<ACCESSION>`, a symlink to
 `<data-root>/sra/<ACCESSION>` (relative when the store and project share a parent folder, absolute
 otherwise; override with `--link-mode`). `store_init` and `store_adopt` add `fastq/` to the project's
 `.gitignore` when the project is a git repository. `store_link` and `store_unlink` manage one link at a
 time; `store_verify` checks a dataset's files against its recorded size, md5 (`--md5`) or NCBI spot
-count (`--spots`), and `--fix-state` rewrites the sidecar and catalogue entry when a check finds a
-mismatch; `store_reindex` rebuilds the SQLite catalogue from the sidecar files if it is ever lost.
+count (`--spots`). A `--spots` check reads the expected count from the dataset's own sidecar if it has
+one, and otherwise falls back to `<data-root>/metadata/<ACCESSION>_metadata.xml` and then to
+`metadata/<ACCESSION>_metadata.xml` in the calling project, so a count found by `download_metadata`
+either at download time or afterwards is picked up. `--fix-state` rewrites the sidecar and catalogue
+entry when a check finds a mismatch, but only promotes a dataset to `complete` after actually reading
+through its files (via the `--spots` check, or, if `--spots` was not requested, a read-through
+`--fix-state` performs itself); matching size and md5 alone is not enough, since a file can still be a
+truncated or corrupt gzip stream underneath. `--rescan` rebuilds a dataset's recorded file list from
+what is actually on disk before checking, for files added or removed by hand; `store_reindex` rebuilds
+the SQLite catalogue from the sidecar files if it is ever lost, replaying an append-only journal under
+the store's `journal/` folder to restore which projects used which datasets (without the journal, a
+rebuilt catalogue has no project or usage records, and `store_gc` then refuses to run, since it cannot
+tell used datasets from unused ones).
 `store_gc` never removes a dataset a project still links or another run is working on; `--older-than
 DAYS` restricts it to datasets downloaded at least that many days ago, `--keep-partial` never removes a
 `partial` dataset, and it also reports (and, with `--yes`, removes) leftover temp artifacts under the
@@ -272,7 +342,10 @@ store's `tmp/` folder left by an interrupted download or adoption.
 A per-accession lock (`locks/<ACCESSION>.lock`, with a heartbeat) stops two projects from downloading
 the same accession into the store at once; a lock with no heartbeat for 10 minutes is treated as
 abandoned and taken over. `--lock-wait SECONDS` bounds how long `download_sra` and `store_adopt` wait
-for another project's lock on the same accession before giving up (default: wait indefinitely).
+for another project's lock on the same accession before giving up; the default, 0, means wait without a
+time limit, for as long as the other project's heartbeat keeps showing it is still working (an abandoned
+lock is still taken over after 10 minutes either way). A positive value bounds the wait to that many
+seconds instead.
 
 On a store shared over a network filesystem or between machines, each project records the hostname it
 last ran on; a project not seen from the current machine looks stale here even when it is still active
@@ -284,12 +357,17 @@ hosts write to it at once.
 Every stored dataset carries a completeness verdict: `complete` (the read count per mate matches NCBI's
 recorded spot count, at or above a 0.99 ratio), `partial` (fewer reads than expected; not used by
 `download_sra` unless `--accept-partial` is given, and re-downloaded by default unless
-`--no-resume-partial`), or `unverified` (the expected spot count is not known; usable by default).
-`store_verify --spots` and `status --reconcile` compute a verdict for a dataset that lacks one.
+`--no-resume-partial`), or `unverified` (no expected spot count was found: no metadata XML was present
+at download or adoption time, from `download_metadata` or `store_adopt --metadata-folder`; usable by
+default). `store_verify --spots` and `status --reconcile` compute a verdict for a dataset that lacks
+one, now also checking `<data-root>/metadata/` and the calling project's own `metadata/` folder for an
+XML `download_metadata` wrote after the fact (see "Downloading reads" above and `store_verify` below).
 
 A download into the store runs `prefetch` (fixed at `--max-size 100G`) before `fasterq-dump`; if the
 kept `.sra` archive or a temporary build folder grow past 1 GB combined, the download summary warns and
-names the folder, and `store_gc --dry-run` separately lists such leftovers as removal candidates.
+names the folder, and `store_gc --dry-run` separately lists such leftovers as removal candidates. Without
+`--temp-folder`, `fasterq-dump`'s own scratch files default to `<data-root>/tmp/<ACCESSION>_fqtmp`
+(inside the store, not the system temp directory) when a store is configured.
 
 `--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_stats`, `sra_validate`,
 `sra_profile_quality`, and `extract_target_reads`; it never replaces `--fastq-folder`, which still names
@@ -314,20 +392,32 @@ metaquest extract_target_reads \
 ```
 
 Use `--dry-run` to list the qualifying samples without running any tool, `--preset` to match the read
-type (`sr` for Illumina, `map-ont`/`map-pb`/`map-hifi` for long reads), and `--assemble` to run
-megahit on each sample's extracted reads. This step requires `minimap2`, `samtools`, and (for
-`--assemble`) `megahit` to be installed and on the PATH.
+type (`sr` for Illumina, `map-ont`/`map-pb`/`map-hifi` for long reads), `--threads` for minimap2 and
+samtools (default 4), and `--assemble` to run megahit on each sample's extracted reads. `--data-root`
+names a shared data store (see "Shared data store" above) to resolve `--fastq-folder` against, the same
+way other store-aware commands do. This step requires `minimap2`, `samtools`, and (for `--assemble`)
+`megahit` to be installed and on the PATH; `--dry-run` never checks for them, since it runs no tool. A
+sample selected by containment but not yet downloaded is common on a broad search, so `--dry-run` prints
+one summary line for however many such samples there are, rather than one warning line per sample.
 
 On macOS the assembly defaults to a single thread, because megahit 1.2.9's parallel k-mer sorting step
 is unstable on recent macOS releases (mapping with minimap2/samtools still uses `--threads`). Override
-the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
+the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more. A
+megahit failure is reported with the tool's own error message (the last few lines of its stderr), not
+just the exit code. megahit needs FIFOs for its scratch files, which some filesystems do not provide
+(ExFAT, some network shares); `--temp-folder DIR` points megahit's scratch elsewhere, at a local POSIX
+filesystem, when the default location (`<output-folder>/.megahit-tmp` unless `--temp-folder` is given)
+does not support them. A macOS ExFAT or SMB volume's stray `._*` AppleDouble sidecar files are ignored
+wherever MetaQuest lists a folder's contents, so they never look like real FASTQ or genome files.
 
 Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally
 discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
 20 is reasonable for a close relative of the target genome, but a divergent strain can genuinely map
 with a low MAPQ, so raising the threshold can discard real matches. `--assembly-preset` selects
 megahit's `--presets` value: `meta-sensitive` (the default, suited to these small targeted read sets),
-`meta-large`, or `default` (no `--presets` flag).
+`meta-large`, or `default` (no `--presets` flag). Unless `--no-coverage`, the extracted reads are mapped
+back onto the assembled contigs to report a mapping rate and estimated mean depth alongside the other
+assembly statistics.
 
 A sample already extracted or assembled with the same genome FASTA, preset, and threshold is skipped
 on a rerun, including samples that mapped zero reads; an assembly folder with no contigs is reported
@@ -342,21 +432,30 @@ metaquest select_datasets --threshold 0.9 --output accessions.txt
 metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
     --metadata-column geo_loc_name_country_calc --metadata-value France --output accessions.txt
 metaquest select_datasets --threshold 0.9 --top-n 20 --output accessions.txt
+metaquest select_datasets --genome-ids GCF_000008025.1 GCF_000006945.2 --require all --threshold 0.5 \
+    --output accessions.txt
 ```
 
-`--top-n N` keeps only the N accessions with the highest containment after every other filter is
-applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
+`--parsed-containment` names the input table (default `parsed_containment.txt`). `--genome-id` ranks on
+one genome column (default `max_containment` when omitted); `--genome-ids` ranks on several columns
+together instead, with `--require any`/`all` deciding whether one or every listed column must meet the
+threshold. `--top-n N` keeps only the N accessions with the highest containment after every other filter
+is applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
 is given), and `--skip-downloaded` additionally drops accessions the registry already records as
-downloaded, useful when re-running selection on an expanded search.
+downloaded, useful when re-running selection on an expanded search. `select_datasets` has no filter on
+dataset size; use `sra_info` beforehand (see "Downloading reads" below) to see sizes.
 
-`accessions.txt` is the input for `download_sra`, which writes `fastq/<accession>/<accession>_1.fastq`
-(and `_2` for paired runs), the layout `status`, `sra_stats`, `sra_profile_quality`, `sra_dashboard`
-and `extract_target_reads` read.
+`accessions.txt` is the input for `download_sra`, which writes
+`fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see
+below), the layout `status`, `sra_stats`, `sra_profile_quality`, `sra_dashboard` and
+`extract_target_reads` read.
 
 ### Downloading reads
 
 `download_sra` runs `fasterq-dump` in parallel, skips accessions whose FASTQ files already exist
-(unless `--force`), retries failures, and writes `fastq/failed_accessions.txt` for reruns:
+(unless `--force`), retries failures, and writes `fastq/failed_accessions.txt` for reruns. Ctrl-C
+cancels downloads that have not started yet, stops the running `prefetch`/`fasterq-dump` processes for
+the ones in progress, and lets the run exit rather than leaving orphaned tool processes behind:
 
 ```bash
 metaquest download_sra --accessions-file accessions.txt --fastq-folder fastq --max-workers 4 --num-threads 4
@@ -377,10 +476,17 @@ sets where prefetch keeps its downloaded `.sra` archives (default `<fastq-folder
 `--verify-downloads` (on by default; `--no-verify-downloads` turns it off) compares each download's
 read count against NCBI's recorded spot count and records a verdict in the registry: `complete` (ratio
 at or above 0.99), `truncated` (fewer reads than expected), or `unverified` (the expected spot count is
-not known). This check runs even for a project with no store configured. `--redownload-truncated`
-re-fetches an accession whose registry verdict is `truncated` instead of skipping it on a rerun; a
-dataset held in the shared store instead carries the store's own verdict (`complete`, `partial`, or
-`unverified`, described in "Shared data store" above).
+not known, e.g. `download_metadata` was never run for this accession). This check runs even for a
+project with no store configured. `--redownload-truncated` re-fetches an accession whose registry
+verdict is `truncated` instead of skipping it on a rerun; a dataset held in the shared store instead
+carries the store's own verdict (`complete`, `partial`, or `unverified`, described in "Shared data
+store" above).
+
+`--temp-folder DIR` sets where `fasterq-dump` writes its scratch files while converting each accession;
+without it, a plain per-project download uses the system's temp directory, and a download into a shared
+store (see "Shared data store" above) defaults to `<store>/tmp/<ACCESSION>_fqtmp` instead.
+`extract_target_reads` (see "Targeted Read Extraction Before Assembly" above) accepts the same flag for
+megahit's scratch files.
 
 On a real run, `download_sra` also honours the project registry: accessions excluded with
 `blacklist` are skipped automatically, without needing `--blacklist blacklist.txt` on every call
@@ -444,7 +550,9 @@ metaquest sra_dashboard \
 ```
 
 Pass `--quality-profiles DIR` to reuse quality profiles already saved by `sra_profile_quality`
-instead of recomputing them.
+instead of recomputing them. `--accessions-file` is required unless `--quality-profiles` names a
+directory with saved profiles, in which case every accession found there is dashboarded and
+`--accessions-file` can be left out entirely.
 
 ### Comparative SRA Analysis
 
@@ -471,17 +579,24 @@ Example groups file format:
 
 ### Plotting Containment Data
 
-Plot the distribution of containment scores:
+Plot the distribution of containment scores. `plot_containment` always writes an image file next to the
+input table (png by default, or the format `--save-format` names), rather than just displaying it, named
+`<input-stem>_<plot-type>_<column>.<format>`:
 
 ```bash
 metaquest plot_containment --file-path parsed_containment.txt --column max_containment --plot-type rank --save-format png --threshold 0.05
 ```
 
+This writes `parsed_containment_rank_max_containment.png`; `sourmash scripts metaquest_plot` (registered
+by the `sourmash` extra) calls the same `plot_containment` function and writes files with the same
+naming.
+
 Available plot types: rank, histogram, box, violin
 
 ### Plotting Metadata Counts
 
-Visualize the distribution of metadata attributes:
+Visualize the distribution of metadata attributes. Unlike `plot_containment`, `plot_metadata_counts`
+only writes a file when `--save-format` is given; without it, the plot is built but never saved anywhere:
 
 ```bash
 metaquest plot_metadata_counts --file-path metadata_counts.txt --plot-type bar --save-format png
@@ -552,7 +667,8 @@ metaquest validate_taxonomy \
 ### Taxonomic Summary Analysis
 Summarise containment per taxonomic rank. The taxonomy table can be the map written by
 `enrich_taxonomy` (genome ids and ranks, the usual route after `parse_containment`) or the validation
-CSV written by `validate_taxonomy`:
+CSV written by `validate_taxonomy`. `enrich_taxonomy --cache` names the GTDB lookup cache file it reads
+and appends to (default `taxonomy_cache.tsv`):
 
 ```bash
 metaquest enrich_taxonomy --parsed-containment parsed_containment.txt --output taxonomy.tsv
@@ -561,6 +677,20 @@ metaquest taxonomic_summary --abundance-file parsed_containment.txt --taxonomy-f
 
 metaquest taxonomic_summary --abundance-file abundance_matrix.csv --taxonomy-file validation_results.csv
 ```
+
+### Genome Search and Containment Exploration
+A few smaller commands round out genome lookup and containment browsing:
+
+- `genome_search --species "..."` or `--genus "..."` looks up GTDB accessions without downloading
+  anything; `--all` includes every genome instead of just GTDB representatives, and `--format tsv`
+  pairs each accession with the queried name.
+- `explore_containment --parsed-containment parsed_containment.txt --min-containment 0.1` writes an
+  interactive HTML browser of the containment table (default `containment_explorer.html`) and a GTDB
+  taxonomy cache (default `taxonomy_cache.tsv`) alongside it, computing taxonomy on the fly unless
+  `--taxonomy-map` is given.
+- `find_by_taxonomy --parsed-containment parsed_containment.txt --taxonomy-map taxonomy.tsv --genus ...`
+  (or `--family`/`--species`) filters the containment table to one taxonomic group; `--format summary`
+  prints a per-rank count instead of the full table.
 
 ## Documentation
 
