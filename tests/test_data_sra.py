@@ -2204,20 +2204,71 @@ class TestDownloadSraStore:
         assert calls[0][1] == fastq_folder
         assert stats["results"]["SRR1"] == "Downloaded 1 files, unverified"
 
+    @staticmethod
+    def _fake_download_using_scratch(calls):
+        """A download_accession stand-in that actually creates kwargs["temp_folder"] and
+        drops a marker file in it before returning, so a test asserting the folder is gone
+        afterwards is only satisfied if something really removed it.
+        """
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append((accession, Path(output_folder), kwargs))
+            scratch = Path(kwargs["temp_folder"])
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "marker").write_text("fasterq-dump scratch")
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        return _download
+
+    @staticmethod
+    def _fake_download_using_scratch_then_failing(calls):
+        """Like ``_fake_download_using_scratch``, but raises after creating the scratch folder,
+        so the removal path exercised is _store_fetch's ``finally`` block, not the success path.
+        """
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append((accession, Path(output_folder), kwargs))
+            scratch = Path(kwargs["temp_folder"])
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "marker").write_text("fasterq-dump scratch")
+            raise RuntimeError("fasterq-dump exploded")
+
+        return _download
+
     def test_store_download_uses_store_tmp_for_fasterq_scratch(self, tmp_path):
         """fasterq-dump's scratch folder is created under the store's tmp, not the system temp,
         and is removed again once the download finishes, since download_accession only cleans
         up a temp_folder it created itself.
         """
         paths = self._store(tmp_path)
-        calls = []
+        calls: list = []
 
-        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download_using_scratch(calls)):
             download_sra(tmp_path / "fastq", self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
 
         kwargs = calls[0][2]
         assert Path(kwargs["temp_folder"]).parent == paths.tmp
         assert Path(kwargs["temp_folder"]).name == "SRR1_fqtmp"
+        assert not Path(kwargs["temp_folder"]).exists()
+
+    def test_store_download_removes_fasterq_scratch_after_a_failure(self, tmp_path):
+        """A download_accession that creates the scratch folder and then fails must not leak
+        it: _store_fetch's ``finally`` block removes it regardless of success or failure.
+        """
+        paths = self._store(tmp_path)
+        calls: list = []
+
+        with patch(
+            "metaquest.data.sra.download_accession",
+            side_effect=self._fake_download_using_scratch_then_failing(calls),
+        ):
+            stats = download_sra(tmp_path / "fastq", self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        kwargs = calls[0][2]
+        assert stats["failed"] == 1
         assert not Path(kwargs["temp_folder"]).exists()
 
 
