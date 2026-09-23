@@ -89,11 +89,12 @@ def is_transient_folder(name: str) -> bool:
     """True for a folder name that is a download-in-progress artifact, not a real accession.
 
     Covers the ``<acc>_temp`` folder ``download_accession`` builds into (kept on disk after a
-    failure for inspection, see its except blocks) and fasterq-dump's own on-disk cache
-    directory (``.sra-cache``). Neither should be counted as a downloaded accession by
+    failure for inspection, see its except blocks), the ``<acc>_fqtmp`` scratch folder
+    ``_store_fetch`` points fasterq-dump at, and fasterq-dump's own on-disk cache directory
+    (``.sra-cache``). None of these should be counted as a downloaded accession by
     ``scan_downloads`` or the status command's on-disk inventory.
     """
-    return name.endswith("_temp") or name == ".sra-cache"
+    return name.endswith("_temp") or name.endswith("_fqtmp") or name == ".sra-cache"
 
 
 def transient_bytes(folder: Union[str, Path]) -> int:
@@ -963,11 +964,24 @@ def _store_fetch(
     if download_kwargs["sra_cache"] is None:
         download_kwargs["sra_cache"] = store.tmp / ".sra-cache"
 
+    # A caller that gave no temp_folder gets one under the store's own tmp, not the system
+    # temp directory: fasterq-dump's scratch space can run to several gigabytes per accession,
+    # and download_accession only cleans up a temp_folder it created itself (its finally block
+    # skips a folder the caller supplied), so this scratch folder is ours to remove afterwards.
+    own_scratch: Optional[Path] = None
+    if download_kwargs.get("temp_folder") is None:
+        own_scratch = store.tmp / f"{accession}_fqtmp"
+        download_kwargs["temp_folder"] = own_scratch
+
     # Whatever an earlier interrupted attempt left staged is not a resume point: the download
     # would otherwise be skipped as "already exists" and that partial copy published.
     _safe_rmtree(staged)
 
-    success, message = download_accession(accession, store.tmp, staging_folder=store.tmp, **download_kwargs)
+    try:
+        success, message = download_accession(accession, store.tmp, staging_folder=store.tmp, **download_kwargs)
+    finally:
+        if own_scratch is not None:
+            _safe_rmtree(own_scratch)
 
     if not success:
         _safe_rmtree(staged)
@@ -1136,11 +1150,6 @@ def _process_download_results(futures_results, accessions_to_download, download_
 
             if success:
                 successful_count += 1
-                # Log progress periodically
-                if successful_count % 5 == 0:
-                    logger.info(
-                        f"Downloaded {successful_count}/{len(accessions_to_download)} " f"({failed_count} failed)"
-                    )
             else:
                 failed_count += 1
                 failed_accessions.append(accession)
@@ -1151,6 +1160,8 @@ def _process_download_results(futures_results, accessions_to_download, download_
             failed_accessions.append(accession)
             logger.error(f"Error processing download result for {accession}: {e}")
             download_results[accession] = f"Error: {str(e)}"
+
+    logger.info("Downloaded %d of %d (%d failed)", successful_count, len(accessions_to_download), failed_count)
 
     return successful_count, failed_count
 

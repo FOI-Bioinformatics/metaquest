@@ -1452,6 +1452,17 @@ class TestProcessDownloadResults:
         assert failed_accessions == ["SRR456"]
         mock_logger.error.assert_called()
 
+    def test_final_count_logged_once(self, caplog):
+        """The final tally is logged exactly once, after the loop, not every fifth success."""
+        results = [("SRR1", (True, "ok")), ("SRR2", (False, "boom")), ("SRR3", (True, "linked from store, 2 files"))]
+
+        with caplog.at_level(logging.INFO, logger="metaquest.data.sra"):
+            ok, failed = _process_download_results(results, ["SRR1", "SRR2", "SRR3"], {}, [])
+
+        assert (ok, failed) == (2, 1)
+        assert "Downloaded 2 of 3 (1 failed)" in caplog.text
+        assert caplog.text.count("Downloaded 2 of 3") == 1
+
 
 class TestRetryFailedDownloads:
     """Test _retry_failed_downloads function."""
@@ -2192,6 +2203,22 @@ class TestDownloadSraStore:
 
         assert calls[0][1] == fastq_folder
         assert stats["results"]["SRR1"] == "Downloaded 1 files, unverified"
+
+    def test_store_download_uses_store_tmp_for_fasterq_scratch(self, tmp_path):
+        """fasterq-dump's scratch folder is created under the store's tmp, not the system temp,
+        and is removed again once the download finishes, since download_accession only cleans
+        up a temp_folder it created itself.
+        """
+        paths = self._store(tmp_path)
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            download_sra(tmp_path / "fastq", self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        kwargs = calls[0][2]
+        assert Path(kwargs["temp_folder"]).parent == paths.tmp
+        assert Path(kwargs["temp_folder"]).name == "SRR1_fqtmp"
+        assert not Path(kwargs["temp_folder"]).exists()
 
 
 class TestFasterqDumpVersion:

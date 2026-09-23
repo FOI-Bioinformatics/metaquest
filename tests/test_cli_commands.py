@@ -2119,6 +2119,79 @@ class TestDownloadSraCommand:
         assert download["store_name"] == "SRR1"
         assert written["store"]["linked"] == ["SRR1"]
 
+    # ------------------------------------------------------- download summary logging
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_summary_reports_how_many_were_linked_from_store(self, mock_download, _which, tmp_path, caplog):
+        """The final summary counts only the results the store linked, not ones it downloaded."""
+        mock_download.return_value = {
+            "total": 2,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 2,
+            "failed": 0,
+            "failed_accessions": [],
+            "results": {
+                "SRR1": "linked from store, 1 files",
+                "SRR2": "Downloaded 1 files, complete (1 of 1 spots); stored",
+            },
+        }
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        with caplog.at_level("INFO"):
+            assert DownloadSraCommand().execute(args) == 0
+
+        assert "Linked from store: 1 datasets" in caplog.text
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_summary_omits_linked_line_when_nothing_was_linked(self, mock_download, _which, tmp_path, caplog):
+        """A run with no store-linked results does not mention linking at all."""
+        mock_download.return_value = {
+            "total": 1,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+            "results": {"SRR1": "Downloaded 1 files, complete (1 of 1 spots)"},
+        }
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        with caplog.at_level("INFO"):
+            assert DownloadSraCommand().execute(args) == 0
+
+        assert "Linked from store" not in caplog.text
+
     # ------------------------------------------------------- transient bytes warning
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
