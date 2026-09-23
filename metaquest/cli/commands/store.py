@@ -593,18 +593,24 @@ class StoreAdoptCommand(BaseCommand):
         print(
             f"Adopted {len(report.adopted)}, copied {len(report.copied)}, "
             f"deduplicated {len(report.deduplicated)}, conflicts {len(report.conflicts)}, "
-            f"skipped {len(report.skipped)}"
+            f"skipped {len(report.skipped)}, empty {len(report.empty)}, failed {len(report.failed)}"
         )
         for label, accessions in (
             ("Resumed after an interrupted run", report.resumed),
             ("Left to their own project (no sidecar, not ours)", report.foreign),
             ("In progress elsewhere", report.in_progress),
             ("Refused for lack of free space", report.refused),
+            ("Empty folders, not adopted", report.empty),
+            ("Failed to stage, project copy kept", report.failed),
         ):
             if accessions:
                 print(f"{label}: {', '.join(sorted(accessions))}")
         if report.conflicts:
             self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
+        if report.failed:
+            self.logger.warning(
+                "Accessions that failed to stage, project copy kept: %s", ", ".join(sorted(report.failed))
+            )
 
 
 class StoreVerifyCommand(BaseCommand):

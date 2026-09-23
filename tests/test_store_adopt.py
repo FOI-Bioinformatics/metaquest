@@ -536,3 +536,54 @@ class TestAdoptIgnoresAppleDouble:
         sc = read_sidecar(sidecar_path(paths, "SRR1"))
         assert sc.state == "complete"
         assert [f["name"] for f in sc.files] == ["SRR1_1.fastq.gz"]
+
+
+class TestAdoptSafety:
+    def test_empty_folder_is_not_adopted(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        (project / "SRR9").mkdir(parents=True)
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.adopted == []
+        assert report.empty == ["SRR9"]
+        assert not (paths.sra / "SRR9").exists()
+        assert (project / "SRR9").is_dir() and not (project / "SRR9").is_symlink()
+
+    def test_failed_staged_copy_keeps_project_folder(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        # metaquest.store's __init__ re-exports the `adopt` function under the same name as
+        # this submodule, so `import metaquest.store.adopt as x` (attribute lookup on the
+        # package) would resolve to the function, not the module; importlib sidesteps that.
+        import importlib
+
+        adopt_mod = importlib.import_module("metaquest.store.adopt")
+        real_build = adopt_mod.build_sidecar
+
+        def failing_build(*a, **kw):
+            sc = real_build(*a, **kw)
+            sc.state = "failed"
+            sc.error = "simulated gzip error"
+            return sc
+
+        monkeypatch.setattr(adopt_mod, "build_sidecar", failing_build)
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.failed == ["SRR1"]
+        assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
+        assert not (project / "SRR1").is_symlink()
+
+    def test_copy_dedup_leaves_project_folder(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        adopt(project, paths, move=False, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert (project / "SRR1").is_dir() and not (project / "SRR1").is_symlink()
+        report = adopt(project, paths, move=False, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.deduplicated == ["SRR1"]
+        assert not (project / "SRR1").is_symlink()
+        assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
