@@ -457,6 +457,8 @@ class StoreReindexCommand(BaseCommand):
         return 0
 
     def _warn_no_projects_restored(self, paths: StorePaths, flagged: bool) -> None:
+        """Warn that no project was restored. With no datasets there is nothing gc could take for
+        unused, so the ``rebuilt_without_projects`` flag is neither set nor cleared in that case."""
         if not flagged:
             self.logger.warning("No project records could be restored from %s", paths.journal)
             return
@@ -1509,14 +1511,13 @@ class StoreGcCommand(BaseCommand):
         )
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
 
-    def _refused_after_rebuild(self, paths: StorePaths, accept_rebuilt: bool) -> bool:
-        """True (after logging why) while the catalogue carries the flag ``store_reindex`` sets
-        when it restored no project; ``accept_rebuilt`` clears the flag instead."""
-        with Catalog(paths) as catalog:
-            rebuilt = catalog.get_meta(REBUILT_WITHOUT_PROJECTS)
-        if rebuilt is None:
-            return False
-        if not accept_rebuilt:
+    def _refuse_before_candidates(self, catalog: Catalog, rebuilt: Optional[str], accept_rebuilt: bool) -> bool:
+        """True (after logging why) when gc must not look for candidates at all: the catalogue
+        carries the flag ``store_reindex`` sets when it restored no project and the user has not
+        passed ``--accept-rebuilt``, or it records no project while it holds datasets (then
+        ``--accept-rebuilt`` is refused too, since no project has registered again yet). Reads
+        only; the flag is cleared by the caller once the report has been built."""
+        if rebuilt is not None and not accept_rebuilt:
             self.logger.error(
                 "store_reindex rebuilt the catalogue on %s without any project records, so the datasets of "
                 "every project that has not registered again since would look unused. Run store_init (or "
@@ -1524,9 +1525,19 @@ class StoreGcCommand(BaseCommand):
                 rebuilt,
             )
             return True
-        with catalog_write(paths) as catalog:
-            catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
-        self.logger.warning("Cleared the flag set when the catalogue was rebuilt without projects on %s", rebuilt)
+        project_count = catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        if project_count == 0 and any(True for _ in catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1")):
+            if rebuilt is not None:
+                self.logger.error(
+                    "--accept-rebuilt refused: the catalogue still records no project at all. Run store_init "
+                    "(or store_link) from every project that uses this store first."
+                )
+            else:
+                self.logger.error(
+                    "The catalogue records no project at all, so nothing can be told apart from unused data. "
+                    "Run store_reindex (which replays the journal) or store_init from each project first."
+                )
+            return True
         return False
 
     # ------------------------------------------------------------- candidates
@@ -1718,19 +1729,20 @@ class StoreGcCommand(BaseCommand):
 
         paths = store_paths(root)
         try:
-            if self._refused_after_rebuild(paths, getattr(args, "accept_rebuilt", False)):
-                return 1
             with Catalog(paths) as catalog:
-                project_count = catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
-                if project_count == 0 and any(True for _ in catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1")):
-                    self.logger.error(
-                        "The catalogue records no project at all, so nothing can be told apart from unused data. "
-                        "Run store_reindex (which replays the journal) or store_init from each project first."
-                    )
+                rebuilt = catalog.get_meta(REBUILT_WITHOUT_PROJECTS)
+                if self._refuse_before_candidates(catalog, rebuilt, getattr(args, "accept_rebuilt", False)):
                     return 1
                 stale = stale_projects(catalog)
                 buckets = self._dataset_candidates(
                     catalog, paths, stale, args.older_than, args.keep_partial, getattr(args, "include_stale", False)
+                )
+            if rebuilt is not None:
+                # Only now that at least one project is recorded and the report has been built.
+                with catalog_write(paths) as catalog:
+                    catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
+                self.logger.warning(
+                    "Cleared the flag set when the catalogue was rebuilt without projects on %s", rebuilt
                 )
         except DataAccessError as e:
             self.logger.error(str(e))

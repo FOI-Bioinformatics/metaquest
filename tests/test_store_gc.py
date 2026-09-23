@@ -517,6 +517,31 @@ class TestStoreGcAfterARebuildWithoutProjects:
         # Nothing was removed: without --yes this is still a dry run.
         assert sra_dir(paths, "SRR1").is_dir()
 
+    def test_accept_rebuilt_is_refused_until_a_project_registers(self, tmp_path, caplog):
+        """--accept-rebuilt with no project recorded must not clear the flag: otherwise the first
+        project to register would let a plain gc treat every other project's data as unused."""
+        import logging
+
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), accept_rebuilt=True, yes=True))
+
+        assert rc == 1
+        assert self._flag(paths)
+        assert sra_dir(paths, "SRR1").is_dir()
+        assert any("store_init" in record.message for record in caplog.records)
+
+        self._register_project(paths, tmp_path)
+        assert StoreGcCommand().execute(_gc_args(data_root=str(paths.root), yes=True)) == 1
+        assert sra_dir(paths, "SRR1").is_dir()
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), accept_rebuilt=True))
+
+        assert rc == 0
+        assert self._flag(paths) is None
+
     def test_reindex_that_restores_a_project_clears_the_flag(self, tmp_path):
         paths = self._store_with_unjournaled_dataset(tmp_path)
         StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
