@@ -466,6 +466,14 @@ class DownloadSraCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
+            return self._run(args)
+        except KeyboardInterrupt:
+            # download_sra has already cancelled pending downloads and stopped running tools.
+            self.logger.error("Download interrupted by the user")
+            return 130
+
+    def _run(self, args: argparse.Namespace) -> int:
+        try:
             if not args.dry_run and shutil.which("fasterq-dump") is None:
                 self.logger.error(
                     "fasterq-dump not found on PATH. Install sra-tools, "

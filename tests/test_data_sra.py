@@ -810,18 +810,20 @@ class TestDownloadAccession:
     def test_download_accession_command_passes_validation(self, tmp_path, monkeypatch):
         """The command download_accession builds must survive SecureSubprocess validation unmocked.
 
-        No prefetch on PATH in this test environment, so this exercises the direct
+        prefetch is reported missing from PATH, so this exercises the direct
         fasterq-dump fallback with --split-3/--skip-technical appended.
         """
         monkeypatch.chdir(tmp_path)
-        with patch("metaquest.utils.security.subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
-                success, message = download_accession(
-                    "SRR2517620", tmp_path / "fastq", num_threads=4, temp_folder=tmp_path / "tmp"
-                )
+        proc = Mock(returncode=0)
+        proc.communicate.return_value = ("", "")
+        with patch("metaquest.utils.security.subprocess.Popen", return_value=proc) as mock_popen:
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
+                    success, message = download_accession(
+                        "SRR2517620", tmp_path / "fastq", num_threads=4, temp_folder=tmp_path / "tmp"
+                    )
         assert success is True, message
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert cmd[0] == "fasterq-dump"
         assert cmd[1:4] == ["--threads", "4", "--progress"]
         assert cmd[4] == "SRR2517620"
@@ -833,10 +835,12 @@ class TestDownloadAccession:
 
         SecureSubprocess._extra_roots.clear()
         monkeypatch.chdir(tmp_path)
-        with patch("metaquest.utils.security.subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
-                download_accession("SRR2517620", tmp_path / "fastq", temp_folder=tmp_path / "scratch")
+        proc = Mock(returncode=0)
+        proc.communicate.return_value = ("", "")
+        with patch("metaquest.utils.security.subprocess.Popen", return_value=proc):
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
+                    download_accession("SRR2517620", tmp_path / "fastq", temp_folder=tmp_path / "scratch")
         assert (tmp_path / "fastq").resolve() in SecureSubprocess._extra_roots
         assert (tmp_path / "scratch").resolve() in SecureSubprocess._extra_roots
         SecureSubprocess._extra_roots.clear()
@@ -2465,3 +2469,66 @@ class TestSafeRmtreeIgnoresMissingFiles:
                 _safe_rmtree(target)
 
         assert any("Could not remove directory" in r.message for r in caplog.records)
+
+
+class TestDownloadInterrupt:
+    @pytest.fixture(autouse=True)
+    def _clear_stop(self):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.STOP.clear()
+        yield
+        sra_mod.STOP.clear()
+
+    def test_keyboard_interrupt_cancels_pending_and_terminates_children(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        calls = []
+
+        def worker(acc, *a, **kw):
+            calls.append(acc)
+            if acc == "SRR1":
+                raise KeyboardInterrupt
+            return True, "ok"
+
+        with patch.object(sra_mod.SecureSubprocess, "terminate_children", return_value=0) as term:
+            with pytest.raises(KeyboardInterrupt):
+                sra_mod._execute_parallel_downloads(
+                    ["SRR1", "SRR2", "SRR3", "SRR4"], tmp_path, 1, 1, False, None, {}, [], downloader=worker
+                )
+        term.assert_called_once()
+        assert sra_mod.STOP.is_set()
+
+    def test_download_accession_runs_no_tool_once_stopped(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.STOP.set()
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure") as mock_run:
+            with patch("metaquest.data.sra.shutil.which", return_value="/usr/bin/prefetch"):
+                success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert (success, message) == (False, "interrupted")
+        mock_run.assert_not_called()
+
+    def test_download_accession_skips_fasterq_dump_when_stopped_during_prefetch(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        def prefetch(executable, args, **kwargs):
+            sra_mod.STOP.set()
+
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=prefetch) as mock_run:
+            with patch("metaquest.data.sra.shutil.which", return_value="/usr/bin/prefetch"):
+                with patch("metaquest.data.sra._cached_sra_archive", return_value=tmp_path / "SRR2517620.sra"):
+                    success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert (success, message) == (False, "interrupted")
+        assert [c.args[0] for c in mock_run.call_args_list] == ["prefetch"]
+
+    def test_retry_pass_returns_early_once_stopped(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.STOP.set()
+        worker = Mock(return_value=(True, "ok"))
+        retried, failed, abort = sra_mod._retry_failed_downloads(
+            ["SRR1"], 2, tmp_path, 1, None, {"SRR1": "Download failed: timeout"}, downloader=worker
+        )
+        assert (retried, failed, abort) == (0, ["SRR1"], None)
+        worker.assert_not_called()

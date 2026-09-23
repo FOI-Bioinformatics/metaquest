@@ -10,8 +10,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Sequence, Union
+from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Union
 
 from metaquest.core.exceptions import SecurityError
 from metaquest.core.validation import validate_accession
@@ -69,6 +71,32 @@ class SecureSubprocess:
 
     # Directories registered at runtime from user-supplied output or temp folders.
     _extra_roots: List[Path] = []
+
+    # Child processes started by run_secure that have not yet finished; read by
+    # terminate_children so an interrupt can stop tools running in worker threads.
+    _children: Set[subprocess.Popen] = set()
+    _children_lock = threading.Lock()
+
+    @classmethod
+    def terminate_children(cls, grace: float = 5.0) -> int:
+        """Terminate, then kill, every child started by ``run_secure`` that is still running.
+
+        Each child is sent SIGTERM; one that has not exited ``grace`` seconds later is
+        sent SIGKILL. Returns the number of tracked children.
+        """
+        with cls._children_lock:
+            children = list(cls._children)
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+        deadline = time.monotonic() + grace
+        for child in children:
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                child.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                child.kill()
+        return len(children)
 
     @classmethod
     def allowed_roots(cls) -> List[Path]:
@@ -246,13 +274,19 @@ class SecureSubprocess:
             cwd: Working directory
             env: Environment variables
             timeout: Timeout in seconds
-            **kwargs: Additional subprocess.run arguments
+            **kwargs: Additional subprocess.Popen arguments; ``check`` (default True)
+                controls whether a non-zero exit raises, and ``capture_output`` is
+                accepted but ignored because output is always captured
 
         Returns:
             CompletedProcess result
 
         Raises:
-            SecurityError: If any validation fails
+            SecurityError: If any validation fails, or the command times out
+            subprocess.CalledProcessError: If the command exits non-zero and ``check`` is True
+
+        The child is started with ``Popen`` and recorded until it finishes, so
+        ``terminate_children`` can stop it from another thread.
         """
         cmd = cls._build_validated_command(executable, args)
 
@@ -268,19 +302,39 @@ class SecureSubprocess:
 
         logger.debug(f"Running secure command: {' '.join(cmd)}")
 
+        check = kwargs.pop("check", True)
+        kwargs.pop("capture_output", None)
         try:
             # Use secure defaults
-            secure_kwargs = {
-                "check": True,
-                "capture_output": True,
+            popen_kwargs = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
                 "text": True,
                 "cwd": cwd,
                 "env": safe_env,
-                "timeout": timeout or MAX_SUBPROCESS_TIMEOUT,
                 **kwargs,
             }
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+            with cls._children_lock:
+                cls._children.add(proc)
+            try:
+                out, err = proc.communicate(timeout=timeout or MAX_SUBPROCESS_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise
+            except BaseException:
+                # As subprocess.run does: an interrupt in the waiting thread stops the child.
+                proc.kill()
+                proc.wait()
+                raise
+            finally:
+                with cls._children_lock:
+                    cls._children.discard(proc)
 
-            return subprocess.run(cmd, **secure_kwargs)
+            if check and proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, cmd, output=out, stderr=err)
+            return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
         except subprocess.TimeoutExpired as e:
             raise SecurityError(f"Command timed out: {e}")

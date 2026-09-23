@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -47,6 +48,23 @@ _DISK_FULL_ERROR_RE = re.compile(r"no space left|enospc|disk[ -]full|storage exh
 _NOT_FOUND_ERROR_RE = re.compile(
     r"not[ -]found|invalid accession|cannot be found|403|404|does not exist", re.IGNORECASE
 )
+
+
+# Set when the user interrupts a download run (Ctrl-C). download_accession checks it
+# before each prefetch or fasterq-dump call, so a worker thread that has not yet
+# started a tool returns without starting one, and the retry pass does not run.
+STOP = threading.Event()
+
+
+class _DownloadInterrupted(Exception):
+    """Raised inside download_accession when STOP is set before a tool call."""
+
+
+def _run_download_tool(executable: str, args: List[str]) -> None:
+    """Run prefetch or fasterq-dump through ``run_secure`` unless STOP is set."""
+    if STOP.is_set():
+        raise _DownloadInterrupted()
+    SecureSubprocess.run_secure(executable, args)
 
 
 def classify_download_error(text: str) -> str:
@@ -774,7 +792,7 @@ def download_accession(
 
         if using_prefetch:
             SecureSubprocess.add_allowed_root(cache_path)
-            SecureSubprocess.run_secure(
+            _run_download_tool(
                 "prefetch",
                 ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
             )
@@ -787,7 +805,7 @@ def download_accession(
 
         # Run fasterq-dump command securely
         args = _fasterq_dump_args(source, temp_path, temp_folder_path, num_threads, using_prefetch)
-        SecureSubprocess.run_secure("fasterq-dump", args)
+        _run_download_tool("fasterq-dump", args)
 
         # Handle download output
         success, message = _handle_download_output(
@@ -798,6 +816,10 @@ def download_accession(
             _discard_cached_archive(cache_path, accession, message)
 
         return success, message
+
+    except _DownloadInterrupted:
+        logger.info(f"Download of {accession} not started or continued: the run was interrupted")
+        return False, "interrupted"
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
@@ -1211,7 +1233,7 @@ def _retry_failed_downloads(
         (and notified too) without ever calling ``download_accession``, and no further retry
         round runs. ``abort_reason`` is ``None`` when every round ran to completion normally.
     """
-    if max_retries <= 0 or not failed_accessions:
+    if max_retries <= 0 or not failed_accessions or STOP.is_set():
         return 0, failed_accessions, None
 
     logger.info(f"Retrying {len(failed_accessions)} failed downloads")
@@ -1342,7 +1364,11 @@ def _execute_parallel_downloads(
 
     ``downloader`` replaces ``download_accession`` when the project reads through a shared
     store; it takes the same arguments so the tally, retries and callbacks are unchanged.
+
+    On ``KeyboardInterrupt`` STOP is set, downloads not yet started are cancelled, every
+    running prefetch or fasterq-dump child is terminated, and the interrupt is re-raised.
     """
+    STOP.clear()
     expected_spots = expected_spots or {}
     futures_results: list = []
     worker = downloader or download_accession
@@ -1364,19 +1390,26 @@ def _execute_parallel_downloads(
             ): acc
             for acc in accessions
         }
-        for future in as_completed(futures):
-            acc = futures[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                logger.error(f"Download failed for {acc}: {e}")
-                futures_results.append((acc, None))
-                _notify_result(on_result, acc, False, str(e))
-                continue
+        try:
+            for future in as_completed(futures):
+                acc = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"Download failed for {acc}: {e}")
+                    futures_results.append((acc, None))
+                    _notify_result(on_result, acc, False, str(e))
+                    continue
 
-            futures_results.append((acc, result))
-            success, message = result
-            _notify_result(on_result, acc, success, message)
+                futures_results.append((acc, result))
+                success, message = result
+                _notify_result(on_result, acc, success, message)
+        except KeyboardInterrupt:
+            STOP.set()
+            logger.warning("Interrupted; cancelling pending downloads and stopping running tools")
+            executor.shutdown(wait=False, cancel_futures=True)
+            SecureSubprocess.terminate_children()
+            raise
 
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
 

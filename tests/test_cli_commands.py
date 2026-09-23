@@ -6,6 +6,7 @@ focusing on argument parsing, validation, and proper delegation.
 """
 
 import argparse
+import logging
 import json
 import os
 from pathlib import Path
@@ -1235,6 +1236,28 @@ class TestDownloadSraCommand:
             data_root=None,
         )
         assert DownloadSraCommand().execute(args) == 0
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra", side_effect=KeyboardInterrupt)
+    def test_keyboard_interrupt_returns_130(self, _download, _which, tmp_path, caplog):
+        args = argparse.Namespace(
+            fastq_folder=str(tmp_path / "fastq"),
+            accessions_file=str(tmp_path / "acc.txt"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+        with caplog.at_level(logging.ERROR):
+            assert DownloadSraCommand().execute(args) == 130
+        assert "Download interrupted by the user" in caplog.text
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
