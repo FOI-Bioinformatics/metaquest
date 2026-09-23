@@ -920,6 +920,67 @@ class TestStoreVerifyCommand:
         assert [f["name"] for f in fixed.files] == ["SRR1_1.fastq.gz"]
         assert fixed.state == "complete"
 
+    def test_fix_state_without_spots_requires_a_read_through(self, tmp_path, monkeypatch):
+        """A file that matches its recorded size can still be a corrupt gzip stream that was
+        never opened; --fix-state without --spots must read it before promoting to complete,
+        not promote on size alone."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        # Looks like a gzip file (magic bytes) but is not valid gzip data.
+        (acc_dir / "SRR1.fastq.gz").write_bytes(b"\x1f\x8b\x00not-really-gzip")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=1)
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error and "SRR1.fastq.gz" in fixed.error
+
+    def test_fix_state_never_promotes_a_dataset_with_no_files_recorded(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        sc = _sidecar("SRR1", state="failed")
+        sc.files = []
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error == "no files recorded"
+
+    def test_rescan_no_fastq_left_reports_missing_and_leaves_sidecar_untouched(self, tmp_path, monkeypatch, capsys):
+        """The accession's folder (and its sidecar) still exist, but every FASTQ file was
+        removed from it by hand; --rescan must not silently rebuild an empty file list and let
+        --fix-state promote that to "complete", so it reports the dataset missing instead and
+        leaves the sidecar exactly as it was."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="complete", reads=1)
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        original_files = [dict(f) for f in sc.files]
+        (acc_dir / "SRR1_1.fastq.gz").unlink()
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), rescan=True, fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "missing" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete"
+        assert fixed.files == original_files
+
 
 class TestStoreLinkCommand:
     def test_command_properties(self):

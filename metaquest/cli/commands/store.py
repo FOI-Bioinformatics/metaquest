@@ -28,7 +28,7 @@ from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import load_registry, project_root, record_download, registry_transaction
-from metaquest.data.sra import is_transient_folder, verify_download
+from metaquest.data.sra import count_fastq_reads, fastq_files, is_transient_folder, verify_download
 from metaquest.store import journal
 from metaquest.store.adopt import adopt
 from metaquest.store.catalog import Catalog, catalog_write
@@ -704,6 +704,25 @@ class StoreVerifyCommand(BaseCommand):
                 detail = detail or f"{name}: {e}"
         return bytes_ok, md5_ok, detail
 
+    @staticmethod
+    def _missing_result(accession: str, detail: Optional[str] = None) -> Dict[str, Any]:
+        """The result shape for an accession this check cannot find anything usable for:
+        no sidecar at all, or (with ``--rescan``) a store folder with no FASTQ files left to
+        describe. ``sidecar`` is left None so ``_fix_state`` leaves whatever is on disk alone."""
+        return {
+            "accession": accession,
+            "state": "missing",
+            "bytes_ok": False,
+            "md5_ok": None,
+            "verdict": "missing",
+            "sidecar": None,
+            "spots_verdict": None,
+            "spots_ratio": None,
+            "mismatch_detail": detail,
+            "rescanned": False,
+            "ncbi_found": None,
+        }
+
     def _find_ncbi_spots(self, accession: str, metadata_dirs: List[Path]) -> Optional[Dict[str, Any]]:
         """The ``ncbi`` block read from the first ``<accession>_metadata.xml`` in
         ``metadata_dirs`` that both exists and yields a spot count, else None."""
@@ -730,22 +749,16 @@ class StoreVerifyCommand(BaseCommand):
         sc_path = sidecar_path(paths, accession)
         sidecar = read_sidecar(sc_path)
         if sidecar is None:
-            return {
-                "accession": accession,
-                "state": "missing",
-                "bytes_ok": False,
-                "md5_ok": None,
-                "verdict": "missing",
-                "sidecar": None,
-                "spots_verdict": None,
-                "spots_ratio": None,
-                "mismatch_detail": None,
-                "rescanned": False,
-                "ncbi_found": None,
-            }
+            return self._missing_result(accession)
 
         rescanned = False
         if rescan:
+            if not fastq_files(store_dir):
+                # The folder this sidecar describes has no FASTQ files left (deleted, moved,
+                # or never populated): rebuilding from it would silently overwrite a real
+                # file list with an empty one, so report the dataset missing instead and
+                # leave whatever is on disk untouched.
+                return self._missing_result(accession, f"{store_dir}: no FASTQ files found to rescan")
             rebuilt = build_sidecar(
                 accession,
                 store_dir,
@@ -803,33 +816,64 @@ class StoreVerifyCommand(BaseCommand):
             "ncbi_found": ncbi_found,
         }
 
+    def _mark_failed(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar, error: str) -> None:
+        """Rewrite ``sidecar`` to ``state="failed"`` with ``error``, unless it already is."""
+        if sidecar.state == "failed" and sidecar.error == error:
+            return
+        sidecar.state = "failed"
+        sidecar.error = error
+        write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
+        with catalog_write(paths) as catalog:
+            catalog.upsert_dataset(sidecar)
+        result["state"] = "failed"
+
+    def _read_through_error(self, store_dir: Path, sidecar: Sidecar) -> Optional[str]:
+        """Open and decompress every file ``sidecar.files`` records, the way a ``--spots``
+        check already does, returning the first one's error (name-prefixed) when it cannot be
+        read, else None.
+
+        A file that matches its recorded size (and md5, if checked) can still be a truncated
+        or corrupt gzip stream, since neither check opens it. ``--fix-state`` must not promote
+        a dataset to ``"complete"`` on size alone when ``--spots`` was never requested for this
+        run, since then no file has actually been read through yet.
+        """
+        for entry in sidecar.files:
+            name = str(entry.get("name"))
+            try:
+                count_fastq_reads(store_dir / name)
+            except (EOFError, OSError) as e:
+                self.logger.warning("%s: could not read %s: %s", sidecar.accession, name, e)
+                return f"{name}: {e}"
+        return None
+
     def _fix_state(self, result: Dict[str, Any], paths: StorePaths) -> None:
         """Rewrite the sidecar's state (and completeness) to match what this check found.
 
         A bytes or md5 mismatch always wins: the file itself is wrong, so the dataset is
         ``"failed"`` with an error naming the first mismatch, regardless of what the spots
-        check says (a corrupt file can still happen to contain the right number of reads). Once
-        bytes and md5 (if checked) both check out, a spots verdict of ``complete``/``truncated``
-        decides ``complete``/``partial``; with no spot count anywhere (never checked, or checked
-        but unavailable), every readable file is enough to promote a ``failed`` dataset to
-        ``complete`` with an ``unverified`` completeness, clearing any stale error. A spot count
-        found in a metadata XML (``result["ncbi_found"]``, from ``_verify_one``'s fallback search)
-        is written into the sidecar's ``ncbi`` block so later runs read it straight from there.
+        check says (a corrupt file can still happen to contain the right number of reads). A
+        sidecar recording no files at all is never promoted either, since there is nothing to
+        have verified. Once bytes, md5 (if checked) and the file list itself all check out, a
+        spots verdict of ``complete``/``truncated`` decides ``complete``/``partial``. With no
+        spot count anywhere: if ``--spots`` was requested and found every file readable but
+        with nothing to compare against (``"unverified"``), or if it was never requested but a
+        read-through performed here now finds every file readable, the dataset is promoted to
+        ``complete`` with an ``unverified`` completeness, clearing any stale error; a read
+        failure found only now is recorded as the new error instead, the same as a bytes/md5
+        mismatch. A spot count found in a metadata XML (``result["ncbi_found"]``, from
+        ``_verify_one``'s fallback search) is written into the sidecar's ``ncbi`` block so
+        later runs read it straight from there.
         """
         sidecar = result.get("sidecar")
         if sidecar is None:
             return
 
         if not result.get("bytes_ok") or result.get("md5_ok") is False:
-            error = result.get("mismatch_detail") or "verify: bytes or md5 mismatch"
-            if sidecar.state == "failed" and sidecar.error == error:
-                return
-            sidecar.state = "failed"
-            sidecar.error = error
-            write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
-            with catalog_write(paths) as catalog:
-                catalog.upsert_dataset(sidecar)
-            result["state"] = "failed"
+            self._mark_failed(result, paths, sidecar, result.get("mismatch_detail") or "verify: bytes or md5 mismatch")
+            return
+
+        if not sidecar.files:
+            self._mark_failed(result, paths, sidecar, "no files recorded")
             return
 
         spots_verdict = result.get("spots_verdict")
@@ -842,8 +886,13 @@ class StoreVerifyCommand(BaseCommand):
         elif spots_verdict == "corrupt":
             return
         else:
-            # No spot count anywhere, but every byte and checksum matched: the files are what was
-            # written, so the dataset is complete with an unverified read count.
+            if spots_verdict is None:
+                # "--spots" was never requested for this run, so no file has actually been
+                # opened yet; read every one now before trusting size/md5 alone.
+                read_error = self._read_through_error(sra_dir(paths, result["accession"]), sidecar)
+                if read_error is not None:
+                    self._mark_failed(result, paths, sidecar, read_error)
+                    return
             new_state = "complete"
             completeness = {"method": "unverified", "ratio": None, "verdict": "unverified"}
         changed = (
