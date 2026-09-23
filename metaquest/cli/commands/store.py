@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import is_hidden_name, visible_files
-from metaquest.data.registry import load_registry, record_download, registry_transaction
+from metaquest.data.registry import load_registry, project_root, record_download, registry_transaction
 from metaquest.data.sra import is_transient_folder, verify_download
 from metaquest.store import journal
 from metaquest.store.adopt import adopt
@@ -36,7 +36,15 @@ from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.locks import lock_holder, lock_is_held
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
-from metaquest.store.sidecar import Sidecar, md5_file, read_sidecar, sidecar_completeness, write_sidecar
+from metaquest.store.sidecar import (
+    Sidecar,
+    build_sidecar,
+    md5_file,
+    ncbi_from_metadata_xml,
+    read_sidecar,
+    sidecar_completeness,
+    write_sidecar,
+)
 from metaquest.store.usage import ensure_project_identity, linked_by, record_usage_many, stale_projects
 
 logger = logging.getLogger(__name__)
@@ -647,6 +655,14 @@ class StoreVerifyCommand(BaseCommand):
             action="store_true",
             help="Rewrite the sidecar state and catalogue entry when a check finds a mismatch",
         )
+        parser.add_argument(
+            "--rescan",
+            action="store_true",
+            help=(
+                "Rebuild each dataset's file list from the files on disk before checking "
+                "(use after files were added or removed by hand)"
+            ),
+        )
 
     @staticmethod
     def _accessions_to_check(args: argparse.Namespace, paths: StorePaths) -> List[str]:
@@ -688,7 +704,28 @@ class StoreVerifyCommand(BaseCommand):
                 detail = detail or f"{name}: {e}"
         return bytes_ok, md5_ok, detail
 
-    def _verify_one(self, accession: str, paths: StorePaths, check_md5: bool, check_spots: bool) -> Dict[str, Any]:
+    def _find_ncbi_spots(self, accession: str, metadata_dirs: List[Path]) -> Optional[Dict[str, Any]]:
+        """The ``ncbi`` block read from the first ``<accession>_metadata.xml`` in
+        ``metadata_dirs`` that both exists and yields a spot count, else None."""
+        for metadata_dir in metadata_dirs:
+            xml_path = metadata_dir / f"{accession}_metadata.xml"
+            if not xml_path.is_file():
+                continue
+            found = ncbi_from_metadata_xml(xml_path)
+            if found.get("spots"):
+                self.logger.info("%s: spot count read from %s", accession, xml_path)
+                return found
+        return None
+
+    def _verify_one(
+        self,
+        accession: str,
+        paths: StorePaths,
+        check_md5: bool,
+        check_spots: bool,
+        metadata_dirs: Optional[List[Path]] = None,
+        rescan: bool = False,
+    ) -> Dict[str, Any]:
         store_dir = sra_dir(paths, accession)
         sc_path = sidecar_path(paths, accession)
         sidecar = read_sidecar(sc_path)
@@ -703,15 +740,38 @@ class StoreVerifyCommand(BaseCommand):
                 "spots_verdict": None,
                 "spots_ratio": None,
                 "mismatch_detail": None,
+                "rescanned": False,
+                "ncbi_found": None,
             }
+
+        rescanned = False
+        if rescan:
+            rebuilt = build_sidecar(
+                accession,
+                store_dir,
+                sidecar.ncbi,
+                sidecar.tool_version,
+                sidecar.compression,
+                tool=sidecar.tool,
+                downloaded=sidecar.downloaded,
+            )
+            rebuilt.stats, rebuilt.stats_computed = sidecar.stats, sidecar.stats_computed
+            sidecar = rebuilt
+            rescanned = True
 
         bytes_ok, md5_ok, detail = self._check_bytes_and_md5(accession, store_dir, sidecar, check_md5)
 
         spots_verdict = None
         spots_ratio = None
+        ncbi_found = None
         if check_spots:
+            expected_spots = sidecar.ncbi.get("spots")
+            if not expected_spots:
+                ncbi_found = self._find_ncbi_spots(accession, metadata_dirs or [])
+                if ncbi_found is not None:
+                    expected_spots = ncbi_found.get("spots")
             try:
-                verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
+                verify = verify_download(accession, store_dir, expected_spots)
                 spots_verdict = verify["verdict"]
                 spots_ratio = verify["ratio"]
             except (EOFError, OSError) as e:
@@ -739,17 +799,22 @@ class StoreVerifyCommand(BaseCommand):
             "spots_verdict": spots_verdict,
             "spots_ratio": spots_ratio,
             "mismatch_detail": detail,
+            "rescanned": rescanned,
+            "ncbi_found": ncbi_found,
         }
 
     def _fix_state(self, result: Dict[str, Any], paths: StorePaths) -> None:
-        """Rewrite the sidecar's state (and, for a spots-only mismatch, its completeness) to
-        match what this check found.
+        """Rewrite the sidecar's state (and completeness) to match what this check found.
 
         A bytes or md5 mismatch always wins: the file itself is wrong, so the dataset is
         ``"failed"`` with an error naming the first mismatch, regardless of what the spots
-        check says (a corrupt file can still happen to contain the right number of reads). Only
-        when bytes and md5 (if checked) both check out does the spots verdict decide
-        ``complete``/``partial``.
+        check says (a corrupt file can still happen to contain the right number of reads). Once
+        bytes and md5 (if checked) both check out, a spots verdict of ``complete``/``truncated``
+        decides ``complete``/``partial``; with no spot count anywhere (never checked, or checked
+        but unavailable), every readable file is enough to promote a ``failed`` dataset to
+        ``complete`` with an ``unverified`` completeness, clearing any stale error. A spot count
+        found in a metadata XML (``result["ncbi_found"]``, from ``_verify_one``'s fallback search)
+        is written into the sidecar's ``ncbi`` block so later runs read it straight from there.
         """
         sidecar = result.get("sidecar")
         if sidecar is None:
@@ -768,17 +833,30 @@ class StoreVerifyCommand(BaseCommand):
             return
 
         spots_verdict = result.get("spots_verdict")
+        if result.get("ncbi_found") and not sidecar.ncbi.get("spots"):
+            sidecar.ncbi = dict(result["ncbi_found"])
         state_for_verdict = {"complete": "complete", "truncated": "partial"}
-        if spots_verdict not in state_for_verdict:
-            # "unverified" (no recorded spot count) or "corrupt" (the files could not be read
-            # for the spots check specifically, bytes/md5 having passed): neither is a state
-            # this check can confidently rewrite.
+        if spots_verdict in state_for_verdict:
+            new_state = state_for_verdict[spots_verdict]
+            completeness = {"method": "spots", "ratio": result.get("spots_ratio"), "verdict": spots_verdict}
+        elif spots_verdict == "corrupt":
             return
-        new_state = state_for_verdict[spots_verdict]
-        if new_state == sidecar.state and sidecar.completeness.get("verdict") == spots_verdict:
+        else:
+            # No spot count anywhere, but every byte and checksum matched: the files are what was
+            # written, so the dataset is complete with an unverified read count.
+            new_state = "complete"
+            completeness = {"method": "unverified", "ratio": None, "verdict": "unverified"}
+        changed = (
+            result.get("rescanned")
+            or new_state != sidecar.state
+            or sidecar.completeness != completeness
+            or sidecar.error
+        )
+        if not changed:
             return
         sidecar.state = new_state
-        sidecar.completeness = {"method": "spots", "ratio": result.get("spots_ratio"), "verdict": spots_verdict}
+        sidecar.completeness = completeness
+        sidecar.error = None
         write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
         with catalog_write(paths) as catalog:
             catalog.upsert_dataset(sidecar)
@@ -805,10 +883,15 @@ class StoreVerifyCommand(BaseCommand):
 
         try:
             paths = store_paths(root)
+            metadata_dirs = [paths.metadata]
+            if registry.path is not None and registry.path.is_file():
+                metadata_dirs.append(project_root(registry) / "metadata")
             accessions = self._accessions_to_check(args, paths)
             results = []
             for accession in accessions:
-                result = self._verify_one(accession, paths, args.md5, args.spots)
+                result = self._verify_one(
+                    accession, paths, args.md5, args.spots, metadata_dirs=metadata_dirs, rescan=args.rescan
+                )
                 if args.fix_state:
                     self._fix_state(result, paths)
                 results.append(result)

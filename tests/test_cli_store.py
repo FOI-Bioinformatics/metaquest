@@ -86,7 +86,13 @@ def _adopt_args(**overrides):
 
 def _verify_args(accessions=None, **overrides):
     base = dict(
-        accessions=list(accessions or []), data_root=None, registry=None, md5=False, spots=False, fix_state=False
+        accessions=list(accessions or []),
+        data_root=None,
+        registry=None,
+        md5=False,
+        spots=False,
+        fix_state=False,
+        rescan=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -479,11 +485,17 @@ def _write_fastq_gz(path, text="@r\nACGT\n+\nIIII\n"):
 
 
 def _sidecar_matching_disk(acc_dir, accession, state="complete", reads=5):
-    """A sidecar whose one file record has the accession's real on-disk size, so a plain
-    `store_verify` (no --md5) reports it as healthy."""
-    file_path = acc_dir / f"{accession}.fastq.gz"
+    """A sidecar whose file records match the FASTQ files actually on disk for this accession
+    (`<accession>.fastq.gz` by default, but also a mate-suffixed name such as
+    `<accession>_1.fastq.gz`), so a plain `store_verify` (no --md5) reports it as healthy."""
+    file_paths = sorted(p for p in acc_dir.glob("*.fastq.gz") if not p.name.startswith("."))
+    if not file_paths:
+        file_paths = [acc_dir / f"{accession}.fastq.gz"]
     sidecar = _sidecar(accession, state=state)
-    sidecar.files = [{"name": file_path.name, "bytes": file_path.stat().st_size, "md5": "ignored", "reads": reads}]
+    sidecar.files = [
+        {"name": file_path.name, "bytes": file_path.stat().st_size, "md5": "ignored", "reads": reads}
+        for file_path in file_paths
+    ]
     return sidecar
 
 
@@ -852,6 +864,61 @@ class TestStoreVerifyCommand:
 
         assert rc == 1
         assert "corrupt" in out
+
+    def test_spots_from_store_metadata_xml(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz", "@r1\nACGT\n+\nIIII\n@r2\nACGT\n+\nIIII\n")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=2)
+        sc.ncbi = {}
+        sc.error = "._SRR1_1.fastq.gz: missing"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        (paths.metadata / "SRR1_metadata.xml").write_text(
+            "<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE><RUN_SET>"
+            '<RUN accession="SRR1" total_spots="2" total_bases="8" size="100">'
+            '<SRAFiles><SRAFile filename="SRR1_1.fastq.gz" md5="00"/></SRAFiles></RUN></RUN_SET>'
+            "</EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>"
+        )
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), spots=True, fix_state=True))
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete"
+        assert fixed.completeness["verdict"] == "complete"
+        assert fixed.ncbi.get("spots") == 2
+        assert fixed.error is None
+
+    def test_fix_state_promotes_readable_dataset_without_spots(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=1)
+        sc.ncbi = {}
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), spots=True, fix_state=True))
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete" and fixed.error is None
+        assert fixed.completeness["verdict"] == "unverified"
+
+    def test_rescan_rebuilds_file_list_from_disk(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=1)
+        sc.files.insert(0, {"name": "._SRR1_1.fastq.gz", "bytes": 4096, "md5": "x", "reads": None})
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), rescan=True, fix_state=True))
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert [f["name"] for f in fixed.files] == ["SRR1_1.fastq.gz"]
+        assert fixed.state == "complete"
 
 
 class TestStoreLinkCommand:
