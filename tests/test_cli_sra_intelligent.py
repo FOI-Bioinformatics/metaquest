@@ -789,6 +789,68 @@ class TestSRAInteractiveDashboardCommand:
 
         assert result == 0
 
+    def test_execute_full_dashboard_reuses_saved_quality_profiles_for_comparative(self, tmp_path):
+        """--quality-profiles alone (no --accessions-file) must reach the comparative
+        dashboard branch too, not just the quality branch: create_comparative_analysis is
+        called with profiles=<the loaded profiles>, not reprofiled from FASTQ. Covers the
+        profiles=profiles or None fix on the create_comparative_analysis call."""
+        cmd = SRAInteractiveDashboardCommand()
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        for acc in ("SRR001", "SRR002"):
+            profile = make_profile(acc)
+            (profiles_dir / f"{acc}_quality_profile.json").write_text(
+                json.dumps(
+                    {
+                        "accession": profile.accession,
+                        "total_reads": profile.total_reads,
+                        "total_bases": profile.total_bases,
+                        "avg_read_length": profile.avg_read_length,
+                        "read_length_distribution": profile.read_length_distribution,
+                        "gc_content": profile.gc_content,
+                        "gc_histogram": profile.gc_histogram,
+                        "quality_distribution": profile.quality_distribution,
+                        "n_content": profile.n_content,
+                        "contamination_indicators": profile.contamination_indicators,
+                        "complexity_score": profile.complexity_score,
+                        "duplication_rate": profile.duplication_rate,
+                        "technology_confidence": profile.technology_confidence,
+                        "quality_grade": profile.quality_grade,
+                        "recommendations": profile.recommendations,
+                    }
+                )
+            )
+
+        args = Namespace(
+            accessions_file=None,
+            quality_profiles=str(profiles_dir),
+            fastq_dir=str(tmp_path / "fastq"),  # never created: no FASTQ files exist on disk
+            output_dir=str(tmp_path / "dashboards"),
+            title="Full Dashboard",
+            dashboard_type="full",
+            no_open=True,
+        )
+
+        mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            mock_reporter = Mock()
+            mock_reporter.analyzer.find_fastq.return_value = None
+            mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
+            mock_reporter.create_comparative_analysis.return_value = mock_dashboard_path
+            mock_reporter_class.return_value = mock_reporter
+
+            result = cmd.execute(args)
+
+        assert result == 0
+
+        _, quality_kwargs = mock_reporter.generate_quality_dashboard.call_args
+        assert set(quality_kwargs["profiles"]) == {"SRR001", "SRR002"}
+
+        comparative_kwargs = mock_reporter.create_comparative_analysis.call_args.kwargs
+        assert set(comparative_kwargs["profiles"]) == {"SRR001", "SRR002"}
+
 
 # ============================================================================
 # TEST CLASS: SRAComparativeAnalysisCommand
