@@ -13,8 +13,8 @@ import pytest
 from metaquest.cli.commands.store import StoreGcCommand
 from metaquest.core.constants import STORE_ENV
 from metaquest.store.catalog import Catalog, catalog_write
-from metaquest.store.layout import init_store, sra_dir
-from metaquest.store.sidecar import Sidecar
+from metaquest.store.layout import init_store, sidecar_path, sra_dir
+from metaquest.store.sidecar import Sidecar, write_sidecar
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +83,7 @@ class TestStoreGcCommand:
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
@@ -147,6 +148,7 @@ class TestStoreGcCommand:
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1", state="partial"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), keep_partial=True, json=True))
@@ -167,6 +169,7 @@ class TestStoreGcCommand:
 
         recent = datetime.now(timezone.utc).isoformat()
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1", downloaded=recent))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), older_than=30, json=True))
@@ -209,6 +212,7 @@ class TestStoreGcCommand:
         (paths.tmp / "SRR9_temp").mkdir(parents=True)
         (paths.tmp / "SRR9_temp" / "f").write_bytes(b"x" * 10)
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root)))
@@ -226,6 +230,7 @@ class TestStoreGcCommand:
         (paths.tmp / "SRR9_temp").mkdir(parents=True)
         (paths.tmp / "SRR9_temp" / "f").write_bytes(b"x" * 10)
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=False, yes=True, json=True))
@@ -308,6 +313,20 @@ class TestStoreGcCommand:
         assert row["registry"] == str(missing_registry)
         assert row["reason"] == "registry missing"
 
+    def test_gc_refuses_when_catalog_has_no_projects(self, tmp_path, caplog):
+        import logging
+
+        paths = init_store(tmp_path / "store")
+        _write_dataset_dir(paths, "SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        with catalog_write(paths) as c:
+            c.upsert_dataset(_sidecar("SRR1"))
+        with caplog.at_level(logging.ERROR):
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), yes=True))
+        assert rc == 1
+        assert (paths.sra / "SRR1" / "SRR1.fastq.gz").exists()
+        assert any("no project" in record.message.lower() for record in caplog.records)
+
 
 class TestStoreGcRespectsLocksAndPlaceholders:
     """Never remove what another run is working on, or a row that stands for no files."""
@@ -328,6 +347,7 @@ class TestStoreGcRespectsLocksAndPlaceholders:
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
         self._hold(paths, "SRR1")
 

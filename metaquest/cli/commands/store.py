@@ -29,6 +29,7 @@ from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import load_registry, record_download, registry_transaction
 from metaquest.data.sra import is_transient_folder, verify_download
+from metaquest.store import journal
 from metaquest.store.adopt import adopt
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, sra_dir, store_paths
@@ -425,11 +426,18 @@ class StoreReindexCommand(BaseCommand):
                 return 1
             with catalog_write(paths) as catalog:
                 count = catalog.reindex(sidecars)
+                projects, usage = journal.replay(paths, catalog)
+                if projects == 0:
+                    self.logger.warning(
+                        "No project records could be restored (no journal under %s); every dataset will look "
+                        "unused until each project runs store_init or store_link again",
+                        paths.journal,
+                    )
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1
 
-        print(f"Reindexed {count} dataset(s)")
+        print(f"Reindexed {count} dataset(s); restored {projects} project(s) and {usage} usage record(s)")
         return 0
 
 
@@ -1478,6 +1486,13 @@ class StoreGcCommand(BaseCommand):
         paths = store_paths(root)
         try:
             with Catalog(paths) as catalog:
+                project_count = catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+                if project_count == 0 and any(True for _ in catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1")):
+                    self.logger.error(
+                        "The catalogue records no project at all, so nothing can be told apart from unused data. "
+                        "Run store_reindex (which replays the journal) or store_init from each project first."
+                    )
+                    return 1
                 stale = stale_projects(catalog)
                 buckets = self._dataset_candidates(
                     catalog, paths, stale, args.older_than, args.keep_partial, getattr(args, "include_stale", False)

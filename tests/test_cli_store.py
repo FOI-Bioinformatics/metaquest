@@ -1349,6 +1349,20 @@ class TestStoreReindexNeverLosesHistory:
         with Catalog(paths) as catalog:
             assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
 
+    def test_reindex_after_catalog_loss_restores_projects_and_usage(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        with catalog_write(paths) as c:
+            c.upsert_dataset(_sidecar("SRR1"))
+            c.upsert_project("pid1", "proj", str(tmp_path), "r.json")
+            c.record_usage("SRR1", "pid1", "", "linked", "")
+        (paths.root / "catalog.sqlite").unlink()
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
+        with catalog_write(paths) as c:
+            assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+            assert c.conn.execute("SELECT COUNT(*) FROM usage WHERE accession='SRR1'").fetchone()[0] == 1
+
 
 class TestCorruptStoreMarker:
     def test_a_corrupt_marker_reads_as_missing_with_a_warning(self, tmp_path, caplog):

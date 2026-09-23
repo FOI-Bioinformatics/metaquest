@@ -148,6 +148,9 @@ class Catalog:
         self.paths = paths
         self.create = create
         self._conn: Optional[sqlite3.Connection] = None
+        # Suspended by journal.replay() while it feeds journaled records back in, so a
+        # rebuilt catalogue does not duplicate the lines it is replaying.
+        self.journal_enabled: bool = True
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -310,6 +313,10 @@ class Catalog:
             """,
             (project_id, name, path, registry, now, now, socket.gethostname()),
         )
+        if self.journal_enabled:
+            from metaquest.store import journal
+
+            journal.append_project(self.paths, project_id, name, path, registry)
 
     # ------------------------------------------------------------------- usage
 
@@ -349,6 +356,10 @@ class Catalog:
             """,
             (accession, project_id, genome_id, stage, now, now, detail),
         )
+        if self.journal_enabled:
+            from metaquest.store import journal
+
+            journal.append_usage(self.paths, accession, project_id, genome_id, stage, detail)
 
     # ----------------------------------------------------------------- queries
 
