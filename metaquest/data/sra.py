@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -123,10 +124,28 @@ def transient_bytes(folder: Union[str, Path]) -> int:
 
 
 def _safe_rmtree(path: Path) -> None:
-    """Remove a directory tree if present, logging on failure instead of raising."""
+    """Remove a directory tree if present, logging on failure instead of raising.
+
+    A missing file during removal is ignored rather than logged: on a volume that stores each
+    file's AppleDouble sidecar (``._<name>``) next to it, macOS can delete ``._X`` together with
+    ``X``, so ``rmtree`` reaching ``._X`` afterwards finds it already gone. That race is not a
+    real failure to remove the directory. ``onexc`` (Python 3.12+) hands the callback the
+    exception object directly; the older ``onerror`` (kept here for 3.11) hands it a
+    ``sys.exc_info()`` tuple instead, so the callback accepts either shape.
+    """
+
+    def _ignore_missing(func, target, exc_info):
+        exc = exc_info[1] if isinstance(exc_info, tuple) else exc_info
+        if isinstance(exc, FileNotFoundError):
+            return
+        raise exc
+
     try:
         if path.exists():
-            shutil.rmtree(path)
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=_ignore_missing)
+            else:
+                shutil.rmtree(path, onerror=_ignore_missing)
     except Exception as e:
         logger.warning(f"Could not remove directory {path}: {e}")
 

@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import load_registry, record_download, registry_transaction
 from metaquest.data.sra import is_transient_folder, verify_download
 from metaquest.store.adopt import adopt
@@ -391,11 +392,7 @@ class StoreReindexCommand(BaseCommand):
         """
         sidecars: List[Sidecar] = []
         unreadable: List[str] = []
-        if not paths.sra.is_dir():
-            return sidecars, unreadable
-        for acc_dir in sorted(paths.sra.iterdir()):
-            if not acc_dir.is_dir() or acc_dir.name == ".sra-cache":
-                continue
+        for acc_dir in visible_files(paths.sra, dirs=True):
             sidecar = read_sidecar(sidecar_path(paths, acc_dir.name))
             if sidecar is None:
                 unreadable.append(acc_dir.name)
@@ -639,9 +636,7 @@ class StoreVerifyCommand(BaseCommand):
     def _accessions_to_check(args: argparse.Namespace, paths: StorePaths) -> List[str]:
         if args.accessions:
             return list(args.accessions)
-        if not paths.sra.is_dir():
-            return []
-        return sorted(p.name for p in paths.sra.iterdir() if p.is_dir())
+        return [p.name for p in visible_files(paths.sra, dirs=True)]
 
     @staticmethod
     def _check_bytes_and_md5(accession: str, store_dir: Path, sidecar: Sidecar, check_md5: bool):
@@ -1426,6 +1421,8 @@ class StoreGcCommand(BaseCommand):
                         if lock_is_held(paths, cls._accession_of_leftover(sub.name)):
                             continue
                         candidates.append({"path": sub, "bytes": _path_bytes(sub), "reason": "leftover"})
+                    continue
+                if is_hidden_name(entry.name):
                     continue
                 if not entry.is_dir():
                     continue

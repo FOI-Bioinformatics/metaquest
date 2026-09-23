@@ -1364,3 +1364,17 @@ class TestCorruptStoreMarker:
             assert read_marker(root) is None
 
         assert any("marker" in record.message for record in caplog.records)
+
+
+def test_reindex_and_verify_ignore_hidden_entries(tmp_path, monkeypatch):
+    paths = init_store(tmp_path / "store")
+    monkeypatch.chdir(tmp_path)
+    acc_dir = sra_dir(paths, "SRR1")
+    _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+    write_sidecar(sidecar_path(paths, "SRR1"), _sidecar_matching_disk(acc_dir, "SRR1"))
+    (paths.sra / "._SRR1").write_bytes(b"\x00\x05")
+    (paths.sra / ".sra-cache").mkdir()
+    (paths.sra / ".hidden_dir").mkdir()
+    assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
+    rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root)))
+    assert rc == 0

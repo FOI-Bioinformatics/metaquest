@@ -517,3 +517,22 @@ class TestAdoptPerAccessionLocking:
         # Nothing was staged or moved, since the lock was never acquired.
         assert not sra_dir(paths, "SRR1").exists()
         assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
+
+
+class TestAdoptIgnoresAppleDouble:
+    def test_staged_copy_has_no_appledouble_and_sidecar_is_complete(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        (acc / "._SRR1_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        (project / "._SRR1").write_bytes(b"\x00\x05")
+        (project / ".DS_Store").write_bytes(b"\x00")
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.adopted == ["SRR1"]
+        names = sorted(p.name for p in (paths.sra / "SRR1").iterdir())
+        assert "._SRR1_1.fastq.gz" not in names
+        sc = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert sc.state == "complete"
+        assert [f["name"] for f in sc.files] == ["SRR1_1.fastq.gz"]

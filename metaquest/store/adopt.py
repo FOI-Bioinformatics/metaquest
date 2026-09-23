@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
+from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.sra import compress_fastq, count_fastq_reads, fastq_files, fastq_stem, is_transient_folder
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
@@ -65,6 +66,11 @@ _ADOPT_COMPRESS_THREADS = 4
 
 # Suffix on a staging folder under paths.tmp, e.g. "SRR1_adopt".
 _STAGING_SUFFIX = "_adopt"
+
+# Names shutil.copytree leaves behind when staging a project folder: the AppleDouble sidecar
+# files (``._<name>``) macOS writes next to every file on a volume without native extended
+# attributes, and the per-folder Finder metadata file ``.DS_Store``. Neither is project data.
+ADOPT_COPY_IGNORE = shutil.ignore_patterns("._*", ".DS_Store")
 
 
 @dataclass
@@ -228,9 +234,12 @@ def _finish_sidecar(
 
 
 def _folder_bytes(folder: Path) -> int:
-    """Total bytes of every file under ``folder``, skipping anything that cannot be stat'ed."""
+    """Total bytes of every file under ``folder``, skipping hidden names and anything that
+    cannot be stat'ed."""
     total = 0
     for sub in folder.rglob("*"):
+        if is_hidden_name(sub.name):
+            continue
         try:
             if sub.is_file():
                 total += sub.stat().st_size
@@ -290,7 +299,7 @@ def _stage_into_store(
         shutil.rmtree(staged)
         report.resumed.append(accession)
 
-    shutil.copytree(entry, staged)
+    shutil.copytree(entry, staged, ignore=ADOPT_COPY_IGNORE)
 
     if compress:
         for file_path in fastq_files(staged):
@@ -314,6 +323,8 @@ def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]
         return real_dirs
     for candidate in sorted(project_dir.iterdir()):
         name = candidate.name
+        if is_hidden_name(name):
+            continue
         if is_transient_folder(name):
             continue
         if candidate.is_symlink():
@@ -333,11 +344,7 @@ def _scan_foreign_incomplete(paths: StorePaths, real_dirs: Dict[str, Path]) -> L
     so a dataset another project is mid-download on cannot be claimed by this run.
     """
     foreign: List[str] = []
-    if not paths.sra.is_dir():
-        return foreign
-    for store_dir in sorted(paths.sra.iterdir()):
-        if not store_dir.is_dir():
-            continue
+    for store_dir in visible_files(paths.sra, dirs=True):
         accession = store_dir.name
         if accession in real_dirs or sidecar_path(paths, accession).is_file():
             continue

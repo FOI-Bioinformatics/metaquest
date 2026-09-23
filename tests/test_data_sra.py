@@ -5,6 +5,8 @@ Tests for metaquest.data.sra module.
 import gzip
 import inspect
 import json
+import logging
+import os
 import shutil
 
 import pytest
@@ -18,6 +20,7 @@ from metaquest.data.sra import (
     _check_existing_download,
     _cached_sra_archive,
     _handle_download_output,
+    _safe_rmtree,
     download_accession,
     _check_existing_downloads,
     _process_download_results,
@@ -2345,3 +2348,42 @@ class TestStoreDownloadPublishesAtomically:
             download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0, force=True)
 
         assert calls[0]["force"] is True
+
+
+class TestSafeRmtreeIgnoresMissingFiles:
+    """On a volume storing each file's AppleDouble sidecar (``._<name>``) next to it, macOS can
+    delete ``._X`` together with ``X``; ``_safe_rmtree`` must not treat that race as a failure."""
+
+    def test_a_file_removed_concurrently_during_cleanup_is_not_logged(self, tmp_path, caplog):
+        target = tmp_path / "acc_dir"
+        target.mkdir()
+        (target / "keep.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        missing_name = "._keep.fastq"
+        (target / missing_name).write_bytes(b"\x00\x05\x16\x07")
+
+        real_unlink = os.unlink
+
+        def _flaky_unlink(path, *args, **kwargs):
+            # `os.unlink` is called with just the entry name (plus `dir_fd`) on a platform
+            # using shutil's fd-based rmtree, not the full path, so the match is by basename.
+            if os.path.basename(str(path)) == missing_name:
+                raise FileNotFoundError(2, "No such file or directory", str(path))
+            return real_unlink(path, *args, **kwargs)
+
+        with caplog.at_level(logging.WARNING):
+            with patch("os.unlink", side_effect=_flaky_unlink):
+                _safe_rmtree(target)
+
+        assert not target.exists()
+        assert not any("Could not remove directory" in r.message for r in caplog.records)
+
+    def test_a_genuine_removal_failure_is_still_logged(self, tmp_path, caplog):
+        target = tmp_path / "acc_dir"
+        target.mkdir()
+        (target / "keep.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        with caplog.at_level(logging.WARNING):
+            with patch("os.unlink", side_effect=PermissionError(13, "Permission denied")):
+                _safe_rmtree(target)
+
+        assert any("Could not remove directory" in r.message for r in caplog.records)
