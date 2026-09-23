@@ -78,7 +78,7 @@ class TestUseBranchwaterCommand:
 
         result = command.execute(args)
         assert result == 0
-        mock_command.assert_called_once_with("test_folder", "matches")
+        mock_command.assert_called_once_with("test_folder", "matches", errors=[])
 
     @patch("metaquest.cli.commands.branchwater.process_branchwater_files")
     def test_execute_failure(self, mock_command):
@@ -90,7 +90,14 @@ class TestUseBranchwaterCommand:
 
         result = command.execute(args)
         assert result == 1
-        mock_command.assert_called_once_with("test_folder", "matches")
+        mock_command.assert_called_once_with("test_folder", "matches", errors=[])
+
+    def test_use_branchwater_returns_1_on_file_error(self, tmp_path):
+        source = tmp_path / "bw"
+        source.mkdir()
+        (source / "bad.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
+        args = argparse.Namespace(branchwater_folder=str(source), matches_folder=str(tmp_path / "m"))
+        assert UseBranchwaterCommand().execute(args) == 1
 
 
 class TestExtractBranchwaterMetadataCommand:
@@ -127,7 +134,7 @@ class TestExtractBranchwaterMetadataCommand:
         result = command.execute(args)
         assert result == 0
         mock_mkdir.assert_called_once_with(exist_ok=True)
-        mock_command.assert_called_once_with("test_folder", Path("metadata/branchwater_metadata.txt"))
+        mock_command.assert_called_once_with("test_folder", Path("metadata/branchwater_metadata.txt"), errors=[])
 
 
 class TestParseContainmentCommand:
@@ -200,7 +207,7 @@ class TestParseContainmentCommand:
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
-            "test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05, details_file=None
+            "test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05, details_file=None, errors=[]
         )
 
     def test_execute_records_screening_in_registry(self, tmp_path):

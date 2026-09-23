@@ -3,6 +3,7 @@ Containment-related CLI commands.
 """
 
 import argparse
+from typing import List
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
@@ -65,12 +66,14 @@ class ParseContainmentCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
+            errors: List[str] = []
             parse_containment_data(
                 args.matches_folder,
                 args.parsed_containment_file,
                 args.summary_containment_file,
                 args.step_size,
                 details_file=args.details_file,
+                errors=errors,
             )
             with registry_transaction(args.registry) as registry:
                 record_screening_from_table(
@@ -79,6 +82,9 @@ class ParseContainmentCommand(BaseCommand):
                     args.matches_folder,
                     max_screened=args.registry_max_screened,
                 )
+            if errors:
+                self.logger.error("%d match file(s) could not be read: %s", len(errors), ", ".join(errors))
+                return 1
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error parsing containment: {e}")

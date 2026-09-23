@@ -112,6 +112,17 @@ class TestProcessBranchwaterFiles:
         with pytest.raises(ValidationError):
             process_branchwater_files("/nonexistent/source", "/tmp/target")
 
+    def test_unreadable_csv_is_reported_to_caller(self, tmp_path):
+        source = tmp_path / "bw"
+        target = tmp_path / "matches"
+        source.mkdir()
+        (source / "good.csv").write_text("acc,containment,cANI\nSRR1,0.9,0.99\n")
+        (source / "bad.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
+        errors: list = []
+        result = process_branchwater_files(source, target, errors=errors)
+        assert "good" in result
+        assert errors == ["bad.csv"]
+
 
 class TestProcessBranchwaterRow:
     """Test _process_branchwater_row function."""

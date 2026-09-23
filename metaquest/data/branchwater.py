@@ -86,13 +86,19 @@ def _write_details_table(details_rows: List[Dict[str, Any]], details_file: Union
     logger.info(f"Containment details saved to {details_file}")
 
 
-def process_branchwater_files(source_folder: Union[str, Path], target_folder: Union[str, Path]) -> Dict[str, Path]:
+def process_branchwater_files(
+    source_folder: Union[str, Path],
+    target_folder: Union[str, Path],
+    errors: Optional[List[str]] = None,
+) -> Dict[str, Path]:
     """
     Process Branchwater files from source folder and copy to target folder.
 
     Args:
         source_folder: Folder containing Branchwater CSV files
         target_folder: Folder to save processed CSV files
+        errors: Optional list the caller inspects afterwards; the name of each file
+            that could not be read is appended to it. Left untouched when None.
 
     Returns:
         Dictionary mapping genome IDs to processed file paths
@@ -137,8 +143,11 @@ def process_branchwater_files(source_folder: Union[str, Path], target_folder: Un
         except Exception as e:
             error_count += 1
             logger.error(f"Error processing {csv_file}: {e}")
+            if errors is not None:
+                errors.append(csv_file.name)
 
-    logger.info(f"Processed {processed_count} files with {error_count} errors")
+    level = logger.warning if error_count else logger.info
+    level(f"Processed {processed_count} files with {error_count} errors")
     return result_files
 
 
@@ -199,7 +208,9 @@ def _validate_branchwater_file(csv_file):
 
 
 def extract_metadata_from_branchwater(
-    branchwater_folder: Union[str, Path], output_file: Union[str, Path]
+    branchwater_folder: Union[str, Path],
+    output_file: Union[str, Path],
+    errors: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Extract metadata from Branchwater CSV files and save to a file.
@@ -207,6 +218,8 @@ def extract_metadata_from_branchwater(
     Args:
         branchwater_folder: Path to the folder containing Branchwater CSV files
         output_file: Path to save metadata CSV file
+        errors: Optional list the caller inspects afterwards; the name of each file
+            that could not be read is appended to it. Left untouched when None.
 
     Returns:
         DataFrame containing extracted metadata
@@ -250,6 +263,8 @@ def extract_metadata_from_branchwater(
             except Exception as e:
                 error_count += 1
                 logger.error(f"Error extracting metadata from {csv_file}: {e}")
+                if errors is not None:
+                    errors.append(csv_file.name)
 
         return _finalize_metadata_extraction(metadata_records, output_file, processed_count, error_count)
 
@@ -270,7 +285,8 @@ def _finalize_metadata_extraction(metadata_records, output_file, processed_count
     Returns:
         pd.DataFrame: The metadata DataFrame
     """
-    logger.info(f"Processed {processed_count} files with {error_count} errors")
+    level = logger.warning if error_count else logger.info
+    level(f"Processed {processed_count} files with {error_count} errors")
 
     if not metadata_records:
         logger.warning("No metadata records extracted")
@@ -433,6 +449,7 @@ def parse_containment_data(
     summary_file: Union[str, Path],
     step_size: float = 0.1,
     details_file: Optional[Union[str, Path]] = None,
+    errors: Optional[List[str]] = None,
 ) -> ContainmentSummary:
     """
     Parse containment data from match files and generate summary.
@@ -448,6 +465,8 @@ def parse_containment_data(
         summary_file: Path to save containment summary
         step_size: Step size for threshold calculation
         details_file: Path to save the details table (default: derived from output_file)
+        errors: Optional list the caller inspects afterwards; the name of each file
+            that could not be read is appended to it. Left untouched when None.
 
     Returns:
         ContainmentSummary object
@@ -479,8 +498,11 @@ def parse_containment_data(
         except Exception as e:
             error_count += 1
             logger.error(f"Error parsing containment from {csv_file}: {e}")
+            if errors is not None:
+                errors.append(csv_file.name)
 
-    logger.info(f"Processed {processed_count} files with {error_count} errors")
+    level = logger.warning if error_count else logger.info
+    level(f"Processed {processed_count} files with {error_count} errors")
 
     _write_details_table(details_rows, _resolve_details_file(output_file, details_file))
 
