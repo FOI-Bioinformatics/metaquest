@@ -653,8 +653,13 @@ def extract_target_reads(
     samples = select_samples_for_genome(containment, genome_id, threshold)
     logger.info("%d sample(s) meet containment >= %.3f for %s", len(samples), threshold, genome_id)
     if available is not None:
-        missing = [acc for acc in samples if acc not in available]
-        samples = [acc for acc in samples if acc in available]
+        # A sample already recorded (``already_done``) is kept even when it is not in
+        # ``available``: its FASTQ input may have been removed since a successful
+        # extraction (e.g. by store_gc/store_unlink), and it must still reach the
+        # "already extracted" fast path below rather than being counted as missing.
+        known = set(available) | set((already_done or {}).keys())
+        missing = [acc for acc in samples if acc not in known]
+        samples = [acc for acc in samples if acc in known]
         if missing:
             logger.info(
                 "%d of the %d selected sample(s) have no FASTQ under %s; skipped",
@@ -771,6 +776,11 @@ def _megahit_args(
 
     if tmp_dir is not None:
         tmp_dir = Path(tmp_dir)
+        if tmp_dir.resolve().is_relative_to(out_dir.resolve()):
+            raise ProcessingError(
+                f"tmp_dir ({tmp_dir}) must not be output_dir or a folder inside it ({out_dir}); "
+                "megahit refuses to run when its -o directory already exists"
+            )
         tmp_dir.mkdir(parents=True, exist_ok=True)
         SecureSubprocess.add_allowed_root(tmp_dir)
         args += ["--tmp-dir", str(tmp_dir)]

@@ -391,21 +391,25 @@ class ExtractTargetReadsCommand(BaseCommand):
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
             # megahit needs FIFOs for its scratch files, which some filesystems (e.g. ExFAT)
             # do not provide; --temp-folder points it elsewhere when given, else a folder
-            # under the assembly's own output directory is used and removed afterwards.
+            # under the project's output root is used -- a sibling of every per-accession
+            # assembly directory, never inside one, since megahit refuses to run when its
+            # -o directory already exists -- and removed afterwards, even on failure.
             uses_default_tmp_dir = not args.temp_folder
-            tmp_dir = Path(args.temp_folder) if args.temp_folder else out_dir / ".megahit-tmp"
-            _, ran = assemble_extracted_reads(
-                reads,
-                out_dir,
-                threads=asm_threads,
-                min_contig_len=args.min_contig_len,
-                force=args.force,
-                preset=args.assembly_preset,
-                keep_intermediate=args.keep_intermediate,
-                tmp_dir=tmp_dir,
-            )
-            if uses_default_tmp_dir:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+            tmp_dir = Path(args.temp_folder) if args.temp_folder else Path(args.output_folder) / ".megahit-tmp"
+            try:
+                _, ran = assemble_extracted_reads(
+                    reads,
+                    out_dir,
+                    threads=asm_threads,
+                    min_contig_len=args.min_contig_len,
+                    force=args.force,
+                    preset=args.assembly_preset,
+                    keep_intermediate=args.keep_intermediate,
+                    tmp_dir=tmp_dir,
+                )
+            finally:
+                if uses_default_tmp_dir:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
             if not ran and self._has_assembly_record(args, accession):
                 # megahit did not run, so the recorded version and parameters still describe
                 # the assembly on disk; leave them alone.
