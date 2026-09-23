@@ -1363,6 +1363,49 @@ class TestStoreReindexNeverLosesHistory:
             assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
             assert c.conn.execute("SELECT COUNT(*) FROM usage WHERE accession='SRR1'").fetchone()[0] == 1
 
+    def test_reindex_survives_a_corrupt_project_journal_line(self, tmp_path, caplog):
+        """A damaged project line must not sink the whole reindex: the dataset rebuild (already
+        done in the same catalog_write transaction) must still be kept, and the command must
+        still return 0, with the usage row that referenced the lost project simply skipped."""
+        import logging
+
+        root, paths = self._store_with_dataset(tmp_path)
+        (paths.journal / "projects.jsonl").write_text("{ this is not json\n")
+        (paths.root / "catalog.sqlite").unlink()
+
+        with caplog.at_level(logging.WARNING):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 0
+        with Catalog(paths) as catalog:
+            assert catalog.conn.execute("SELECT COUNT(*) FROM datasets").fetchone()[0] == 1
+            assert catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+            assert catalog.conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] == 0
+        assert any("Skipping unreadable journal line" in r.message for r in caplog.records)
+        assert any("Skipped 1 usage record" in r.message for r in caplog.records)
+
+    def test_reindex_recovers_a_pre_journal_project_once_backfilled(self, tmp_path):
+        """A project and usage row written before the journal existed (journaling disabled)
+        are copied into the journal the next time the store is opened for writing, while
+        catalog.sqlite still holds them; only then does losing catalog.sqlite stay recoverable."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths) as c:
+            c.journal_enabled = False
+            c.upsert_project("pid1", "proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            c.record_usage("SRR1", "pid1", "", "linked", "")
+        assert not (paths.journal / "projects.jsonl").exists()
+
+        with catalog_write(paths):
+            pass  # any ordinary write session backfills the journal from catalog.sqlite
+        assert (paths.journal / "projects.jsonl").is_file()
+
+        (paths.root / "catalog.sqlite").unlink()
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(root))) == 0
+        with catalog_write(paths) as c:
+            assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+            assert c.conn.execute("SELECT COUNT(*) FROM usage WHERE accession='SRR1'").fetchone()[0] == 1
+
 
 class TestCorruptStoreMarker:
     def test_a_corrupt_marker_reads_as_missing_with_a_warning(self, tmp_path, caplog):

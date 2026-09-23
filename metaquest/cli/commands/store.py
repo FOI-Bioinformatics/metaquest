@@ -429,7 +429,7 @@ class StoreReindexCommand(BaseCommand):
                 projects, usage = journal.replay(paths, catalog)
                 if projects == 0:
                     self.logger.warning(
-                        "No project records could be restored (no journal under %s); every dataset will look "
+                        "No project records could be restored from %s; every dataset will look "
                         "unused until each project runs store_init or store_link again",
                         paths.journal,
                     )

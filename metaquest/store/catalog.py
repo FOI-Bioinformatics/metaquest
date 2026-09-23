@@ -466,10 +466,11 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
 
     Acquires ``paths.catalog_lock`` (blocking, with the same wait/stale-lock
     protocol as the per-project registry's ``_acquire_lock``), opens the
-    catalogue, migrates its schema, yields it for the caller to write through,
-    commits on a clean exit, and always releases the lock. If the block raises,
-    the connection is closed without committing (uncommitted changes are
-    discarded) and the lock is still released.
+    catalogue, migrates its schema, backfills the journal from any ``projects``/``usage`` rows
+    that predate it (``journal.backfill_from_catalog``, a no-op once the journal already has
+    project lines), yields it for the caller to write through, commits on a clean exit, and
+    always releases the lock. If the block raises, the connection is closed without committing
+    (uncommitted changes are discarded) and the lock is still released.
 
     Not re-entrant: nesting a second ``catalog_write`` (or ``Catalog.__enter__``, opened
     against the same store root) inside this block's body will deadlock against the
@@ -480,6 +481,9 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     try:
         with Catalog(paths, create=True) as catalog:
             catalog.migrate()
+            from metaquest.store import journal
+
+            journal.backfill_from_catalog(paths, catalog)
             yield catalog
             try:
                 catalog.conn.commit()
