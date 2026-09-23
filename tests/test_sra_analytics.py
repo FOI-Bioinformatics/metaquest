@@ -1044,3 +1044,62 @@ class TestDataStructures:
         assert recommendations.recommended_pipeline == "paired_end"
         assert recommendations.quality_trimming["enabled"] is True
         assert recommendations.computational_requirements["memory_gb"] == 16
+
+
+def test_statistical_tests_are_json_serialisable():
+    """json_safe converts numpy scalars, sets and non-finite floats to JSON-safe values."""
+    import json
+
+    import numpy as np
+
+    from metaquest.sra.analytics import json_safe
+
+    payload = {"significant": np.bool_(True), "p": np.float64(0.01), "nan": float("nan"), "s": {1, 2}}
+    text = json.dumps(json_safe(payload))
+    assert json.loads(text) == {"significant": True, "p": 0.01, "nan": None, "s": [1, 2]}
+
+
+def _profile_with_gc(accession: str, gc_content: float) -> QualityProfile:
+    """Build a real QualityProfile with a chosen gc_content, otherwise matching the
+    ``make_profile`` helper in tests/test_cli_sra_intelligent.py (which hardcodes
+    gc_content=0.45 and so cannot vary it across groups)."""
+    return QualityProfile(
+        accession=accession,
+        total_reads=1000,
+        reads_sampled=1000,
+        total_bases=150000,
+        avg_read_length=150.0,
+        read_length_distribution={},
+        gc_content=gc_content,
+        gc_histogram={},
+        quality_distribution={"excellent_q30+": 0.9},
+        n_content=0.0,
+        contamination_indicators={"adapter_contamination": 0.0},
+        complexity_score=0.85,
+        duplication_rate=None,
+        technology_confidence=0.8,
+        quality_grade="good",
+        recommendations=[],
+    )
+
+
+def test_compare_datasets_result_dumps(tmp_path):
+    """compare_datasets' real statistical_tests output (numpy bool included) must be
+    JSON-serialisable once passed through json_safe, matching what _save_comparison_results
+    now does before writing comparative_analysis.json."""
+    import json
+
+    from metaquest.sra.analytics import SRADatasetAnalyzer, json_safe
+
+    analyzer = SRADatasetAnalyzer(tmp_path)
+    groups = {"a": ["A1", "A2", "A3"], "b": ["B1", "B2"]}
+    profiles = {}
+    for i, accession in enumerate(groups["a"]):
+        profiles[accession] = _profile_with_gc(accession, 0.40 + i * 0.01)
+    for i, accession in enumerate(groups["b"]):
+        profiles[accession] = _profile_with_gc(accession, 0.55 + i * 0.01)
+
+    result = analyzer.compare_datasets(groups, profiles=profiles)
+
+    assert result.statistical_tests["gc_content"]["test"] == "t-test"
+    json.dumps(json_safe(result.statistical_tests))
