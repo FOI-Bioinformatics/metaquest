@@ -151,6 +151,9 @@ ignore_missing_imports = true
 minversion = "6.0"
 addopts = "-ra -q --strict-markers -m 'not network'"
 testpaths = ["tests"]
+# Import the package from the checkout under test, not from the editable install's path,
+# so a git worktree tests its own copy.
+pythonpath = ["."]
 markers = [
     "network: calls NCBI or SRA over the internet; run explicitly with 'pytest -m network'",
 ]
