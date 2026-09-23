@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
-from metaquest.data.file_io import write_csv
+from metaquest.data.file_io import visible_files, write_csv
 from metaquest.data.registry import (
     ProjectPaths,
     ReconcileReport,
@@ -137,14 +137,13 @@ class StatusCommand(BaseCommand):
         meta_dir = Path(args.metadata_folder)
         genomes_dir = Path(args.genomes_folder)
 
-        if fastq_dir.is_dir():
-            on_disk_fastq = sorted(
-                d.name for d in fastq_dir.iterdir() if not is_transient_folder(d.name) and accession_has_fastq(d)
-            )
-        else:
-            on_disk_fastq = []
-        on_disk_meta = sorted(p.name[: -len("_metadata.xml")] for p in meta_dir.glob("*_metadata.xml"))
-        on_disk_genomes = sorted({p.name for g in GENOME_FASTA_GLOBS for p in genomes_dir.glob(g)})
+        on_disk_fastq = sorted(
+            d.name
+            for d in visible_files(fastq_dir, dirs=True)
+            if not is_transient_folder(d.name) and accession_has_fastq(d)
+        )
+        on_disk_meta = sorted(p.name[: -len("_metadata.xml")] for p in visible_files(meta_dir, "*_metadata.xml"))
+        on_disk_genomes = sorted(p.name for p in visible_files(genomes_dir, *GENOME_FASTA_GLOBS))
 
         report: Dict[str, Any] = {
             "on_disk": {

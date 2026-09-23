@@ -37,20 +37,43 @@ def ensure_directory(path: Union[str, Path]) -> Path:
         raise DataAccessError(f"Failed to create directory {path}: {e}")
 
 
-def list_files(directory: Union[str, Path], pattern: str = "*") -> List[Path]:
-    """
-    List all files in a directory matching a pattern.
+def is_hidden_name(name: str) -> bool:
+    """True for a dotfile name, including the ``._<name>`` AppleDouble files macOS writes next to
+    every file on a volume without native extended attributes (ExFAT, SMB, some NAS shares)."""
+    return name.startswith(".")
 
-    Args:
-        directory: Path to the directory
-        pattern: Glob pattern to match files
 
-    Returns:
-        List of matching file paths
+def visible_files(directory: Union[str, Path], *patterns: str, dirs: bool = False) -> List[Path]:
+    """Entries directly in ``directory`` matching any of ``patterns``, hidden names removed.
+
+    Returns files (or directories when ``dirs`` is True), sorted by name, without duplicates.
+    A directory that does not exist yields an empty list. Every folder listing in metaquest
+    goes through here so that ``._*`` and ``.DS_Store`` never count as data.
     """
+    base = Path(directory)
+    if not base.is_dir():
+        return []
+    found = set()
+    for pattern in patterns or ("*",):
+        for candidate in base.glob(pattern):
+            if is_hidden_name(candidate.name):
+                continue
+            try:
+                keep = candidate.is_dir() if dirs else candidate.is_file()
+            except OSError:
+                continue
+            if keep:
+                found.add(candidate)
+    return sorted(found)
+
+
+def list_files(directory: Union[str, Path], pattern: str = "*", include_hidden: bool = False) -> List[Path]:
+    """List the files in ``directory`` matching ``pattern``; hidden names are dropped unless asked for."""
     try:
         directory = Path(directory)
-        return list(directory.glob(pattern))
+        if include_hidden:
+            return list(directory.glob(pattern))
+        return visible_files(directory, pattern)
     except Exception as e:
         logger.warning(f"Error listing files in {directory} with pattern {pattern}: {e}")
         return []

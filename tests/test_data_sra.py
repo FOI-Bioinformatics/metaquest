@@ -262,6 +262,22 @@ class TestFastqFiles:
         assert [p.name for p in fastq_files(link)] == ["SRR1_1.fastq"]
 
 
+class TestFastqFilesIgnoresAppleDouble:
+    def test_appledouble_not_listed(self, tmp_path):
+        acc = tmp_path / "SRR1"
+        acc.mkdir()
+        (acc / "SRR1_1.fastq.gz").write_bytes(b"x" * 10)
+        (acc / "._SRR1_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        assert [p.name for p in fastq_files(acc)] == ["SRR1_1.fastq.gz"]
+
+    def test_folder_with_only_appledouble_has_no_fastq(self, tmp_path):
+        acc = tmp_path / "SRR2"
+        acc.mkdir()
+        (acc / "._SRR2_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        assert fastq_files(acc) == []
+        assert accession_has_fastq(acc) is False
+
+
 class TestAccessionHasFastq:
     """Test accession_has_fastq, the single source of truth for "already downloaded"."""
 

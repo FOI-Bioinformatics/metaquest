@@ -9,6 +9,7 @@ from typing import Optional
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.file_io import visible_files
 from metaquest.data.genome_download import download_genomes, extract_and_organize, partition_present_genomes
 from metaquest.data.gtdb import (
     get_accessions_for_genus,
@@ -309,7 +310,7 @@ class GenomePrepareCommand(BaseCommand):
 
     def _create_manifest(self, output_dir: Path, manifest_file: str, registry: Optional[str] = None) -> int:
         """Create a manifest CSV from the genome FASTA files in output_dir and record its rows."""
-        genome_files = sorted({p for pattern in GENOME_FASTA_GLOBS for p in output_dir.glob(pattern)})
+        genome_files = visible_files(output_dir, *GENOME_FASTA_GLOBS)
         if not genome_files:
             self.logger.warning("No genome files found in %s", output_dir)
             return 0

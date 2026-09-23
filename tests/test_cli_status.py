@@ -8,6 +8,7 @@ from pathlib import Path
 
 from metaquest.cli.commands.status import StatusCommand
 from metaquest.data.registry import (
+    Registry,
     SCHEMA_VERSION,
     load_registry,
     record_exclusion,
@@ -190,6 +191,17 @@ def _status_args(root, **overrides):
     )
     base.update(overrides)
     return argparse.Namespace(**base)
+
+
+def test_inventory_ignores_appledouble(tmp_path):
+    root = _make_tree(tmp_path)
+    (root / "metadata" / "._SRR1_metadata.xml").write_bytes(b"\x00\x05")
+    (root / "genomes" / "._g.fna").write_bytes(b"\x00\x05")
+    (root / "fastq" / "._SRR1").mkdir()
+    report = StatusCommand()._inventory_report(_status_args(root), Registry())
+    assert report["on_disk"]["metadata_xml"] == 1
+    assert report["on_disk"]["genome_fasta"] == 1
+    assert report["on_disk"]["fastq_accessions"] == 1
 
 
 def _project_tree(root):

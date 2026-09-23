@@ -19,6 +19,7 @@ from metaquest.data.file_io import (
     list_files,
     copy_file,
     read_csv,
+    visible_files,
     write_csv,
 )
 from metaquest.plugins.base import format_registry
@@ -223,7 +224,7 @@ def extract_metadata_from_branchwater(
             raise DataAccessError(f"Branchwater folder does not exist: {source_path}")
 
         # Get all CSV files in the source folder
-        csv_files = list(source_path.glob("*.csv"))
+        csv_files = visible_files(source_path, "*.csv")
         if not csv_files:
             logger.warning(f"No CSV files found in {source_path}")
             return pd.DataFrame()

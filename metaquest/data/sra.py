@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence,
 
 from metaquest.core.constants import DEFAULT_MAX_WORKERS, FAILED_ACCESSIONS_FILE, FASTQ_GLOBS, MAX_CONCURRENT_DOWNLOADS
 from metaquest.core.exceptions import DataAccessError, SecurityError
-from metaquest.data.file_io import ensure_directory
+from metaquest.data.file_io import ensure_directory, visible_files
 from metaquest.utils.security import SecureSubprocess
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: metaquest.store imports this module
@@ -148,22 +148,23 @@ def _notify_result(
 
 
 def fastq_files(acc_dir: Union[str, Path]) -> List[Path]:
-    """Non-empty FASTQ files directly in ``acc_dir``, sorted by name.
+    """Non-empty, visible FASTQ files directly in ``acc_dir``, sorted by name (see ``visible_files``).
 
     Matches ``FASTQ_GLOBS`` (plain and gzipped ``.fastq``/``.fq``). A directory that does not
     exist (or a dangling symlink) yields an empty list; a symlinked directory is followed
     since ``Path.is_dir``/``Path.glob`` already resolve it transparently. A zero-byte file
-    (e.g. left behind by an interrupted download) is never returned.
+    (e.g. left behind by an interrupted download) is never returned, and neither is a hidden
+    name such as the ``._<name>`` AppleDouble files macOS writes next to every file on a
+    volume without native extended attributes.
     """
-    acc_path = Path(acc_dir)
-    if not acc_path.is_dir():
-        return []
-    found = set()
-    for pattern in FASTQ_GLOBS:
-        for candidate in acc_path.glob(pattern):
-            if candidate.is_file() and candidate.stat().st_size > 0:
-                found.add(candidate)
-    return sorted(found)
+    found = []
+    for candidate in visible_files(acc_dir, *FASTQ_GLOBS):
+        try:
+            if candidate.stat().st_size > 0:
+                found.append(candidate)
+        except OSError:
+            continue
+    return found
 
 
 def fastq_stem(path: Union[str, Path]) -> str:

@@ -24,6 +24,7 @@ from Bio import SeqIO
 from scipy import stats
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import visible_files
 from metaquest.data.sra import iter_fastq_records
 from metaquest.data.sra_metadata import SRADatasetInfo
 
@@ -160,7 +161,7 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
     if not directory.is_dir():
         return profiles
 
-    for path in sorted(directory.glob(f"*{_QUALITY_PROFILE_SUFFIX}")):
+    for path in visible_files(directory, f"*{_QUALITY_PROFILE_SUFFIX}"):
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as e:

@@ -599,3 +599,16 @@ class TestGenomePrepareCommand:
             )
             result = cmd.execute(args)
             assert result == 0
+
+
+def test_manifest_ignores_appledouble_files(tmp_path, monkeypatch):
+    from metaquest.cli.commands.genome import GenomePrepareCommand
+
+    monkeypatch.chdir(tmp_path)
+    genomes = tmp_path / "genomes"
+    genomes.mkdir()
+    (genomes / "GCF_1.fna").write_text(">c\nACGT\n")
+    (genomes / "._GCF_1.fna").write_bytes(b"\x00\x05\x16\x07")
+    count = GenomePrepareCommand()._create_manifest(genomes, "genome_manifest.csv", str(tmp_path / "r.json"))
+    assert count == 1
+    assert "._GCF_1" not in (tmp_path / "genome_manifest.csv").read_text()
