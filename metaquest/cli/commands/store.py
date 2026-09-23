@@ -553,10 +553,12 @@ class StoreAdoptCommand(BaseCommand):
                 print(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
             return 0
 
-        # Only an accession the project now links to (adopted via --move, or deduplicated,
-        # which always links) needs its download record pointed at the store; a --copy
-        # accession keeps its project folder exactly as it was, unlinked.
-        newly_linked = sorted(set(report.adopted) | set(report.deduplicated))
+        # Only an accession the project now links to needs its download record pointed at the
+        # store: one freshly adopted or deduplicated under --move (both replace the project's
+        # folder with a link). Under --copy, report.adopted is always empty and a dedup leaves
+        # the project's folder exactly as it was, real and unlinked, the same as a fresh --copy
+        # adoption (report.copied), so neither is recorded here.
+        newly_linked = sorted(set(report.adopted) | (set(report.deduplicated) if args.move else set()))
         if newly_linked:
             self._record_linked(args, paths, newly_linked)
         self._print_report(report)

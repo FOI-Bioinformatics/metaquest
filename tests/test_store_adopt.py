@@ -575,6 +575,38 @@ class TestAdoptSafety:
         assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
         assert not (project / "SRR1").is_symlink()
 
+    def test_retry_after_failed_stage_does_not_delete_project_copy(self, tmp_path, monkeypatch):
+        """A second adopt() run must not dedup a project copy onto a store copy that a
+        previous run already found unverifiable: _dedup_or_conflict's content match alone
+        cannot tell a byte-identical bad copy from a good one, so it must also check the
+        existing sidecar's state before treating anything as a dedup."""
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        import importlib
+
+        adopt_mod = importlib.import_module("metaquest.store.adopt")
+        real_build = adopt_mod.build_sidecar
+
+        def failing_build(*a, **kw):
+            sc = real_build(*a, **kw)
+            sc.state = "failed"
+            sc.error = "simulated gzip error"
+            return sc
+
+        monkeypatch.setattr(adopt_mod, "build_sidecar", failing_build)
+        first = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert first.failed == ["SRR1"]
+
+        monkeypatch.undo()
+        second = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert second.failed == ["SRR1"]
+        assert second.deduplicated == []
+        assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
+        assert not (project / "SRR1").is_symlink()
+
     def test_copy_dedup_leaves_project_folder(self, tmp_path):
         paths = init_store(tmp_path / "store")
         project = tmp_path / "proj" / "fastq"

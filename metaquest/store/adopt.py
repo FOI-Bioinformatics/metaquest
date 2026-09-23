@@ -386,10 +386,28 @@ def _dedup_or_conflict(
     A dedup is reported the same way whether or not the project's folder is actually removed:
     ``--copy`` (``move=False``) leaves it in place, unlinked, exactly as ``--copy`` does for a
     freshly adopted accession (see ``_apply_move_or_copy``).
+
+    A store sidecar whose state is outside ``STORE_READY_STATES`` (left behind by an earlier
+    run whose staged copy could not be verified, see ``_adopt_one``'s own check) is never
+    treated as a match, even when its files are byte-identical to the project's: that copy is
+    known bad, so an identical-content project folder is the only good copy left, and a dedup
+    would remove it and link the project to the bad one instead. Such an accession is reported
+    in ``failed`` and both copies are left exactly as they are.
     """
     if entry is None:
         return
     existing = read_sidecar(sc_path)
+    if existing is not None and existing.state not in STORE_READY_STATES:
+        report.failed.append(accession)
+        logger.error(
+            "%s: store copy's sidecar state is %s, not a verified copy; project copy kept "
+            "(run 'store_verify --spots --fix-state %s' or remove the store copy and re-adopt)",
+            accession,
+            existing.state,
+            accession,
+        )
+        _notify(on_progress, accession, "failed")
+        return
     if existing is not None and _files_match(entry, store_dir, existing):
         if dry_run:
             report.planned.append(accession)
@@ -518,14 +536,19 @@ def adopt(
     """Fold every real accession folder in ``project_fastq`` into the shared store.
 
     For each real (non-symlink, non-transient) directory ``project_fastq/<ACC>``: if the store
-    already has ``<ACC>`` with a sidecar, an identical set of files is deduplicated (the project
-    copy is dropped and replaced with a link) and a differing set is left as a conflict (both
-    copies kept); otherwise the folder is staged into the store, compressed, sidecar'd and
-    catalogued, then either linked back (``--move``, removing the project's folder) or left alone
-    (``--copy``, the project keeps its own folder, unlinked). A symlink already in
-    ``project_fastq`` is counted in ``skipped`` and left untouched. A dedup under ``--copy`` is
-    still counted in ``deduplicated``, but the project's folder is left in place and unlinked,
-    the same as a fresh ``--copy`` adoption.
+    already has ``<ACC>`` with a sidecar in a ready state (``STORE_READY_STATES``), an identical
+    set of files is deduplicated (the project copy is dropped and replaced with a link) and a
+    differing set is left as a conflict (both copies kept); otherwise the folder is staged into
+    the store, compressed, sidecar'd and catalogued, then either linked back (``--move``,
+    removing the project's folder) or left alone (``--copy``, the project keeps its own folder,
+    unlinked). A symlink already in ``project_fastq`` is counted in ``skipped`` and left
+    untouched. A dedup under ``--copy`` is still counted in ``deduplicated``, but the project's
+    folder is left in place and unlinked, the same as a fresh ``--copy`` adoption.
+
+    A store sidecar outside a ready state is never matched against, even byte-identical: that
+    copy already failed verification once, so an identical project folder is the only good copy
+    and must not be removed on top of it. Such an accession lands in ``failed`` on this call too
+    (not just on the run that first staged it), and both copies are left exactly as they are.
 
     A real folder with no FASTQ files at all is never adopted (the store gains nothing from an
     empty accession) and is listed in ``empty``; the project's folder is left exactly as it was.

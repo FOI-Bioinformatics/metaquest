@@ -621,6 +621,39 @@ class TestStoreAdoptCommand:
         # No registry write is needed: the project's own download record did not change.
         assert not registry_path.exists()
 
+    def test_copy_mode_dedup_does_not_record_link(self, tmp_path, monkeypatch):
+        """A --copy run that finds the store already holds an identical copy (a dedup) must
+        not be recorded as linked: the project's folder is left exactly as it was, a real
+        directory, the same as a fresh --copy adoption, so no store-sourced download record
+        or store["linked"] entry should appear."""
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        entry = project_dir / "fastq" / "SRR1"
+        entry.mkdir(parents=True)
+        (entry / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        first_rc = StoreAdoptCommand().execute(
+            _adopt_args(data_root=str(root), registry=str(registry_path), move=False)
+        )
+        assert first_rc == 0
+
+        second_rc = StoreAdoptCommand().execute(
+            _adopt_args(data_root=str(root), registry=str(registry_path), move=False)
+        )
+        assert second_rc == 0
+
+        assert entry.is_dir() and not entry.is_symlink()
+        assert (entry / "SRR1.fastq").is_file()
+
+        registry = load_registry(registry_path)
+        assert not registry.store.get("linked")
+        assert "SRR1" not in registry.datasets
+
 
 class TestStoreVerifyCommand:
     def test_command_properties(self):
