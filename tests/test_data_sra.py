@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import time
 
 import pytest
 from pathlib import Path
@@ -2477,8 +2478,91 @@ class TestDownloadInterrupt:
         from metaquest.data import sra as sra_mod
 
         sra_mod.STOP.clear()
+        sra_mod.SecureSubprocess.clear_stopping()
         yield
         sra_mod.STOP.clear()
+        sra_mod.SecureSubprocess.clear_stopping()
+
+    def test_keyboard_interrupt_during_submission_reaches_the_handler(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        def accessions():
+            yield "SRR1"
+            raise KeyboardInterrupt
+
+        worker = Mock(return_value=(True, "ok"))
+        with patch.object(sra_mod.SecureSubprocess, "terminate_children", return_value=0) as term:
+            with pytest.raises(KeyboardInterrupt):
+                sra_mod._execute_parallel_downloads(
+                    accessions(), tmp_path, 1, 1, False, None, {}, [], downloader=worker
+                )
+        term.assert_called_once()
+        assert sra_mod.STOP.is_set()
+
+    def test_a_new_run_clears_the_stopping_flag(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.SecureSubprocess.terminate_children(grace=0.0)
+        worker = Mock(return_value=(True, "ok"))
+        sra_mod._execute_parallel_downloads(["SRR1"], tmp_path, 1, 1, False, None, {}, [], downloader=worker)
+        assert sra_mod.SecureSubprocess._stopping is False
+
+    def test_tool_killed_by_the_interrupt_reports_interrupted(self, tmp_path):
+        import subprocess as sp
+
+        from metaquest.data import sra as sra_mod
+
+        def killed(executable, args, **kwargs):
+            sra_mod.STOP.set()
+            raise sp.CalledProcessError(-15, [executable], output="", stderr="")
+
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=killed):
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert (success, message) == (False, "interrupted")
+
+    def test_tool_failure_without_interrupt_is_still_an_error(self, tmp_path):
+        import subprocess as sp
+
+        from metaquest.data import sra as sra_mod
+
+        err = sp.CalledProcessError(3, ["fasterq-dump"], output="", stderr="network timeout")
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=err):
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert success is False
+        assert message.startswith("network:")
+
+    def test_compression_is_skipped_once_stopped(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        temp = tmp_path / "SRR1_temp"
+        temp.mkdir()
+        (temp / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (temp / "SRR1_2.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        sra_mod.STOP.set()
+        with patch("metaquest.data.sra.compress_fastq") as mock_compress:
+            success, message = sra_mod._handle_download_output(temp, tmp_path / "SRR1", compress=True)
+        assert success is True
+        mock_compress.assert_not_called()
+        assert "compression skipped (interrupted) for SRR1_1.fastq, SRR1_2.fastq" in message
+        assert (tmp_path / "SRR1" / "SRR1_1.fastq").exists()
+
+    def test_store_download_waiting_on_a_held_lock_returns_interrupted(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+        from metaquest.store.layout import init_store
+        from metaquest.store.locks import dataset_lock
+
+        store = init_store(tmp_path / "store")
+        sra_mod.STOP.set()
+        with dataset_lock(store, "SRR1"):
+            with patch("metaquest.data.sra._store_precheck", return_value=None):
+                with patch("metaquest.data.sra._store_fetch") as fetch:
+                    started = time.monotonic()
+                    result = sra_mod._store_download("SRR1", tmp_path / "fastq", store, lock_wait=0.0)
+        assert result == (False, "interrupted")
+        assert time.monotonic() - started < 1.0
+        fetch.assert_not_called()
 
     def test_keyboard_interrupt_cancels_pending_and_terminates_children(self, tmp_path):
         from metaquest.data import sra as sra_mod

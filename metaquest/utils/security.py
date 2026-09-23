@@ -76,15 +76,27 @@ class SecureSubprocess:
     # terminate_children so an interrupt can stop tools running in worker threads.
     _children: Set[subprocess.Popen] = set()
     _children_lock = threading.Lock()
+    # Set by terminate_children; a child started after that is killed as soon as it is
+    # created, so a worker that passed its own stop check just before the interrupt cannot
+    # leave a tool running. Cleared by clear_stopping at the start of the next run.
+    _stopping = False
+
+    @classmethod
+    def clear_stopping(cls) -> None:
+        """Allow ``run_secure`` children to run again after ``terminate_children``."""
+        with cls._children_lock:
+            cls._stopping = False
 
     @classmethod
     def terminate_children(cls, grace: float = 5.0) -> int:
         """Terminate, then kill, every child started by ``run_secure`` that is still running.
 
         Each child is sent SIGTERM; one that has not exited ``grace`` seconds later is
-        sent SIGKILL. Returns the number of tracked children.
+        sent SIGKILL. Returns the number of tracked children. Any child started after this
+        call is killed at once, until ``clear_stopping`` is called.
         """
         with cls._children_lock:
+            cls._stopping = True
             children = list(cls._children)
         for child in children:
             if child.poll() is None:
@@ -316,7 +328,12 @@ class SecureSubprocess:
             }
             proc = subprocess.Popen(cmd, **popen_kwargs)
             with cls._children_lock:
-                cls._children.add(proc)
+                if cls._stopping:
+                    # terminate_children already ran: stop this child too; communicate()
+                    # below then reaps it and the non-zero exit is reported as usual.
+                    proc.kill()
+                else:
+                    cls._children.add(proc)
             try:
                 out, err = proc.communicate(timeout=timeout or MAX_SUBPROCESS_TIMEOUT)
             except subprocess.TimeoutExpired:

@@ -614,6 +614,31 @@ class TestAllowedRoots:
 class TestChildProcessTracking:
     """run_secure records every child it starts so an interrupt can stop them."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_stopping(self):
+        SecureSubprocess.clear_stopping()
+        yield
+        SecureSubprocess.clear_stopping()
+
+    def test_child_started_after_terminate_children_is_killed_at_once(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        assert SecureSubprocess.terminate_children(grace=0.0) == 0
+        proc = _fake_proc(returncode=-9)
+        with patch("subprocess.Popen", return_value=proc):
+            with pytest.raises(subprocess.CalledProcessError):
+                SecureSubprocess.run_secure("datasets", ["--version"])
+        proc.kill.assert_called_once()
+        assert not SecureSubprocess._children
+
+    def test_clear_stopping_lets_children_run_again(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        SecureSubprocess.terminate_children(grace=0.0)
+        SecureSubprocess.clear_stopping()
+        proc = _fake_proc()
+        with patch("subprocess.Popen", return_value=proc):
+            SecureSubprocess.run_secure("datasets", ["--version"])
+        proc.kill.assert_not_called()
+
     @pytest.mark.skipif(shutil.which("sleep") is None, reason="needs a sleep executable")
     def test_run_secure_tracks_children_and_terminate_children_kills_them(self, monkeypatch):
         monkeypatch.setattr(SecureSubprocess, "ALLOWED_EXECUTABLES", SecureSubprocess.ALLOWED_EXECUTABLES | {"sleep"})

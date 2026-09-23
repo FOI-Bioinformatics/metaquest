@@ -61,10 +61,19 @@ class _DownloadInterrupted(Exception):
 
 
 def _run_download_tool(executable: str, args: List[str]) -> None:
-    """Run prefetch or fasterq-dump through ``run_secure`` unless STOP is set."""
+    """Run prefetch or fasterq-dump through ``run_secure`` unless STOP is set.
+
+    A tool that exits non-zero while STOP is set was stopped by the interrupt (or killed
+    as it started), so its failure is reported as an interruption rather than an error.
+    """
     if STOP.is_set():
         raise _DownloadInterrupted()
-    SecureSubprocess.run_secure(executable, args)
+    try:
+        SecureSubprocess.run_secure(executable, args)
+    except subprocess.CalledProcessError as e:
+        if STOP.is_set():
+            raise _DownloadInterrupted() from e
+        raise
 
 
 def classify_download_error(text: str) -> str:
@@ -623,8 +632,15 @@ def _handle_download_output(
     verdict = verify_download(output_path.name, output_path, expected_spots=expected_spots)
 
     compression_failures = []
+    compression_skipped: List[str] = []
     if compress:
-        for file in moved:
+        for index, file in enumerate(moved):
+            if STOP.is_set():
+                # The download itself is complete; leave the rest uncompressed rather than
+                # start pigz after an interrupt.
+                compression_skipped = [f.name for f in moved[index:]]
+                logger.info(f"Compression of {output_path.name} skipped: the run was interrupted")
+                break
             try:
                 compress_fastq(file, num_threads)
             except Exception as e:
@@ -646,6 +662,8 @@ def _handle_download_output(
         # Appended, never prepended, so parse_verdict_message's regex/substring checks
         # on the leading verdict text keep working unchanged.
         message += "; compression failed for " + ", ".join(compression_failures)
+    if compression_skipped:
+        message += "; compression skipped (interrupted) for " + ", ".join(compression_skipped)
 
     return True, message
 
@@ -1049,7 +1067,7 @@ def _store_download(
     ``lock_wait`` of zero waits for as long as the other project keeps working; a positive
     value gives up after that many seconds, naming the accession and the holder.
     """
-    from metaquest.store.locks import dataset_lock
+    from metaquest.store.locks import LockWaitStopped, dataset_lock
 
     project_path = Path(project_fastq)
     for directory in (store.sra, store.tmp, store.locks):
@@ -1061,7 +1079,7 @@ def _store_download(
             if settled is not None:
                 return settled
 
-        with dataset_lock(store, accession, wait_seconds=lock_wait):
+        with dataset_lock(store, accession, wait_seconds=lock_wait, should_stop=STOP.is_set):
             if not force:
                 settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
                 if settled is not None:
@@ -1069,6 +1087,9 @@ def _store_download(
             return _store_fetch(
                 accession, project_path, store, link_mode, store_metadata, force=force, **download_kwargs
             )
+    except LockWaitStopped:
+        logger.info(f"Stopped waiting for the store lock on {accession}: the run was interrupted")
+        return False, "interrupted"
     except DataAccessError as e:
         logger.error(f"Store download failed for {accession}: {e}")
         return False, f"store error: {e}"
@@ -1369,28 +1390,29 @@ def _execute_parallel_downloads(
     running prefetch or fasterq-dump child is terminated, and the interrupt is re-raised.
     """
     STOP.clear()
+    SecureSubprocess.clear_stopping()
     expected_spots = expected_spots or {}
     futures_results: list = []
     worker = downloader or download_accession
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                worker,
-                acc,
-                fastq_path,
-                num_threads,
-                force,
-                temp_folder,
-                expected_spots=expected_spots.get(acc),
-                redownload_truncated=redownload_truncated,
-                sra_cache=sra_cache,
-                use_prefetch=use_prefetch,
-                keep_sra=keep_sra,
-                compress=compress,
-            ): acc
-            for acc in accessions
-        }
         try:
+            futures = {
+                executor.submit(
+                    worker,
+                    acc,
+                    fastq_path,
+                    num_threads,
+                    force,
+                    temp_folder,
+                    expected_spots=expected_spots.get(acc),
+                    redownload_truncated=redownload_truncated,
+                    sra_cache=sra_cache,
+                    use_prefetch=use_prefetch,
+                    keep_sra=keep_sra,
+                    compress=compress,
+                ): acc
+                for acc in accessions
+            }
             for future in as_completed(futures):
                 acc = futures[future]
                 try:
