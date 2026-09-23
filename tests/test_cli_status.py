@@ -197,7 +197,11 @@ def test_inventory_ignores_appledouble(tmp_path):
     root = _make_tree(tmp_path)
     (root / "metadata" / "._SRR1_metadata.xml").write_bytes(b"\x00\x05")
     (root / "genomes" / "._g.fna").write_bytes(b"\x00\x05")
-    (root / "fastq" / "._SRR1").mkdir()
+    # A hidden accession directory with a real, non-empty FASTQ file inside: only the
+    # directory's own dotted name should exclude it, not an empty-folder accident.
+    hidden_acc = root / "fastq" / "._SRR1"
+    hidden_acc.mkdir()
+    (hidden_acc / "reads.fastq.gz").write_bytes(b"x" * 10)
     report = StatusCommand()._inventory_report(_status_args(root), Registry())
     assert report["on_disk"]["metadata_xml"] == 1
     assert report["on_disk"]["genome_fasta"] == 1

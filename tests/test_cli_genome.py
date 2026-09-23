@@ -602,8 +602,6 @@ class TestGenomePrepareCommand:
 
 
 def test_manifest_ignores_appledouble_files(tmp_path, monkeypatch):
-    from metaquest.cli.commands.genome import GenomePrepareCommand
-
     monkeypatch.chdir(tmp_path)
     genomes = tmp_path / "genomes"
     genomes.mkdir()

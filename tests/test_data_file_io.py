@@ -346,8 +346,6 @@ class TestVisibleFiles:
     def test_list_files_hides_dotfiles_by_default(self, tmp_path):
         (tmp_path / "g.csv").write_text("a\n")
         (tmp_path / "._g.csv").write_bytes(b"\x00")
-        from metaquest.data.file_io import list_files
-
         assert [p.name for p in list_files(tmp_path, "*.csv")] == ["g.csv"]
         assert len(list_files(tmp_path, "*.csv", include_hidden=True)) == 2
 
