@@ -788,14 +788,15 @@ class TestDownloadAccession:
         output_folder = tmp_path / "downloads"
         temp_path = tmp_path / "temp"
 
-        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
-            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
-                with patch("metaquest.data.sra._handle_download_output") as mock_handle:
-                    mock_prep.return_value = temp_path
-                    mock_run.return_value = Mock(returncode=0, stdout="success", stderr="")
-                    mock_handle.return_value = (True, "Downloaded 2 files")
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+                with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                    with patch("metaquest.data.sra._handle_download_output") as mock_handle:
+                        mock_prep.return_value = temp_path
+                        mock_run.return_value = Mock(returncode=0, stdout="success", stderr="")
+                        mock_handle.return_value = (True, "Downloaded 2 files")
 
-                    success, message = download_accession("SRR123", output_folder, num_threads=8)
+                        success, message = download_accession("SRR123", output_folder, num_threads=8)
 
         assert success is True
         assert "Downloaded 2 files" in message
@@ -869,16 +870,17 @@ class TestDownloadAccession:
         output_path.mkdir(parents=True)
         (output_path / "SRR123.fastq").write_text("partial")
 
-        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
-            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
-                with patch("metaquest.data.sra._handle_download_output") as mock_handle:
-                    mock_prep.return_value = tmp_path / "temp"
-                    mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-                    mock_handle.return_value = (True, "Downloaded 1 files, complete (10 of 10 spots)")
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+                with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                    with patch("metaquest.data.sra._handle_download_output") as mock_handle:
+                        mock_prep.return_value = tmp_path / "temp"
+                        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+                        mock_handle.return_value = (True, "Downloaded 1 files, complete (10 of 10 spots)")
 
-                    success, message = download_accession(
-                        "SRR123", output_folder, force=False, redownload_truncated=True
-                    )
+                        success, message = download_accession(
+                            "SRR123", output_folder, force=False, redownload_truncated=True
+                        )
 
         assert "already exists" not in message
         mock_run.assert_called_once()
