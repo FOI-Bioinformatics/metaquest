@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 # Bump when the catalogue's schema changes shape.
 SCHEMA_VERSION = 1
 
+# ``store_meta`` key set by ``store_reindex`` when it rebuilds a catalogue that holds datasets
+# but restores no project: every dataset then looks unused, so ``store_gc`` refuses to run
+# until the user confirms with ``--accept-rebuilt`` (or a later reindex restores a project).
+REBUILT_WITHOUT_PROJECTS = "rebuilt_without_projects"
+
 _SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS store_meta (
@@ -206,6 +211,24 @@ class Catalog:
             "INSERT OR IGNORE INTO store_meta (key, value) VALUES ('schema_version', ?)",
             (str(SCHEMA_VERSION),),
         )
+
+    # -------------------------------------------------------------------- meta
+
+    @_wrap_sqlite_errors
+    def get_meta(self, key: str) -> Optional[str]:
+        """The ``store_meta`` value for ``key``, or None when it is not set."""
+        row = self.conn.execute("SELECT value FROM store_meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else row["value"]
+
+    @_wrap_sqlite_errors
+    def set_meta(self, key: str, value: str) -> None:
+        """Set the ``store_meta`` value for ``key``, replacing any earlier value."""
+        self.conn.execute("INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)", (key, value))
+
+    @_wrap_sqlite_errors
+    def delete_meta(self, key: str) -> None:
+        """Remove ``key`` from ``store_meta``; a key that is not set is left as it is."""
+        self.conn.execute("DELETE FROM store_meta WHERE key = ?", (key,))
 
     # ---------------------------------------------------------------- datasets
 

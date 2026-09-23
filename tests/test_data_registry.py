@@ -922,3 +922,43 @@ class TestStoreBackedVerdictBackfill:
         _fill_missing_download_verdicts(registry, ProjectPaths(fastq=tmp_path / "fastq"))
 
         assert "complete" not in registry.datasets["SRR1"]["download"]
+
+
+class TestScannersIgnoreHiddenEntries:
+    """``._*`` AppleDouble files and hidden folders are never extractions or assemblies."""
+
+    def test_scan_extractions_ignores_appledouble_files_and_hidden_dirs(self, tmp_path):
+        targeted = tmp_path / "targeted"
+        acc_dir = targeted / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "GCF_1_1.fastq.gz").write_bytes(b"x")
+        (acc_dir / "._GCF_1_1.fastq.gz").write_bytes(b"x" * 4096)
+        hidden_dir = targeted / ".Trashes"
+        hidden_dir.mkdir()
+        (hidden_dir / "GCF_1_1.fastq.gz").write_bytes(b"x")
+
+        found = reg.scan_extractions(targeted, [])
+
+        assert list(found) == ["SRR1"]
+        assert list(found["SRR1"]) == ["GCF_1"]
+        assert [p.name for p in found["SRR1"]["GCF_1"]] == ["GCF_1_1.fastq.gz"]
+
+    def test_scan_assemblies_ignores_hidden_entries(self, tmp_path):
+        targeted = tmp_path / "targeted"
+        (targeted / "SRR1" / "GCF_1_assembly").mkdir(parents=True)
+        (targeted / "SRR1" / "._GCF_1_assembly").mkdir()
+        (targeted / ".hidden" / "GCF_2_assembly").mkdir(parents=True)
+
+        found = reg.scan_assemblies(targeted, [])
+
+        assert found == {"SRR1": {"GCF_1": targeted / "SRR1" / "GCF_1_assembly"}}
+
+    def test_genome_ids_on_disk_ignores_hidden_assembly_entries(self, tmp_path):
+        paths = _project(tmp_path)
+        (paths.targeted / "SRR1" / "GCF_1_assembly").mkdir(parents=True)
+        (paths.targeted / "SRR1" / "._GCF_9_assembly").write_bytes(b"x" * 4096)
+
+        ids = reg._genome_ids_on_disk(paths, None)
+
+        assert "GCF_1" in ids
+        assert not any(genome_id.startswith(".") for genome_id in ids)

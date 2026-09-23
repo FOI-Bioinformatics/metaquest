@@ -16,6 +16,7 @@ import pandas as pd
 import requests
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import visible_files
 from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_records
 from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats, compute_dataset_stats, store_stats
 
@@ -698,7 +699,7 @@ def generate_statistics_report(
 
     logger.info("Generating statistics report for downloaded datasets")
 
-    accession_dirs = [d for d in fastq_path.iterdir() if d.is_dir()]
+    accession_dirs = visible_files(fastq_path, dirs=True)
     if not accession_dirs:
         logger.warning("No accession directories found")
         return

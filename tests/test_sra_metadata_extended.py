@@ -687,6 +687,22 @@ class TestGenerateStatisticsReport:
         assert sidecar.stats["reads_total"] == 2
         assert sidecar.stats_computed is not None
 
+    def test_generate_statistics_skips_hidden_accession_dirs(self, tmp_path):
+        """A hidden folder such as ``._SRR001`` is not reported as a dataset."""
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        for name in ("SRR001", "._SRR001"):
+            (fastq_folder / name).mkdir()
+            (fastq_folder / name / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file)
+
+        import pandas as pd
+
+        df = pd.read_csv(output_file)
+        assert len(df) == 1
+
     def test_generate_statistics_reports_the_exact_total_when_sampling(self, tmp_path):
         """A folder without a store reports every read, not just the sampled ones.
 

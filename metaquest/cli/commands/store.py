@@ -22,16 +22,23 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import load_registry, project_root, record_download, registry_transaction
-from metaquest.data.sra import count_fastq_reads, fastq_files, is_transient_folder, verify_download
+from metaquest.data.sra import (
+    count_fastq_reads,
+    fastq_files,
+    is_transient_folder,
+    orphan_fastq,
+    primary_fastq,
+    verify_download,
+)
 from metaquest.store import journal
 from metaquest.store.adopt import adopt
-from metaquest.store.catalog import Catalog, catalog_write
+from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, Catalog, catalog_write
 from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.locks import lock_holder, lock_is_held
@@ -435,18 +442,32 @@ class StoreReindexCommand(BaseCommand):
             with catalog_write(paths) as catalog:
                 count = catalog.reindex(sidecars)
                 projects, usage = journal.replay(paths, catalog)
-                if projects == 0:
-                    self.logger.warning(
-                        "No project records could be restored from %s; every dataset will look "
-                        "unused until each project runs store_init or store_link again",
-                        paths.journal,
-                    )
+                has_datasets = catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1").fetchone() is not None
+                if projects == 0 and has_datasets:
+                    catalog.set_meta(REBUILT_WITHOUT_PROJECTS, _now())
+                elif projects > 0:
+                    catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
+            if projects == 0:
+                self._warn_no_projects_restored(paths, has_datasets)
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1
 
         print(f"Reindexed {count} dataset(s); restored {projects} project(s) and {usage} usage record(s)")
         return 0
+
+    def _warn_no_projects_restored(self, paths: StorePaths, flagged: bool) -> None:
+        if not flagged:
+            self.logger.warning("No project records could be restored from %s", paths.journal)
+            return
+        self.logger.warning(
+            "No project records could be restored from %s; every dataset will look unused until each "
+            "project runs store_init or store_link again. store_gc now refuses to run (catalogue flag '%s') "
+            "until that is done and it is run once with --accept-rebuilt, or until a later store_reindex "
+            "restores at least one project",
+            paths.journal,
+            REBUILT_WITHOUT_PROJECTS,
+        )
 
 
 class StoreAdoptCommand(BaseCommand):
@@ -559,6 +580,12 @@ class StoreAdoptCommand(BaseCommand):
                 print("  " + ", ".join(sorted(report.planned)))
             if report.conflicts:
                 print(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
+            for label, accessions in (
+                ("Empty folders, not adopted", report.empty),
+                ("Failed (store copy not verified), project copy kept", report.failed),
+            ):
+                if accessions:
+                    print(f"{label}: {', '.join(sorted(accessions))}")
             return 0
 
         # Only an accession the project now links to needs its download record pointed at the
@@ -817,7 +844,13 @@ class StoreVerifyCommand(BaseCommand):
         }
 
     def _mark_failed(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar, error: str) -> None:
-        """Rewrite ``sidecar`` to ``state="failed"`` with ``error``, unless it already is."""
+        """Rewrite ``sidecar`` to ``state="failed"`` with ``error``, unless it already is.
+
+        The result is reported as ``corrupt`` either way, so the printed table and the exit
+        status agree with the state the sidecar is left in.
+        """
+        result["verdict"] = "corrupt"
+        result["state"] = "failed"
         if sidecar.state == "failed" and sidecar.error == error:
             return
         sidecar.state = "failed"
@@ -827,24 +860,52 @@ class StoreVerifyCommand(BaseCommand):
             catalog.upsert_dataset(sidecar)
         result["state"] = "failed"
 
-    def _read_through_error(self, store_dir: Path, sidecar: Sidecar) -> Optional[str]:
-        """Open and decompress every file ``sidecar.files`` records, the way a ``--spots``
-        check already does, returning the first one's error (name-prefixed) when it cannot be
-        read, else None.
+    def _read_through_error(self, store_dir: Path, sidecar: Sidecar, skip: Collection[str] = ()) -> Optional[str]:
+        """Open and decompress every file ``sidecar.files`` records, except those named in
+        ``skip`` (already read by a spot comparison), returning the first one's error
+        (name-prefixed) when it cannot be read, else None.
 
         A file that matches its recorded size (and md5, if checked) can still be a truncated
-        or corrupt gzip stream, since neither check opens it. ``--fix-state`` must not promote
-        a dataset to ``"complete"`` on size alone when ``--spots`` was never requested for this
-        run, since then no file has actually been read through yet.
+        or corrupt gzip stream, since neither check opens it, and a spot comparison reads only
+        the mate 1 (or single-end) file and the unpaired-read file. ``--fix-state`` must not
+        promote a dataset to ``"complete"`` before every recorded file has been read through.
         """
         for entry in sidecar.files:
             name = str(entry.get("name"))
+            if name in skip:
+                continue
             try:
                 count_fastq_reads(store_dir / name)
             except (EOFError, OSError) as e:
                 self.logger.warning("%s: could not read %s: %s", sidecar.accession, name, e)
                 return f"{name}: {e}"
         return None
+
+    def _compare_known_spots(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar) -> Optional[str]:
+        """Compare the reads on disk against the spot count ``sidecar.ncbi`` already records,
+        for a run without ``--spots``; the outcome is written into ``result`` as a ``--spots``
+        check would have written it. Returns a read error (name-prefixed where possible) when
+        a file cannot be read, else None."""
+        accession = result["accession"]
+        store_dir = sra_dir(paths, accession)
+        try:
+            verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
+        except (EOFError, OSError) as e:
+            self.logger.warning("%s: could not verify read counts: %s", accession, e)
+            return self._read_through_error(store_dir, sidecar) or f"read count verification failed: {e}"
+        result["spots_verdict"] = verify["verdict"]
+        result["spots_ratio"] = verify["ratio"]
+        if verify["verdict"] == "truncated":
+            result["verdict"] = "truncated"
+        return None
+
+    def _unread_file_error(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar) -> Optional[str]:
+        """Read through every recorded file that no spot comparison has read in this run."""
+        store_dir = sra_dir(paths, result["accession"])
+        skip: set = set()
+        if result.get("spots_verdict") is not None:
+            skip = {p.name for p in (primary_fastq(store_dir), orphan_fastq(store_dir)) if p is not None}
+        return self._read_through_error(store_dir, sidecar, skip)
 
     def _fix_state(self, result: Dict[str, Any], paths: StorePaths) -> None:
         """Rewrite the sidecar's state (and completeness) to match what this check found.
@@ -853,16 +914,16 @@ class StoreVerifyCommand(BaseCommand):
         ``"failed"`` with an error naming the first mismatch, regardless of what the spots
         check says (a corrupt file can still happen to contain the right number of reads). A
         sidecar recording no files at all is never promoted either, since there is nothing to
-        have verified. Once bytes, md5 (if checked) and the file list itself all check out, a
-        spots verdict of ``complete``/``truncated`` decides ``complete``/``partial``. With no
-        spot count anywhere: if ``--spots`` was requested and found every file readable but
-        with nothing to compare against (``"unverified"``), or if it was never requested but a
-        read-through performed here now finds every file readable, the dataset is promoted to
-        ``complete`` with an ``unverified`` completeness, clearing any stale error; a read
-        failure found only now is recorded as the new error instead, the same as a bytes/md5
-        mismatch. A spot count found in a metadata XML (``result["ncbi_found"]``, from
-        ``_verify_one``'s fallback search) is written into the sidecar's ``ncbi`` block so
-        later runs read it straight from there.
+        have verified. A spot count found in a metadata XML (``result["ncbi_found"]``, from
+        ``_verify_one``'s fallback search) is first written into the sidecar's ``ncbi`` block
+        so later runs read it straight from there. When ``--spots`` was not requested but the
+        sidecar records a spot count, the reads are compared against it here, exactly as
+        ``--spots`` would have. Every recorded file the spot comparison did not read (mate 2,
+        or every file when no comparison ran) is then read through; a read failure is recorded
+        as the new error, the same as a bytes/md5 mismatch. Once all of that checks out, a
+        spots verdict of ``complete``/``truncated`` decides ``complete``/``partial``; with no
+        spot count anywhere, the dataset is promoted to ``complete`` with an ``unverified``
+        completeness, clearing any stale error.
         """
         sidecar = result.get("sidecar")
         if sidecar is None:
@@ -876,23 +937,24 @@ class StoreVerifyCommand(BaseCommand):
             self._mark_failed(result, paths, sidecar, "no files recorded")
             return
 
-        spots_verdict = result.get("spots_verdict")
         if result.get("ncbi_found") and not sidecar.ncbi.get("spots"):
             sidecar.ncbi = dict(result["ncbi_found"])
+        if result.get("spots_verdict") == "corrupt":
+            return
+        read_error = None
+        if result.get("spots_verdict") is None and sidecar.ncbi.get("spots"):
+            read_error = self._compare_known_spots(result, paths, sidecar)
+        read_error = read_error or self._unread_file_error(result, paths, sidecar)
+        if read_error is not None:
+            self._mark_failed(result, paths, sidecar, read_error)
+            return
+
+        spots_verdict = result.get("spots_verdict")
         state_for_verdict = {"complete": "complete", "truncated": "partial"}
         if spots_verdict in state_for_verdict:
             new_state = state_for_verdict[spots_verdict]
             completeness = {"method": "spots", "ratio": result.get("spots_ratio"), "verdict": spots_verdict}
-        elif spots_verdict == "corrupt":
-            return
         else:
-            if spots_verdict is None:
-                # "--spots" was never requested for this run, so no file has actually been
-                # opened yet; read every one now before trusting size/md5 alone.
-                read_error = self._read_through_error(sra_dir(paths, result["accession"]), sidecar)
-                if read_error is not None:
-                    self._mark_failed(result, paths, sidecar, read_error)
-                    return
             new_state = "complete"
             completeness = {"method": "unverified", "ratio": None, "verdict": "unverified"}
         changed = (
@@ -1434,7 +1496,38 @@ class StoreGcCommand(BaseCommand):
                 "machine; every project on another workstation of a shared store looks stale here"
             ),
         )
+        parser.add_argument(
+            "--accept-rebuilt",
+            dest="accept_rebuilt",
+            action="store_true",
+            default=False,
+            help=(
+                "Confirm that every project using this store has run store_init or store_link since "
+                "store_reindex rebuilt the catalogue without any project records; clears that "
+                "catalogue flag so store_gc can run"
+            ),
+        )
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
+
+    def _refused_after_rebuild(self, paths: StorePaths, accept_rebuilt: bool) -> bool:
+        """True (after logging why) while the catalogue carries the flag ``store_reindex`` sets
+        when it restored no project; ``accept_rebuilt`` clears the flag instead."""
+        with Catalog(paths) as catalog:
+            rebuilt = catalog.get_meta(REBUILT_WITHOUT_PROJECTS)
+        if rebuilt is None:
+            return False
+        if not accept_rebuilt:
+            self.logger.error(
+                "store_reindex rebuilt the catalogue on %s without any project records, so the datasets of "
+                "every project that has not registered again since would look unused. Run store_init (or "
+                "store_link) from every project that uses this store, then run store_gc --accept-rebuilt.",
+                rebuilt,
+            )
+            return True
+        with catalog_write(paths) as catalog:
+            catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
+        self.logger.warning("Cleared the flag set when the catalogue was rebuilt without projects on %s", rebuilt)
+        return False
 
     # ------------------------------------------------------------- candidates
 
@@ -1546,8 +1639,8 @@ class StoreGcCommand(BaseCommand):
 
     @staticmethod
     def _accession_of_leftover(name: str) -> str:
-        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp``."""
-        for suffix in ("_temp", "_adopt", "_old"):
+        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp`` or ``SRR1_fqtmp``."""
+        for suffix in ("_temp", "_fqtmp", "_adopt", "_old"):
             if name.endswith(suffix):
                 return name[: -len(suffix)]
         return name
@@ -1556,9 +1649,9 @@ class StoreGcCommand(BaseCommand):
     def _leftover_candidates(cls, paths: StorePaths) -> List[Dict[str, Any]]:
         """Leftover build folders and cached archives, minus anything a live run is using.
 
-        A ``<ACC>_temp`` folder or a cached ``.sra`` archive whose accession lock is held is a
-        download in progress, not a leftover: removing it would pull the files out from under
-        a running fasterq-dump.
+        A ``<ACC>_temp`` build folder, an ``<ACC>_fqtmp`` fasterq-dump scratch folder or a cached
+        ``.sra`` archive whose accession lock is held is a download in progress, not a leftover:
+        removing it would pull the files out from under a running fasterq-dump.
         """
         candidates: List[Dict[str, Any]] = []
         tmp = paths.tmp
@@ -1625,6 +1718,8 @@ class StoreGcCommand(BaseCommand):
 
         paths = store_paths(root)
         try:
+            if self._refused_after_rebuild(paths, getattr(args, "accept_rebuilt", False)):
+                return 1
             with Catalog(paths) as catalog:
                 project_count = catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
                 if project_count == 0 and any(True for _ in catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1")):

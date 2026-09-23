@@ -747,7 +747,7 @@ def _genome_ids_on_disk(paths: ProjectPaths, registry: Optional[Registry]) -> Se
             ids.add(p.name[: -len(pattern[1:])])
     ids.update(p.stem for p in visible_files(paths.matches, "*.csv"))
     for acc_dir in visible_files(paths.targeted, dirs=True):
-        for asm in acc_dir.glob(f"*{_ASSEMBLY_SUFFIX}"):
+        for asm in visible_files(acc_dir, f"*{_ASSEMBLY_SUFFIX}", dirs=True):
             ids.add(asm.name[: -len(_ASSEMBLY_SUFFIX)])
     return ids
 
@@ -756,8 +756,8 @@ def scan_extractions(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[s
     found: Dict[str, Dict[str, List[Path]]] = {}
     if not targeted_folder.is_dir():
         return found
-    for acc_dir in sorted(p for p in targeted_folder.iterdir() if p.is_dir()):
-        for path in sorted(p for p in acc_dir.iterdir() if p.is_file()):
+    for acc_dir in visible_files(targeted_folder, dirs=True):
+        for path in visible_files(acc_dir):
             split = split_extract_filename(path.name, genome_ids)
             if split:
                 found.setdefault(acc_dir.name, {}).setdefault(split[0], []).append(path)
@@ -768,8 +768,8 @@ def scan_assemblies(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[st
     found: Dict[str, Dict[str, Path]] = {}
     if not targeted_folder.is_dir():
         return found
-    for acc_dir in sorted(p for p in targeted_folder.iterdir() if p.is_dir()):
-        for asm in sorted(p for p in acc_dir.glob(f"*{_ASSEMBLY_SUFFIX}") if p.is_dir()):
+    for acc_dir in visible_files(targeted_folder, dirs=True):
+        for asm in visible_files(acc_dir, f"*{_ASSEMBLY_SUFFIX}", dirs=True):
             found.setdefault(acc_dir.name, {})[asm.name[: -len(_ASSEMBLY_SUFFIX)]] = asm
     return found
 

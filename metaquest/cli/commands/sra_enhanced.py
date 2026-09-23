@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.data.defaults import read_records
+from metaquest.data.file_io import visible_files
 from metaquest.data.registry import Registry, load_registry, nan_to_none, record_analysis, save_registry
 from metaquest.data.sra import (
     MATE1_SUFFIXES,
@@ -320,7 +321,7 @@ class SRAValidateCommand(BaseCommand):
 
     def _find_accession_dirs(self, fastq_folder, specific_accessions=None):
         """Find accession directories to validate."""
-        accession_dirs = [d for d in fastq_folder.iterdir() if d.is_dir()]
+        accession_dirs = visible_files(fastq_folder, dirs=True)
         if specific_accessions:
             accession_dirs = [d for d in accession_dirs if d.name in specific_accessions]
         return accession_dirs
@@ -467,7 +468,7 @@ class SRAValidateCommand(BaseCommand):
         """Validate a single accession directory."""
         print(f"Validating {acc_dir.name}...")
 
-        raw_files = list(acc_dir.glob("*.fastq*"))
+        raw_files = visible_files(acc_dir, "*.fastq*")
         if not raw_files:
             return {
                 "accession": acc_dir.name,
