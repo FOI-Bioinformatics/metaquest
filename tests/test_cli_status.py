@@ -15,6 +15,7 @@ from metaquest.data.registry import (
     record_extraction,
     record_genome,
     record_selection,
+    registry_transaction,
     save_registry,
 )
 
@@ -267,6 +268,32 @@ class TestStatusWithRegistry:
         assert any(
             "extract_target_reads" in c and "GCF_1" in c for c in commands
         )  # SRR1/SRR2 downloaded, not extracted
+
+    def test_next_does_not_suggest_a_no_skip_excluded_list(self, tmp_path, monkeypatch):
+        """A selection recorded with --no-skip-excluded may still list an excluded accession,
+        so --next must not suggest downloading that selection's output file directly; it
+        should instead point at re-running select_datasets with --skip-excluded.
+
+        SRR1 and SRR2 already have FASTQ on disk in `_project_tree`, so `--init` marks them
+        downloaded and `_download_next_steps` would drop them regardless of selection
+        criteria; SRR3 has no FASTQ on disk, so it is the accession left to download and the
+        one whose selection criteria this test exercises."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_exclusion(reg, "SRR2", "isolate")
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5},
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        assert not any("sel_noskip.txt" in c for c in commands)
+        assert any("select_datasets" in c and "--skip-excluded" in c for c in commands)
 
     def test_next_extraction_command_is_runnable(self, tmp_path, capsys):
         """The extract suggestion carries the table it was selected from and a FASTA that exists."""

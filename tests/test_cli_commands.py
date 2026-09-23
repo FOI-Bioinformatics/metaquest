@@ -2632,7 +2632,7 @@ class TestPlotContainmentCommand:
         assert args.plot_type == "rank"
         assert args.title is None
         assert args.colors is None
-        assert args.save_format is None
+        assert args.save_format == "png"
 
     def test_configure_parser_with_options(self):
         """Test parser with optional arguments."""

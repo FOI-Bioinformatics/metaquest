@@ -260,17 +260,22 @@ class TestSavePlotIfNeeded:
         output_file = tmp_path / "test_plot"
 
         with patch("matplotlib.pyplot.savefig") as mock_savefig:
-            _save_plot_if_needed(output_file, "containment", "max_containment", "png")
+            result = _save_plot_if_needed(output_file, "containment", "max_containment", "png")
 
-        expected_filename = str(output_file) + "_containment_max_containment.png"
-        mock_savefig.assert_called_once_with(expected_filename, dpi=300, bbox_inches="tight")
+        expected_path = tmp_path / "test_plot_containment_max_containment.png"
+        assert result == expected_path
+        mock_savefig.assert_called_once_with(expected_path, dpi=300, bbox_inches="tight")
 
-    def test_save_plot_if_needed_no_format(self):
-        """Test plot not saved when format is None."""
-        with patch("matplotlib.pyplot.savefig") as mock_savefig:
-            _save_plot_if_needed("test_plot", "containment", "max_containment", None)
+    def test_save_plot_default_png_and_stem_name(self, tmp_path):
+        """No format given still saves, defaulting to png and using the file's stem (not its
+        full name with extension) so a table named parsed_containment.txt does not produce
+        parsed_containment.txt_rank_max_containment.png."""
+        import matplotlib.pyplot as plt
 
-        mock_savefig.assert_not_called()
+        plt.figure()
+        out = _save_plot_if_needed(tmp_path / "parsed_containment.txt", "rank", "max_containment", None)
+        assert out == tmp_path / "parsed_containment_rank_max_containment.png"
+        assert out.exists()
 
     def test_save_plot_if_needed_different_formats(self, tmp_path):
         """Test plot saving with different formats."""
@@ -278,10 +283,11 @@ class TestSavePlotIfNeeded:
 
         for format_type in ["png", "pdf", "svg"]:
             with patch("matplotlib.pyplot.savefig") as mock_savefig:
-                _save_plot_if_needed(output_file, "containment", "max_containment", format_type)
+                result = _save_plot_if_needed(output_file, "containment", "max_containment", format_type)
 
-            expected_filename = str(output_file) + f"_containment_max_containment.{format_type}"
-            mock_savefig.assert_called_once_with(expected_filename, dpi=300, bbox_inches="tight")
+            expected_path = tmp_path / f"test_plot_containment_max_containment.{format_type}"
+            assert result == expected_path
+            mock_savefig.assert_called_once_with(expected_path, dpi=300, bbox_inches="tight")
 
 
 class TestPlotContainment:

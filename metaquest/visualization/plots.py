@@ -134,13 +134,18 @@ def _create_plot_by_type(
         raise VisualizationError(f"Unknown plot type: {plot_type}. " "Supported types: rank, histogram, box, violin")
 
 
-def _save_plot_if_needed(file_path: Union[str, Path], plot_type: str, column: str, save_format: Optional[str]) -> None:
-    """Save plot if format is specified."""
-    if save_format:
-        base_path = Path(file_path)
-        output_file = f"{base_path}_{plot_type}_{column}.{save_format}"
-        plt.savefig(output_file, dpi=300, bbox_inches="tight")
-        logger.info(f"Plot saved to {output_file}")
+def _save_plot_if_needed(file_path: Union[str, Path], plot_type: str, column: str, save_format: Optional[str]) -> Path:
+    """Save the current plot, always: unset formats default to png.
+
+    Names the file from the table's stem, not its full name, so a table named
+    ``parsed_containment.txt`` produces ``parsed_containment_rank_max_containment.png``
+    rather than carrying the ``.txt`` suffix into the middle of the image's name.
+    """
+    fmt = save_format or "png"
+    output_file = Path(file_path).parent / f"{Path(file_path).stem}_{plot_type}_{column}.{fmt}"
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    logger.info(f"Plot saved to {output_file}")
+    return output_file
 
 
 def plot_containment(
@@ -201,8 +206,11 @@ def plot_containment(
         # Adjust layout
         plt.tight_layout()
 
-        # Save plot if format specified
-        _save_plot_if_needed(file_path, plot_type, column, save_format)
+        # Save the plot, defaulting to png. A DataFrame has no path to name the file
+        # from; callers passing one already save the returned figure themselves (e.g.
+        # embedding it in a PDF page or report image), so saving is skipped for those.
+        if not isinstance(file_path, pd.DataFrame):
+            _save_plot_if_needed(file_path, plot_type, column, save_format)
 
         return fig
 

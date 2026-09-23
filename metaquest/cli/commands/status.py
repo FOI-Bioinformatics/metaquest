@@ -229,14 +229,32 @@ class StatusCommand(BaseCommand):
         ]
         if not to_download:
             return []
+        # A selection recorded with --no-skip-excluded may still list an excluded
+        # accession, so its output file is never suggested for direct download;
+        # such accessions instead point at re-running select_datasets with
+        # --skip-excluded so the excluded run is dropped before download.
         by_output: Dict[str, List[str]] = {}
+        needs_reselect: List[str] = []
         for acc in to_download:
-            output = registry.datasets[acc].get("selection", {}).get("output") or "accessions.txt"
+            selection = registry.datasets[acc].get("selection", {})
+            criteria = selection.get("criteria") or {}
+            if criteria.get("skip_excluded") is False:
+                needs_reselect.append(acc)
+                continue
+            output = selection.get("output") or "accessions.txt"
             by_output.setdefault(output, []).append(acc)
-        return [
+        steps = [
             {"command": f"metaquest download_sra --accessions-file {output}", "accessions": accs}
             for output, accs in by_output.items()
         ]
+        if needs_reselect:
+            steps.append(
+                {
+                    "command": "metaquest select_datasets ... --skip-excluded  (the last selection kept excluded runs)",
+                    "accessions": needs_reselect,
+                }
+            )
+        return steps
 
     @staticmethod
     def _selection_table(registry: Registry) -> str:

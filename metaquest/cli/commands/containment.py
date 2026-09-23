@@ -3,6 +3,7 @@ Containment-related CLI commands.
 """
 
 import argparse
+from pathlib import Path
 from typing import List
 
 from metaquest.cli.base import BaseCommand
@@ -114,9 +115,9 @@ class PlotContainmentCommand(BaseCommand):
         parser.add_argument("--show-title", action="store_true", help="Whether to display the title")
         parser.add_argument(
             "--save-format",
-            default=None,
+            default="png",
             choices=["png", "jpg", "pdf", "svg"],
-            help="Format to save the plot",
+            help="Image format of the saved plot (default: png)",
         )
         parser.add_argument(
             "--threshold",
@@ -133,7 +134,7 @@ class PlotContainmentCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
-            viz_plot_containment(
+            fig = viz_plot_containment(
                 file_path=args.file_path,
                 column=args.column,
                 title=args.title,
@@ -143,6 +144,12 @@ class PlotContainmentCommand(BaseCommand):
                 threshold=args.threshold,
                 plot_type=args.plot_type,
             )
+            if fig is not None:
+                fmt = args.save_format or "png"
+                stem = Path(args.file_path).stem
+                output_path = Path(args.file_path).parent / f"{stem}_{args.plot_type}_{args.column}.{fmt}"
+                self.logger.info("Plot saved to %s", output_path)
+                self.logger.info("Next: open %s to view the plot", output_path)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error plotting containment: {e}")
