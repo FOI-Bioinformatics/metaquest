@@ -310,6 +310,86 @@ class TestSRAXMLParsing:
         assert result.layout == "SINGLE"
         assert result.spots == 500000
 
+    def test_extract_dataset_info_no_run_set_yields_one_record_keyed_by_experiment(self):
+        """A package with no RUN_SET/RUN element at all (nothing has been submitted to SRA
+        for this experiment yet, or the efetch response is trimmed) must still yield exactly
+        one record, keyed by the EXPERIMENT accession, with zeroed run-level numbers rather
+        than being silently dropped."""
+        import xml.etree.ElementTree as ET
+
+        xml_no_run_set = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE>
+            <EXPERIMENT accession="SRX777">
+                <TITLE>No runs yet</TITLE>
+                <PLATFORM>
+                    <ILLUMINA>
+                        <INSTRUMENT_MODEL>NovaSeq</INSTRUMENT_MODEL>
+                    </ILLUMINA>
+                </PLATFORM>
+                <DESIGN>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION>
+                        <LIBRARY_SOURCE>GENOMIC</LIBRARY_SOURCE>
+                        <LIBRARY_LAYOUT>
+                            <SINGLE/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                </DESIGN>
+            </EXPERIMENT>
+        </EXPERIMENT_PACKAGE>
+        """
+        package = ET.fromstring(xml_no_run_set)
+
+        results = self.client._extract_dataset_info(package)
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.accession == "SRX777"
+        assert result.spots == 0
+        assert result.bases == 0
+        assert result.avg_length == 0.0
+
+    def test_extract_dataset_info_run_without_accession_falls_back_to_experiment(self):
+        """A RUN element present but missing its own ``accession`` attribute (a malformed or
+        partial efetch record) must fall back to the EXPERIMENT accession rather than
+        yielding a record keyed by an empty string."""
+        import xml.etree.ElementTree as ET
+
+        xml_run_no_accession = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE>
+            <EXPERIMENT accession="SRX888">
+                <TITLE>Run missing its own accession</TITLE>
+                <PLATFORM>
+                    <ILLUMINA>
+                        <INSTRUMENT_MODEL>NovaSeq</INSTRUMENT_MODEL>
+                    </ILLUMINA>
+                </PLATFORM>
+                <DESIGN>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION>
+                        <LIBRARY_SOURCE>GENOMIC</LIBRARY_SOURCE>
+                        <LIBRARY_LAYOUT>
+                            <SINGLE/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                </DESIGN>
+            </EXPERIMENT>
+            <RUN_SET>
+                <RUN total_spots="1000" total_bases="150000" size="100000" published="2023-02-01"/>
+            </RUN_SET>
+        </EXPERIMENT_PACKAGE>
+        """
+        package = ET.fromstring(xml_run_no_accession)
+
+        results = self.client._extract_dataset_info(package)
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.accession == "SRX888"
+        assert result.spots == 1000
+
     # Note: Removed test_extract_dataset_info_exception_handling because
     # xml.etree.ElementTree.Element.find is immutable and cannot be patched
 
@@ -737,7 +817,8 @@ class TestGenerateStatisticsReport:
         generate_statistics_report(fastq_folder, tmp_path / "report.csv", sample_size=2)
 
         out = capsys.readouterr().out
-        assert "Total reads: 5 (read-level metrics from a sample)" in out
+        # total_reads counts mates, not NCBI spots; sra_stats' summary says so.
+        assert "Total reads (mates counted): 5 (read-level metrics from a sample)" in out
 
     def test_generate_statistics_cache_survives_a_zero_byte_extra_file(self, tmp_path):
         """The signature written into the cache uses the same file list ``cached_stats``
@@ -896,6 +977,156 @@ def test_parse_real_efetch_shape_reports_runs():
     assert run.strategy == "WGS" and run.layout == "PAIRED" and run.organism == "gut metagenome"
     assert run.bioproject == "PRJNA1"
     assert abs(run.avg_length - 300.0) < 0.01
+
+
+def test_parse_sra_xml_requested_one_run_of_a_shared_package_keeps_its_sibling_run():
+    """SRR100 and SRR101 sit in the same EXPERIMENT_PACKAGE (two lanes/runs of one
+    experiment). Filtering happens at the package level, not per RUN: a request naming only
+    SRR100 is a request for that package, so its sibling run SRR101 comes back too, rather
+    than being dropped as "not requested". A request list may also legitimately hold an
+    experiment, study or sample accession instead of a RUN accession (nothing about
+    --accessions-file rules that out); per-RUN filtering would silently return nothing at all
+    for such a request, which is the regression this rule avoids."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRR100"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_requested_experiment_accession_keeps_whole_package():
+    """Requesting a package's EXPERIMENT (SRX) accession is as valid as naming one of its
+    RUNs directly; every RUN in that package is returned."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRX100"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_requested_study_accession_keeps_whole_package():
+    """Requesting a package's STUDY (SRP) accession likewise keeps every RUN in it."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRP1"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_requested_matches_case_insensitively():
+    """A lowercase (or any-case) requested accession still matches the XML's own casing."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"srr100"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_without_requested_keeps_every_run():
+    """Called directly with no request set (a script, a REPL, or a test that hands it XML on
+    its own), every RUN in the package is still returned; filtering only applies when a
+    caller names the accessions it actually asked for."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML)
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+XML_TWO_PACKAGES = """<?xml version="1.0" encoding="UTF-8"?>
+<EXPERIMENT_PACKAGE_SET>
+<EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX100" alias="e"><TITLE>gut sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA100" received="2023-03-01"/>
+<STUDY accession="SRP1"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA1</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS1"><SAMPLE_NAME><SCIENTIFIC_NAME>gut metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR100" total_spots="4866463" total_bases="1459938900" size="482592813"
+published="2023-03-23"/></RUN_SET>
+</EXPERIMENT_PACKAGE>
+<EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX200" alias="e2"><TITLE>soil sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA200" received="2023-04-01"/>
+<STUDY accession="SRP2"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA2</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS2"><IDENTIFIERS><PRIMARY_ID>SRS2</PRIMARY_ID>
+<EXTERNAL_ID namespace="BioSample">SAMN2</EXTERNAL_ID></IDENTIFIERS>
+<SAMPLE_NAME><SCIENTIFIC_NAME>soil metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR200" total_spots="1000" total_bases="150000" size="100000"
+published="2023-04-02"/></RUN_SET>
+</EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>"""
+
+
+def test_parse_sra_xml_requested_excludes_runs_from_a_different_package():
+    """SRR100 and SRR200 sit in different EXPERIMENT_PACKAGEs (different experiments);
+    requesting only SRR100 does not pull in SRR200's package, unlike the shared-package case
+    above."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"SRR100"})
+    assert set(results) == {"SRR100"}
+
+
+def test_parse_sra_xml_requested_bioproject_keeps_its_package():
+    """A BioProject accession is carried as an EXTERNAL_ID of the package's STUDY; a request
+    for it keeps that package and not the other one."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"PRJNA1"})
+    assert set(results) == {"SRR100"}
+
+
+def test_parse_sra_xml_requested_biosample_keeps_its_package():
+    """A BioSample accession is carried as an EXTERNAL_ID of the package's SAMPLE; matching is
+    case-insensitive like the other levels."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"samn2"})
+    assert set(results) == {"SRR200"}
+
+
+def test_parse_sra_xml_requested_matching_nothing_keeps_the_batch(caplog):
+    """When the requested accessions match no package of a non-empty reply, every run is
+    listed with a WARNING instead of reporting a false failure."""
+    client = SRAMetadataClient(email="a@b.c")
+    with caplog.at_level("WARNING"):
+        results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"nomatch"})
+    assert set(results) == {"SRR100", "SRR101"}
+    assert any(
+        "requested accessions matched no package in the reply; listing every run returned" in r.message
+        for r in caplog.records
+    )
+
+
+def test_fetch_batch_metadata_filters_to_the_requested_batch():
+    """sra_info's underlying batch fetch must not surface a RUN from a package the caller
+    never asked for, even when NCBI's efetch response for the batch bundles another
+    experiment's package alongside the requested one."""
+    client = SRAMetadataClient(email="a@b.c")
+    mock_search_response = json.dumps({"esearchresult": {"idlist": ["100"]}})
+
+    with patch.object(client, "_make_request") as mock_request:
+        mock_request.side_effect = [mock_search_response, XML_TWO_PACKAGES]
+        result = client._fetch_batch_metadata(["SRR100"])
+
+    assert set(result) == {"SRR100"}
+
+
+XML_RUN_MISSING_ATTRS_BUT_STATISTICS_CHILD = """<?xml version="1.0" encoding="UTF-8"?>
+<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX200" alias="e"><TITLE>soil sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA200" received="2023-04-01"/>
+<STUDY accession="SRP2"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA2</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS2"><SAMPLE_NAME><SCIENTIFIC_NAME>soil metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR200" published="2023-04-02">
+<Statistics nspots="5000" nbases="750000"/>
+</RUN></RUN_SET>
+</EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>"""
+
+
+def test_parse_falls_back_to_statistics_child_when_run_attributes_missing():
+    """A RUN element without total_spots/total_bases attributes still reports real numbers,
+    read from its Statistics child, rather than the zeroed defaults."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_RUN_MISSING_ATTRS_BUT_STATISTICS_CHILD)
+    run = results["SRR200"]
+    assert run.spots == 5000
+    assert run.bases == 750000
 
 
 # ============================================================================

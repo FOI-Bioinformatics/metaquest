@@ -100,6 +100,21 @@ class TestUseBranchwaterCommand:
         args = argparse.Namespace(branchwater_folder=str(source), matches_folder=str(tmp_path / "m"))
         assert UseBranchwaterCommand().execute(args) == 1
 
+    @patch("metaquest.cli.commands.branchwater.process_branchwater_files")
+    def test_execute_logs_a_next_hint(self, mock_command, caplog):
+        """On success, point at the next pipeline step (parse_containment)."""
+        mock_command.return_value = {"file1": Path("test")}
+        command = UseBranchwaterCommand()
+        args = argparse.Namespace(branchwater_folder="test_folder", matches_folder="matches")
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "Next:" in caplog.text
+        assert "parse_containment" in caplog.text
+        assert "matches" in caplog.text
+
 
 class TestExtractBranchwaterMetadataCommand:
     """Test ExtractBranchwaterMetadataCommand."""
@@ -284,6 +299,33 @@ class TestParseContainmentCommand:
         assert result == 0
         assert custom_details.exists()
         assert not (tmp_path / "parsed_details.tsv").exists()
+
+    def test_execute_logs_a_next_hint(self, tmp_path, caplog):
+        """On success, point at plot_containment and select_datasets as the next steps."""
+        matches_folder = tmp_path / "matches"
+        matches_folder.mkdir()
+        (matches_folder / "GCF_A.csv").write_text("acc,containment\nSRR1,0.9\nSRR2,0.1\n")
+
+        command = ParseContainmentCommand()
+        parsed_file = tmp_path / "parsed.txt"
+        args = argparse.Namespace(
+            matches_folder=str(matches_folder),
+            parsed_containment_file=str(parsed_file),
+            summary_containment_file=str(tmp_path / "summary.txt"),
+            step_size=0.1,
+            details_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        )
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "Next:" in caplog.text
+        assert "plot_containment" in caplog.text
+        assert "select_datasets" in caplog.text
+        assert "GCF_A" in caplog.text
 
 
 class TestDownloadMetadataCommand:
@@ -1831,6 +1873,110 @@ class TestDownloadSraCommand:
         assert download["store_name"] == "SRR1"
         assert download["attempts"] == attempts
         assert written["store"]["linked"] == ["SRR1"]
+
+    @pytest.mark.parametrize(
+        "previous, sidecar_verdict, sidecar_ratio, expected",
+        [
+            # complete -> complete: the recorded read count is kept (audit deferred S7-7).
+            (
+                {"verdict": "complete", "reads_r1": 48000000, "expected_spots": 48000000, "ratio": 1.0},
+                "complete",
+                1.0,
+                {"verdict": "complete", "reads_r1": 48000000, "expected_spots": None, "ratio": 1.0},
+            ),
+            # truncated project copy relinked to a complete store copy: the truncated count
+            # describes other files, so nothing is carried; ratio comes from the new block only.
+            (
+                {"verdict": "truncated", "reads_r1": 5, "expected_spots": 48000000, "ratio": 0.0001},
+                "complete",
+                1.0,
+                {"verdict": "complete", "reads_r1": None, "expected_spots": None, "ratio": 1.0},
+            ),
+            # complete -> truncated: nothing carried either.
+            (
+                {"verdict": "complete", "reads_r1": 48000000, "expected_spots": 48000000, "ratio": 1.0},
+                "truncated",
+                None,
+                {"verdict": "truncated", "reads_r1": None, "expected_spots": None, "ratio": None},
+            ),
+        ],
+        ids=["complete-to-complete", "truncated-to-complete", "complete-to-truncated"],
+    )
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_relink_carries_read_count_only_between_equal_verdicts(
+        self, mock_download, _which, tmp_path, previous, sidecar_verdict, sidecar_ratio, expected
+    ):
+        """A relink to a store copy takes its verdict from the sidecar. A sidecar with no read
+        count of its own keeps the registry's previous count only when the previous verdict
+        equals the new one; ratio and expected_spots are never carried over, so a relink never
+        mixes two downloads' verdict blocks."""
+        from metaquest.store.layout import init_store, sidecar_path
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(
+            sidecar_path(paths, "SRR1"),
+            Sidecar(
+                accession="SRR1",
+                state="complete",
+                reads_per_mate=None,
+                completeness={"method": "spots", "ratio": sidecar_ratio, "verdict": sidecar_verdict},
+            ),
+        )
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        os.symlink(acc_dir, fastq_folder / "SRR1")
+
+        registry_file = tmp_path / "metaquest_registry.json"
+        seeded = load_registry(registry_file)
+        record_download(seeded, "SRR1", "downloaded", fastq_folder)
+        seeded.datasets["SRR1"]["download"]["complete"] = dict(previous)
+        save_registry(seeded)
+
+        message = "linked from store, 1 files"
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, message)
+            return {
+                "total": 1,
+                "to_download": 1,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 1,
+                "failed": 0,
+                "failed_accessions": [],
+                "results": {"SRR1": message},
+            }
+
+        mock_download.side_effect = fake_download_sra
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=str(store_root),
+            redownload_truncated=True,
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        written = json.loads(registry_file.read_text())
+        complete = written["datasets"]["SRR1"]["download"]["complete"]
+        assert {key: complete.get(key) for key in expected} == expected
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")

@@ -1,6 +1,10 @@
 import json
+import sqlite3
 
-from metaquest.store.catalog import catalog_write
+import pytest
+
+from metaquest.core.exceptions import DataAccessError
+from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store
 from metaquest.store import journal
 
@@ -27,6 +31,29 @@ def test_replay_restores_projects_and_usage_into_a_fresh_catalog(tmp_path):
         assert restored == (1, 1)
         assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
         assert c.conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] == 1
+
+
+def test_replaying_the_journal_twice_is_idempotent(tmp_path):
+    """A second replay (e.g. a repeated ``store_reindex``) must not duplicate rows: the
+    catalogue's own upsert semantics (ON CONFLICT DO UPDATE for projects, DO UPDATE for the
+    unique (accession, project_id, genome_id, stage) usage key) make replaying the same
+    journal lines again a no-op on row counts, whichever catalogue it is replayed into."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.record_usage("SRR1", "pid1", "GCF_1", "downloaded", "first pass")
+    (paths.root / "catalog.sqlite").unlink()
+
+    with catalog_write(paths) as c:
+        first = journal.replay(paths, c)
+        second = journal.replay(paths, c)
+
+        assert first == (1, 1)
+        assert second == (1, 1)
+        assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+        assert c.conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] == 1
+        project_row = c.conn.execute("SELECT name FROM projects WHERE project_id = ?", ("pid1",)).fetchone()
+        assert project_row["name"] == "proj"
 
 
 def test_replay_without_journal_returns_zero(tmp_path):
@@ -88,9 +115,53 @@ def test_catalog_write_backfills_a_pre_journal_store_once(tmp_path):
     assert len((paths.journal / "usage.jsonl").read_text().splitlines()) == 1
 
 
+def test_backfill_keeps_the_catalogue_rows_hostname_and_time(tmp_path):
+    """Backfilled lines carry the host and time the catalogue row recorded, not the host and
+    time of the backfill, so a later replay restores the true values."""
+    paths = init_store(tmp_path / "store")
+    when = "2020-01-02T03:04:05+00:00"
+    with catalog_write(paths) as c:
+        c.journal_enabled = False  # simulate a store written before the journal existed
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json", hostname="other-host")
+        c.record_usage("SRR1", "pid1", "", "linked", "", at=when)
+
+    with catalog_write(paths):
+        pass  # backfill runs on entry
+
+    project = json.loads((paths.journal / "projects.jsonl").read_text().splitlines()[0])
+    usage = json.loads((paths.journal / "usage.jsonl").read_text().splitlines()[0])
+    assert project["hostname"] == "other-host"
+    assert usage["at"] == when
+
+
 def test_backfill_from_catalog_is_a_noop_on_an_empty_catalog(tmp_path):
     """No project rows yet (a freshly initialised store) means nothing to backfill."""
     paths = init_store(tmp_path / "store")
     with catalog_write(paths) as c:
         assert journal.backfill_from_catalog(paths, c) == (0, 0)
     assert not (paths.journal / "projects.jsonl").exists()
+
+
+def test_backfill_sqlite_error_becomes_data_access_error(tmp_path, monkeypatch):
+    """backfill_from_catalog's own sqlite calls must be wrapped like every other catalogue
+    method: a raw sqlite3.Error must never reach the caller of catalog_write."""
+    paths = init_store(tmp_path / "store")
+    with Catalog(paths, create=True) as c:
+        c.migrate()
+        c.journal_enabled = False  # a pre-journal project: nothing appended yet
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.conn.commit()
+    assert not (paths.journal / "projects.jsonl").exists()
+
+    class _RaisingConn:
+        def execute(self, *args, **kwargs):
+            raise sqlite3.OperationalError("boom")
+
+    # sqlite3.Connection is a C extension type: its methods cannot be monkeypatched directly
+    # (setattr on an instance or the class both raise), so the ``conn`` property itself is
+    # patched to hand back a stand-in whose ``execute`` raises, same effect as if the real
+    # connection had failed mid-query.
+    monkeypatch.setattr(Catalog, "conn", property(lambda self: _RaisingConn()))
+    with Catalog(paths) as c:
+        with pytest.raises(DataAccessError):
+            journal.backfill_from_catalog(paths, c)

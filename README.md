@@ -280,6 +280,11 @@ on a broad search, `branchwater_search` and `parse_containment` record at most 5
 genome, the ones with the highest containment; change that with `--registry-max-screened`. The
 match CSVs always keep every hit.
 
+`status --next` lists a runnable `download_sra` command for accessions ready to download; for
+accessions still selected under a `select_datasets --no-skip-excluded` run, it instead prints a
+`select_datasets ... --skip-excluded` command (reproducing that run's genome, threshold, metadata and
+top-N criteria) so rerunning it drops the excluded accessions from the selection file first.
+
 Commit `metaquest_registry.json` with your project if you want the decisions to travel with the
 results.
 
@@ -314,7 +319,9 @@ metaquest store_gc --dry-run                                           # candida
 to the store's copy. `store_adopt --copy` leaves the project's folder exactly as it was, real and
 unlinked, whether the accession is freshly adopted or turns out to duplicate what the store already
 holds; a folder with no FASTQ files at all (an empty or interrupted download) is never adopted either
-way and is reported separately, not silently skipped.
+way and is reported separately, not silently skipped. A `--copy` adoption still records the copying
+project as a user of the dataset (the same as a linked one), so `store_usage` and `store_gc` do not
+treat a copied dataset as unused.
 
 Inside a project, each linked accession appears as `fastq/<ACCESSION>`, a symlink to
 `<data-root>/sra/<ACCESSION>` (relative when the store and project share a parent folder, absolute
@@ -331,9 +338,12 @@ through its files (via the `--spots` check, or, if `--spots` was not requested, 
 truncated or corrupt gzip stream underneath. `--rescan` rebuilds a dataset's recorded file list from
 what is actually on disk before checking, for files added or removed by hand; `store_reindex` rebuilds
 the SQLite catalogue from the sidecar files if it is ever lost, replaying an append-only journal under
-the store's `journal/` folder to restore which projects used which datasets (without the journal, a
-rebuilt catalogue has no project or usage records, and `store_gc` then refuses to run, since it cannot
-tell used datasets from unused ones).
+the store's `journal/` folder to restore which projects used which datasets. If that replay restores no
+project at all while the rebuilt catalogue still holds datasets, `store_reindex` sets a
+`rebuilt_without_projects` catalogue flag (every dataset would otherwise look unused); `store_gc` then
+refuses to run until each project using the store has run `store_init` or `store_link` again and
+`store_gc` is passed `--accept-rebuilt`, or until a later `store_reindex` restores at least one project
+on its own. `store_gc --json` prints the report (or, on a refusal, `{"error": ...}`) as one JSON object.
 `store_gc` never removes a dataset a project still links or another run is working on; `--older-than
 DAYS` restricts it to datasets downloaded at least that many days ago, `--keep-partial` never removes a
 `partial` dataset, and it also reports (and, with `--yes`, removes) leftover temp artifacts under the
@@ -373,7 +383,10 @@ names the folder, and `store_gc --dry-run` separately lists such leftovers as re
 `sra_profile_quality`, and `extract_target_reads`; it never replaces `--fastq-folder`, which still names
 where the project expects its reads (as a folder or as the store's symlink). `sra_compare` and
 `sra_dashboard` do not take `--data-root` themselves; instead they reuse quality profiles a store-aware
-`sra_profile_quality` run already saved, via `--quality-profiles`.
+`sra_profile_quality` run already saved, via `--quality-profiles`. With a store configured, `status`
+flags a wanted accession whose `fastq/<ACC>` is a link into the store but whose store dataset is not yet
+`complete` or `unverified` (still `downloading`, `failed`, or `partial`) as linked to a store dataset
+that is not complete, rather than simply listing it as missing.
 
 ### 11. Targeted Read Extraction Before Assembly
 
@@ -398,7 +411,9 @@ names a shared data store (see "Shared data store" above) to resolve `--fastq-fo
 way other store-aware commands do. This step requires `minimap2`, `samtools`, and (for `--assemble`)
 `megahit` to be installed and on the PATH; `--dry-run` never checks for them, since it runs no tool. A
 sample selected by containment but not yet downloaded is common on a broad search, so `--dry-run` prints
-one summary line for however many such samples there are, rather than one warning line per sample.
+one summary line for however many such samples there are, rather than one warning line per sample. A
+`fastq/<ACC>` symlink whose target is missing (typically an unmounted shared store) is logged as one
+WARNING naming every dangling link found, rather than failing silently for each one.
 
 On macOS the assembly defaults to a single thread, because megahit 1.2.9's parallel k-mer sorting step
 is unstable on recent macOS releases (mapping with minimap2/samtools still uses `--threads`). Override
@@ -406,9 +421,13 @@ the assembly thread count explicitly with `--assembly-threads` if your megahit b
 megahit failure is reported with the tool's own error message (the last few lines of its stderr), not
 just the exit code. megahit needs FIFOs for its scratch files, which some filesystems do not provide
 (ExFAT, some network shares); `--temp-folder DIR` points megahit's scratch elsewhere, at a local POSIX
-filesystem, when the default location (`<output-folder>/.megahit-tmp` unless `--temp-folder` is given)
-does not support them. A macOS ExFAT or SMB volume's stray `._*` AppleDouble sidecar files are ignored
-wherever MetaQuest lists a folder's contents, so they never look like real FASTQ or genome files.
+filesystem, when the default location does not support them. Without `--temp-folder`, each run creates
+its own scratch folder directly under `--output-folder`, named `.megahit-tmp-<random suffix>` (a sibling
+of the per-accession assembly directories, never inside one, since megahit refuses to run when its `-o`
+directory already exists), and removes it afterwards, even on failure; the random suffix lets two
+concurrent runs sharing one output folder keep separate scratch space. A macOS ExFAT or SMB volume's
+stray `._*` AppleDouble sidecar files are ignored wherever MetaQuest lists a folder's contents, so they
+never look like real FASTQ or genome files.
 
 Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally
 discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
@@ -443,7 +462,12 @@ threshold. `--top-n N` keeps only the N accessions with the highest containment 
 is applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
 is given), and `--skip-downloaded` additionally drops accessions the registry already records as
 downloaded, useful when re-running selection on an expanded search. `select_datasets` has no filter on
-dataset size; use `sra_info` beforehand (see "Downloading reads" below) to see sizes.
+dataset size; use `sra_info` beforehand (see "Downloading reads" below) to see sizes. `--no-record`
+still writes the output file and logs the counts, but does not record the selection in the registry, so
+`status` is left unchanged; use it for an exploratory run that should not redefine the target list.
+Because `status --next` points `download_sra` at the recorded selection's file, `--no-record` refuses to
+overwrite a file that a recorded selection names (including the default `accessions.txt`); give it an
+`--output` that names a scratch file instead.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see
@@ -466,7 +490,11 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 `--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`,
 `blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
-`docs/SRA_ENHANCED_FEATURES.md`.
+`docs/SRA_ENHANCED_FEATURES.md`. `sra_info` filters per experiment package, not per run: it lists every
+run of each experiment package that a requested run, experiment, sample, study, BioProject or BioSample
+accession matches (including sibling lanes or replicates of the same experiment as a requested run), and
+drops runs of packages that match none of the requested accessions. If a reply would be filtered down to
+nothing, it lists every run returned and logs a warning instead.
 
 By default, `download_sra` runs `prefetch` before `fasterq-dump` (`--no-prefetch` reverts to calling
 `fasterq-dump` directly) and gzip-compresses the resulting FASTQ files (`--no-compress` leaves them
@@ -531,6 +559,11 @@ file by default or from just the start with `--sampler head`. `sra_stats` takes 
 `sra_stats`, `sra_validate` and `sra_profile_quality` alike until the underlying file's size or
 modification time changes.
 
+`sra_stats` and `sra_profile_quality` label every printed read total "(mates counted)": a paired-end
+run's two mate files are counted separately, so the figure is twice the spot count NCBI reports for
+that run. The per-accession quality profile JSON (`--detailed-reports`) writes the complexity score
+under both `complexity_score` and the newer `sequence_complexity` key, so either name can be read back.
+
 ### Interactive SRA Dashboards
 
 Generate interactive HTML dashboards for SRA analysis:
@@ -574,6 +607,9 @@ Example groups file format:
   "Control_Group": ["SRR789012", "SRR789013"]
 }
 ```
+
+The per-group summary prints "Mean reads in sample", the average of each dataset's `total_reads` value
+(mates counted, see "SRA Quality Profiling" above), not a per-mate or per-sample-size figure.
 
 ## Visualizing Results
 

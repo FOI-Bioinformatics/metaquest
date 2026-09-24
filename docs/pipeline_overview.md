@@ -76,7 +76,15 @@ their reason in the registry and in `blacklist.txt`, and `download_sra` honours 
 flags. `--top-n` keeps only the highest-containment accessions after every other filter; excluded
 accessions are dropped by default (`--skip-excluded`) and `--skip-downloaded` also drops accessions the
 registry already records as downloaded. `select_datasets` has no filter on dataset size; `sra_info` (see
-[README](../README.md#downloading-reads)) reports sizes separately, before downloading.
+[README](../README.md#downloading-reads)) reports sizes separately, before downloading. It filters per
+experiment package, not per run: it lists every run of each experiment package that a requested run,
+experiment, sample, study, BioProject or BioSample accession matches (including sibling lanes or
+replicates of the same experiment as a requested run), and drops runs of packages that match none of the
+requested accessions; a reply that would be filtered down to nothing is listed in full with a warning.
+`--no-record` logs the counts and writes its list without touching the registry, for an exploratory
+run that should not replace the recorded selection. It refuses to overwrite a file that a recorded
+selection names (the default `accessions.txt` once a selection has been recorded), so `--output` should
+name a scratch file.
 
 ## 3. Download
 
@@ -132,6 +140,11 @@ dataset held in the shared data store, this sample and the exact counts are cach
 `sra_stats`, `sra_validate` and `sra_profile_quality` compute it once and reuse it rather than
 re-reading the file each time.
 
+`sra_stats` and `sra_profile_quality` label every printed read total "(mates counted)", since a
+paired-end run's two mate files are counted separately; `sra_compare`'s per-group summary reports the
+same figure as "Mean reads in sample". `sra_profile_quality --detailed-reports` writes the per-accession
+complexity score under both `complexity_score` and `sequence_complexity` in the profile JSON.
+
 ## 5. Extract
 
 Map each selected sample against the target genome and keep only the reads that map.
@@ -172,9 +185,12 @@ A megahit failure surfaces the tool's own stderr (last few lines), not just its 
 megahit runs single-threaded by default (`--assembly-threads` overrides).
 
 megahit's scratch files need a filesystem with FIFOs, which ExFAT and some network shares do not
-provide; `--temp-folder DIR` points that scratch at a local POSIX filesystem instead of the default
-(`<output-folder>/.megahit-tmp` when `--temp-folder` is not given). On such a volume, stray `._*`
-AppleDouble sidecar files are ignored wherever MetaQuest lists a folder's contents.
+provide; `--temp-folder DIR` points that scratch at a local POSIX filesystem instead of the default.
+Without `--temp-folder`, each run creates its own scratch folder directly under `--output-folder`,
+named `.megahit-tmp-<random suffix>`, and removes it once the run finishes, even on failure; the random
+suffix keeps two concurrent runs sharing one output folder from clashing. On such a volume, stray `._*`
+AppleDouble sidecar files are ignored wherever MetaQuest lists a folder's contents. A `fastq/<ACC>`
+symlink whose target is missing is logged as one WARNING naming every such dangling link found.
 
 `--assembly-preset` sets megahit's `--presets` value: `meta-sensitive` (the default), `meta-large`, or
 `default` for no preset. `intermediate_contigs/` is removed after a successful assembly unless
@@ -232,8 +248,14 @@ should travel with the results.
 
 `status --data-root` reports whether the project uses a shared data store, and if so the store's root,
 whether each dataset is store-backed or local, and any dataset that is partial or whose store symlink is
-dangling. `status --reconcile` records a dangling link the same way it records other files removed by
-hand.
+dangling. A wanted accession whose `fastq/<ACC>` link points at a store dataset that is not yet
+`complete` or `unverified` (still `downloading`, `failed`, or `partial`) is reported as linked to a store
+dataset that is not complete, rather than simply listed as missing. `status --reconcile` records a
+dangling link the same way it records other files removed by hand.
+
+`status --next` also turns a `select_datasets --no-skip-excluded` selection's still-excluded accessions
+into a runnable `select_datasets ... --skip-excluded` command, reproducing that run's genome, threshold,
+metadata and top-N criteria, instead of suggesting `download_sra` directly on them.
 
 ## The walkthrough
 

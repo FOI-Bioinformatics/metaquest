@@ -1,13 +1,14 @@
 """Tests for `metaquest.store.adopt`: folding project-owned FASTQ folders into the store."""
 
 import gzip
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.store.adopt import adopt
+from metaquest.store.adopt import ADOPT_COPY_IGNORE, _folder_bytes, adopt
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, lock_path, sidecar_path, sra_dir
 from metaquest.store.sidecar import build_sidecar, read_sidecar, write_sidecar
@@ -538,6 +539,64 @@ class TestAdoptIgnoresAppleDouble:
         assert [f["name"] for f in sc.files] == ["SRR1_1.fastq.gz"]
 
 
+class TestFolderBytes:
+    """``_folder_bytes`` feeds ``_has_room_for``'s free-space check, which must estimate the
+    same folder the staging copy (``shutil.copytree(..., ignore=ADOPT_COPY_IGNORE)``) actually
+    produces: disagreeing in either direction is a bug. Counting bytes the copy skips (e.g.
+    the contents of a directory whose own name matches an ignore pattern, like ``._cache/``)
+    over-counts and can make adoption refuse a folder that actually fits; skipping bytes the
+    copy does include (e.g. a plain file inside an ordinary hidden directory like
+    ``.snakemake/``, which the copy does *not* skip) under-counts and can let adoption start
+    staging a folder that does not actually fit. Earlier code hit both directions at once: the
+    original version only checked each file's own name, over-counting a nested ``._cache/``
+    directory's contents; a first fix skipped every hidden directory's contents outright,
+    under-counting an ordinary hidden directory like ``.hidden/`` whose files the copy does
+    include. The current implementation skips a path only when ``_copy_ignores`` matches one
+    of its path segments -- the same test ``ADOPT_COPY_IGNORE`` applies during the copy."""
+
+    def test_a_plain_file_inside_an_otherwise_hidden_directory_is_counted(self, tmp_path):
+        """A plainly-named file sitting inside a directory whose name matches neither ignore
+        pattern (e.g. a `.snakemake/` work folder some pipelines leave under an accession's
+        FASTQ directory, or any other ordinary dotted directory) is not skipped by the
+        staging copy, so ``_folder_bytes`` must count it too: both the visible top-level
+        file's 100 bytes and the 50 bytes inside `.snakemake/` should count."""
+        folder = tmp_path / "SRR1"
+        folder.mkdir()
+        (folder / "visible.fastq").write_bytes(b"x" * 100)
+        hidden_dir = folder / ".snakemake"
+        hidden_dir.mkdir()
+        (hidden_dir / "metadata.txt").write_bytes(b"y" * 50)
+
+        assert _folder_bytes(folder) == 150
+
+    def test_matches_the_bytes_the_staging_copy_actually_produces(self, tmp_path):
+        """Pin ``_folder_bytes`` against the real staging copy rather than against a
+        restatement of its own logic: build a folder with a plain file, a ``._plain``
+        AppleDouble file, a ``.DS_Store``, a ``.hidden/keep.txt`` file and a ``sub/._junk``
+        file; run the same ``shutil.copytree(..., ignore=ADOPT_COPY_IGNORE)`` staging uses;
+        and assert ``_folder_bytes`` on the source equals the real byte total of the staged
+        copy. ``._plain``, ``.DS_Store`` and ``sub/._junk`` must not reach the copy (or the
+        count); ``.hidden/keep.txt`` must reach both, since ``.hidden`` matches neither
+        ignore pattern."""
+        src = tmp_path / "SRR1"
+        src.mkdir()
+        (src / "plain.fastq").write_bytes(b"x" * 100)
+        (src / "._plain.fastq").write_bytes(b"y" * 20)
+        (src / ".DS_Store").write_bytes(b"z" * 5)
+        (src / ".hidden").mkdir()
+        (src / ".hidden" / "keep.txt").write_bytes(b"a" * 30)
+        (src / "sub").mkdir()
+        (src / "sub" / "._junk").write_bytes(b"b" * 15)
+        (src / "sub" / "real.fastq").write_bytes(b"c" * 7)
+
+        staged = tmp_path / "staged"
+        shutil.copytree(src, staged, ignore=ADOPT_COPY_IGNORE)
+        copied_bytes = sum(p.stat().st_size for p in staged.rglob("*") if p.is_file())
+
+        assert copied_bytes == 100 + 30 + 7  # ._plain, .DS_Store and sub/._junk excluded
+        assert _folder_bytes(src) == copied_bytes
+
+
 class TestAdoptSafety:
     def test_empty_folder_is_not_adopted(self, tmp_path):
         paths = init_store(tmp_path / "store")
@@ -548,6 +607,23 @@ class TestAdoptSafety:
         assert report.empty == ["SRR9"]
         assert not (paths.sra / "SRR9").exists()
         assert (project / "SRR9").is_dir() and not (project / "SRR9").is_symlink()
+
+    def test_hidden_files_only_folder_reaches_empty(self, tmp_path):
+        """An accession directory whose own name is not hidden, but which holds only hidden
+        files (a stray .DS_Store, an AppleDouble sidecar), has no usable FASTQ file: it must
+        be reported in ``empty`` exactly like a folder with nothing in it at all, not adopted
+        as if the hidden files counted."""
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR9"
+        acc.mkdir(parents=True)
+        (acc / ".DS_Store").write_bytes(b"\x00\x01\x02")
+        (acc / "._SRR9_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.adopted == []
+        assert report.empty == ["SRR9"]
+        assert not (paths.sra / "SRR9").exists()
+        assert (acc / ".DS_Store").is_file()  # left exactly as it was
 
     def test_failed_staged_copy_keeps_project_folder(self, tmp_path, monkeypatch):
         paths = init_store(tmp_path / "store")

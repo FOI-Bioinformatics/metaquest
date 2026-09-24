@@ -21,16 +21,22 @@ from metaquest.data.registry import (
     record_download,
     registry_transaction,
 )
-from metaquest.data.sra import default_max_workers, download_sra, parse_verdict_message, transient_bytes
+from metaquest.data.sra import (
+    STORE_LINKED_PREFIX,
+    default_max_workers,
+    download_sra,
+    parse_verdict_message,
+    transient_bytes,
+)
 from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import sidecar_completeness
 from metaquest.store.usage import ensure_project_identity, record_usage_many, record_usage_safe
 
-# Markers the data layer puts in a result message for a dataset the shared store provided
-# (linked from a copy already there) or received (downloaded into it by this run).
-STORE_LINKED_PREFIX = "linked from store"
+# Marker the data layer puts in a result message for a dataset this run downloaded and
+# saved into the store (as opposed to STORE_LINKED_PREFIX, imported above, for one the
+# store already held).
 STORE_SAVED_SUFFIX = "; stored"
 
 # Kept .sra-cache archives and <ACC>_temp build folders bigger than this, summed across a

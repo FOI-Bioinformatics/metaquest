@@ -421,7 +421,8 @@ class SRAValidateCommand(BaseCommand):
                 spots = sidecar.ncbi.get("spots")
                 return [f"partial: {reads} reads on disk vs {spots} spots at NCBI"]
             if sidecar.state == "failed":
-                return ["failed at NCBI download"]
+                detail = sidecar.error or "see store_verify"
+                return [f"store state failed: {detail}"]
             if sidecar.state == "downloading":
                 return ["download in progress elsewhere"]
             return []

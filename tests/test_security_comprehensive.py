@@ -19,6 +19,16 @@ from metaquest.utils.security import SecureSubprocess
 from metaquest.core.exceptions import SecurityError
 
 
+@pytest.fixture(autouse=True)
+def _isolated_allowed_roots(monkeypatch):
+    """Give every test its own copy of the class-level allowed roots, restored afterwards.
+
+    Several tests here (``_megahit_args`` among them) register tmp_path folders through
+    ``add_allowed_root``; without this they would stay allowed for every later test.
+    """
+    monkeypatch.setattr(SecureSubprocess, "_extra_roots", list(SecureSubprocess._extra_roots))
+
+
 def _fake_proc(returncode=0, stdout="", stderr=""):
     """A stand-in for subprocess.Popen's return value, as run_secure uses it."""
     proc = Mock()
@@ -144,6 +154,177 @@ class TestParameterValidation:
     def test_megahit_presets_flag_allowed(self):
         cmd = SecureSubprocess._build_validated_command("megahit", ["--presets", "meta-sensitive"])
         assert cmd == ["megahit", "--presets", "meta-sensitive"]
+
+    def test_megahit_tmp_dir_flag_passes_validation(self, tmp_path):
+        """The default per-run megahit scratch directory (Task 2, audit deferred S7-2) is
+        passed to megahit as ``--tmp-dir``; the allow-list must accept it, or every
+        ``extract_target_reads --assemble`` run fails right after mapping succeeds, as it
+        did in production before this fix (SecurityError: Parameter '--tmp-dir' not
+        allowed for megahit). Built with the real ``_megahit_args`` and run through the
+        real validator, not a mock, so a gap like this cannot hide behind a mocked
+        ``run_secure`` again.
+        """
+        from metaquest.data.read_extraction import _megahit_args
+
+        output_folder = tmp_path / "targeted"
+        output_folder.mkdir()
+        out_dir = output_folder / "SRR1" / "GCF_1_assembly"
+        tmp_dir = output_folder / ".megahit-tmp-abcd1234"
+
+        args = _megahit_args(
+            [tmp_path / "GCF_1_1.fastq.gz", tmp_path / "GCF_1_2.fastq.gz"],
+            out_dir,
+            threads=4,
+            min_contig_len=None,
+            preset="meta-sensitive",
+            k_flags=None,
+            tmp_dir=tmp_dir,
+        )
+
+        cmd = SecureSubprocess._build_validated_command("megahit", args)
+        assert "--tmp-dir" in cmd
+        assert cmd[cmd.index("--tmp-dir") + 1] == str(tmp_dir.resolve())
+
+    def test_megahit_safe_params_cover_every_flag_megahit_args_can_emit(self, tmp_path):
+        """Every literal flag ``_megahit_args`` can emit must be in the megahit allow-list.
+
+        A new flag added to ``_megahit_args`` without a matching allow-list entry passes
+        every unit test that mocks ``run_secure`` and only surfaces once megahit actually
+        runs against a real project -- exactly how the ``--tmp-dir`` gap (audit deferred
+        S7-2, Task 2 fix round 1) reached production. This derives the flag set from the
+        real function's output rather than a hand-maintained list, so it stays correct as
+        ``_megahit_args`` changes.
+        """
+        from metaquest.data.read_extraction import _megahit_args
+
+        paired_args = _megahit_args(
+            [tmp_path / "r1.fastq.gz", tmp_path / "r2.fastq.gz"],
+            tmp_path / "asm",
+            threads=4,
+            min_contig_len=100,
+            preset="meta-sensitive",
+            k_flags=None,
+            tmp_dir=tmp_path / "scratch",
+        )
+        single_end_args = _megahit_args(
+            [tmp_path / "r.fastq.gz"],
+            tmp_path / "asm2",
+            threads=4,
+            min_contig_len=None,
+            preset=None,
+            k_flags={"k-min": 21, "k-max": 141, "k-step": 10},
+            tmp_dir=None,
+        )
+        flags_emitted = {a for a in (*paired_args, *single_end_args) if a.startswith("-")}
+        safe_params = SecureSubprocess.SAFE_PARAMETERS["megahit"]
+        missing = flags_emitted - safe_params
+        assert not missing, f"megahit allow-list is missing: {sorted(missing)}"
+
+    def test_megahit_tests_leave_no_allowed_root_behind(self):
+        """Runs after the two ``_megahit_args`` tests above, which register their tmp_path
+        scratch folders as allowed roots. The module's roots fixture must have restored the
+        class-level list, so none of those folders is still accepted by ``validate_path``
+        in later tests. (If test order is shuffled this passes trivially.)"""
+        assert not any(root.name == ".megahit-tmp-abcd1234" for root in SecureSubprocess._extra_roots)
+
+    def test_minimap2_flags_used_by_read_extraction_pass_validation(self, tmp_path):
+        """read_extraction.py has no standalone ``_minimap2_args`` builder (unlike
+        ``_megahit_args``); its minimap2 calls are literal argument lists inline in
+        ``build_index``, ``_run_minimap2``, and ``assembly_coverage``. This reproduces
+        those exact literals and runs them through the real validator, as a regression
+        guard for the same class of gap ``--tmp-dir`` fell into (audit deferred S7-2, Task
+        2 fix round 1). No gap currently exists for minimap2; this test documents that and
+        catches it if one is introduced.
+        """
+        calls = [
+            # build_index
+            ["-x", "sr", "-d", str(tmp_path / "idx.mmi"), str(tmp_path / "genome.fna")],
+            # _run_minimap2 (and its FASTA-fallback retry, which uses the same flags)
+            [
+                "-a",
+                "-x",
+                "sr",
+                "-t",
+                "4",
+                "-o",
+                str(tmp_path / "out.sam"),
+                str(tmp_path / "ref.mmi"),
+                str(tmp_path / "r1.fastq.gz"),
+                str(tmp_path / "r2.fastq.gz"),
+            ],
+            # assembly_coverage
+            [
+                "-a",
+                "-x",
+                "sr",
+                "-t",
+                "4",
+                "-o",
+                str(tmp_path / "coverage.sam"),
+                str(tmp_path / "contigs.fa"),
+                str(tmp_path / "r1.fastq.gz"),
+            ],
+        ]
+        for args in calls:
+            SecureSubprocess._build_validated_command("minimap2", args)  # must not raise
+
+    def test_samtools_flags_used_by_read_extraction_pass_validation(self, tmp_path):
+        """read_extraction.py has no standalone samtools argument builder; its calls are
+        literal argument lists inline in ``_count_records``, ``_filter_and_merge_bam``,
+        ``_export_mapped_fastq``, and ``assembly_coverage``. This reproduces those exact
+        literals and runs them through the real validator, as a regression guard for the
+        same class of gap ``--tmp-dir`` fell into (audit deferred S7-2, Task 2 fix round
+        1). No gap currently exists for samtools; this test documents that and catches it
+        if one is introduced.
+        """
+        calls = [
+            # _count_records
+            ["view", "-c", "-F", "4", str(tmp_path / "x.sam")],
+            # _filter_and_merge_bam, with an explicit --min-mapq
+            [
+                "view",
+                "-b",
+                "-F",
+                "0x904",
+                "-q",
+                "20",
+                "-@",
+                "4",
+                "-o",
+                str(tmp_path / "x.bam"),
+                str(tmp_path / "x.sam"),
+            ],
+            ["cat", "-o", str(tmp_path / "merged.bam"), str(tmp_path / "a.bam"), str(tmp_path / "b.bam")],
+            # _export_mapped_fastq, paired output
+            [
+                "fastq",
+                "-@",
+                "4",
+                "-1",
+                str(tmp_path / "o1.fastq.gz"),
+                "-2",
+                str(tmp_path / "o2.fastq.gz"),
+                "-s",
+                str(tmp_path / "s.fastq.gz"),
+                "-0",
+                str(tmp_path / "orphans.fastq.gz"),
+                str(tmp_path / "x.bam"),
+            ],
+            # assembly_coverage
+            [
+                "view",
+                "-b",
+                "-F",
+                "0x904",
+                "-@",
+                "4",
+                "-o",
+                str(tmp_path / "coverage.bam"),
+                str(tmp_path / "coverage.sam"),
+            ],
+        ]
+        for args in calls:
+            SecureSubprocess._build_validated_command("samtools", args)  # must not raise
 
 
 class TestPathValidation:

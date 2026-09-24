@@ -706,6 +706,36 @@ class TestExtractionIdempotency:
         mock_run.assert_not_called()
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_redo_reason_names_missing_output(self, mock_run, caplog):
+        """The recorded parameters still match, but a recorded output file was removed from
+        disk; the redo log must name that reason, not blame the parameters."""
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _make_tree(tmp, paired=True)
+            record = {
+                "SRR1": {
+                    "genome_fasta": str(genome),
+                    "preset": "sr",
+                    "threshold": 0.5,
+                    "mapped_reads": 5,
+                    "unequal_mates": False,
+                    "files": [str(root / "targeted" / "SRR1" / "GCF_1_1.fastq.gz")],
+                }
+            }
+            with caplog.at_level("INFO"):
+                extract_target_reads(
+                    parsed_containment=table,
+                    genome_id="GCF_1",
+                    genome_fasta=genome,
+                    fastq_folder=root / "fastq",
+                    output_folder=root / "targeted",
+                    threshold=0.5,
+                    already_done=record,
+                )
+        assert "recorded output file missing" in caplog.text
+        assert "recorded parameters differ" not in caplog.text
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_relative_genome_path_matches_recorded_path(self, mock_run, monkeypatch):
         """./genomes/x.fna and genomes/x.fna are the same file, so the record still matches."""
         mock_run.side_effect = _fake_tools({})

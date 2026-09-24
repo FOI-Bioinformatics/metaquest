@@ -141,6 +141,36 @@ class TestSearchSpecies:
             search_species("Escherichia coli")
 
     @patch("metaquest.data.gtdb.requests.get")
+    def test_http_error_400_hints_stale_name(self, mock_get):
+        """A 400 usually means the name predates a GTDB genus reclassification, so say so."""
+        mock_response = MagicMock()
+        error_response = MagicMock(status_code=400)
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "400 Client Error", response=error_response
+        )
+        mock_get.return_value = mock_response
+
+        with pytest.raises(DataAccessError, match="not a current GTDB name") as excinfo:
+            search_species("Lactobacillus rhamnosus")
+
+        assert "genus" in str(excinfo.value)
+
+    @patch("metaquest.data.gtdb.requests.get")
+    def test_http_error_500_keeps_plain_message(self, mock_get):
+        """Only a 400 gets the stale-name hint; other HTTP errors keep the existing message."""
+        mock_response = MagicMock()
+        error_response = MagicMock(status_code=500)
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "500 Server Error", response=error_response
+        )
+        mock_get.return_value = mock_response
+
+        with pytest.raises(DataAccessError) as excinfo:
+            search_species("Escherichia coli")
+
+        assert "not a current GTDB name" not in str(excinfo.value)
+
+    @patch("metaquest.data.gtdb.requests.get")
     def test_timeout(self, mock_get):
         mock_get.side_effect = requests.exceptions.Timeout("Request timed out")
 
@@ -229,6 +259,18 @@ class TestSearchTaxon:
 
         with pytest.raises(DataAccessError, match="GTDB API error"):
             search_taxon("Escherichia")
+
+    @patch("metaquest.data.gtdb.requests.get")
+    def test_http_error_400_hints_stale_name(self, mock_get):
+        mock_response = MagicMock()
+        error_response = MagicMock(status_code=400)
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "400 Client Error", response=error_response
+        )
+        mock_get.return_value = mock_response
+
+        with pytest.raises(DataAccessError, match="not a current GTDB name"):
+            search_taxon("Lactobacillus")
 
     @patch("metaquest.data.gtdb.requests.get")
     def test_unexpected_data_type(self, mock_get):

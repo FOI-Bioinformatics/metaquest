@@ -7,7 +7,7 @@ from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_TOP_N
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.defaults import resolve_metadata_table
-from metaquest.data.registry import load_registry, query, record_selection, save_registry
+from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection, save_registry
 from metaquest.processing.selection import select_accessions_ranked
 
 
@@ -17,6 +17,26 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError(f"--top-n must be a positive integer, got {value!r}")
     return parsed
+
+
+def _recorded_selection_files(registry: Registry) -> set:
+    """Resolved paths of every file a recorded selection names.
+
+    A relative recorded path is resolved against both the project root and the current
+    directory, since the recording run may have been started from either.
+    """
+    files = set()
+    for record in registry.datasets.values():
+        recorded = (record.get("selection") or {}).get("output")
+        if not recorded:
+            continue
+        path = Path(recorded)
+        if path.is_absolute():
+            files.add(path.resolve())
+        else:
+            files.add((project_root(registry) / path).resolve())
+            files.add(path.resolve())
+    return files
 
 
 class SelectDatasetsCommand(BaseCommand):
@@ -80,6 +100,14 @@ class SelectDatasetsCommand(BaseCommand):
             action="store_true",
             help="Drop accessions already marked downloaded in the registry",
         )
+        parser.add_argument(
+            "--no-record",
+            dest="no_record",
+            action="store_true",
+            help="Write the output file and log the counts, but do not record the selection in "
+            "the registry (for an exploratory run that should not redefine the target list); "
+            "refuses an --output that a recorded selection names, so give it a scratch file",
+        )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -88,6 +116,13 @@ class SelectDatasetsCommand(BaseCommand):
                 metadata_file = resolve_metadata_table(args.metadata_file)
 
             registry = load_registry(args.registry)
+            if args.no_record and Path(args.output).resolve() in _recorded_selection_files(registry):
+                self.logger.error(
+                    "%s is the recorded selection's file; give --no-record a different --output "
+                    "or run without --no-record",
+                    args.output,
+                )
+                return 1
             exclude = set(query(registry, "excluded")) if args.skip_excluded else set()
             excluded_count = len(exclude)
             downloaded = set(query(registry, "downloaded")) if args.skip_downloaded else set()
@@ -120,6 +155,10 @@ class SelectDatasetsCommand(BaseCommand):
                 excluded_count,
                 len(accessions),
             )
+
+            if args.no_record:
+                self.logger.info("Not recording this selection in the registry (--no-record)")
+                return 0
 
             ranked_records = [
                 {"accession": accession, "rank": i + 1, "column": column, "value": value}

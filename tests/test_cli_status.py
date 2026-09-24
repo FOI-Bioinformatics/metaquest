@@ -17,6 +17,7 @@ from metaquest.data.registry import (
     record_selection,
     registry_transaction,
     save_registry,
+    upsert_dataset,
 )
 
 
@@ -292,8 +293,221 @@ class TestStatusWithRegistry:
             )
         steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
-        assert not any("sel_noskip.txt" in c for c in commands)
+        download_commands = [c for c in commands if c.startswith("metaquest download_sra")]
+        # sel_noskip.txt is never downloaded directly; it is only the --output of the
+        # runnable reselect command (checked in test_reselect_suggestion_is_runnable).
+        assert not any("sel_noskip.txt" in c for c in download_commands)
         assert any("select_datasets" in c and "--skip-excluded" in c for c in commands)
+
+    def test_mixed_skip_and_no_skip_selections_yield_both_a_download_and_a_reselect(self, tmp_path, monkeypatch):
+        """A registry holding both an ordinary (--skip-excluded) selection for one accession
+        and a --no-skip-excluded selection for another, each still to download, must surface
+        both kinds of next step at once: a direct download command for the ordinary
+        selection's output file, and a reselect suggestion for the --no-skip-excluded one.
+        Neither must swallow or replace the other.
+
+        SRR4's selection is written directly rather than through a second `record_selection`
+        call: that helper unselects anything selected earlier but absent from its own
+        `accessions` argument, which would otherwise clear SRR3's selection made just above."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg, ["SRR3"], {"skip_excluded": True, "column": "GCF_A", "threshold": 0.5}, "sel_normal.txt"
+            )
+            upsert_dataset(reg, "SRR4")["selection"] = {
+                "selected": True,
+                "date": "2026-01-01T00:00:00+00:00",
+                "criteria": {"skip_excluded": False, "column": "GCF_B", "threshold": 0.3},
+                "output": "sel_noskip.txt",
+            }
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+
+        download_commands = [c for c in commands if c.startswith("metaquest download_sra")]
+        reselect_commands = [c for c in commands if c.startswith("metaquest select_datasets")]
+
+        assert any("sel_normal.txt" in c for c in download_commands)
+        assert len(reselect_commands) == 1
+        assert "sel_noskip.txt" in reselect_commands[0] and "--skip-excluded" in reselect_commands[0]
+
+    def test_reselect_suggestion_is_runnable(self, tmp_path, monkeypatch):
+        """The reselect suggestion for a --no-skip-excluded selection is not a placeholder: it
+        is built from the recorded criteria and can be run as-is to redo the selection with
+        --skip-excluded, writing back to the same output file."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_exclusion(reg, "SRR2", "isolate")
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5},
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert reselect == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded --output sel_noskip.txt"
+        )
+
+    def test_reselect_suggestion_uses_genome_ids_when_recorded(self, tmp_path, monkeypatch):
+        """A --no-skip-excluded selection made with --genome-ids reselects the same way."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {"skip_excluded": False, "genome_ids": ["GCF_A", "GCF_B"], "require": "all", "threshold": 0.3},
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert reselect == (
+            "metaquest select_datasets --genome-ids GCF_A GCF_B --require all "
+            "--threshold 0.3 --skip-excluded --output sel_noskip.txt"
+        )
+
+    def test_reselect_suggestion_omits_malformed_numbers_and_require(self, tmp_path, monkeypatch):
+        """Values read back from a hand-edited registry are coerced (threshold to float, top-N
+        to a positive int, require to any/all); a value that does not coerce is omitted rather
+        than pasted into the command unquoted."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "genome_ids": ["GCF_A", "GCF_B"],
+                    "require": "all; touch pwned",
+                    "threshold": "0.5; touch pwned",
+                    "top_n": "3 && touch pwned",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        reselect = next(s["command"] for s in steps if s["command"].startswith("metaquest select_datasets"))
+        assert "pwned" not in reselect
+        assert reselect == (
+            "metaquest select_datasets --genome-ids GCF_A GCF_B --skip-excluded --output sel_noskip.txt"
+        )
+
+    def test_reselect_suggestion_coerces_numeric_strings(self):
+        command = StatusCommand._reselect_command(
+            {"column": "GCF_A", "threshold": "0.25", "top_n": "7", "require": "any"}, "out.txt"
+        )
+        assert command == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.25 --skip-excluded --output out.txt --top-n 7"
+        )
+
+    def test_reselect_suggestion_reproduces_metadata_filter_top_n_and_table(self, tmp_path, monkeypatch):
+        """A selection made with a metadata filter, a top-N cap and a non-default containment
+        table must reselect the same way: dropping any of those would reproduce a different,
+        looser selection or read the wrong file."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "column": "GCF_A",
+                    "threshold": 0.5,
+                    "metadata_column": "country",
+                    "metadata_value": "Sweden",
+                    "top_n": 10,
+                    "table": "custom_containment.txt",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert reselect == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded "
+            "--output sel_noskip.txt --metadata-column country --metadata-value Sweden "
+            "--top-n 10 --parsed-containment custom_containment.txt"
+        )
+
+    def test_reselect_suggestion_omits_table_flag_when_it_is_the_default(self, tmp_path, monkeypatch):
+        """A recorded table equal to select_datasets' own default must not be echoed back as
+        --parsed-containment; only a non-default table needs to be named explicitly."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5, "table": "parsed_containment.txt"},
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert reselect == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded --output sel_noskip.txt"
+        )
+
+    def test_reselect_suggestion_quotes_values_with_spaces(self, tmp_path, monkeypatch):
+        """A metadata value containing a space must be shell-quoted, so the suggested command
+        is actually safe to paste and run rather than breaking the shell's argument split."""
+        import shlex
+
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "column": "GCF_A",
+                    "threshold": 0.5,
+                    "metadata_column": "city",
+                    "metadata_value": "New York",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+
+        assert "--metadata-value 'New York'" in reselect
+        assert shlex.split(reselect) == [
+            "metaquest",
+            "select_datasets",
+            "--genome-id",
+            "GCF_A",
+            "--threshold",
+            "0.5",
+            "--skip-excluded",
+            "--output",
+            "sel_noskip.txt",
+            "--metadata-column",
+            "city",
+            "--metadata-value",
+            "New York",
+        ]
 
     def test_next_extraction_command_is_runnable(self, tmp_path, capsys):
         """The extract suggestion carries the table it was selected from and a FASTA that exists."""
@@ -556,6 +770,110 @@ class TestStatusStorePlumbing:
 
         assert rc == 0
         assert out["store"]["root"] == str(store_root.resolve())
+
+
+class TestStatusIncompleteStoreLinks:
+    def test_status_names_links_to_incomplete_store_datasets(self, tmp_path, capsys):
+        """A fastq/<ACC> symlink into a store dataset whose sidecar state is not ready (here
+        'failed') is missing, but status must say why rather than reporting it as an ordinary
+        missing accession."""
+        from metaquest.store.layout import init_store, sidecar_path, sra_dir
+        from metaquest.store.link import link_dataset
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        dataset_dir = sra_dir(paths, "SRR1")
+        dataset_dir.mkdir(parents=True)
+        (dataset_dir / "SRR1.fastq.gz").write_bytes(b"x" * 10)
+        write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state="failed"))
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        link_dataset(fastq_dir, "SRR1", paths, mode="absolute")
+
+        (tmp_path / "matches").mkdir()
+        (tmp_path / "matches" / "GCF_1.csv").write_text("acc,containment,cANI\nSRR1,0.9,0.99\n")
+        (tmp_path / "accessions.txt").write_text("SRR1\n")
+
+        rc = StatusCommand().execute(
+            _status_args(
+                tmp_path,
+                accessions_file=str(tmp_path / "accessions.txt"),
+                data_root=str(store_root),
+                json=False,
+            )
+        )
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "linked to a store dataset that is not complete" in out
+
+    def test_json_report_lists_incomplete_store_links(self, tmp_path, capsys):
+        from metaquest.store.layout import init_store, sidecar_path, sra_dir
+        from metaquest.store.link import link_dataset
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        dataset_dir = sra_dir(paths, "SRR1")
+        dataset_dir.mkdir(parents=True)
+        (dataset_dir / "SRR1.fastq.gz").write_bytes(b"x" * 10)
+        write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state="partial"))
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        link_dataset(fastq_dir, "SRR1", paths, mode="absolute")
+
+        (tmp_path / "matches").mkdir()
+        (tmp_path / "matches" / "GCF_1.csv").write_text("acc,containment,cANI\nSRR1,0.9,0.99\n")
+        (tmp_path / "accessions.txt").write_text("SRR1\n")
+
+        rc = StatusCommand().execute(
+            _status_args(
+                tmp_path,
+                accessions_file=str(tmp_path / "accessions.txt"),
+                data_root=str(store_root),
+            )
+        )
+        out = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert out["wanted"]["fastq_incomplete_store_links"] == ["SRR1"]
+        assert "SRR1" in out["wanted"]["fastq_missing"]
+
+    def test_a_complete_store_link_is_not_reported_as_incomplete(self, tmp_path, capsys):
+        from metaquest.store.layout import init_store, sidecar_path, sra_dir
+        from metaquest.store.link import link_dataset
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        dataset_dir = sra_dir(paths, "SRR1")
+        dataset_dir.mkdir(parents=True)
+        (dataset_dir / "SRR1.fastq.gz").write_bytes(b"x" * 10)
+        write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state="complete"))
+
+        fastq_dir = tmp_path / "fastq"
+        fastq_dir.mkdir()
+        link_dataset(fastq_dir, "SRR1", paths, mode="absolute")
+
+        (tmp_path / "matches").mkdir()
+        (tmp_path / "matches" / "GCF_1.csv").write_text("acc,containment,cANI\nSRR1,0.9,0.99\n")
+        (tmp_path / "accessions.txt").write_text("SRR1\n")
+
+        rc = StatusCommand().execute(
+            _status_args(
+                tmp_path,
+                accessions_file=str(tmp_path / "accessions.txt"),
+                data_root=str(store_root),
+                json=False,
+            )
+        )
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "linked to a store dataset that is not complete" not in out
 
 
 class TestStatusReconcileVerdict:

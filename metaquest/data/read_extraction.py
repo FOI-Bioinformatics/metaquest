@@ -228,6 +228,43 @@ def selected_samples(parsed_containment: Union[str, Path], genome_id: str, thres
     return select_samples_for_genome(containment, genome_id, threshold)
 
 
+#: Why a registry extraction record was rejected: the call's own parameters (genome, preset,
+#: threshold, min_mapq) changed since the record was written, versus the parameters still
+#: matching but one of the recorded output files being gone from disk.
+_PARAMETERS_DIFFER = "recorded parameters differ from this call"
+_OUTPUT_FILE_MISSING = "recorded output file missing"
+
+
+def _record_mismatch_reason(
+    record: Dict[str, Any], genome_path: Path, preset: str, threshold: float, min_mapq: int = 0
+) -> Optional[str]:
+    """Why a registry extraction record does not match the current call, or None when it does.
+
+    A parameter that is absent or None is a wildcard. Records rebuilt from disk by
+    ``status --init`` carry no parameters at all, and rejecting them would remap every
+    sample of an already extracted project. Distinguishes a parameter mismatch from a
+    recorded output file that has since been removed from disk, so a caller can log which
+    one triggered the redo instead of always blaming the parameters.
+    """
+    recorded_fasta = record.get("genome_fasta")
+    if recorded_fasta is not None and Path(recorded_fasta).resolve() != genome_path.resolve():
+        return _PARAMETERS_DIFFER
+    recorded_preset = record.get("preset")
+    if recorded_preset is not None and recorded_preset != preset:
+        return _PARAMETERS_DIFFER
+    recorded_threshold = record.get("threshold")
+    if recorded_threshold is not None and float(recorded_threshold) != float(threshold):
+        return _PARAMETERS_DIFFER
+    recorded_mapq = record.get("min_mapq")
+    if recorded_mapq is not None and int(recorded_mapq) != int(min_mapq):
+        return _PARAMETERS_DIFFER
+    if record.get("mapped_reads") == 0:
+        return None
+    if not all(Path(p).exists() for p in record.get("files", [])):
+        return _OUTPUT_FILE_MISSING
+    return None
+
+
 def _record_matches(
     record: Dict[str, Any], genome_path: Path, preset: str, threshold: float, min_mapq: int = 0
 ) -> bool:
@@ -237,21 +274,7 @@ def _record_matches(
     ``status --init`` carry no parameters at all, and rejecting them would remap every
     sample of an already extracted project.
     """
-    recorded_fasta = record.get("genome_fasta")
-    if recorded_fasta is not None and Path(recorded_fasta).resolve() != genome_path.resolve():
-        return False
-    recorded_preset = record.get("preset")
-    if recorded_preset is not None and recorded_preset != preset:
-        return False
-    recorded_threshold = record.get("threshold")
-    if recorded_threshold is not None and float(recorded_threshold) != float(threshold):
-        return False
-    recorded_mapq = record.get("min_mapq")
-    if recorded_mapq is not None and int(recorded_mapq) != int(min_mapq):
-        return False
-    if record.get("mapped_reads") == 0:
-        return True
-    return all(Path(p).exists() for p in record.get("files", []))
+    return _record_mismatch_reason(record, genome_path, preset, threshold, min_mapq=min_mapq) is None
 
 
 def _skipped_result(record: Dict[str, Any]) -> ExtractionResult:
@@ -471,6 +494,30 @@ def _map_and_extract(
     return ExtractionResult(written, mapped, unequal, mapped_total=mapped_total)
 
 
+def _resolve_done_state(
+    accession: str,
+    record: Optional[Dict[str, Any]],
+    genome_path: Path,
+    preset: str,
+    threshold: float,
+    force: bool,
+    min_mapq: int = 0,
+) -> bool:
+    """True when a recorded extraction still stands and can be skipped.
+
+    Logs the reason for a redo (parameters differ vs. a recorded output file missing) when
+    a record exists, is not forced, and does not match. Split out of ``_extract_one_sample``
+    to keep that function's branching simple.
+    """
+    if not record or force:
+        return False
+    mismatch_reason = _record_mismatch_reason(record, genome_path, preset, threshold, min_mapq=min_mapq)
+    if mismatch_reason is not None:
+        logger.info("%s: redoing extraction, %s", accession, mismatch_reason)
+        return False
+    return True
+
+
 def _skip_if_truncated(accession: str, verdict: Optional[Dict[str, Any]], allow_truncated: bool) -> bool:
     """True (after logging) when this sample's truncated download should be skipped."""
     if not verdict or allow_truncated:
@@ -507,11 +554,7 @@ def _extract_one_sample(
     (no FASTQ files found for it). The shared minimap2 index is built on first use here and
     cached in ``reference_holder["reference"]`` for every later sample of this call.
     """
-    done = (
-        bool(record) and not force and _record_matches(record or {}, genome_path, preset, threshold, min_mapq=min_mapq)
-    )
-    if record and not done and not force:
-        logger.info("%s: redoing extraction, recorded parameters differ from this call", accession)
+    done = _resolve_done_state(accession, record, genome_path, preset, threshold, force, min_mapq=min_mapq)
     if done and not dry_run:
         result = _skipped_result(record or {})
         logger.info(
@@ -750,8 +793,9 @@ def _megahit_args(
     an optional ``--tmp-dir`` (created and allow-listed here when given).
 
     Raises:
-        ProcessingError: If the number of reads is unsupported, or ``k_flags`` is given
-            together with a preset.
+        ProcessingError: If the number of reads is unsupported, ``k_flags`` is given
+            together with a preset, or ``tmp_dir`` is ``out_dir`` or a folder inside it
+            (megahit refuses to run when its ``-o`` directory already exists).
     """
     args: List[str] = []
     if len(reads) == 2:
@@ -837,7 +881,8 @@ def assemble_extracted_reads(
     Raises:
         ProcessingError: If the number of reads is unsupported, the output directory
             exists without contigs and ``force`` is not set, ``k_flags`` is given
-            together with a preset, or megahit itself fails.
+            together with a preset, ``tmp_dir`` is ``output_dir`` or a folder inside it,
+            or megahit itself fails.
     """
     out_dir = Path(output_dir)
     contigs_path = out_dir / "final.contigs.fa"

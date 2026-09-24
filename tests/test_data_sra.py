@@ -1977,6 +1977,25 @@ class TestDownloadSraStore:
         assert (fastq_folder / "SRR1").is_symlink()
         assert (fastq_folder / "SRR1").resolve() == (paths.sra / "SRR1").resolve()
 
+    def test_summary_counts_links_separately(self, tmp_path, caplog):
+        """The final summary must not count a store link as a newly downloaded dataset
+        (audit deferred S5-3)."""
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, accession="SRR1")
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            with caplog.at_level("INFO", logger="metaquest.data.sra"):
+                stats = download_sra(
+                    fastq_folder, self._accessions(tmp_path, "SRR1", "SRR2"), store=paths, max_retries=0
+                )
+
+        assert stats["results"]["SRR1"].startswith("linked from store")
+        assert stats["results"]["SRR2"].endswith("; stored")
+        assert "Newly downloaded: 1" in caplog.text
+        assert "Linked from store: 1" in caplog.text
+
     def test_unverified_sidecar_also_links(self, tmp_path):
         paths = self._store(tmp_path)
         self._store_dataset(paths, state="unverified")

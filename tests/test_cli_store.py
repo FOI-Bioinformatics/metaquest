@@ -15,6 +15,7 @@ import pytest
 
 from metaquest.cli.commands.store import (
     StoreAdoptCommand,
+    StoreGcCommand,
     StoreInitCommand,
     StoreLinkCommand,
     StoreReindexCommand,
@@ -113,6 +114,22 @@ def _link_args(accessions, **overrides):
 
 def _unlink_args(accessions, **overrides):
     base = dict(accessions=list(accessions), fastq_folder="fastq", registry=None)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _gc_args(**overrides):
+    base = dict(
+        data_root=None,
+        registry=None,
+        dry_run=False,
+        yes=False,
+        older_than=None,
+        keep_partial=False,
+        include_stale=False,
+        accept_rebuilt=False,
+        json=False,
+    )
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -656,8 +673,20 @@ class TestStoreAdoptCommand:
         paths = store_paths(root)
         assert sra_dir(paths, "SRR1").is_dir()
 
-        # No registry write is needed: the project's own download record did not change.
-        assert not registry_path.exists()
+        # The project's own download record is untouched (--copy never points it at the
+        # store), but the registry does now get a project identity, so the "copied" usage
+        # recorded below has a project to belong to and store_gc does not see this dataset
+        # as unused just because it was never linked.
+        registry = load_registry(registry_path)
+        assert registry.project.get("id")
+        assert "SRR1" not in registry.datasets
+        assert not registry.store.get("linked")
+        with Catalog(paths) as cat:
+            row = cat.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?",
+                ("SRR1", registry.project["id"]),
+            ).fetchone()
+        assert row is not None and row["stage"] == "copied"
 
     def test_copy_mode_dedup_does_not_record_link(self, tmp_path, monkeypatch):
         """A --copy run that finds the store already holds an identical copy (a dedup) must
@@ -691,6 +720,40 @@ class TestStoreAdoptCommand:
         registry = load_registry(registry_path)
         assert not registry.store.get("linked")
         assert "SRR1" not in registry.datasets
+
+    def test_copy_adoption_records_copied_usage_so_gc_keeps_it(self, tmp_path, monkeypatch, capsys):
+        """A --copy adoption must record a 'copied' usage row for the project, so store_gc does
+        not treat the store's copy as unused just because the project kept its own folder too
+        (see test_copy_mode_dedup_does_not_record_link for the same fixture shape)."""
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        entry = project_dir / "fastq" / "SRR1"
+        entry.mkdir(parents=True)
+        (entry / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path), move=False))
+        assert rc == 0
+
+        registry = load_registry(registry_path)
+        paths = store_paths(root)
+        with Catalog(paths) as cat:
+            row = cat.conn.execute(
+                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?",
+                ("SRR1", registry.project["id"]),
+            ).fetchone()
+        assert row is not None and row["stage"] == "copied"
+
+        capsys.readouterr()
+        gc_rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+        assert gc_rc == 0
+        # The recorded usage keeps this dataset out of gc's removal candidates.
+        assert report["datasets"] == []
 
 
 class TestStoreVerifyCommand:
@@ -1668,9 +1731,15 @@ class TestStoreReindexNeverLosesHistory:
         catalog.sqlite still holds them; only then does losing catalog.sqlite stay recoverable."""
         root = tmp_path / "store"
         paths = init_store(root)
+        # SRR1's folder and sidecar must actually be on disk, or the later reindex this test
+        # exercises (which now replays before rebuilding, see test_reindex_does_not_resurrect_a_
+        # removed_dataset) would correctly treat this usage row's accession as gone rather than
+        # resurrect a placeholder for it.
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
         with catalog_write(paths) as c:
             c.journal_enabled = False
             c.upsert_project("pid1", "proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            c.upsert_dataset(_sidecar("SRR1"))
             c.record_usage("SRR1", "pid1", "", "linked", "")
         assert not (paths.journal / "projects.jsonl").exists()
 
@@ -1683,6 +1752,36 @@ class TestStoreReindexNeverLosesHistory:
         with catalog_write(paths) as c:
             assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
             assert c.conn.execute("SELECT COUNT(*) FROM usage WHERE accession='SRR1'").fetchone()[0] == 1
+
+    def test_reindex_does_not_resurrect_a_removed_dataset(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        with catalog_write(paths) as c:
+            c.upsert_dataset(_sidecar("SRR1"))
+            c.upsert_project("pid1", "proj", str(tmp_path), "r.json")
+            c.record_usage("SRR1", "pid1", "", "linked", "")
+            c.record_usage("SRR9", "pid1", "", "linked", "")  # SRR9 was removed by gc later
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
+        with catalog_write(paths) as c:
+            rows = {r["accession"] for r in c.conn.execute("SELECT accession FROM datasets").fetchall()}
+        assert rows == {"SRR1"}
+
+    def test_replay_restores_hostname_and_first_used(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        with catalog_write(paths) as c:
+            c.upsert_dataset(_sidecar("SRR1"))
+            c.upsert_project("pid1", "proj", str(tmp_path), "r.json", hostname="other-host")
+            c.record_usage("SRR1", "pid1", "", "linked", "", at="2026-01-01T00:00:00+00:00")
+        (paths.root / "catalog.sqlite").unlink()
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
+        with catalog_write(paths) as c:
+            row = c.conn.execute("SELECT hostname FROM projects WHERE project_id='pid1'").fetchone()
+            used = c.conn.execute("SELECT first_used FROM usage WHERE accession='SRR1'").fetchone()
+        assert row["hostname"] == "other-host"
+        assert used["first_used"].startswith("2026-01-01")
 
 
 class TestCorruptStoreMarker:

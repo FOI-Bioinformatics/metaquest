@@ -9,11 +9,13 @@ exists yet, the report is reconstructed in memory from what is on disk.
 
 import argparse
 import json
+import math
+import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
-from metaquest.core.constants import DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
+from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import visible_files, write_csv
 from metaquest.data.registry import (
@@ -34,10 +36,32 @@ from metaquest.data.registry import (
     stage_counts,
     to_dataframes,
 )
-from metaquest.data.sra import accession_has_fastq, is_transient_folder
+from metaquest.data.sra import STORE_READY_STATES, accession_has_fastq, is_transient_folder
 from metaquest.store.catalog import Catalog
-from metaquest.store.layout import store_paths
+from metaquest.store.layout import StorePaths, sidecar_path, store_paths
+from metaquest.store.link import is_store_link
 from metaquest.store.resolve import resolve_store_root
+from metaquest.store.sidecar import read_sidecar
+
+
+def _as_float(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or None when it is not a number."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _as_positive_int(value: Any) -> Optional[int]:
+    """``value`` as a positive int, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 class StatusCommand(BaseCommand):
@@ -132,7 +156,9 @@ class StatusCommand(BaseCommand):
 
     # -------------------------------------------------------------- reporting
 
-    def _inventory_report(self, args: argparse.Namespace, registry: Registry) -> Dict[str, Any]:
+    def _inventory_report(
+        self, args: argparse.Namespace, registry: Registry, store: Optional[StorePaths] = None
+    ) -> Dict[str, Any]:
         fastq_dir = Path(args.fastq_folder)
         meta_dir = Path(args.metadata_folder)
         genomes_dir = Path(args.genomes_folder)
@@ -165,10 +191,31 @@ class StatusCommand(BaseCommand):
                 "total": len(wanted),
                 "fastq_present": len(fastq_present),
                 "fastq_missing": fastq_missing,
+                "fastq_incomplete_store_links": self._incomplete_store_links(fastq_dir, fastq_missing, store),
                 "metadata_present": len(meta_present),
                 "metadata_missing": meta_missing,
             }
         return report
+
+    @staticmethod
+    def _incomplete_store_links(fastq_dir: Path, missing: List[str], store: Optional[StorePaths]) -> List[str]:
+        """Missing accessions whose ``fastq/<ACC>`` is a symlink into the store, but the store's
+        recorded sidecar state for that dataset falls outside ``STORE_READY_STATES``.
+
+        Such a link is not simply absent: a download into the store was attempted (and left a
+        ``failed`` or ``partial`` sidecar, or one is still ``downloading``), so the report says
+        why the accession reads as missing rather than leaving that to be rediscovered by hand.
+        """
+        if store is None:
+            return []
+        incomplete = []
+        for acc in missing:
+            if not is_store_link(fastq_dir / acc, store):
+                continue
+            sidecar = read_sidecar(sidecar_path(store, acc))
+            if sidecar is not None and sidecar.state not in STORE_READY_STATES:
+                incomplete.append(acc)
+        return sorted(incomplete)
 
     @staticmethod
     def _stage_filter_accessions(registry: Registry, stage: str, genomes: Optional[List[str]]) -> List[str]:
@@ -219,6 +266,55 @@ class StatusCommand(BaseCommand):
         }
 
     @staticmethod
+    def _reselect_command(criteria: Dict[str, Any], output: str) -> str:
+        """A runnable ``select_datasets`` command that redoes a selection with ``--skip-excluded``.
+
+        Built from the criteria the original ``--no-skip-excluded`` run recorded, targeting the
+        same ``--output`` so rerunning it corrects that selection's file in place. Reproduces
+        every criterion ``record_selection`` stores that changes which accessions are chosen
+        (metadata filter, top-N cap, source table), not just the genome column and threshold, so
+        the suggested command redoes the same selection rather than a looser one. Every value
+        that came from the registry rather than this method's own literal flag text is passed
+        through ``shlex.quote``, so a value containing a space or shell metacharacter (a
+        metadata value like "New York", say) still produces a command that is safe to paste
+        into a shell and run as-is. The threshold is coerced with ``float``, the top-N count
+        with ``int`` (positive only) and ``require`` must be ``any`` or ``all``; a recorded value
+        that fails that check (a hand-edited registry, say) leaves its flag out rather than
+        being pasted into the command.
+        """
+        threshold = _as_float(criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD))
+        threshold_part = f" --threshold {threshold}" if threshold is not None else ""
+        genome_ids = criteria.get("genome_ids")
+        if genome_ids:
+            require = criteria.get("require", "any")
+            quoted_ids = " ".join(shlex.quote(str(g)) for g in genome_ids)
+            genome_part = f"--genome-ids {quoted_ids}"
+            if require in ("any", "all"):
+                genome_part += f" --require {require}"
+        else:
+            column = criteria.get("column") or "max_containment"
+            genome_part = f"--genome-id {shlex.quote(str(column))}"
+        command = (
+            f"metaquest select_datasets {genome_part}{threshold_part} "
+            f"--skip-excluded --output {shlex.quote(str(output))}"
+        )
+
+        metadata_column = criteria.get("metadata_column")
+        metadata_value = criteria.get("metadata_value")
+        if metadata_column and metadata_value is not None:
+            command += (
+                f" --metadata-column {shlex.quote(str(metadata_column))}"
+                f" --metadata-value {shlex.quote(str(metadata_value))}"
+            )
+        top_n = _as_positive_int(criteria.get("top_n"))
+        if top_n:
+            command += f" --top-n {top_n}"
+        table = criteria.get("table")
+        if table and str(table) != DEFAULT_PARSED_CONTAINMENT_FILE:
+            command += f" --parsed-containment {shlex.quote(str(table))}"
+        return command
+
+    @staticmethod
     def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
         to_download = [
             acc
@@ -234,26 +330,22 @@ class StatusCommand(BaseCommand):
         # such accessions instead point at re-running select_datasets with
         # --skip-excluded so the excluded run is dropped before download.
         by_output: Dict[str, List[str]] = {}
-        needs_reselect: List[str] = []
+        reselect_groups: Dict[str, Tuple[Dict[str, Any], List[str]]] = {}
         for acc in to_download:
             selection = registry.datasets[acc].get("selection", {})
             criteria = selection.get("criteria") or {}
-            if criteria.get("skip_excluded") is False:
-                needs_reselect.append(acc)
-                continue
             output = selection.get("output") or "accessions.txt"
+            if criteria.get("skip_excluded") is False:
+                group = reselect_groups.setdefault(output, (criteria, []))
+                group[1].append(acc)
+                continue
             by_output.setdefault(output, []).append(acc)
         steps = [
             {"command": f"metaquest download_sra --accessions-file {output}", "accessions": accs}
             for output, accs in by_output.items()
         ]
-        if needs_reselect:
-            steps.append(
-                {
-                    "command": "metaquest select_datasets ... --skip-excluded  (the last selection kept excluded runs)",
-                    "accessions": needs_reselect,
-                }
-            )
+        for output, (criteria, accs) in reselect_groups.items():
+            steps.append({"command": StatusCommand._reselect_command(criteria, output), "accessions": accs})
         return steps
 
     @staticmethod
@@ -374,12 +466,18 @@ class StatusCommand(BaseCommand):
 
         w = report.get("wanted")
         if w:
+            incomplete_links = w.get("fastq_incomplete_store_links") or []
             print(f"\nReconciled against {w['total']} wanted accession(s)")
-            print(f"  FASTQ    : {w['fastq_present']} present, {len(w['fastq_missing'])} missing")
+            fastq_line = f"  FASTQ    : {w['fastq_present']} present, {len(w['fastq_missing'])} missing"
+            if incomplete_links:
+                fastq_line += f", {len(incomplete_links)} linked to a store dataset that is not complete"
+            print(fastq_line)
             print(f"  Metadata : {w['metadata_present']} present, {len(w['metadata_missing'])} missing")
             if list_missing:
                 if w["fastq_missing"]:
                     print("  Missing FASTQ    : " + ", ".join(w["fastq_missing"]))
+                if incomplete_links:
+                    print("  Incomplete store links : " + ", ".join(incomplete_links))
                 if w["metadata_missing"]:
                     print("  Missing metadata : " + ", ".join(w["metadata_missing"]))
 
@@ -572,10 +670,12 @@ class StatusCommand(BaseCommand):
                 save_registry(registry)
 
             store_root, store_available = self._resolve_store_root(args, registry)
+            store: Optional[StorePaths] = None
             if store_root is not None and store_available:
+                store = store_paths(store_root)
                 self.logger.info("Using shared data store at %s", store_root)
 
-            report = self._inventory_report(args, registry)
+            report = self._inventory_report(args, registry, store)
             report["registry"] = {
                 "path": str(registry_file),
                 "version": registry.version,

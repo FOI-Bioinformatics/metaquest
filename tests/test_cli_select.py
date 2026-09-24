@@ -24,6 +24,7 @@ def _args(tmp_path, **kwargs):
         registry=str(tmp_path / "metaquest_registry.json"),
         skip_excluded=True,
         skip_downloaded=False,
+        no_record=False,
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -50,6 +51,83 @@ def test_selection_is_recorded_in_registry(tmp_path, monkeypatch):
     sel = data["datasets"]["SRR1"]["selection"]
     assert sel["selected"] is True and sel["criteria"]["column"] == "GCF_A" and sel["criteria"]["threshold"] == 0.5
     assert "SRR2" not in data["datasets"] or not data["datasets"]["SRR2"]["selection"]["selected"]
+
+
+def test_no_record_leaves_registry_untouched(tmp_path, monkeypatch):
+    """--no-record writes the output file but must not redefine the project's target list:
+    a later, differently-thresholded --no-record run leaves the registry's selected set
+    (recorded by the first, normal run) exactly as it was."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, genome_id="GCF_A", threshold=0.5, registry=str(registry_path)))
+    assert rc == 0
+    before = registry_path.read_text()
+
+    rc = SelectDatasetsCommand().execute(
+        _args(
+            tmp_path,
+            genome_id="GCF_A",
+            threshold=0.05,
+            registry=str(registry_path),
+            no_record=True,
+            output=str(tmp_path / "exploratory.txt"),
+        )
+    )
+    assert rc == 0
+    assert (tmp_path / "exploratory.txt").read_text() == "SRR1\nSRR2\n"
+    assert registry_path.read_text() == before
+
+
+def test_no_record_refuses_the_recorded_selection_file(tmp_path, monkeypatch, caplog):
+    """A --no-record run that would write to the file a recorded selection names is refused:
+    the file keeps the recorded list and the registry stays as it was."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, genome_id="GCF_A", threshold=0.5, output="accessions.txt"))
+    assert rc == 0
+    before_registry = registry_path.read_text()
+    before_file = (tmp_path / "accessions.txt").read_text()
+
+    with caplog.at_level("ERROR"):
+        rc = SelectDatasetsCommand().execute(
+            _args(tmp_path, genome_id="GCF_A", threshold=0.05, no_record=True, output="accessions.txt")
+        )
+    assert rc == 1
+    assert (tmp_path / "accessions.txt").read_text() == before_file == "SRR1\n"
+    assert registry_path.read_text() == before_registry
+    assert any("recorded selection" in r.message and "--output" in r.message for r in caplog.records)
+
+    # The same file named by an absolute path is refused as well.
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, genome_id="GCF_A", threshold=0.05, no_record=True))
+    assert rc == 1
+    assert (tmp_path / "accessions.txt").read_text() == "SRR1\n"
+
+
+def test_no_record_with_other_output_proceeds(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    assert SelectDatasetsCommand().execute(_args(tmp_path, genome_id="GCF_A")) == 0
+    before = registry_path.read_text()
+    rc = SelectDatasetsCommand().execute(
+        _args(tmp_path, genome_id="GCF_A", threshold=0.05, no_record=True, output="other.txt")
+    )
+    assert rc == 0
+    assert (tmp_path / "other.txt").read_text() == "SRR1\nSRR2\n"
+    assert (tmp_path / "accessions.txt").read_text() == "SRR1\n"
+    assert registry_path.read_text() == before
+
+
+def test_no_record_default_output_without_recorded_selection(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, genome_id="GCF_A", no_record=True))
+    assert rc == 0
+    assert (tmp_path / "accessions.txt").read_text() == "SRR1\n"
+    assert not (tmp_path / "metaquest_registry.json").exists()
 
 
 def test_command_is_registered():

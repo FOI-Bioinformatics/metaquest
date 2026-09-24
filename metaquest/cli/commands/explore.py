@@ -178,6 +178,8 @@ class ExploreContainmentCommand(BaseCommand):
 
                 if not open_in_browser(output_path):
                     self.logger.warning("Could not open a browser automatically for %s", output_path)
+            else:
+                self.logger.info("Next: open %s in a browser", output_path)
 
             return 0
         except MetaQuestError as e:

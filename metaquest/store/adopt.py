@@ -34,6 +34,7 @@ any other accession is another project's interrupted or still running work,
 and is reported rather than blessed with a sidecar and linked here.
 """
 
+import fnmatch
 import gzip
 import hashlib
 import logging
@@ -74,10 +75,22 @@ _ADOPT_COMPRESS_THREADS = 4
 # Suffix on a staging folder under paths.tmp, e.g. "SRR1_adopt".
 _STAGING_SUFFIX = "_adopt"
 
-# Names shutil.copytree leaves behind when staging a project folder: the AppleDouble sidecar
-# files (``._<name>``) macOS writes next to every file on a volume without native extended
-# attributes, and the per-folder Finder metadata file ``.DS_Store``. Neither is project data.
-ADOPT_COPY_IGNORE = shutil.ignore_patterns("._*", ".DS_Store")
+# Name patterns shutil.copytree leaves behind when staging a project folder: the AppleDouble
+# sidecar files (``._<name>``) macOS writes next to every file on a volume without native
+# extended attributes, and the per-folder Finder metadata file ``.DS_Store``. Neither is
+# project data. Kept as one pattern list so the copy (``ADOPT_COPY_IGNORE``) and the
+# free-space estimate (``_folder_bytes``, via ``_copy_ignores``) can never drift apart: a name
+# the copy skips is a name the byte count must skip too, and nothing else -- an ordinary
+# hidden directory or file (``.hidden/``, a pipeline's ``.snakemake/`` work folder) matches
+# neither pattern, so the copy does not skip it and the byte count must not either.
+_COPY_IGNORE_PATTERNS = ("._*", ".DS_Store")
+ADOPT_COPY_IGNORE = shutil.ignore_patterns(*_COPY_IGNORE_PATTERNS)
+
+
+def _copy_ignores(name: str) -> bool:
+    """True when ``name`` matches one of ``_COPY_IGNORE_PATTERNS``, the same test
+    ``ADOPT_COPY_IGNORE`` applies during the staging copy."""
+    return any(fnmatch.fnmatch(name, pattern) for pattern in _COPY_IGNORE_PATTERNS)
 
 
 @dataclass
@@ -247,11 +260,21 @@ def _finish_sidecar(
 
 
 def _folder_bytes(folder: Path) -> int:
-    """Total bytes of every file under ``folder``, skipping hidden names and anything that
-    cannot be stat'ed."""
+    """Total bytes of every file under ``folder`` that the staging copy
+    (``shutil.copytree(..., ignore=ADOPT_COPY_IGNORE)``, see ``_stage_into_store``) will
+    actually copy, so the free-space check in ``_has_room_for`` estimates the same folder the
+    copy produces rather than a different one.
+
+    Skips a path when some segment of its path relative to ``folder`` matches
+    ``_copy_ignores`` (an AppleDouble ``._*`` sidecar or ``.DS_Store``, at any depth) -- the
+    same names the copy itself skips, wherever they appear. A plain-named file inside an
+    otherwise hidden directory (``.hidden/keep.txt``, a pipeline's ``.snakemake/`` work
+    folder) is *not* skipped: ``.hidden``/``.snakemake`` match neither ignore pattern, so
+    ``shutil.copytree`` copies that file too, and this must count it. Anything that cannot be
+    stat'ed is skipped."""
     total = 0
     for sub in folder.rglob("*"):
-        if is_hidden_name(sub.name):
+        if any(_copy_ignores(p) for p in sub.relative_to(folder).parts):
             continue
         try:
             if sub.is_file():

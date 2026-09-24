@@ -13,6 +13,26 @@ GTDB_API_BASE = "https://gtdb-api.ecogenomic.org"
 REQUEST_TIMEOUT = 30
 
 
+def _api_error_message(kind: str, name: str, e: requests.exceptions.RequestException) -> str:
+    """Build the DataAccessError message for a failed GTDB request.
+
+    A 400 response usually means the name is not a current GTDB name: GTDB periodically
+    reclassifies genera (for example many former Lactobacillus species now sit in
+    Lacticaseibacillus, Limosilactobacillus or another genus), so the message suggests
+    searching the current genus instead. Other HTTP and connection errors keep the plain
+    message, since a status other than 400 is not evidence of a stale name.
+    """
+    message = f"GTDB API error searching {kind} '{name}': {e}"
+    response = getattr(e, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 400:
+        message += (
+            f". '{name}' is not a current GTDB name (GTDB periodically reclassifies genera, "
+            "for example former Lactobacillus species now placed in Lacticaseibacillus, "
+            "Limosilactobacillus or another genus); try searching the current genus name instead."
+        )
+    return message
+
+
 def search_species(species_name: str) -> List[Dict]:
     """Search GTDB for a species, return list of genome records with accessions."""
     url = f"{GTDB_API_BASE}/species/search/{requests.utils.quote(species_name)}"
@@ -23,7 +43,7 @@ def search_species(species_name: str) -> List[Dict]:
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
-        raise DataAccessError(f"GTDB API error searching species '{species_name}': {e}")
+        raise DataAccessError(_api_error_message("species", species_name, e))
 
     if not data:
         logger.warning("No results found for species '%s'", species_name)
@@ -49,7 +69,7 @@ def search_taxon(taxon_name: str, limit: int = 100) -> List[Dict]:
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
-        raise DataAccessError(f"GTDB API error searching taxon '{taxon_name}': {e}")
+        raise DataAccessError(_api_error_message("taxon", taxon_name, e))
 
     if not data:
         logger.warning("No results found for taxon '%s'", taxon_name)

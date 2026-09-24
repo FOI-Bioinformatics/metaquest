@@ -291,11 +291,16 @@ def record_screening(
 
 
 def record_genome(registry: Registry, genome_id: str, fasta: Union[str, Path], manifest: Union[str, Path]) -> None:
-    """Record where a target genome's FASTA lives, and the manifest it came from."""
+    """Record where a target genome's FASTA lives, and the manifest it came from.
+
+    ``manifest`` is empty (falsy) for a genome fetched directly (e.g. by ``genome_download``,
+    with no manifest CSV written); stored as "" rather than resolved, so it does not turn
+    into a meaningless path built from wherever the process happened to run.
+    """
     root = project_root(registry)
     registry.genomes[genome_id] = {
         "fasta": _project_relative(fasta, root),
-        "manifest": _project_relative(manifest, root),
+        "manifest": _project_relative(manifest, root) if manifest else "",
         "date": _now(),
     }
 
@@ -442,6 +447,28 @@ def _file_entries(paths: Iterable[Path], root: Path) -> List[Dict[str, Any]]:
     return entries
 
 
+# Read counts in a completeness block that a new block with the same verdict may inherit.
+# ``ratio`` and ``expected_spots`` are deliberately absent: they always come from the new block.
+_CARRIED_COUNT_KEYS = ("reads_r1",)
+
+
+def _merge_verdict(previous: Any, new: Dict[str, Any]) -> Dict[str, Any]:
+    """The completeness block to record when ``new`` replaces ``previous``.
+
+    A count ``new`` leaves as ``None`` inherits the previous count only when both blocks carry
+    the same verdict (a complete-to-complete relink describes the same reads). Across a verdict
+    change the previous count describes other files, e.g. a truncated project copy relinked to
+    a complete store copy, so it stays ``None``; ``store_verify --rescan`` can fill in a real
+    count. Nothing else is carried, so the result never mixes two downloads' verdict blocks.
+    """
+    merged = dict(new)
+    if isinstance(previous, dict) and previous.get("verdict") == merged.get("verdict"):
+        for key in _CARRIED_COUNT_KEYS:
+            if merged.get(key) is None and previous.get(key) is not None:
+                merged[key] = previous[key]
+    return merged
+
+
 def record_download(
     registry: Registry,
     accession: str,
@@ -459,6 +486,9 @@ def record_download(
     state without an actual download attempt (e.g. a file found already present on disk).
     ``complete`` is the completeness verdict from ``metaquest.data.sra.verify_download``
     (via ``parse_verdict_message``); when omitted, any verdict already on file is left as is.
+    When given, it replaces the block on file, except that a read count it carries as ``None``
+    (e.g. a store sidecar with no read count of its own) keeps the previous count if, and only
+    if, the previous verdict equals the new one; see ``_merge_verdict``.
     ``source`` says where the reads came from (``"store"`` for a dataset the shared store
     holds and the project only links to) and ``store_name`` is the dataset's name inside
     that store. Both describe this outcome, so a call that names neither clears whatever
@@ -480,7 +510,7 @@ def record_download(
         }
     )
     if complete is not None:
-        download["complete"] = complete
+        download["complete"] = _merge_verdict(download.get("complete"), complete)
     if source is None:
         download.pop("source", None)
         download.pop("store_name", None)
@@ -622,6 +652,19 @@ def record_assembly(
     for key in _REQUIRED_ASSEMBLY_STATS:
         assembly[key] = int(stats.get(key, 0))
     entry["assembly"] = assembly
+
+
+def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
+    """Remove one extraction's recorded assembly block, leaving the extraction itself alone.
+
+    Called before every forced ``--assemble`` redo, whether or not the assembly folder is
+    still on disk: if megahit then fails, the registry must not go on describing contigs
+    (and a ``dir``) that no longer exist. A no-op when there is no extraction record (or no
+    assembly block) for this accession/genome.
+    """
+    entry = registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
+    if entry is not None:
+        entry["assembly"] = None
 
 
 def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:

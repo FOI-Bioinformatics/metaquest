@@ -49,6 +49,7 @@ class UseBranchwaterCommand(BaseCommand):
             if errors:
                 self.logger.error("%d match file(s) could not be read: %s", len(errors), ", ".join(errors))
                 return 1
+            self.logger.info("Next: metaquest parse_containment --matches-folder %s", args.matches_folder)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error processing Branchwater files: {e}")

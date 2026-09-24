@@ -187,6 +187,61 @@ class TestExploreContainmentCommand:
         result = cmd.execute(args)
         assert result == 1
 
+    @patch("metaquest.cli.commands.explore.enrich_genomes_with_taxonomy")
+    @patch("metaquest.visualization.explorer.generate_containment_explorer")
+    def test_execute_logs_a_next_hint_when_not_opened(self, mock_gen, mock_enrich, tmp_path, caplog):
+        """Without --open, tell the user to open the HTML file themselves."""
+        containment = tmp_path / "containment.tsv"
+        _write_containment_tsv(containment)
+
+        mock_enrich.return_value = {}
+        output = tmp_path / "out.html"
+        mock_gen.return_value = output
+
+        cmd = ExploreContainmentCommand()
+        args = argparse.Namespace(
+            parsed_containment=str(containment),
+            taxonomy_map=None,
+            metadata=None,
+            output=str(output),
+            min_containment=0.0,
+            cache=str(tmp_path / "cache.tsv"),
+            open_browser=False,
+        )
+        with caplog.at_level("INFO"):
+            result = cmd.execute(args)
+        assert result == 0
+        assert "Next:" in caplog.text
+        assert str(output) in caplog.text
+
+    @patch("metaquest.utils.browser.open_in_browser")
+    @patch("metaquest.cli.commands.explore.enrich_genomes_with_taxonomy")
+    @patch("metaquest.visualization.explorer.generate_containment_explorer")
+    def test_execute_no_next_hint_when_opened(self, mock_gen, mock_enrich, mock_open, tmp_path, caplog):
+        """--open already opened it, so there is nothing left to hint at."""
+        containment = tmp_path / "containment.tsv"
+        _write_containment_tsv(containment)
+
+        mock_enrich.return_value = {}
+        output = tmp_path / "out.html"
+        mock_gen.return_value = output
+        mock_open.return_value = True
+
+        cmd = ExploreContainmentCommand()
+        args = argparse.Namespace(
+            parsed_containment=str(containment),
+            taxonomy_map=None,
+            metadata=None,
+            output=str(output),
+            min_containment=0.0,
+            cache=str(tmp_path / "cache.tsv"),
+            open_browser=True,
+        )
+        with caplog.at_level("INFO"):
+            result = cmd.execute(args)
+        assert result == 0
+        assert "Next:" not in caplog.text
+
     def test_execute_missing_taxonomy_map(self, tmp_path):
         containment = tmp_path / "containment.tsv"
         _write_containment_tsv(containment)

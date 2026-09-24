@@ -744,12 +744,16 @@ class TestSRAValidateCommand:
 
     @pytest.mark.parametrize(
         "state, expected",
-        [("failed", "failed at NCBI download"), ("downloading", "download in progress elsewhere")],
+        [("failed", "store state failed: see store_verify"), ("downloading", "download in progress elsewhere")],
     )
     @patch("builtins.print")
     def test_validate_directory_flags_failed_and_downloading_sidecars(self, mock_print, tmp_path, state, expected):
         """Only a complete or adopted dataset passes: a failed download, and one another
-        project is still downloading, are not finished datasets even when their files parse."""
+        project is still downloading, are not finished datasets even when their files parse.
+
+        A "failed" sidecar with no recorded error falls back to pointing at store_verify,
+        since there is nothing more specific to tell the reader.
+        """
         from metaquest.store.sidecar import Sidecar, write_sidecar
 
         store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
@@ -766,6 +770,30 @@ class TestSRAValidateCommand:
 
         assert result["status"] == "FAILED"
         assert expected in result["issues"]
+
+    @patch("builtins.print")
+    def test_validate_directory_failed_sidecar_reports_its_own_error(self, mock_print, tmp_path):
+        """When the sidecar recorded why the download failed, that reason is surfaced instead
+        of the generic 'see store_verify' fallback."""
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
+        store_acc_dir.mkdir(parents=True)
+        (store_acc_dir / "SRR123.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(
+            store_acc_dir / "SRR123.json",
+            Sidecar(accession="SRR123", state="failed", error="connection reset by NCBI"),
+        )
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        acc_dir = fastq_folder / "SRR123"
+        acc_dir.symlink_to(store_acc_dir)
+
+        result = SRAValidateCommand()._validate_directory(acc_dir)
+
+        assert result["status"] == "FAILED"
+        assert "store state failed: connection reset by NCBI" in result["issues"]
 
     @patch("builtins.print")
     def test_validate_directory_passes_a_complete_sidecar(self, mock_print, tmp_path):

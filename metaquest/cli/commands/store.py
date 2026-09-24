@@ -440,12 +440,20 @@ class StoreReindexCommand(BaseCommand):
                 )
                 return 1
             with catalog_write(paths) as catalog:
-                count = catalog.reindex(sidecars)
+                # Replay first: a fresh or rebuilt catalogue has no projects yet, so usage rows
+                # restored here can insert "unknown" placeholder datasets for accessions the
+                # journal references. reindex() then removes any placeholder (and real) row
+                # whose accession is not among the sidecars just read and whose folder is gone
+                # from disk, so a dataset gc already removed is never resurrected by replay.
                 projects, usage = journal.replay(paths, catalog)
+                count = catalog.reindex(sidecars)
                 has_datasets = catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1").fetchone() is not None
                 if projects == 0 and has_datasets:
                     catalog.set_meta(REBUILT_WITHOUT_PROJECTS, _now())
-                elif projects > 0:
+                else:
+                    # Either at least one project was restored, or the store now holds no
+                    # dataset at all (nothing for gc to mistake as unused either way): a flag
+                    # set by an earlier, emptier reindex must not survive as stale.
                     catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
             if projects == 0:
                 self._warn_no_projects_restored(paths, has_datasets)
@@ -594,10 +602,17 @@ class StoreAdoptCommand(BaseCommand):
         # store: one freshly adopted or deduplicated under --move (both replace the project's
         # folder with a link). Under --copy, report.adopted is always empty and a dedup leaves
         # the project's folder exactly as it was, real and unlinked, the same as a fresh --copy
-        # adoption (report.copied), so neither is recorded here.
+        # adoption (report.copied); those are not linked, but still count as usage (below), so
+        # store_gc does not see the store's copy as unused just because this project kept its
+        # own copy too.
         newly_linked = sorted(set(report.adopted) | (set(report.deduplicated) if args.move else set()))
         if newly_linked:
             self._record_linked(args, paths, newly_linked)
+
+        copied = sorted(set(report.copied) | (set(report.deduplicated) if not args.move else set()))
+        if copied:
+            self._record_copied(args, paths, copied)
+
         self._print_report(report)
         return 0
 
@@ -627,6 +642,21 @@ class StoreAdoptCommand(BaseCommand):
         # write out.
         record_usage_many(paths, usage_registry, [(acc, "", "linked", "store_adopt") for acc in newly_linked])
         _gitignore_guard(Path.cwd(), logger)
+
+    @staticmethod
+    def _record_copied(args: argparse.Namespace, paths: StorePaths, copied: List[str]) -> None:
+        """Record usage for accessions left as the project's own, unlinked copy under --copy.
+
+        Neither a fresh --copy adoption (``report.copied``) nor a --copy dedup
+        (``report.deduplicated`` when ``args.move`` is False) points the project's download
+        record at the store or touches ``registry.store["linked"]``, since the project's
+        folder is real, not a link. Without a usage row, store_gc would still see the store's
+        copy as unused, even though this project depends on it.
+        """
+        with registry_transaction(args.registry) as reg:
+            ensure_project_identity(reg)
+            usage_registry = reg
+        record_usage_many(paths, usage_registry, [(acc, "", "copied", "store_adopt --copy") for acc in copied])
 
     def _print_report(self, report: Any) -> None:
         print(
@@ -1511,34 +1541,41 @@ class StoreGcCommand(BaseCommand):
         )
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
 
-    def _refuse_before_candidates(self, catalog: Catalog, rebuilt: Optional[str], accept_rebuilt: bool) -> bool:
-        """True (after logging why) when gc must not look for candidates at all: the catalogue
-        carries the flag ``store_reindex`` sets when it restored no project and the user has not
-        passed ``--accept-rebuilt``, or it records no project while it holds datasets (then
-        ``--accept-rebuilt`` is refused too, since no project has registered again yet). Reads
-        only; the flag is cleared by the caller once the report has been built."""
+    def _refuse_before_candidates(
+        self, catalog: Catalog, rebuilt: Optional[str], accept_rebuilt: bool
+    ) -> Optional[str]:
+        """The refusal message (after logging it) when gc must not look for candidates at all,
+        or None to proceed: the catalogue carries the flag ``store_reindex`` sets when it
+        restored no project and the user has not passed ``--accept-rebuilt``, or it records no
+        project while it holds datasets (then ``--accept-rebuilt`` is refused too, since no
+        project has registered again yet). Reads only; the flag is cleared by the caller once
+        the report has been built. The caller also prints the returned message as JSON when
+        ``--json`` is given, since a refusal must be visible to a script parsing stdout, not
+        only to the log."""
         if rebuilt is not None and not accept_rebuilt:
-            self.logger.error(
-                "store_reindex rebuilt the catalogue on %s without any project records, so the datasets of "
-                "every project that has not registered again since would look unused. Run store_init (or "
-                "store_link) from every project that uses this store, then run store_gc --accept-rebuilt.",
-                rebuilt,
+            message = (
+                f"store_reindex rebuilt the catalogue on {rebuilt} without any project records, so the "
+                "datasets of every project that has not registered again since would look unused. Run "
+                "store_init (or store_link) from every project that uses this store, then run store_gc "
+                "--accept-rebuilt."
             )
-            return True
+            self.logger.error(message)
+            return message
         project_count = catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
         if project_count == 0 and any(True for _ in catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1")):
             if rebuilt is not None:
-                self.logger.error(
+                message = (
                     "--accept-rebuilt refused: the catalogue still records no project at all. Run store_init "
                     "(or store_link) from every project that uses this store first."
                 )
             else:
-                self.logger.error(
+                message = (
                     "The catalogue records no project at all, so nothing can be told apart from unused data. "
                     "Run store_reindex (which replays the journal) or store_init from each project first."
                 )
-            return True
-        return False
+            self.logger.error(message)
+            return message
+        return None
 
     # ------------------------------------------------------------- candidates
 
@@ -1731,7 +1768,10 @@ class StoreGcCommand(BaseCommand):
         try:
             with Catalog(paths) as catalog:
                 rebuilt = catalog.get_meta(REBUILT_WITHOUT_PROJECTS)
-                if self._refuse_before_candidates(catalog, rebuilt, getattr(args, "accept_rebuilt", False)):
+                refusal = self._refuse_before_candidates(catalog, rebuilt, getattr(args, "accept_rebuilt", False))
+                if refusal is not None:
+                    if args.json:
+                        print(json.dumps({"error": refusal}))
                     return 1
                 stale = stale_projects(catalog)
                 buckets = self._dataset_candidates(

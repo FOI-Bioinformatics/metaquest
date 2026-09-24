@@ -3,6 +3,7 @@ Containment-related CLI commands.
 """
 
 import argparse
+import shlex
 from typing import List
 
 from metaquest.cli.base import BaseCommand
@@ -67,7 +68,7 @@ class ParseContainmentCommand(BaseCommand):
     def execute(self, args: argparse.Namespace) -> int:
         try:
             errors: List[str] = []
-            parse_containment_data(
+            summary = parse_containment_data(
                 args.matches_folder,
                 args.parsed_containment_file,
                 args.summary_containment_file,
@@ -85,6 +86,16 @@ class ParseContainmentCommand(BaseCommand):
             if errors:
                 self.logger.error("%d match file(s) could not be read: %s", len(errors), ", ".join(errors))
                 return 1
+
+            hint = f"Next: metaquest plot_containment --file-path {shlex.quote(str(args.parsed_containment_file))}"
+            genome_id = next(iter(getattr(summary, "genome_to_samples", None) or {}), None)
+            if genome_id:
+                hint += (
+                    "; then metaquest select_datasets "
+                    f"--parsed-containment {shlex.quote(str(args.parsed_containment_file))} "
+                    f"--genome-id {shlex.quote(str(genome_id))} --threshold 0.5"
+                )
+            self.logger.info(hint)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error parsing containment: {e}")

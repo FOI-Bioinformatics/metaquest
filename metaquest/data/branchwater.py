@@ -298,6 +298,16 @@ def _finalize_metadata_extraction(metadata_records, output_file, processed_count
         # Remove duplicates
         if "Run_ID" in metadata_df.columns:
             metadata_df = metadata_df.drop_duplicates(subset=["Run_ID"])
+        # A Branchwater-API-shaped CSV (acc/containment/cANI columns only) carries no SRA
+        # metadata, so every record here has nothing beyond Run_ID and cANI; that looks like
+        # a successful extraction unless we say so explicitly.
+        extra_columns = set(metadata_df.columns) - {"Run_ID", "cANI"}
+        if not extra_columns:
+            logger.warning(
+                "No metadata beyond Run_ID and cANI was found; the source CSVs look like "
+                "Branchwater API output (acc/containment/cANI only), not an SRA metadata download. "
+                "Run download_metadata to fetch biosample, bioproject and other SRA fields."
+            )
 
     # Save to output file
     # Ensure directory exists

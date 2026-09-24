@@ -15,7 +15,7 @@ from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
 )
-from metaquest.data.registry import record_genome, registry_transaction
+from metaquest.data.registry import record_genome, registry_transaction, resolve_project_path
 
 
 def _genome_name(filename: str) -> str:
@@ -166,6 +166,7 @@ class GenomeDownloadCommand(BaseCommand):
             action="store_true",
             help="Report which genomes are already present vs would be downloaded, without downloading",
         )
+        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
     def _collect_accessions(self, args: argparse.Namespace) -> list:
         """Collect accessions from all input sources."""
@@ -228,6 +229,15 @@ class GenomeDownloadCommand(BaseCommand):
 
             genome_paths = extract_and_organize(zip_path, output_dir)
             self.logger.info("Downloaded and extracted %d genome(s)", len(genome_paths))
+
+            with registry_transaction(args.registry) as reg:
+                for genome_id, path in genome_paths.items():
+                    # genome_download writes no manifest; keep one an earlier genome_prepare
+                    # recorded for this genome rather than blanking it on a --force redownload.
+                    earlier = (reg.genomes.get(genome_id) or {}).get("manifest")
+                    manifest = resolve_project_path(reg, earlier) if earlier else ""
+                    record_genome(reg, genome_id, path, manifest)
+
             return 0
         except MetaQuestError as e:
             self.logger.error("Error downloading genomes: %s", e)

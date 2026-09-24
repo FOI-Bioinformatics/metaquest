@@ -10,9 +10,11 @@ Appends happen inside ``catalog_write``, which holds the store-wide write lock.
 
 import json
 import logging
+import socket
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.store.layout import StorePaths
@@ -23,24 +25,60 @@ PROJECTS_FILE = "projects.jsonl"
 USAGE_FILE = "usage.jsonl"
 
 
-def _append(paths: StorePaths, name: str, record: Dict[str, Any]) -> None:
+def _append(paths: StorePaths, name: str, record: Dict[str, Any], at: Optional[str] = None) -> None:
+    """Append one record, stamped with ``at`` (or now, when the caller has no timestamp of its
+    own to preserve)."""
     paths.journal.mkdir(parents=True, exist_ok=True)
-    record = dict(record, at=datetime.now(timezone.utc).isoformat())
+    record = dict(record, at=at or datetime.now(timezone.utc).isoformat())
     with open(paths.journal / name, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def append_project(paths: StorePaths, project_id: str, name: str, path: str, registry: str) -> None:
-    """Append one project record (mirroring ``Catalog.upsert_project``'s arguments)."""
-    _append(paths, PROJECTS_FILE, {"project_id": project_id, "name": name, "path": path, "registry": registry})
+def append_project(
+    paths: StorePaths, project_id: str, name: str, path: str, registry: str, hostname: Optional[str] = None
+) -> None:
+    """Append one project record (mirroring ``Catalog.upsert_project``'s arguments).
+
+    Records the host that wrote this row, so replaying the line later (possibly on a
+    different machine, rebuilding a lost catalogue) can restore the host that actually wrote
+    the project rather than the host doing the rebuild. ``hostname`` should be the same value
+    the caller just wrote to ``catalog.sqlite`` (``Catalog.upsert_project`` passes its own
+    resolved host through); it defaults to this machine's own host only when the caller has
+    none to pass (e.g. a direct call outside ``Catalog``).
+    """
+    _append(
+        paths,
+        PROJECTS_FILE,
+        {
+            "project_id": project_id,
+            "name": name,
+            "path": path,
+            "registry": registry,
+            "hostname": hostname if hostname is not None else socket.gethostname(),
+        },
+    )
 
 
-def append_usage(paths: StorePaths, accession: str, project_id: str, genome_id: str, stage: str, detail: str) -> None:
-    """Append one usage record (mirroring ``Catalog.record_usage``'s arguments)."""
+def append_usage(
+    paths: StorePaths,
+    accession: str,
+    project_id: str,
+    genome_id: str,
+    stage: str,
+    detail: str,
+    at: Optional[str] = None,
+) -> None:
+    """Append one usage record (mirroring ``Catalog.record_usage``'s arguments).
+
+    ``at`` should be the same timestamp the caller just wrote to ``first_used``/``last_used``
+    in ``catalog.sqlite`` (``Catalog.record_usage`` passes it through), so replaying this line
+    later restores the date the usage actually happened rather than the date it was replayed.
+    """
     _append(
         paths,
         USAGE_FILE,
         {"accession": accession, "project_id": project_id, "genome_id": genome_id, "stage": stage, "detail": detail},
+        at=at,
     )
 
 
@@ -100,7 +138,11 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
                 logger.warning("Skipping project journal line without project_id: %r", record)
                 continue
             catalog.upsert_project(
-                record["project_id"], record.get("name", ""), record.get("path", ""), record.get("registry", "")
+                record["project_id"],
+                record.get("name", ""),
+                record.get("path", ""),
+                record.get("registry", ""),
+                hostname=record.get("hostname"),
             )
             projects += 1
         for record in _lines(paths.journal / USAGE_FILE):
@@ -114,6 +156,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
                     record.get("genome_id", ""),
                     record.get("stage", ""),
                     record.get("detail", ""),
+                    at=record.get("at"),
                 )
                 usage += 1
             except DataAccessError:
@@ -141,20 +184,40 @@ def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     a real write or from this backfill), this is a no-op. Writes projects before usage, since
     usage rows reference a project by id. Uses ``append_project``/``append_usage`` directly
     (not ``catalog.upsert_project``/``record_usage``), so nothing already in ``catalog.sqlite``
-    is written back to it and nothing is appended twice.
+    is written back to it and nothing is appended twice. Each line carries the catalogue row's
+    own ``hostname`` and ``first_used`` (else ``last_used``) time rather than the host and time
+    of the backfill, so a later replay restores the values the catalogue held; a row with no
+    recorded host falls back to this machine, as ``append_project`` does.
     """
     projects_path = paths.journal / PROJECTS_FILE
     if _has_records(projects_path):
         return 0, 0
 
-    project_rows = catalog.conn.execute("SELECT project_id, name, path, registry FROM projects").fetchall()
+    try:
+        project_rows = catalog.conn.execute(
+            "SELECT project_id, name, path, registry, hostname FROM projects"
+        ).fetchall()
+    except sqlite3.Error as e:
+        raise DataAccessError(str(e)) from e
     if not project_rows:
         return 0, 0
 
     for row in project_rows:
-        append_project(paths, row["project_id"], row["name"] or "", row["path"] or "", row["registry"] or "")
+        append_project(
+            paths,
+            row["project_id"],
+            row["name"] or "",
+            row["path"] or "",
+            row["registry"] or "",
+            hostname=row["hostname"],
+        )
 
-    usage_rows = catalog.conn.execute("SELECT accession, project_id, genome_id, stage, detail FROM usage").fetchall()
+    try:
+        usage_rows = catalog.conn.execute(
+            "SELECT accession, project_id, genome_id, stage, detail, first_used, last_used FROM usage"
+        ).fetchall()
+    except sqlite3.Error as e:
+        raise DataAccessError(str(e)) from e
     for row in usage_rows:
         append_usage(
             paths,
@@ -163,6 +226,7 @@ def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
             row["genome_id"] or "",
             row["stage"] or "",
             row["detail"] or "",
+            at=row["first_used"] or row["last_used"],
         )
 
     return len(project_rows), len(usage_rows)

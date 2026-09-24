@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 import requests
@@ -162,17 +162,46 @@ class SRAMetadataClient:
         }
 
         fetch_response = self._make_request(fetch_url, params)
-        return self._parse_sra_xml(fetch_response)
+        # Restrict the result to packages this batch actually asked for: eSearch can match an
+        # accession at any level (run, experiment, study, sample), and the matching efetch
+        # package for one requested run can bundle other runs (e.g. other lanes/replicates of
+        # the same experiment) alongside it, which are kept too, not dropped.
+        return self._parse_sra_xml(fetch_response, requested=set(accessions))
 
-    def _parse_sra_xml(self, xml_content: str) -> Dict[str, SRADatasetInfo]:
-        """Parse SRA XML response to extract metadata, one entry per RUN accession."""
+    def _parse_sra_xml(self, xml_content: str, requested: Optional[Set[str]] = None) -> Dict[str, SRADatasetInfo]:
+        """Parse SRA XML response to extract metadata, one entry per RUN accession.
+
+        ``requested``, when given, is the set of accessions the caller actually asked for.
+        Filtering happens per EXPERIMENT_PACKAGE, not per RUN: a package is kept (every RUN
+        in it returned) when any requested accession matches, case-insensitively, that
+        package's EXPERIMENT, STUDY or SAMPLE accession, any of its RUN accessions, or an
+        identifier listed under one of those elements (a BioProject or BioSample accession); a
+        package matching none of those is dropped. When a non-empty reply would be filtered
+        down to nothing, every package is kept and a WARNING is logged, so the caller sees the
+        runs that were returned rather than a false report that nothing could be fetched. A request list may reasonably
+        hold an accession from any of those levels (nothing about how it is built rules out
+        an experiment, study or sample accession alongside RUN accessions), and one package
+        can bundle several RUNs (e.g. other lanes/replicates of the same experiment) that a
+        RUN-only match would otherwise have dropped even though the package was asked for.
+        Called directly with no ``requested`` set (a script, a REPL, or a test working with
+        raw XML), every RUN in every package is returned, matching the historical behaviour.
+        """
         try:
             import xml.etree.ElementTree as ET
 
             root = ET.fromstring(xml_content)
             results = {}
+            requested_upper = {r.upper() for r in requested} if requested is not None else None
 
-            for package in root.findall(".//EXPERIMENT_PACKAGE"):
+            packages = root.findall(".//EXPERIMENT_PACKAGE")
+            if requested_upper is not None:
+                matched = [p for p in packages if self._package_matches_requested(p, requested_upper)]
+                if packages and not matched:
+                    logger.warning("requested accessions matched no package in the reply; listing every run returned")
+                else:
+                    packages = matched
+
+            for package in packages:
                 try:
                     for info in self._extract_dataset_info(package):
                         results[info.accession] = info
@@ -184,6 +213,28 @@ class SRAMetadataClient:
         except Exception as e:
             logger.error(f"Failed to parse SRA XML: {e}")
             return {}
+
+    @staticmethod
+    def _package_matches_requested(package, requested_upper: Set[str]) -> bool:
+        """True when any accession this EXPERIMENT_PACKAGE carries is in ``requested_upper``
+        (already uppercased).
+
+        The accessions compared are the ``accession`` attribute of its EXPERIMENT, STUDY and
+        SAMPLE and of each RUN, plus the text of every IDENTIFIERS/PRIMARY_ID, EXTERNAL_ID and
+        SECONDARY_ID under those elements, which is where a BioProject (PRJNA...) or BioSample
+        (SAMN...) accession appears. Comparison is case-insensitive on this side too, since an
+        accession's own casing in the XML is not guaranteed to match how a caller wrote it.
+        """
+        elements = [package.find(".//EXPERIMENT"), package.find(".//STUDY"), package.find(".//SAMPLE")]
+        elements.extend(package.findall(".//RUN_SET/RUN"))
+        candidates = []
+        for element in elements:
+            if element is None:
+                continue
+            candidates.append(element.get("accession", ""))
+            for tag in ("PRIMARY_ID", "EXTERNAL_ID", "SECONDARY_ID"):
+                candidates.extend((node.text or "").strip() for node in element.findall(f"IDENTIFIERS/{tag}"))
+        return any(candidate and candidate.upper() in requested_upper for candidate in candidates)
 
     def _extract_platform(self, experiment) -> Tuple[str, str]:
         """Return (platform, instrument) from the first PLATFORM child of an experiment."""
@@ -198,14 +249,30 @@ class SRAMetadataClient:
 
     @staticmethod
     def _run_numbers(run) -> Tuple[int, int, float, str]:
-        """spots, bases, size in MB and published date of one ``<RUN>`` element."""
+        """spots, bases, size in MB and published date of one ``<RUN>`` element.
 
-        def _int(name: str) -> int:
-            value = run.get(name)
+        Spots/bases are normally the RUN's own ``total_spots``/``total_bases`` attributes.
+        When those are missing (0), the RUN's nested ``<Statistics nspots="..."
+        nbases="...">`` child, where present, is used instead, rather than reporting a
+        dataset that has real reads as having none.
+        """
+
+        def _int_attr(element, name: str) -> int:
+            value = element.get(name) if element is not None else None
             return int(value) if value and value.isdigit() else 0
 
-        size_bytes = _int("size")
-        return _int("total_spots"), _int("total_bases"), size_bytes / (1024 * 1024), run.get("published", "") or ""
+        spots = _int_attr(run, "total_spots")
+        bases = _int_attr(run, "total_bases")
+        if spots == 0 or bases == 0:
+            statistics_elem = run.find("./Statistics")
+            if statistics_elem is not None:
+                if spots == 0:
+                    spots = _int_attr(statistics_elem, "nspots")
+                if bases == 0:
+                    bases = _int_attr(statistics_elem, "nbases")
+
+        size_bytes = _int_attr(run, "size")
+        return spots, bases, size_bytes / (1024 * 1024), run.get("published", "") or ""
 
     def _extract_biosample(self, package) -> str:
         """Return the BioSample accession from SAMPLE_ATTRIBUTE tags, or ''."""
@@ -669,7 +736,7 @@ def _print_statistics_summary(df: pd.DataFrame) -> None:
     # The read totals are exact counts; a sampled row's per-read metrics (and therefore its
     # base total) come from a subset of the records, which the reader should know about.
     sampled = " (read-level metrics from a sample)" if bool(df.get("sampled", pd.Series(dtype=bool)).any()) else ""
-    print(f"Total reads: {df['total_reads'].sum():,}{sampled}")
+    print(f"Total reads (mates counted): {df['total_reads'].sum():,}{sampled}")
     print(f"Total bases: {df['total_bases'].sum():,}")
     print(f"Average read length: {df['avg_read_length'].mean():.1f}")
     print(f"Average GC content: {df['gc_content'].mean():.1f}%")
