@@ -241,6 +241,33 @@ class TestGenomeDownloadCommand:
 
     @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_execute_with_no_extracted_genomes_leaves_registry_untouched(self, mock_download, mock_extract):
+        """When extract_and_organize returns nothing (e.g. the zip held no usable genome
+        files), no registry transaction should even open: there is nothing to record, so no
+        registry file should be created."""
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {}
+        cmd = GenomeDownloadCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_file = Path(tmpdir) / "metaquest_registry.json"
+            args = argparse.Namespace(
+                accessions=["GCF_000006945.2"],
+                accession_file=None,
+                species=None,
+                genus=None,
+                output_dir=tmpdir,
+                representative_only=True,
+                assembly_level=None,
+                force=False,
+                dry_run=False,
+                registry=str(registry_file),
+            )
+            result = cmd.execute(args)
+            assert result == 0
+            assert not registry_file.exists()
+
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
     def test_execute_with_accession_file(self, mock_download, mock_extract):
         mock_download.return_value = Path("genomes/download.zip")
         mock_extract.return_value = {"GCF_000006945.2": Path("genomes/GCF_000006945.2.fna.gz")}
@@ -581,6 +608,30 @@ class TestGenomePrepareCommand:
             )
             result = cmd.execute(args)
             assert result == 0
+
+    def test_prepare_with_no_genomes_leaves_registry_untouched(self, tmp_path):
+        """With no genome files to manifest, no registry transaction should even open: an
+        empty run must not create (or touch) a registry file that never gets anything
+        written to it."""
+        registry_file = tmp_path / "metaquest_registry.json"
+        genomes_dir = tmp_path / "genomes"
+        genomes_dir.mkdir()
+        manifest = tmp_path / "manifest.csv"
+        args = argparse.Namespace(
+            species=None,
+            genus=None,
+            accession_file=None,
+            output_dir=str(genomes_dir),
+            representative_only=True,
+            manifest_file=str(manifest),
+            skip_download=True,
+            registry=str(registry_file),
+        )
+
+        result = GenomePrepareCommand().execute(args)
+
+        assert result == 0
+        assert not registry_file.exists()
 
     def test_manifest_lists_plain_fna_files(self):
         from metaquest.cli.commands.genome import GenomePrepareCommand

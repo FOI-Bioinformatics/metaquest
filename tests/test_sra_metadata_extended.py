@@ -1007,6 +1007,13 @@ def test_parse_sra_xml_requested_study_accession_keeps_whole_package():
     assert set(results) == {"SRR100", "SRR101"}
 
 
+def test_parse_sra_xml_requested_sample_accession_keeps_whole_package():
+    """Requesting a package's SAMPLE (SRS) accession likewise keeps every RUN in it."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRS1"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
 def test_parse_sra_xml_requested_matches_case_insensitively():
     """A lowercase (or any-case) requested accession still matches the XML's own casing."""
     client = SRAMetadataClient(email="a@b.c")
@@ -1088,6 +1095,85 @@ def test_parse_sra_xml_requested_matching_nothing_keeps_the_batch(caplog):
         "requested accessions matched no package in the reply; listing every run returned" in r.message
         for r in caplog.records
     )
+
+
+def test_parse_sra_xml_package_inspection_failure_is_isolated_per_package(caplog):
+    """One EXPERIMENT_PACKAGE's match check raising must not blank out every package's
+    results: the failing package is logged and treated as not matched, while a package that
+    matches normally still returns its runs. XML_TWO_PACKAGES holds two separate packages
+    (SRX100/SRR100 and SRX200/SRR200); the check is made to raise only for the SRX200
+    package."""
+    client = SRAMetadataClient(email="a@b.c")
+    real_matches = SRAMetadataClient._package_matches_requested
+
+    def flaky_matches(package, requested_upper):
+        if package.find(".//EXPERIMENT").get("accession") == "SRX200":
+            raise ValueError("boom")
+        return real_matches(package, requested_upper)
+
+    with patch.object(SRAMetadataClient, "_package_matches_requested", side_effect=flaky_matches):
+        with caplog.at_level("WARNING"):
+            results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"SRX100"})
+
+    assert set(results) == {"SRR100"}
+    assert any("Failed to inspect dataset package" in r.message for r in caplog.records)
+
+
+def test_parse_sra_xml_inspection_failure_with_no_match_stays_empty(caplog):
+    """When a package's match check raises and no successfully-inspected package matches
+    either, the result must stay empty rather than falling back to "keep everything": that
+    fallback is only for a clean inspection that genuinely found no match, and applying it
+    here would resurrect the package that could not even be checked. The warning must name
+    the inspection failure, not claim the request "matched no package"."""
+    client = SRAMetadataClient(email="a@b.c")
+    real_matches = SRAMetadataClient._package_matches_requested
+
+    def flaky_matches(package, requested_upper):
+        if package.find(".//EXPERIMENT").get("accession") == "SRX100":
+            raise ValueError("boom")
+        return real_matches(package, requested_upper)
+
+    with patch.object(SRAMetadataClient, "_package_matches_requested", side_effect=flaky_matches):
+        with caplog.at_level("WARNING"):
+            results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"nomatch"})
+
+    assert results == {}
+    assert any("could not be inspected" in r.message for r in caplog.records)
+    assert not any("matched no package" in r.message for r in caplog.records)
+
+
+XML_PACKAGE_WITHOUT_RUN_SET = """<?xml version="1.0" encoding="UTF-8"?>
+<EXPERIMENT_PACKAGE_SET>
+<EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX9" alias="e9"><TITLE>study-level record</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA900" received="2023-05-01"/>
+<STUDY accession="SRP9"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA9</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS9"><SAMPLE_NAME><SCIENTIFIC_NAME>test metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+</EXPERIMENT_PACKAGE>
+<EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX100" alias="e"><TITLE>gut sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA100" received="2023-03-01"/>
+<STUDY accession="SRP1"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA1</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS1"><SAMPLE_NAME><SCIENTIFIC_NAME>gut metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR100" total_spots="4866463" total_bases="1459938900" size="482592813"
+published="2023-03-23"/></RUN_SET>
+</EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>"""
+
+
+def test_parse_sra_xml_requested_filter_with_package_without_run_set():
+    """A package with no RUN_SET still yields one record keyed by its EXPERIMENT accession
+    (see _extract_dataset_info's docstring); filtering by that accession keeps only that
+    record and drops the other, normal package."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_PACKAGE_WITHOUT_RUN_SET, requested={"SRX9"})
+    assert set(results) == {"SRX9"}
 
 
 def test_fetch_batch_metadata_filters_to_the_requested_batch():

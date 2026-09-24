@@ -343,7 +343,9 @@ project at all while the rebuilt catalogue still holds datasets, `store_reindex`
 `rebuilt_without_projects` catalogue flag (every dataset would otherwise look unused); `store_gc` then
 refuses to run until each project using the store has run `store_init` or `store_link` again and
 `store_gc` is passed `--accept-rebuilt`, or until a later `store_reindex` restores at least one project
-on its own. `store_gc --json` prints the report (or, on a refusal, `{"error": ...}`) as one JSON object.
+on its own. `store_gc --json` prints the report (or, on a refusal, `{"error": ...}`) as one JSON object;
+with no store configured at all, `store_gc`, `store_status` and `store_usage` all print that same
+`{"error": ...}` shape under `--json` instead of the plain-text hint.
 `store_gc` never removes a dataset a project still links or another run is working on; `--older-than
 DAYS` restricts it to datasets downloaded at least that many days ago, `--keep-partial` never removes a
 `partial` dataset, and it also reports (and, with `--yes`, removes) leftover temp artifacts under the

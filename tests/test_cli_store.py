@@ -362,6 +362,13 @@ class TestStoreStatusCommand:
         assert rc == 1
         assert "store_init" in out
 
+    def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        rc = StoreStatusCommand().execute(_status_args(json=True, registry=str(tmp_path / "metaquest_registry.json")))
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert payload["error"].startswith("No store configured")
+
     def test_reports_counts_bytes_and_projects(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
@@ -1378,6 +1385,18 @@ class TestStoreUsageCommand:
             _usage_args(unused=True, registry=str(project_dir / "metaquest_registry.json"))
         )
         assert rc == 1
+
+    def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreUsageCommand().execute(
+            _usage_args(unused=True, json=True, registry=str(project_dir / "metaquest_registry.json"))
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert payload["error"].startswith("No store configured")
 
     def _seed(self, tmp_path):
         root = tmp_path / "store"

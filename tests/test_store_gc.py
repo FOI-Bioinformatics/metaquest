@@ -10,10 +10,17 @@ import json
 
 import pytest
 
-from metaquest.cli.commands.store import StoreGcCommand, StoreReindexCommand
+from metaquest.cli.commands.store import (
+    StoreAdoptCommand,
+    StoreGcCommand,
+    StoreInitCommand,
+    StoreLinkCommand,
+    StoreReindexCommand,
+)
 from metaquest.core.constants import STORE_ENV
+from metaquest.data.registry import load_registry
 from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, Catalog, catalog_write
-from metaquest.store.layout import init_store, sidecar_path, sra_dir
+from metaquest.store.layout import init_store, sidecar_path, sra_dir, store_paths
 from metaquest.store.sidecar import Sidecar, write_sidecar
 
 
@@ -65,6 +72,45 @@ def _write_dataset_dir(paths, accession):
     return acc_dir
 
 
+def _init_args(root, project_dir, **overrides):
+    base = dict(
+        data_root=str(root),
+        project_name=None,
+        set_default=False,
+        registry=str(project_dir / "metaquest_registry.json"),
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _adopt_args(**overrides):
+    base = dict(
+        fastq_folder="fastq",
+        data_root=None,
+        registry=None,
+        move=True,
+        dry_run=False,
+        compress=True,
+        metadata_folder="metadata",
+        lock_wait=0.0,
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _link_args(accessions, **overrides):
+    base = dict(
+        accessions=list(accessions),
+        fastq_folder="fastq",
+        registry=None,
+        data_root=None,
+        link_mode="auto",
+        accept_partial=False,
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
 class TestStoreGcCommand:
     def test_command_properties(self):
         cmd = StoreGcCommand()
@@ -78,6 +124,19 @@ class TestStoreGcCommand:
 
         rc = StoreGcCommand().execute(_gc_args(registry=str(project_dir / "metaquest_registry.json")))
         assert rc == 1
+
+    def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
+        """No store, --json requested: the hint must be valid JSON on stdout, same shape as
+        the refusal in test_json_refusal_prints_an_error_object, not the plain-text hint."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreGcCommand().execute(_gc_args(json=True, registry=str(project_dir / "metaquest_registry.json")))
+        payload = json.loads(capsys.readouterr().out)
+
+        assert rc == 1
+        assert payload["error"].startswith("No store configured")
 
     def test_json_refusal_prints_an_error_object(self, tmp_path, capsys):
         """A refusal before --json can even build a report must still be visible on stdout as
@@ -381,6 +440,58 @@ class TestStoreGcCommand:
         assert (paths.sra / "SRR1" / "SRR1.fastq.gz").exists()
         assert any("no project" in record.message.lower() for record in caplog.records)
 
+    def test_a_second_project_linking_the_same_accession_also_keeps_it_from_gc(self, tmp_path, monkeypatch, capsys):
+        """A --copy adoption records a 'copied' usage row for the adopting project
+        (test_copy_adoption_records_copied_usage_so_gc_keeps_it in tests/test_cli_store.py);
+        a second, independent project that later links the same accession through
+        store_link must record its own usage row too. Both are live (neither stale), so
+        _classify_dataset's 'keep' branch applies and the accession is dropped from the
+        report entirely, the same non-appearance the single-project case already pins via
+        report["datasets"] == [] -- not surfaced under any bucket, since 'in_use' there is
+        reserved for a download lock currently held, not for multi-project usage."""
+        root = tmp_path / "store"
+        init_store(root)
+
+        project1_dir = tmp_path / "project1"
+        entry = project1_dir / "fastq" / "SRR1"
+        entry.mkdir(parents=True)
+        (entry / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        registry1_path = project1_dir / "metaquest_registry.json"
+        monkeypatch.chdir(project1_dir)
+        assert StoreInitCommand().execute(_init_args(root, project1_dir, registry=str(registry1_path))) == 0
+        assert (
+            StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry1_path), move=False)) == 0
+        )
+
+        project2_dir = tmp_path / "project2"
+        project2_dir.mkdir()
+        registry2_path = project2_dir / "metaquest_registry.json"
+        monkeypatch.chdir(project2_dir)
+        assert StoreInitCommand().execute(_init_args(root, project2_dir, registry=str(registry2_path))) == 0
+        assert StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root), registry=str(registry2_path))) == 0
+
+        registry1 = load_registry(registry1_path)
+        registry2 = load_registry(registry2_path)
+        paths = store_paths(root)
+        with Catalog(paths) as cat:
+            rows = {
+                row["project_id"]: row["stage"]
+                for row in cat.conn.execute(
+                    "SELECT project_id, stage FROM usage WHERE accession = ?", ("SRR1",)
+                ).fetchall()
+            }
+        assert rows == {registry1.project["id"]: "copied", registry2.project["id"]: "linked"}
+
+        capsys.readouterr()
+        gc_rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert gc_rc == 0
+        assert report["datasets"] == []
+        assert report["still_linked"] == []
+        assert report["in_use"] == []
+        assert report["kept_stale"] == []
+
 
 class TestStoreGcRespectsLocksAndPlaceholders:
     """Never remove what another run is working on, or a row that stands for no files."""
@@ -554,6 +665,23 @@ class TestStoreGcAfterARebuildWithoutProjects:
         message = " ".join(record.message for record in caplog.records)
         assert "--accept-rebuilt" in message
         assert "store_init" in message
+
+    def test_gc_json_refuses_when_rebuilt_without_projects(self, tmp_path, capsys):
+        """The refusal set by an unjournaled reindex must also reach a --json caller: a
+        script parsing stdout needs the same error a human sees in the log, not empty
+        output (same fixture as test_gc_refuses_while_the_flag_is_set_even_after_one_project
+        _registers, with --json in place of --yes)."""
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+        self._register_project(paths, tmp_path)
+        capsys.readouterr()
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), json=True))
+
+        assert rc == 1
+        assert sra_dir(paths, "SRR1").is_dir()
+        report = json.loads(capsys.readouterr().out)
+        assert "--accept-rebuilt" in report["error"]
 
     def test_accept_rebuilt_clears_the_flag_and_gc_proceeds(self, tmp_path, capsys):
         paths = self._store_with_unjournaled_dataset(tmp_path)

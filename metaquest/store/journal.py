@@ -14,7 +14,7 @@ import socket
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Set, Tuple
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.store.layout import StorePaths
@@ -67,19 +67,27 @@ def append_usage(
     stage: str,
     detail: str,
     at: Optional[str] = None,
+    last_used: Optional[str] = None,
 ) -> None:
     """Append one usage record (mirroring ``Catalog.record_usage``'s arguments).
 
-    ``at`` should be the same timestamp the caller just wrote to ``first_used``/``last_used``
-    in ``catalog.sqlite`` (``Catalog.record_usage`` passes it through), so replaying this line
+    ``at`` should be the same timestamp the caller just wrote to ``first_used`` in
+    ``catalog.sqlite`` (``Catalog.record_usage`` passes it through), so replaying this line
     later restores the date the usage actually happened rather than the date it was replayed.
+    ``last_used`` is written as its own key only when given (an ordinary call has none, and a
+    single ``at`` already covers both bounds); a backfilled or explicitly out-of-order line
+    that carries a later ``last_used`` than ``at`` passes it so replay restores both bounds.
     """
-    _append(
-        paths,
-        USAGE_FILE,
-        {"accession": accession, "project_id": project_id, "genome_id": genome_id, "stage": stage, "detail": detail},
-        at=at,
-    )
+    record = {
+        "accession": accession,
+        "project_id": project_id,
+        "genome_id": genome_id,
+        "stage": stage,
+        "detail": detail,
+    }
+    if last_used is not None:
+        record["last_used"] = last_used
+    _append(paths, USAGE_FILE, record, at=at)
 
 
 def _lines(path: Path) -> Iterator[Dict[str, Any]]:
@@ -119,6 +127,11 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     The catalogue calls back into ``append_*`` when it writes, so replay runs with journaling
     suspended (``catalog.journal_enabled = False``) to avoid duplicating the file.
 
+    The project count is the number of *distinct* ``project_id`` values upserted, not the
+    number of journal lines replayed: ``upsert_project`` appends one line per call, including
+    a call that only refreshes an existing project's ``last_seen``/``hostname``, so a project
+    touched more than once would otherwise be over-counted.
+
     A usage line whose ``project_id`` was never restored (its project's line is missing,
     corrupt, or absent from the journal entirely) is skipped rather than raised: without this,
     one such line would make ``record_usage`` raise ``DataAccessError("Unknown project_id")``,
@@ -127,7 +140,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     A journal line missing ``project_id`` (for projects) or ``accession``/``project_id`` (for
     usage) is skipped the same way, since it cannot be replayed either.
     """
-    projects = 0
+    project_ids: Set[str] = set()
     usage = 0
     skipped_usage = 0
     previous = getattr(catalog, "journal_enabled", True)
@@ -144,7 +157,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
                 record.get("registry", ""),
                 hostname=record.get("hostname"),
             )
-            projects += 1
+            project_ids.add(record["project_id"])
         for record in _lines(paths.journal / USAGE_FILE):
             if "accession" not in record or "project_id" not in record:
                 logger.warning("Skipping usage journal line without accession/project_id: %r", record)
@@ -157,6 +170,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
                     record.get("stage", ""),
                     record.get("detail", ""),
                     at=record.get("at"),
+                    last_used=record.get("last_used"),
                 )
                 usage += 1
             except DataAccessError:
@@ -169,7 +183,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
             )
     finally:
         catalog.journal_enabled = previous
-    return projects, usage
+    return len(project_ids), usage
 
 
 def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
@@ -185,9 +199,11 @@ def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     usage rows reference a project by id. Uses ``append_project``/``append_usage`` directly
     (not ``catalog.upsert_project``/``record_usage``), so nothing already in ``catalog.sqlite``
     is written back to it and nothing is appended twice. Each line carries the catalogue row's
-    own ``hostname`` and ``first_used`` (else ``last_used``) time rather than the host and time
-    of the backfill, so a later replay restores the values the catalogue held; a row with no
-    recorded host falls back to this machine, as ``append_project`` does.
+    own ``hostname`` and ``first_used`` (else ``last_used``) time as ``at``, plus the row's own
+    ``last_used`` (which can be later than ``first_used`` for a row touched more than once
+    before the journal existed), rather than the host and time of the backfill, so a later
+    replay restores both bounds the catalogue held; a row with no recorded host falls back to
+    this machine, as ``append_project`` does.
     """
     projects_path = paths.journal / PROJECTS_FILE
     if _has_records(projects_path):
@@ -227,6 +243,7 @@ def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
             row["stage"] or "",
             row["detail"] or "",
             at=row["first_used"] or row["last_used"],
+            last_used=row["last_used"],
         )
 
     return len(project_rows), len(usage_rows)

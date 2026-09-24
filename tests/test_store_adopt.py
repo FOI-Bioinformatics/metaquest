@@ -572,12 +572,13 @@ class TestFolderBytes:
     def test_matches_the_bytes_the_staging_copy_actually_produces(self, tmp_path):
         """Pin ``_folder_bytes`` against the real staging copy rather than against a
         restatement of its own logic: build a folder with a plain file, a ``._plain``
-        AppleDouble file, a ``.DS_Store``, a ``.hidden/keep.txt`` file and a ``sub/._junk``
-        file; run the same ``shutil.copytree(..., ignore=ADOPT_COPY_IGNORE)`` staging uses;
-        and assert ``_folder_bytes`` on the source equals the real byte total of the staged
-        copy. ``._plain``, ``.DS_Store`` and ``sub/._junk`` must not reach the copy (or the
-        count); ``.hidden/keep.txt`` must reach both, since ``.hidden`` matches neither
-        ignore pattern."""
+        AppleDouble file, a ``.DS_Store``, a ``.hidden/keep.txt`` file, a ``sub/._junk``
+        file and a ``._cache/x.bin`` ignored directory; run the same
+        ``shutil.copytree(..., ignore=ADOPT_COPY_IGNORE)`` staging uses; and assert
+        ``_folder_bytes`` on the source equals the real byte total of the staged copy.
+        ``._plain``, ``.DS_Store``, ``sub/._junk`` and everything under ``._cache`` must not
+        reach the copy (or the count); ``.hidden/keep.txt`` must reach both, since
+        ``.hidden`` matches neither ignore pattern."""
         src = tmp_path / "SRR1"
         src.mkdir()
         (src / "plain.fastq").write_bytes(b"x" * 100)
@@ -588,12 +589,14 @@ class TestFolderBytes:
         (src / "sub").mkdir()
         (src / "sub" / "._junk").write_bytes(b"b" * 15)
         (src / "sub" / "real.fastq").write_bytes(b"c" * 7)
+        (src / "._cache").mkdir()
+        (src / "._cache" / "x.bin").write_bytes(b"d" * 40)
 
         staged = tmp_path / "staged"
         shutil.copytree(src, staged, ignore=ADOPT_COPY_IGNORE)
         copied_bytes = sum(p.stat().st_size for p in staged.rglob("*") if p.is_file())
 
-        assert copied_bytes == 100 + 30 + 7  # ._plain, .DS_Store and sub/._junk excluded
+        assert copied_bytes == 100 + 30 + 7  # ._plain, .DS_Store, sub/._junk and ._cache excluded
         assert _folder_bytes(src) == copied_bytes
 
 

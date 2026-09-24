@@ -75,6 +75,26 @@ class TestSketchFasta:
         with pytest.raises(DataAccessError, match=r"metaquest\[sourmash\]"):
             sketch_fasta(fasta)
 
+    def test_missing_sourmash_hint_names_the_interpreter(self, tmp_path, monkeypatch):
+        """A user with several Python environments needs to know which one to install into."""
+        import builtins
+        import sys
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("sourmash"):
+                raise ImportError("no sourmash")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        fasta = tmp_path / "x.fna"
+        _write_fasta(fasta)
+        with pytest.raises(DataAccessError) as exc_info:
+            sketch_fasta(fasta)
+        assert sys.executable in str(exc_info.value)
+        assert "-m pip install 'metaquest[sourmash]'" in str(exc_info.value)
+
 
 class TestLoadSignature:
     def test_list_form(self, tmp_path):

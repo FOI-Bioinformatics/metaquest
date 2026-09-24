@@ -173,6 +173,11 @@ class SelectDatasetsCommand(BaseCommand):
                     # single --genome-id this falls back to when nothing was selected.
                     "column": ranked[0][1] if ranked else (args.genome_id or "max_containment"),
                     "threshold": args.threshold,
+                    # The metadata table actually used, whether it was --metadata-file or the
+                    # default resolve_metadata_table autodetected (see the top of execute()),
+                    # so a reselect built from these criteria carries the real path instead of
+                    # relying on cwd-relative autodetection happening again.
+                    "metadata_file": (str(metadata_file.resolve()) if metadata_file is not None else None),
                     "metadata_column": args.metadata_column,
                     "metadata_value": args.metadata_value,
                     "table": str(args.parsed_containment),

@@ -32,6 +32,7 @@ from metaquest.cli.commands.samples import SingleSampleCommand
 from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.models import ContainmentSummary
 from metaquest.data.registry import load_registry, record_download, record_exclusion, record_metadata, save_registry
 
 
@@ -326,6 +327,32 @@ class TestParseContainmentCommand:
         assert "plot_containment" in caplog.text
         assert "select_datasets" in caplog.text
         assert "GCF_A" in caplog.text
+
+    @patch("metaquest.cli.commands.containment.parse_containment_data")
+    def test_execute_next_hint_names_the_first_genome_column_sorted(self, mock_command, tmp_path, caplog):
+        """With several genome columns, the hint's --genome-id must name the alphabetically
+        first one, not whichever happened to be inserted first into genome_to_samples."""
+        summary = ContainmentSummary()
+        summary.genome_to_samples = {"GCF_B": ["SRR1"], "GCF_A": ["SRR2"]}
+        mock_command.return_value = summary
+
+        command = ParseContainmentCommand()
+        args = argparse.Namespace(
+            matches_folder="test_matches",
+            parsed_containment_file=str(tmp_path / "parsed.txt"),
+            summary_containment_file="summary.txt",
+            step_size=0.1,
+            details_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        )
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "--genome-id GCF_A" in caplog.text
+        assert "--genome-id GCF_B" not in caplog.text
 
 
 class TestDownloadMetadataCommand:
@@ -1118,7 +1145,11 @@ class TestDownloadSraCommand:
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_with_failures_writes_failed_file(self, mock_command, _which, tmp_path, caplog):
-        """Failed downloads return 1; the retry hint is logged and the CLI itself writes no file."""
+        """Failed downloads return 1; the retry hint is logged and the CLI itself writes no file.
+
+        The "Some downloads failed..." warning is the data layer's own (metaquest.data.sra's
+        download_sra logs it once already); with download_sra mocked out here, as it is in
+        this test, the CLI must not log a second copy of that line itself."""
         failed_file = tmp_path / "fastq" / FAILED_ACCESSIONS_FILE
 
         def fake_download_sra(**kwargs):
@@ -1158,6 +1189,9 @@ class TestDownloadSraCommand:
         assert not failed_file.exists()
         assert str(failed_file) in caplog.text
         assert "--accessions-file" in caplog.text
+        # download_sra is mocked here, so its own "Some downloads failed..." warning never
+        # ran; the CLI must not print a second copy of that line itself.
+        assert caplog.text.count("Some downloads failed") == 0
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
@@ -2292,8 +2326,9 @@ class TestDownloadSraCommand:
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_summary_reports_how_many_were_linked_from_store(self, mock_download, _which, tmp_path, caplog):
-        """The final summary counts only the results the store linked, not ones it downloaded."""
+    def test_cli_logs_no_second_download_summary(self, mock_download, _which, tmp_path, caplog):
+        """The data layer prints the run summary; the CLI must not print a second block whose
+        "Successfully downloaded" line counted store links as downloads (audit S5-6)."""
         mock_download.return_value = {
             "total": 2,
             "already_downloaded": 0,
@@ -2325,41 +2360,8 @@ class TestDownloadSraCommand:
         with caplog.at_level("INFO"):
             assert DownloadSraCommand().execute(args) == 0
 
-        assert "Linked from store: 1 datasets" in caplog.text
-
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
-    @patch("metaquest.cli.commands.sra.download_sra")
-    def test_summary_omits_linked_line_when_nothing_was_linked(self, mock_download, _which, tmp_path, caplog):
-        """A run with no store-linked results does not mention linking at all."""
-        mock_download.return_value = {
-            "total": 1,
-            "already_downloaded": 0,
-            "blacklisted": 0,
-            "successful": 1,
-            "failed": 0,
-            "failed_accessions": [],
-            "results": {"SRR1": "Downloaded 1 files, complete (1 of 1 spots)"},
-        }
-        args = argparse.Namespace(
-            accessions_file=str(tmp_path / "acc.txt"),
-            fastq_folder=str(tmp_path / "fastq"),
-            max_downloads=None,
-            num_threads=4,
-            max_workers=4,
-            dry_run=False,
-            force=False,
-            max_retries=1,
-            temp_folder=None,
-            blacklist=None,
-            report_file=None,
-            registry=str(tmp_path / "metaquest_registry.json"),
-            data_root=None,
-        )
-
-        with caplog.at_level("INFO"):
-            assert DownloadSraCommand().execute(args) == 0
-
-        assert "Linked from store" not in caplog.text
+        assert "Download summary:" not in caplog.text
+        assert "Successfully downloaded" not in caplog.text
 
     # ------------------------------------------------------- transient bytes warning
 

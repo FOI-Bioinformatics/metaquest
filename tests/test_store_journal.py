@@ -89,6 +89,69 @@ def test_replay_skips_malformed_journal_lines_without_raising(tmp_path):
         assert journal.replay(paths, c) == (0, 0)
 
 
+def test_replay_out_of_order_keeps_latest_last_used_and_earliest_first_used(tmp_path):
+    """Journal lines are replayed in file order, which is not necessarily chronological (e.g.
+    a line appended late by a slow writer). The restored row must still end up with first_used
+    at the earliest ``at`` and last_used at the latest ``at``, not just the last line replayed."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+    journal.append_usage(paths, "SRR1", "pid1", "", "linked", "", at="2026-09-02T00:00:00+00:00")
+    journal.append_usage(paths, "SRR1", "pid1", "", "linked", "", at="2026-09-01T00:00:00+00:00")
+
+    with catalog_write(paths) as c:
+        journal.replay(paths, c)
+        row = c.conn.execute("SELECT first_used, last_used FROM usage WHERE accession='SRR1'").fetchone()
+
+    assert row["first_used"] == "2026-09-01T00:00:00+00:00"
+    assert row["last_used"] == "2026-09-02T00:00:00+00:00"
+
+
+def test_replay_restores_an_explicit_last_used_from_a_single_line(tmp_path):
+    """A single journal line can itself carry a ``last_used`` later than its own ``at``
+    (e.g. a backfilled row touched more than once before the journal existed). Replay must
+    pass that ``last_used`` through to ``record_usage`` rather than collapsing both bounds to
+    ``at``."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+    journal.append_usage(
+        paths,
+        "SRR1",
+        "pid1",
+        "",
+        "linked",
+        "",
+        at="2026-09-01T00:00:00+00:00",
+        last_used="2026-09-03T00:00:00+00:00",
+    )
+
+    with catalog_write(paths) as c:
+        journal.replay(paths, c)
+        row = c.conn.execute("SELECT first_used, last_used FROM usage WHERE accession='SRR1'").fetchone()
+
+    assert row["first_used"] == "2026-09-01T00:00:00+00:00"
+    assert row["last_used"] == "2026-09-03T00:00:00+00:00"
+
+
+def test_replay_counts_distinct_projects_not_journal_lines(tmp_path):
+    """``upsert_project`` appends one journal line per call, even when it is the same project
+    updated again (e.g. a ``store_link`` run touching the same project's ``last_seen``
+    repeatedly). Replay's project count must reflect distinct projects restored, not the
+    number of lines replayed, or ``store_reindex`` misreports how many projects came back."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+    (paths.root / "catalog.sqlite").unlink()
+
+    with catalog_write(paths) as c:
+        projects, _usage = journal.replay(paths, c)
+
+    assert projects == 1
+
+
 def test_catalog_write_backfills_a_pre_journal_store_once(tmp_path):
     """A pre-journal store's ``projects``/``usage`` rows are copied into the journal the first
     time ``catalog_write`` opens it afterwards (``catalog_write`` calls ``backfill_from_catalog``
@@ -132,6 +195,26 @@ def test_backfill_keeps_the_catalogue_rows_hostname_and_time(tmp_path):
     usage = json.loads((paths.journal / "usage.jsonl").read_text().splitlines()[0])
     assert project["hostname"] == "other-host"
     assert usage["at"] == when
+
+
+def test_backfill_line_carries_first_and_last_used(tmp_path):
+    """A pre-journal usage row can have been touched more than once before the journal
+    existed, so first_used and last_used differ; the backfilled line must carry both, not
+    collapse to a single timestamp (which would make a later replay lose the earlier date)."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.journal_enabled = False  # simulate a store written before the journal existed
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.record_usage("SRR1", "pid1", "", "linked", "", at="2026-09-01T00:00:00+00:00")
+        c.record_usage("SRR1", "pid1", "", "linked", "", at="2026-09-03T00:00:00+00:00")
+    assert not (paths.journal / "projects.jsonl").exists()
+
+    with catalog_write(paths):
+        pass  # backfill runs on entry
+
+    usage = json.loads((paths.journal / "usage.jsonl").read_text().splitlines()[0])
+    assert usage["at"] == "2026-09-01T00:00:00+00:00"
+    assert usage["last_used"] == "2026-09-03T00:00:00+00:00"
 
 
 def test_backfill_from_catalog_is_a_noop_on_an_empty_catalog(tmp_path):

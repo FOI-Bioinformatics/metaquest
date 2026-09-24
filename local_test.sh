@@ -39,7 +39,7 @@ check metadata_counts_bar.png
 
 echo "plot_containment"
 metaquest plot_containment --file-path parsed_containment.txt --column max_containment --plot-type rank --save-format png
-check parsed_containment.txt_rank_max_containment.png
+check parsed_containment_rank_max_containment.png
 
 echo "select_datasets"
 metaquest select_datasets --threshold 0.95 --output accessions.txt

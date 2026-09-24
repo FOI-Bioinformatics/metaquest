@@ -88,7 +88,7 @@ class ParseContainmentCommand(BaseCommand):
                 return 1
 
             hint = f"Next: metaquest plot_containment --file-path {shlex.quote(str(args.parsed_containment_file))}"
-            genome_id = next(iter(getattr(summary, "genome_to_samples", None) or {}), None)
+            genome_id = next(iter(sorted(getattr(summary, "genome_to_samples", None) or {})), None)
             if genome_id:
                 hint += (
                     "; then metaquest select_datasets "

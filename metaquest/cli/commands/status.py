@@ -9,6 +9,7 @@ exists yet, the report is reconstructed in memory from what is on disk.
 
 import argparse
 import json
+import logging
 import math
 import shlex
 from pathlib import Path
@@ -43,6 +44,8 @@ from metaquest.store.link import is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import read_sidecar
 
+logger = logging.getLogger(__name__)
+
 
 def _as_float(value: Any) -> Optional[float]:
     """``value`` as a finite float, or None when it is not a number."""
@@ -62,6 +65,11 @@ def _as_positive_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _warn_malformed(name: str, value: Any, reason: str) -> None:
+    """Warn that a recorded criteria value could not be used to build a reselect command."""
+    logger.warning("Recorded %s %r %s", name, value, reason)
 
 
 class StatusCommand(BaseCommand):
@@ -282,15 +290,20 @@ class StatusCommand(BaseCommand):
         that fails that check (a hand-edited registry, say) leaves its flag out rather than
         being pasted into the command.
         """
-        threshold = _as_float(criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD))
+        raw_threshold = criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD)
+        threshold = _as_float(raw_threshold)
+        if threshold is None and raw_threshold is not None:
+            _warn_malformed("threshold", raw_threshold, "is not a number; the suggested command uses the default")
         threshold_part = f" --threshold {threshold}" if threshold is not None else ""
         genome_ids = criteria.get("genome_ids")
         if genome_ids:
-            require = criteria.get("require", "any")
+            raw_require = criteria.get("require", "any")
             quoted_ids = " ".join(shlex.quote(str(g)) for g in genome_ids)
             genome_part = f"--genome-ids {quoted_ids}"
-            if require in ("any", "all"):
-                genome_part += f" --require {require}"
+            if raw_require in ("any", "all"):
+                genome_part += f" --require {raw_require}"
+            elif raw_require is not None:
+                _warn_malformed("require", raw_require, "is not 'any' or 'all'; the suggested command omits --require")
         else:
             column = criteria.get("column") or "max_containment"
             genome_part = f"--genome-id {shlex.quote(str(column))}"
@@ -299,6 +312,9 @@ class StatusCommand(BaseCommand):
             f"--skip-excluded --output {shlex.quote(str(output))}"
         )
 
+        metadata_file = criteria.get("metadata_file")
+        if metadata_file:
+            command += f" --metadata-file {shlex.quote(str(metadata_file))}"
         metadata_column = criteria.get("metadata_column")
         metadata_value = criteria.get("metadata_value")
         if metadata_column and metadata_value is not None:
@@ -306,9 +322,12 @@ class StatusCommand(BaseCommand):
                 f" --metadata-column {shlex.quote(str(metadata_column))}"
                 f" --metadata-value {shlex.quote(str(metadata_value))}"
             )
-        top_n = _as_positive_int(criteria.get("top_n"))
+        raw_top_n = criteria.get("top_n")
+        top_n = _as_positive_int(raw_top_n)
         if top_n:
             command += f" --top-n {top_n}"
+        elif raw_top_n is not None:
+            _warn_malformed("top_n", raw_top_n, "is not a number; the suggested command uses the default")
         table = criteria.get("table")
         if table and str(table) != DEFAULT_PARSED_CONTAINMENT_FILE:
             command += f" --parsed-containment {shlex.quote(str(table))}"

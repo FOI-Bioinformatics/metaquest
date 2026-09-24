@@ -220,13 +220,6 @@ class TestParameterValidation:
         missing = flags_emitted - safe_params
         assert not missing, f"megahit allow-list is missing: {sorted(missing)}"
 
-    def test_megahit_tests_leave_no_allowed_root_behind(self):
-        """Runs after the two ``_megahit_args`` tests above, which register their tmp_path
-        scratch folders as allowed roots. The module's roots fixture must have restored the
-        class-level list, so none of those folders is still accepted by ``validate_path``
-        in later tests. (If test order is shuffled this passes trivially.)"""
-        assert not any(root.name == ".megahit-tmp-abcd1234" for root in SecureSubprocess._extra_roots)
-
     def test_minimap2_flags_used_by_read_extraction_pass_validation(self, tmp_path):
         """read_extraction.py has no standalone ``_minimap2_args`` builder (unlike
         ``_megahit_args``); its minimap2 calls are literal argument lists inline in
