@@ -884,6 +884,12 @@ def fasterq_dump_version() -> str:
 # spot count, or downloaded without a spot count to check it against.
 STORE_READY_STATES = ("complete", "unverified")
 
+# Prefix ``_link_result`` puts on the message for a dataset the store already held (linked
+# rather than downloaded); the single place this string is produced, so every caller that
+# needs to tell a link apart from a fresh download (the CLI's result recorder, this module's
+# own run summary) matches against this constant rather than a copy of the literal.
+STORE_LINKED_PREFIX = "linked from store"
+
 
 def _metadata_xml(folders, accession: str) -> Optional[Path]:
     """The first ``<accession>_metadata.xml`` found in ``folders``, or None."""
@@ -923,7 +929,7 @@ def _link_result(accession: str, project_fastq: Path, store, link_mode: str, not
     from metaquest.store.link import link_dataset
 
     link = link_dataset(project_fastq, accession, store, mode=link_mode)
-    return True, f"linked from store{note}, {len(fastq_files(link))} files"
+    return True, f"{STORE_LINKED_PREFIX}{note}, {len(fastq_files(link))} files"
 
 
 def _store_precheck(
@@ -1521,6 +1527,42 @@ def _download_with_retries(
     return successful_count, failed_count, failed_accessions, download_results, abort_reason
 
 
+def _log_download_run_summary(
+    all_accessions: List[str],
+    already_downloaded: List[str],
+    blacklisted: List[str],
+    successful_count: int,
+    failed_count: int,
+    download_results: Dict[str, str],
+    abort_reason: Optional[str],
+    failed_accessions: List[str],
+    fastq_path: Path,
+) -> None:
+    """Log the summary for a completed (non-dry-run) ``download_sra`` call.
+
+    A result the store served from a copy it already had is counted in ``successful_count``,
+    but it downloaded nothing this run; it is reported separately ("Linked from store") rather
+    than folded into "Newly downloaded", which would overstate how much this run actually
+    fetched. Kept out of ``download_sra`` itself to keep that function's branching down.
+    """
+    linked_count = sum(1 for message in download_results.values() if message.startswith(STORE_LINKED_PREFIX))
+
+    logger.info("Download summary:")
+    logger.info(f"  Total accessions: {len(all_accessions)}")
+    logger.info(f"  Already downloaded: {len(already_downloaded)}")
+    logger.info(f"  Blacklisted: {len(blacklisted)}")
+    logger.info(f"  Newly downloaded: {successful_count - linked_count}")
+    if linked_count:
+        logger.info(f"  Linked from store: {linked_count}")
+    logger.info(f"  Failed downloads: {failed_count}")
+
+    if abort_reason:
+        logger.error(f"Download run aborted: {abort_reason}")
+    if failed_count > 0:
+        logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable automatic retry.")
+        _handle_download_failure(fastq_path, failed_accessions)
+
+
 def download_sra(
     fastq_folder: Union[str, Path],
     accessions_file: Union[str, Path],
@@ -1682,19 +1724,17 @@ def download_sra(
             downloader,
         )
 
-        # Log final summary
-        logger.info("Download summary:")
-        logger.info(f"  Total accessions: {len(all_accessions)}")
-        logger.info(f"  Already downloaded: {len(already_downloaded)}")
-        logger.info(f"  Blacklisted: {len(blacklisted)}")
-        logger.info(f"  Newly downloaded: {successful_count}")
-        logger.info(f"  Failed downloads: {failed_count}")
-
-        if abort_reason:
-            logger.error(f"Download run aborted: {abort_reason}")
-        if failed_count > 0:
-            logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable " "automatic retry.")
-            _handle_download_failure(fastq_path, failed_accessions)
+        _log_download_run_summary(
+            all_accessions,
+            already_downloaded,
+            blacklisted,
+            successful_count,
+            failed_count,
+            download_results,
+            abort_reason,
+            failed_accessions,
+            fastq_path,
+        )
 
         download_stats = {
             "total": len(all_accessions),

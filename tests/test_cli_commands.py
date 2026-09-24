@@ -1834,6 +1834,86 @@ class TestDownloadSraCommand:
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
+    def test_relink_keeps_previous_read_count(self, mock_download, _which, tmp_path):
+        """A relink to a store copy takes its verdict from the sidecar, but a sidecar with no
+        read count of its own must not blank out the read count the registry already had
+        (audit deferred S7-7)."""
+        from metaquest.store.layout import init_store, sidecar_path
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(
+            sidecar_path(paths, "SRR1"),
+            Sidecar(
+                accession="SRR1",
+                state="complete",
+                reads_per_mate=None,
+                completeness={"method": "spots", "ratio": 1.0, "verdict": "complete"},
+            ),
+        )
+
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        os.symlink(acc_dir, fastq_folder / "SRR1")
+
+        registry_file = tmp_path / "metaquest_registry.json"
+        seeded = load_registry(registry_file)
+        record_download(seeded, "SRR1", "downloaded", fastq_folder)
+        seeded.datasets["SRR1"]["download"]["complete"] = {
+            "verdict": "truncated",
+            "reads_r1": 5,
+            "expected_spots": 48000000,
+            "ratio": 0.0001,
+        }
+        save_registry(seeded)
+
+        message = "linked from store, 1 files"
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, message)
+            return {
+                "total": 1,
+                "to_download": 1,
+                "already_downloaded": 0,
+                "blacklisted": 0,
+                "successful": 1,
+                "failed": 0,
+                "failed_accessions": [],
+                "results": {"SRR1": message},
+            }
+
+        mock_download.side_effect = fake_download_sra
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=str(store_root),
+            redownload_truncated=True,
+        )
+
+        assert DownloadSraCommand().execute(args) == 0
+
+        written = json.loads(registry_file.read_text())
+        complete = written["datasets"]["SRR1"]["download"]["complete"]
+        assert complete["reads_r1"] == 5
+        assert complete["expected_spots"] == 48000000
+        assert complete["verdict"] == "complete"
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
     def test_a_plain_download_is_not_recorded_as_store_backed(self, mock_download, _which, tmp_path):
         from metaquest.store.layout import init_store
 
