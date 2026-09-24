@@ -465,6 +465,9 @@ downloaded, useful when re-running selection on an expanded search. `select_data
 dataset size; use `sra_info` beforehand (see "Downloading reads" below) to see sizes. `--no-record`
 still writes the output file and logs the counts, but does not record the selection in the registry, so
 `status` is left unchanged; use it for an exploratory run that should not redefine the target list.
+Because `status --next` points `download_sra` at the recorded selection's file, `--no-record` refuses to
+overwrite a file that a recorded selection names (including the default `accessions.txt`); give it an
+`--output` that names a scratch file instead.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see

@@ -80,8 +80,10 @@ registry already records as downloaded. `select_datasets` has no filter on datas
 experiment package, not per run: it lists every run of each experiment package that a requested run,
 experiment, sample or study accession matches (including sibling lanes or replicates of the same
 experiment as a requested run), and drops runs of packages that match none of the requested accessions.
-`--no-record` writes `accessions.txt` and logs the counts without touching the registry, for an
-exploratory run that should not replace the recorded selection.
+`--no-record` logs the counts and writes its list without touching the registry, for an exploratory
+run that should not replace the recorded selection. It refuses to overwrite a file that a recorded
+selection names (the default `accessions.txt` once a selection has been recorded), so `--output` should
+name a scratch file.
 
 ## 3. Download
 
