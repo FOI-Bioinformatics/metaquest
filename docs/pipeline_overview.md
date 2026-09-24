@@ -66,6 +66,9 @@ metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 --output a
 metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
     --metadata-column Sample_Scientific_Name --metadata-value "Drosophila melanogaster"
 
+# Only Illumina runs of at most 2 GB (needs the NCBI metadata table from parse_metadata)
+metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 --max-run-size 2G --platform ILLUMINA
+
 # Exclude a dataset and say why
 metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"
 ```
@@ -75,8 +78,8 @@ selection; running `select_datasets` again replaces the previous selection. Excl
 their reason in the registry and in `blacklist.txt`, and `download_sra` honours them without further
 flags. `--top-n` keeps only the highest-containment accessions after every other filter; excluded
 accessions are dropped by default (`--skip-excluded`) and `--skip-downloaded` also drops accessions the
-registry already records as downloaded. `select_datasets` has no filter on dataset size; `sra_info` (see
-[README](../README.md#downloading-reads)) reports sizes separately, before downloading. It filters per
+registry already records as downloaded. `sra_info` (see [README](../README.md#downloading-reads))
+reports sizes of any accession list before downloading. It filters per
 experiment package, not per run: it lists every run of each experiment package that a requested run,
 experiment, sample, study, BioProject or BioSample accession matches (including sibling lanes or
 replicates of the same experiment as a requested run), and drops runs of packages that match none of the
@@ -85,6 +88,12 @@ requested accessions; a reply that would be filtered down to nothing is listed i
 run that should not replace the recorded selection. It refuses to overwrite a file that a recorded
 selection names (the default `accessions.txt` once a selection has been recorded), so `--output` should
 name a scratch file.
+
+`--max-run-size BYTES` (suffixes K, M, G, T as powers of 10), `--min-spots N`, `--max-spots N` and
+`--platform NAME` filter on `Run_Size`, `Run_Total_Spots` and `Platform` in the NCBI metadata table,
+after the metadata filter and before `--top-n`. A run absent from the table or without a value is dropped
+and counted in the log; a table without the column (every Branchwater-derived table) skips that filter
+with a warning. The registry records these four values with the selection.
 
 ## 3. Download
 
@@ -262,7 +271,7 @@ dangling link the same way it records other files removed by hand.
 
 `status --next` also turns a `select_datasets --no-skip-excluded` selection's still-excluded accessions
 into a runnable `select_datasets ... --skip-excluded` command, reproducing that run's genome, threshold,
-metadata and top-N criteria, instead of suggesting `download_sra` directly on them.
+metadata, top-N and run filter criteria, instead of suggesting `download_sra` directly on them.
 
 ## The walkthrough
 

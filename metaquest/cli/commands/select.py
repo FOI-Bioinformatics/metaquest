@@ -8,7 +8,7 @@ from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_TOP_
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection, save_registry
-from metaquest.processing.selection import select_accessions_ranked
+from metaquest.processing.selection import RunFilters, parse_size, select_accessions_ranked
 
 
 def _positive_int(value: str) -> int:
@@ -16,6 +16,28 @@ def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError(f"--top-n must be a positive integer, got {value!r}")
+    return parsed
+
+
+def _size_bytes(value: str) -> int:
+    """argparse type for --max-run-size: a byte count with an optional K/M/G/T suffix, above zero."""
+    try:
+        parsed = parse_size(value)
+    except MetaQuestError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"--max-run-size must be above zero, got {value!r}")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type for --min-spots and --max-spots: an integer of zero or more."""
+    try:
+        parsed = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {value!r}") from e
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"expected zero or a positive whole number, got {value!r}")
     return parsed
 
 
@@ -87,6 +109,35 @@ class SelectDatasetsCommand(BaseCommand):
         )
         parser.add_argument("--metadata-column", default=None, help="Metadata column to filter on")
         parser.add_argument("--metadata-value", default=None, help="Required value in that column")
+        parser.add_argument(
+            "--max-run-size",
+            type=_size_bytes,
+            default=None,
+            metavar="BYTES",
+            help="Drop runs whose Run_Size exceeds BYTES (suffixes K, M, G, T are powers of 10, e.g. 500M); "
+            "needs the NCBI metadata table, and a run with no Run_Size value is dropped",
+        )
+        parser.add_argument(
+            "--min-spots",
+            type=_non_negative_int,
+            default=None,
+            metavar="N",
+            help="Drop runs with fewer than N spots (Run_Total_Spots); a run with no value is dropped",
+        )
+        parser.add_argument(
+            "--max-spots",
+            type=_non_negative_int,
+            default=None,
+            metavar="N",
+            help="Drop runs with more than N spots (Run_Total_Spots); a run with no value is dropped",
+        )
+        parser.add_argument(
+            "--platform",
+            default=None,
+            metavar="NAME",
+            help="Keep only runs from this sequencing platform, e.g. ILLUMINA (case-insensitive); "
+            "a run with no Platform value is dropped",
+        )
         parser.add_argument("--output", default="accessions.txt", help="Output file, one accession per line")
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument(
@@ -111,8 +162,14 @@ class SelectDatasetsCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
+            run_filters = RunFilters(
+                max_run_size=args.max_run_size,
+                min_spots=args.min_spots,
+                max_spots=args.max_spots,
+                platform=args.platform,
+            )
             metadata_file = None
-            if args.metadata_column:
+            if args.metadata_column or run_filters.active():
                 metadata_file = resolve_metadata_table(args.metadata_file)
 
             registry = load_registry(args.registry)
@@ -140,6 +197,7 @@ class SelectDatasetsCommand(BaseCommand):
                 exclude=exclude,
                 genome_ids=args.genome_ids,
                 require=args.require,
+                run_filters=run_filters,
             )
             accessions = [accession for accession, _, _ in ranked]
 
@@ -186,6 +244,10 @@ class SelectDatasetsCommand(BaseCommand):
                     "genome_ids": args.genome_ids,
                     "skip_excluded": args.skip_excluded,
                     "skip_downloaded": args.skip_downloaded,
+                    "max_run_size": args.max_run_size,
+                    "min_spots": args.min_spots,
+                    "max_spots": args.max_spots,
+                    "platform": args.platform,
                 },
                 output,
                 ranked=ranked_records,

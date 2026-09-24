@@ -464,6 +464,40 @@ class TestStatusWithRegistry:
             "metaquest select_datasets --genome-id GCF_A --threshold 0.25 --skip-excluded --output out.txt --top-n 7"
         )
 
+    def test_reselect_suggestion_reproduces_run_filters(self):
+        """A selection recorded with the run size, spot count and platform filters reselects with
+        the same four flags: the size as an integer byte count, the platform shell-quoted."""
+        command = StatusCommand._reselect_command(
+            {
+                "column": "GCF_A",
+                "threshold": 0.5,
+                "max_run_size": 500000000,
+                "min_spots": "1000",
+                "max_spots": 2000000,
+                "platform": "OXFORD NANOPORE",
+            },
+            "out.txt",
+        )
+        assert command == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded --output out.txt"
+            " --max-run-size 500000000 --min-spots 1000 --max-spots 2000000 --platform 'OXFORD NANOPORE'"
+        )
+        assert shlex.split(command)[-2:] == ["--platform", "OXFORD NANOPORE"]
+
+    def test_reselect_suggestion_keeps_min_spots_zero(self):
+        """--min-spots 0 is a valid flag (it drops runs with no spot count), so it is reproduced."""
+        command = StatusCommand._reselect_command({"column": "GCF_A", "min_spots": 0}, "out.txt")
+        assert command.endswith(" --min-spots 0")
+
+    def test_reselect_command_warns_on_malformed_max_run_size(self, caplog):
+        with caplog.at_level("WARNING"):
+            command = StatusCommand._reselect_command(
+                {"column": "GCF_A", "max_run_size": "big; rm -rf ~", "max_spots": -3}, "out.txt"
+            )
+        assert "Recorded max_run_size 'big; rm -rf ~'" in caplog.text
+        assert "Recorded max_spots -3" in caplog.text
+        assert "--max-run-size" not in command and "--max-spots" not in command and "rm -rf" not in command
+
     def test_reselect_suggestion_reproduces_metadata_filter_top_n_and_table(self, tmp_path, monkeypatch):
         """A selection made with a metadata filter, a top-N cap and a non-default containment
         table must reselect the same way: dropping any of those would reproduce a different,

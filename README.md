@@ -307,7 +307,7 @@ match CSVs always keep every hit.
 `status --next` lists a runnable `download_sra` command for accessions ready to download; for
 accessions still selected under a `select_datasets --no-skip-excluded` run, it instead prints a
 `select_datasets ... --skip-excluded` command (reproducing that run's genome, threshold, metadata and
-top-N criteria) so rerunning it drops the excluded accessions from the selection file first.
+top-N and run filter criteria) so rerunning it drops the excluded accessions from the selection file first.
 
 Commit `metaquest_registry.json` with your project if you want the decisions to travel with the
 results.
@@ -483,6 +483,8 @@ metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
 metaquest select_datasets --threshold 0.9 --top-n 20 --output accessions.txt
 metaquest select_datasets --genome-ids GCF_000008025.1 GCF_000006945.2 --require all --threshold 0.5 \
     --output accessions.txt
+metaquest select_datasets --threshold 0.5 --max-run-size 2G --min-spots 1000000 --platform ILLUMINA \
+    --output accessions.txt
 ```
 
 `--parsed-containment` names the input table (default `parsed_containment.txt`). `--genome-id` ranks on
@@ -491,13 +493,21 @@ together instead, with `--require any`/`all` deciding whether one or every liste
 threshold. `--top-n N` keeps only the N accessions with the highest containment after every other filter
 is applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
 is given), and `--skip-downloaded` additionally drops accessions the registry already records as
-downloaded, useful when re-running selection on an expanded search. `select_datasets` has no filter on
-dataset size; use `sra_info` beforehand (see "Downloading reads" below) to see sizes. `--no-record`
+downloaded, useful when re-running selection on an expanded search. `--no-record`
 still writes the output file and logs the counts, but does not record the selection in the registry, so
 `status` is left unchanged; use it for an exploratory run that should not redefine the target list.
 Because `status --next` points `download_sra` at the recorded selection's file, `--no-record` refuses to
 overwrite a file that a recorded selection names (including the default `accessions.txt`); give it an
 `--output` that names a scratch file instead.
+
+`--max-run-size BYTES` (a byte count; suffixes K, M, G and T are powers of 10, so `500M` is 500000000
+bytes), `--min-spots N`, `--max-spots N` and `--platform NAME` (case-insensitive, e.g. `ILLUMINA`) filter
+on the `Run_Size`, `Run_Total_Spots` and `Platform` columns of the NCBI metadata table (`metadata_table.txt`
+from `parse_metadata`, found automatically, or `--metadata-file`). They apply after the threshold,
+exclusions and the metadata filter and before `--top-n`. A run absent from the table or without a value in
+the filtered column is dropped, since the bound cannot be checked for it, and the log counts such runs.
+Branchwater-derived tables carry none of these columns; the filter is then skipped with a warning. The
+log also reports the summed size of the selected runs.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see
