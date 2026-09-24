@@ -289,7 +289,11 @@ metaquest status --next                      # which commands would advance the 
 metaquest status --reconcile                 # record files removed by hand, register untracked work
 metaquest status --export-tsv registry       # registry_datasets.tsv and registry_extractions.tsv
 metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"
+metaquest results_table --output results.tsv
 ```
+
+`results_table` writes one row per screened accession and genome, joining containment, selection,
+exclusion, download, run size, mapped reads, reference coverage and assembly statistics.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
 and threshold; pass `--force` to redo them.

@@ -1008,3 +1008,22 @@ class TestScannersIgnoreHiddenEntries:
 
         assert "GCF_1" in ids
         assert not any(genome_id.startswith(".") for genome_id in ids)
+
+
+class TestRecordExport:
+    def test_record_export_under_project_exports(self, tmp_path):
+        path = tmp_path / "metaquest_registry.json"
+        r = reg.load_registry(path)
+        r.project = {"id": "p1", "name": "demo"}
+        reg.record_export(r, "results_table", tmp_path / "out" / "results.tsv", {"rows": 3})
+        reg.save_registry(r)
+        loaded = reg.load_registry(path)
+        export = loaded.project["exports"]["results_table"]
+        assert export["output"] == "out/results.tsv"
+        assert export["summary"] == {"rows": 3}
+        assert export["date"]
+        assert loaded.project["id"] == "p1"
+
+    def test_to_int_or_none_is_public(self):
+        assert reg.to_int_or_none("12") == 12
+        assert reg.to_int_or_none("1.2G") is None

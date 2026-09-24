@@ -241,7 +241,11 @@ metaquest status --init                       # build the registry for a project
 metaquest status --reconcile                  # record files removed by hand, register untracked work
 metaquest status --export-tsv registry        # registry_datasets.tsv and registry_extractions.tsv
 metaquest status --json                       # the same report for scripts
+metaquest results_table --output results.tsv  # one row per accession and genome, the study's results
 ```
+
+`results_table` joins the registry with the parsed containment table into one row per screened
+accession and genome, from containment through read mapping, reference coverage and assembly.
 
 Presence is always re-checked on disk, so a folder deleted by hand shows up as missing rather than done.
 Decisions and provenance (why a dataset was selected or excluded, when it was downloaded, how many

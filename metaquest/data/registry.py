@@ -554,6 +554,10 @@ def _to_int_or_none(value: Any) -> Optional[int]:
         return None
 
 
+# Public name for callers outside this module (e.g. the results table).
+to_int_or_none = _to_int_or_none
+
+
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
     record: Dict[str, Any] = {"xml": _project_relative(xml_path, project_root(registry)), "date": _now()}
     for key in (
@@ -576,6 +580,19 @@ def record_analysis(
     registry: Registry, accession: str, analysis: str, output: Union[str, Path], summary: Dict[str, Any]
 ) -> None:
     upsert_dataset(registry, accession).setdefault("analyses", {})[analysis] = {
+        "date": _now(),
+        "output": _project_relative(output, project_root(registry)),
+        "summary": dict(summary),
+    }
+
+
+def record_export(registry: Registry, name: str, output: Union[str, Path], summary: Dict[str, Any]) -> None:
+    """Record a project-level export (e.g. the results table) under ``project["exports"][name]``.
+
+    Only the latest run of each export is kept: its date, the project-relative output path
+    and a summary of what it contained.
+    """
+    registry.project.setdefault("exports", {})[name] = {
         "date": _now(),
         "output": _project_relative(output, project_root(registry)),
         "summary": dict(summary),

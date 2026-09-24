@@ -210,7 +210,9 @@ class StoreInitCommand(BaseCommand):
                 created = existing_project.get("created") or _now()
                 name = args.project_name or cwd.name
 
+                # Keys store_init does not own (e.g. "exports" from results_table) are kept.
                 registry.project = {
+                    **existing_project,
                     "id": project_id,
                     "name": name,
                     "path": str(cwd.resolve()),

@@ -25,7 +25,7 @@ from metaquest.cli.commands.store import (
     StoreVerifyCommand,
 )
 from metaquest.core.constants import STORE_ENV
-from metaquest.data.registry import load_registry
+from metaquest.data.registry import load_registry, save_registry
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
@@ -235,6 +235,22 @@ class TestStoreInitCommand:
 
         registry = load_registry(project_dir / "metaquest_registry.json")
         assert registry.project["name"] == "my-project"
+
+    def test_execute_keeps_recorded_exports(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry = load_registry(project_dir / "metaquest_registry.json")
+        registry.project = {"exports": {"results_table": {"output": "results.tsv", "summary": {"rows": 1}}}}
+        save_registry(registry)
+
+        rc = StoreInitCommand().execute(_init_args(root, project_dir))
+        assert rc == 0
+
+        registry = load_registry(project_dir / "metaquest_registry.json")
+        assert registry.project["exports"]["results_table"]["output"] == "results.tsv"
+        assert registry.project["id"]
 
     def test_execute_keeps_project_id_on_second_run(self, tmp_path, monkeypatch):
         root = tmp_path / "store"
