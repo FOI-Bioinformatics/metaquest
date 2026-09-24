@@ -162,31 +162,39 @@ class SRAMetadataClient:
         }
 
         fetch_response = self._make_request(fetch_url, params)
-        # Restrict the result to the runs this batch actually asked for: one matched
-        # EXPERIMENT can bundle other RUNs (e.g. other lanes/replicates of the same
-        # experiment) that the caller never requested.
+        # Restrict the result to packages this batch actually asked for: eSearch can match an
+        # accession at any level (run, experiment, study, sample), and the matching efetch
+        # package for one requested run can bundle other runs (e.g. other lanes/replicates of
+        # the same experiment) alongside it, which are kept too, not dropped.
         return self._parse_sra_xml(fetch_response, requested=set(accessions))
 
     def _parse_sra_xml(self, xml_content: str, requested: Optional[Set[str]] = None) -> Dict[str, SRADatasetInfo]:
         """Parse SRA XML response to extract metadata, one entry per RUN accession.
 
-        ``requested``, when given, is the set of accessions the caller actually asked for;
-        a RUN whose accession is not in it is dropped, since one matched EXPERIMENT_PACKAGE
-        can bundle other RUNs alongside the one requested. Called directly with no
-        ``requested`` set (a script, a REPL, or a test working with raw XML), every RUN in
-        the package is returned, matching the historical behaviour.
+        ``requested``, when given, is the set of accessions the caller actually asked for.
+        Filtering happens per EXPERIMENT_PACKAGE, not per RUN: a package is kept (every RUN
+        in it returned) when any requested accession matches, case-insensitively, that
+        package's EXPERIMENT, STUDY or SAMPLE accession, or any of its RUN accessions; a
+        package matching none of those is dropped entirely. A request list may reasonably
+        hold an accession from any of those levels (nothing about how it is built rules out
+        an experiment, study or sample accession alongside RUN accessions), and one package
+        can bundle several RUNs (e.g. other lanes/replicates of the same experiment) that a
+        RUN-only match would otherwise have dropped even though the package was asked for.
+        Called directly with no ``requested`` set (a script, a REPL, or a test working with
+        raw XML), every RUN in every package is returned, matching the historical behaviour.
         """
         try:
             import xml.etree.ElementTree as ET
 
             root = ET.fromstring(xml_content)
             results = {}
+            requested_upper = {r.upper() for r in requested} if requested is not None else None
 
             for package in root.findall(".//EXPERIMENT_PACKAGE"):
+                if requested_upper is not None and not self._package_matches_requested(package, requested_upper):
+                    continue
                 try:
                     for info in self._extract_dataset_info(package):
-                        if requested is not None and info.accession not in requested:
-                            continue
                         results[info.accession] = info
                 except Exception as e:
                     logger.warning(f"Failed to parse dataset package: {e}")
@@ -196,6 +204,27 @@ class SRAMetadataClient:
         except Exception as e:
             logger.error(f"Failed to parse SRA XML: {e}")
             return {}
+
+    @staticmethod
+    def _package_matches_requested(package, requested_upper: Set[str]) -> bool:
+        """True when this EXPERIMENT_PACKAGE's EXPERIMENT, STUDY or SAMPLE accession, or any
+        of its RUN accessions, is in ``requested_upper`` (already uppercased).
+
+        Comparison is case-insensitive on this side too, since an accession's own casing in
+        the XML is not guaranteed to match how a caller wrote it.
+        """
+        candidates = []
+        experiment = package.find(".//EXPERIMENT")
+        if experiment is not None:
+            candidates.append(experiment.get("accession", ""))
+        study = package.find(".//STUDY")
+        if study is not None:
+            candidates.append(study.get("accession", ""))
+        sample = package.find(".//SAMPLE")
+        if sample is not None:
+            candidates.append(sample.get("accession", ""))
+        candidates.extend(run.get("accession", "") for run in package.findall(".//RUN_SET/RUN"))
+        return any(candidate and candidate.upper() in requested_upper for candidate in candidates)
 
     def _extract_platform(self, experiment) -> Tuple[str, str]:
         """Return (platform, instrument) from the first PLATFORM child of an experiment."""

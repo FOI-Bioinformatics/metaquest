@@ -899,13 +899,39 @@ def test_parse_real_efetch_shape_reports_runs():
     assert abs(run.avg_length - 300.0) < 0.01
 
 
-def test_parse_sra_xml_requested_filters_to_only_those_runs():
-    """A caller that knows which accessions it asked for (e.g. _fetch_batch_metadata, which
-    passes its own batch) does not get back a run it never requested, even when NCBI's efetch
-    package for the matching experiment bundles other runs alongside it."""
+def test_parse_sra_xml_requested_one_run_of_a_shared_package_keeps_its_sibling_run():
+    """SRR100 and SRR101 sit in the same EXPERIMENT_PACKAGE (two lanes/runs of one
+    experiment). Filtering happens at the package level, not per RUN: a request naming only
+    SRR100 is a request for that package, so its sibling run SRR101 comes back too, rather
+    than being dropped as "not requested". A request list may also legitimately hold an
+    experiment, study or sample accession instead of a RUN accession (nothing about
+    --accessions-file rules that out); per-RUN filtering would silently return nothing at all
+    for such a request, which is the regression this rule avoids."""
     client = SRAMetadataClient(email="a@b.c")
     results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRR100"})
-    assert set(results) == {"SRR100"}
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_requested_experiment_accession_keeps_whole_package():
+    """Requesting a package's EXPERIMENT (SRX) accession is as valid as naming one of its
+    RUNs directly; every RUN in that package is returned."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRX100"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_requested_study_accession_keeps_whole_package():
+    """Requesting a package's STUDY (SRP) accession likewise keeps every RUN in it."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRP1"})
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_parse_sra_xml_requested_matches_case_insensitively():
+    """A lowercase (or any-case) requested accession still matches the XML's own casing."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"srr100"})
+    assert set(results) == {"SRR100", "SRR101"}
 
 
 def test_parse_sra_xml_without_requested_keeps_every_run():
@@ -917,15 +943,51 @@ def test_parse_sra_xml_without_requested_keeps_every_run():
     assert set(results) == {"SRR100", "SRR101"}
 
 
+XML_TWO_PACKAGES = """<?xml version="1.0" encoding="UTF-8"?>
+<EXPERIMENT_PACKAGE_SET>
+<EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX100" alias="e"><TITLE>gut sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA100" received="2023-03-01"/>
+<STUDY accession="SRP1"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA1</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS1"><SAMPLE_NAME><SCIENTIFIC_NAME>gut metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR100" total_spots="4866463" total_bases="1459938900" size="482592813"
+published="2023-03-23"/></RUN_SET>
+</EXPERIMENT_PACKAGE>
+<EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX200" alias="e2"><TITLE>soil sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA200" received="2023-04-01"/>
+<STUDY accession="SRP2"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA2</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS2"><SAMPLE_NAME><SCIENTIFIC_NAME>soil metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR200" total_spots="1000" total_bases="150000" size="100000"
+published="2023-04-02"/></RUN_SET>
+</EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>"""
+
+
+def test_parse_sra_xml_requested_excludes_runs_from_a_different_package():
+    """SRR100 and SRR200 sit in different EXPERIMENT_PACKAGEs (different experiments);
+    requesting only SRR100 does not pull in SRR200's package, unlike the shared-package case
+    above."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"SRR100"})
+    assert set(results) == {"SRR100"}
+
+
 def test_fetch_batch_metadata_filters_to_the_requested_batch():
-    """sra_info's underlying batch fetch must not surface a RUN the caller never asked for,
-    even when NCBI's efetch response for a matched experiment bundles other runs alongside
-    the requested one."""
+    """sra_info's underlying batch fetch must not surface a RUN from a package the caller
+    never asked for, even when NCBI's efetch response for the batch bundles another
+    experiment's package alongside the requested one."""
     client = SRAMetadataClient(email="a@b.c")
     mock_search_response = json.dumps({"esearchresult": {"idlist": ["100"]}})
 
     with patch.object(client, "_make_request") as mock_request:
-        mock_request.side_effect = [mock_search_response, REAL_EFETCH_XML]
+        mock_request.side_effect = [mock_search_response, XML_TWO_PACKAGES]
         result = client._fetch_batch_metadata(["SRR100"])
 
     assert set(result) == {"SRR100"}
