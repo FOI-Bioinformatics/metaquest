@@ -107,6 +107,33 @@ def test_replay_out_of_order_keeps_latest_last_used_and_earliest_first_used(tmp_
     assert row["last_used"] == "2026-09-02T00:00:00+00:00"
 
 
+def test_replay_restores_an_explicit_last_used_from_a_single_line(tmp_path):
+    """A single journal line can itself carry a ``last_used`` later than its own ``at``
+    (e.g. a backfilled row touched more than once before the journal existed). Replay must
+    pass that ``last_used`` through to ``record_usage`` rather than collapsing both bounds to
+    ``at``."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+    journal.append_usage(
+        paths,
+        "SRR1",
+        "pid1",
+        "",
+        "linked",
+        "",
+        at="2026-09-01T00:00:00+00:00",
+        last_used="2026-09-03T00:00:00+00:00",
+    )
+
+    with catalog_write(paths) as c:
+        journal.replay(paths, c)
+        row = c.conn.execute("SELECT first_used, last_used FROM usage WHERE accession='SRR1'").fetchone()
+
+    assert row["first_used"] == "2026-09-01T00:00:00+00:00"
+    assert row["last_used"] == "2026-09-03T00:00:00+00:00"
+
+
 def test_catalog_write_backfills_a_pre_journal_store_once(tmp_path):
     """A pre-journal store's ``projects``/``usage`` rows are copied into the journal the first
     time ``catalog_write`` opens it afterwards (``catalog_write`` calls ``backfill_from_catalog``

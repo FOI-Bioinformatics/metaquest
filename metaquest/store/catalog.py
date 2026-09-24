@@ -400,9 +400,10 @@ class Catalog:
             INSERT INTO usage (accession, project_id, genome_id, stage, first_used, last_used, detail)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(accession, project_id, genome_id, stage) DO UPDATE SET
-                first_used=min(first_used, excluded.first_used),
-                last_used=max(last_used, excluded.last_used),
-                detail=CASE WHEN excluded.last_used >= last_used THEN excluded.detail ELSE detail END
+                first_used=min(coalesce(first_used, excluded.first_used), excluded.first_used),
+                last_used=max(coalesce(last_used, excluded.last_used), excluded.last_used),
+                detail=CASE WHEN last_used IS NULL OR excluded.last_used >= last_used
+                       THEN excluded.detail ELSE detail END
             """,
             (accession, project_id, genome_id, stage, now, latest, detail),
         )

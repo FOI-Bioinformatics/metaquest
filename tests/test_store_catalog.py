@@ -151,6 +151,35 @@ def test_record_usage_with_explicit_at_keeps_earliest_first_used_latest_last_use
     assert row["last_used"] == "2026-09-02T00:00:00+00:00"
 
 
+def test_record_usage_updates_a_hand_edited_row_with_null_dates(paths):
+    """first_used/last_used are nullable; SQLite's scalar min()/max() return NULL when either
+    side is NULL, so a row with a NULL date (e.g. hand-edited, or migrated from an older
+    schema) would never advance past NULL without coalescing against the incoming value.
+    record_usage must still set both dates and refresh detail for such a row."""
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+        catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
+        catalog.upsert_dataset(_sidecar())
+        catalog._conn.execute(
+            "INSERT INTO usage (accession, project_id, genome_id, stage, first_used, last_used, detail) "
+            "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
+            ("SRR1", "proj1", "wMel", "downloaded", "stale"),
+        )
+
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", detail="fresh", at="2026-09-05T00:00:00+00:00")
+
+        row = dict(
+            catalog._conn.execute(
+                "SELECT * FROM usage WHERE accession=? AND project_id=? AND genome_id=? AND stage=?",
+                ("SRR1", "proj1", "wMel", "downloaded"),
+            ).fetchone()
+        )
+
+    assert row["first_used"] == "2026-09-05T00:00:00+00:00"
+    assert row["last_used"] == "2026-09-05T00:00:00+00:00"
+    assert row["detail"] == "fresh"
+
+
 def test_record_usage_inserts_placeholder_dataset_when_missing(paths):
     with Catalog(paths, create=True) as catalog:
         catalog.migrate()
