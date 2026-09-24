@@ -1259,6 +1259,38 @@ class TestRealBackendInterface:
 
 
 class TestHonestExits:
+    def test_profile_quality_returns_1_without_accession_source(self, tmp_path):
+        """Neither --accession nor --accessions-file given must fail cleanly at the execute()
+        level (the ValidationError from _resolve_accessions caught by execute's own
+        except-Exception, not raised through to the caller) rather than crashing on
+        open(None)."""
+        args = Namespace(
+            accession=None,
+            accessions_file=None,
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "output"),
+            detailed_reports=False,
+            include_contamination=False,
+            summary_only=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+        assert SRAQualityProfileCommand().execute(args) == 1
+
+    def test_dashboard_returns_1_without_accession_source(self, tmp_path):
+        """Neither --accessions-file nor --quality-profiles given must fail cleanly at the
+        execute() level, same as the profile-quality command above."""
+        args = argparse.Namespace(
+            accessions_file=None,
+            quality_profiles=None,
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "dash"),
+            title="t",
+            dashboard_type="quality",
+            no_open=True,
+        )
+        assert SRAInteractiveDashboardCommand().execute(args) == 1
+
     def test_compare_returns_1_without_fastq(self, tmp_path):
         from metaquest.cli.commands.sra_intelligent import SRAComparativeAnalysisCommand
 

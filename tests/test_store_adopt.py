@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.store.adopt import adopt
+from metaquest.store.adopt import _folder_bytes, adopt
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, lock_path, sidecar_path, sra_dir
 from metaquest.store.sidecar import build_sidecar, read_sidecar, write_sidecar
@@ -538,6 +538,27 @@ class TestAdoptIgnoresAppleDouble:
         assert [f["name"] for f in sc.files] == ["SRR1_1.fastq.gz"]
 
 
+class TestFolderBytes:
+    """``_folder_bytes`` feeds ``_has_room_for``'s free-space check; over-counting a hidden
+    directory's contents would make adoption refuse a folder that actually fits, and
+    under-counting (the bug fixed here) would let it start staging a folder that does not."""
+
+    def test_ignores_files_inside_a_hidden_directory_not_only_hidden_file_names(self, tmp_path):
+        """Before this fix, ``_folder_bytes`` only skipped a file whose own name starts with
+        a dot; a plainly-named file sitting inside a hidden directory (e.g. a `.snakemake/`
+        work folder some pipelines leave under an accession's FASTQ directory) was still
+        counted. Regression test for that: only the visible top-level file's 100 bytes
+        should count, not the 50 bytes sitting inside `.snakemake/`."""
+        folder = tmp_path / "SRR1"
+        folder.mkdir()
+        (folder / "visible.fastq").write_bytes(b"x" * 100)
+        hidden_dir = folder / ".snakemake"
+        hidden_dir.mkdir()
+        (hidden_dir / "metadata.txt").write_bytes(b"y" * 50)
+
+        assert _folder_bytes(folder) == 100
+
+
 class TestAdoptSafety:
     def test_empty_folder_is_not_adopted(self, tmp_path):
         paths = init_store(tmp_path / "store")
@@ -548,6 +569,23 @@ class TestAdoptSafety:
         assert report.empty == ["SRR9"]
         assert not (paths.sra / "SRR9").exists()
         assert (project / "SRR9").is_dir() and not (project / "SRR9").is_symlink()
+
+    def test_hidden_files_only_folder_reaches_empty(self, tmp_path):
+        """An accession directory whose own name is not hidden, but which holds only hidden
+        files (a stray .DS_Store, an AppleDouble sidecar), has no usable FASTQ file: it must
+        be reported in ``empty`` exactly like a folder with nothing in it at all, not adopted
+        as if the hidden files counted."""
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR9"
+        acc.mkdir(parents=True)
+        (acc / ".DS_Store").write_bytes(b"\x00\x01\x02")
+        (acc / "._SRR9_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.adopted == []
+        assert report.empty == ["SRR9"]
+        assert not (paths.sra / "SRR9").exists()
+        assert (acc / ".DS_Store").is_file()  # left exactly as it was
 
     def test_failed_staged_copy_keeps_project_folder(self, tmp_path, monkeypatch):
         paths = init_store(tmp_path / "store")

@@ -95,6 +95,43 @@ class TestStoreGcCommand:
         payload = json.loads(out)
         assert "records no project at all" in payload["error"]
 
+    def test_dry_run_refusal_under_no_project_returns_1_and_touches_nothing(self, tmp_path, capsys):
+        """--dry-run must not bypass the no-project refusal: the refusal is checked before
+        candidates are even built, so it applies whether or not --yes would have followed."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(_sidecar("SRR1"))  # no project recorded at all
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert out == ""  # no --json: the refusal is only logged, nothing on stdout
+        assert acc_dir.is_dir()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
+    def test_dry_run_and_json_refusal_prints_an_error_object(self, tmp_path, capsys):
+        """--dry-run combined with --json under the same no-project refusal must still print
+        the JSON error object (not an empty report) and remove nothing."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(_sidecar("SRR1"))  # no project recorded at all
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=True, json=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        payload = json.loads(out)
+        assert "records no project at all" in payload["error"]
+        assert acc_dir.is_dir()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
     def test_unused_dataset_listed_with_bytes(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)

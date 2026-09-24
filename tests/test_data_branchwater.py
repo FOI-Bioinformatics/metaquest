@@ -246,6 +246,29 @@ class TestExtractMetadataFromBranchwater:
         assert "Run_ID" in result.columns
         assert output_file.exists()
 
+    def test_unreadable_file_is_reported_and_summary_is_warning(self, tmp_path, caplog):
+        """A genuinely unreadable file (not a mocked exception) must be named in ``errors``
+        and must not stop the other file in the same folder from being extracted; with at
+        least one error, the "Processed N files with M errors" summary line must log at
+        WARNING, not INFO."""
+        import logging
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        output_file = tmp_path / "metadata.csv"
+
+        (source_dir / "good.csv").write_text("acc,containment,organism\nERR123,0.95,E. coli\n")
+        (source_dir / "bad.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
+
+        errors: list = []
+        with caplog.at_level(logging.WARNING):
+            result = extract_metadata_from_branchwater(source_dir, output_file, errors=errors)
+
+        assert errors == ["bad.csv"]
+        assert list(result["Run_ID"]) == ["ERR123"]
+        summary_records = [r for r in caplog.records if "Processed" in r.message and "errors" in r.message]
+        assert summary_records and summary_records[0].levelno == logging.WARNING
+
     def test_extract_metadata_api_shaped_csv_warns(self, tmp_path, caplog):
         """A Branchwater-API CSV (acc/containment/cANI only) has no SRA metadata to extract;
         warn and point at download_metadata rather than silently writing a near-empty table."""
@@ -541,6 +564,34 @@ class TestParseContainmentData:
         """Test with invalid matches folder."""
         with pytest.raises(ValidationError):
             parse_containment_data("/nonexistent", "output.txt", "summary.txt")
+
+    def test_unreadable_file_is_reported_and_summary_is_warning(self, tmp_path, caplog):
+        """A genuinely unreadable match file (not a mocked exception) must be named in
+        ``errors`` and must not stop the other genome's file in the same folder from being
+        parsed; with at least one error, the "Processed N files with M errors" summary line
+        must log at WARNING, not INFO."""
+        import logging
+
+        matches_dir = tmp_path / "matches"
+        matches_dir.mkdir()
+        output_file = tmp_path / "parsed.txt"
+        summary_file = tmp_path / "summary.txt"
+
+        (matches_dir / "good_genome.csv").write_text(
+            "acc,containment,cANI,biosample,bioproject,assay_type,organism,geo_loc_name_country_calc,lat_lon\n"
+            "SRR1,0.9,0.98,SAMN1,PRJNA1,WGS,Salmonella enterica,USA,35.7N 100.2W\n"
+        )
+        (matches_dir / "bad_genome.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
+
+        errors: list = []
+        with caplog.at_level(logging.WARNING):
+            result = parse_containment_data(matches_dir, output_file, summary_file, errors=errors)
+
+        assert errors == ["bad_genome.csv"]
+        assert isinstance(result, ContainmentSummary)
+        assert "SRR1" in output_file.read_text()
+        summary_records = [r for r in caplog.records if "Processed" in r.message and "errors" in r.message]
+        assert summary_records and summary_records[0].levelno == logging.WARNING
 
 
 class TestBranchwaterIntegration:

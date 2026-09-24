@@ -1095,6 +1095,7 @@ class TestParseMetadataXml:
         path = tmp_path / "SRR1_metadata.xml"
         path.write_text(xml)
         fields = parse_metadata_xml(path)
+        assert fields["Experiment_Library_Name"] == "lib"
         assert fields["Experiment_Library_Strategy"] == "WGS"
         assert fields["Experiment_Library_Source"] == "METAGENOMIC"
         assert fields["Experiment_Library_Selection"] == "RANDOM"

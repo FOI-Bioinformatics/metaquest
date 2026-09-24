@@ -310,6 +310,86 @@ class TestSRAXMLParsing:
         assert result.layout == "SINGLE"
         assert result.spots == 500000
 
+    def test_extract_dataset_info_no_run_set_yields_one_record_keyed_by_experiment(self):
+        """A package with no RUN_SET/RUN element at all (nothing has been submitted to SRA
+        for this experiment yet, or the efetch response is trimmed) must still yield exactly
+        one record, keyed by the EXPERIMENT accession, with zeroed run-level numbers rather
+        than being silently dropped."""
+        import xml.etree.ElementTree as ET
+
+        xml_no_run_set = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE>
+            <EXPERIMENT accession="SRX777">
+                <TITLE>No runs yet</TITLE>
+                <PLATFORM>
+                    <ILLUMINA>
+                        <INSTRUMENT_MODEL>NovaSeq</INSTRUMENT_MODEL>
+                    </ILLUMINA>
+                </PLATFORM>
+                <DESIGN>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION>
+                        <LIBRARY_SOURCE>GENOMIC</LIBRARY_SOURCE>
+                        <LIBRARY_LAYOUT>
+                            <SINGLE/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                </DESIGN>
+            </EXPERIMENT>
+        </EXPERIMENT_PACKAGE>
+        """
+        package = ET.fromstring(xml_no_run_set)
+
+        results = self.client._extract_dataset_info(package)
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.accession == "SRX777"
+        assert result.spots == 0
+        assert result.bases == 0
+        assert result.avg_length == 0.0
+
+    def test_extract_dataset_info_run_without_accession_falls_back_to_experiment(self):
+        """A RUN element present but missing its own ``accession`` attribute (a malformed or
+        partial efetch record) must fall back to the EXPERIMENT accession rather than
+        yielding a record keyed by an empty string."""
+        import xml.etree.ElementTree as ET
+
+        xml_run_no_accession = """<?xml version="1.0"?>
+        <EXPERIMENT_PACKAGE>
+            <EXPERIMENT accession="SRX888">
+                <TITLE>Run missing its own accession</TITLE>
+                <PLATFORM>
+                    <ILLUMINA>
+                        <INSTRUMENT_MODEL>NovaSeq</INSTRUMENT_MODEL>
+                    </ILLUMINA>
+                </PLATFORM>
+                <DESIGN>
+                    <LIBRARY_DESCRIPTOR>
+                        <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                        <LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION>
+                        <LIBRARY_SOURCE>GENOMIC</LIBRARY_SOURCE>
+                        <LIBRARY_LAYOUT>
+                            <SINGLE/>
+                        </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                </DESIGN>
+            </EXPERIMENT>
+            <RUN_SET>
+                <RUN total_spots="1000" total_bases="150000" size="100000" published="2023-02-01"/>
+            </RUN_SET>
+        </EXPERIMENT_PACKAGE>
+        """
+        package = ET.fromstring(xml_run_no_accession)
+
+        results = self.client._extract_dataset_info(package)
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.accession == "SRX888"
+        assert result.spots == 1000
+
     # Note: Removed test_extract_dataset_info_exception_handling because
     # xml.etree.ElementTree.Element.find is immutable and cannot be patched
 

@@ -17,6 +17,7 @@ from metaquest.data.registry import (
     record_selection,
     registry_transaction,
     save_registry,
+    upsert_dataset,
 )
 
 
@@ -297,6 +298,40 @@ class TestStatusWithRegistry:
         # runnable reselect command (checked in test_reselect_suggestion_is_runnable).
         assert not any("sel_noskip.txt" in c for c in download_commands)
         assert any("select_datasets" in c and "--skip-excluded" in c for c in commands)
+
+    def test_mixed_skip_and_no_skip_selections_yield_both_a_download_and_a_reselect(self, tmp_path, monkeypatch):
+        """A registry holding both an ordinary (--skip-excluded) selection for one accession
+        and a --no-skip-excluded selection for another, each still to download, must surface
+        both kinds of next step at once: a direct download command for the ordinary
+        selection's output file, and a reselect suggestion for the --no-skip-excluded one.
+        Neither must swallow or replace the other.
+
+        SRR4's selection is written directly rather than through a second `record_selection`
+        call: that helper unselects anything selected earlier but absent from its own
+        `accessions` argument, which would otherwise clear SRR3's selection made just above."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg, ["SRR3"], {"skip_excluded": True, "column": "GCF_A", "threshold": 0.5}, "sel_normal.txt"
+            )
+            upsert_dataset(reg, "SRR4")["selection"] = {
+                "selected": True,
+                "date": "2026-01-01T00:00:00+00:00",
+                "criteria": {"skip_excluded": False, "column": "GCF_B", "threshold": 0.3},
+                "output": "sel_noskip.txt",
+            }
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+
+        download_commands = [c for c in commands if c.startswith("metaquest download_sra")]
+        reselect_commands = [c for c in commands if c.startswith("metaquest select_datasets")]
+
+        assert any("sel_normal.txt" in c for c in download_commands)
+        assert len(reselect_commands) == 1
+        assert "sel_noskip.txt" in reselect_commands[0] and "--skip-excluded" in reselect_commands[0]
 
     def test_reselect_suggestion_is_runnable(self, tmp_path, monkeypatch):
         """The reselect suggestion for a --no-skip-excluded selection is not a placeholder: it

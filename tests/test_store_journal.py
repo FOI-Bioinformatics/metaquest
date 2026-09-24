@@ -33,6 +33,29 @@ def test_replay_restores_projects_and_usage_into_a_fresh_catalog(tmp_path):
         assert c.conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] == 1
 
 
+def test_replaying_the_journal_twice_is_idempotent(tmp_path):
+    """A second replay (e.g. a repeated ``store_reindex``) must not duplicate rows: the
+    catalogue's own upsert semantics (ON CONFLICT DO UPDATE for projects, DO UPDATE for the
+    unique (accession, project_id, genome_id, stage) usage key) make replaying the same
+    journal lines again a no-op on row counts, whichever catalogue it is replayed into."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.record_usage("SRR1", "pid1", "GCF_1", "downloaded", "first pass")
+    (paths.root / "catalog.sqlite").unlink()
+
+    with catalog_write(paths) as c:
+        first = journal.replay(paths, c)
+        second = journal.replay(paths, c)
+
+        assert first == (1, 1)
+        assert second == (1, 1)
+        assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+        assert c.conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] == 1
+        project_row = c.conn.execute("SELECT name FROM projects WHERE project_id = ?", ("pid1",)).fetchone()
+        assert project_row["name"] == "proj"
+
+
 def test_replay_without_journal_returns_zero(tmp_path):
     paths = init_store(tmp_path / "store")
     with catalog_write(paths) as c:

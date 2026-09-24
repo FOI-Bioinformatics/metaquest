@@ -247,11 +247,12 @@ def _finish_sidecar(
 
 
 def _folder_bytes(folder: Path) -> int:
-    """Total bytes of every file under ``folder``, skipping hidden names and anything that
+    """Total bytes of every file under ``folder``, skipping hidden names (including files
+    inside a hidden directory, not just hidden file names themselves) and anything that
     cannot be stat'ed."""
     total = 0
     for sub in folder.rglob("*"):
-        if is_hidden_name(sub.name):
+        if any(is_hidden_name(p) for p in sub.relative_to(folder).parts):
             continue
         try:
             if sub.is_file():
