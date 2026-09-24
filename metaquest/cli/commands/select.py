@@ -173,7 +173,9 @@ class SelectDatasetsCommand(BaseCommand):
                     # single --genome-id this falls back to when nothing was selected.
                     "column": ranked[0][1] if ranked else (args.genome_id or "max_containment"),
                     "threshold": args.threshold,
-                    "metadata_file": str(Path(args.metadata_file).resolve()) if args.metadata_file else None,
+                    "metadata_file": (
+                        str(Path(args.metadata_file).resolve()) if args.metadata_column and args.metadata_file else None
+                    ),
                     "metadata_column": args.metadata_column,
                     "metadata_value": args.metadata_value,
                     "table": str(args.parsed_containment),

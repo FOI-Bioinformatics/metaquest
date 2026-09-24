@@ -417,21 +417,26 @@ class TestStatusWithRegistry:
 
     def test_reselect_command_warns_on_unknown_require(self, caplog):
         """A recorded require value outside any/all is dropped from the suggested command and
-        logs a warning naming the bad value, instead of failing silently."""
+        logs a warning with its own wording (not "is not a number", which does not describe an
+        enum value), naming the bad value, instead of failing silently."""
         with caplog.at_level("WARNING"):
             command = StatusCommand._reselect_command({"genome_ids": ["GCF_A", "GCF_B"], "require": "maybe"}, "out.txt")
-        assert "require" in caplog.text and "maybe" in caplog.text
+        assert "Recorded require 'maybe' is not 'any' or 'all'; the suggested command omits --require" in caplog.text
         assert "--require" not in command
 
     def test_reselect_suggestion_includes_metadata_file(self, tmp_path, monkeypatch):
         """A selection recorded with --metadata-file must reproduce that flag on rerun, next
         to the metadata column/value it already reproduces, so the reselect actually rereads
-        the same metadata table rather than falling back to metadata table autodetection."""
+        the same metadata table rather than falling back to metadata table autodetection. The
+        path holds a space, so this also exercises that it is shell-quoted like the metadata
+        value already is (test_reselect_suggestion_quotes_values_with_spaces)."""
+        import shlex
+
         root = tmp_path
         _project_tree(root)
         monkeypatch.chdir(root)
         StatusCommand().execute(_status_args(root, init=True))
-        meta_path = str(root / "meta.txt")
+        meta_path = str(root / "my meta.txt")
         with registry_transaction(str(root / "metaquest_registry.json")) as reg:
             record_selection(
                 reg,
@@ -449,7 +454,7 @@ class TestStatusWithRegistry:
         steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
-        assert f"--metadata-file {meta_path}" in reselect
+        assert f"--metadata-file {shlex.quote(meta_path)}" in reselect
         assert "--metadata-column country --metadata-value Sweden" in reselect
 
     def test_reselect_suggestion_coerces_numeric_strings(self):

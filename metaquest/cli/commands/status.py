@@ -67,6 +67,11 @@ def _as_positive_int(value: Any) -> Optional[int]:
     return number if number > 0 else None
 
 
+def _warn_malformed(name: str, value: Any, reason: str) -> None:
+    """Warn that a recorded criteria value could not be used to build a reselect command."""
+    logger.warning("Recorded %s %r %s", name, value, reason)
+
+
 class StatusCommand(BaseCommand):
     """Command to report locally available data and the registry's per-accession stages."""
 
@@ -288,9 +293,7 @@ class StatusCommand(BaseCommand):
         raw_threshold = criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD)
         threshold = _as_float(raw_threshold)
         if threshold is None and raw_threshold is not None:
-            logger.warning(
-                "Recorded %s %r is not a number; the suggested command uses the default", "threshold", raw_threshold
-            )
+            _warn_malformed("threshold", raw_threshold, "is not a number; the suggested command uses the default")
         threshold_part = f" --threshold {threshold}" if threshold is not None else ""
         genome_ids = criteria.get("genome_ids")
         if genome_ids:
@@ -300,9 +303,7 @@ class StatusCommand(BaseCommand):
             if raw_require in ("any", "all"):
                 genome_part += f" --require {raw_require}"
             elif raw_require is not None:
-                logger.warning(
-                    "Recorded %s %r is not a number; the suggested command uses the default", "require", raw_require
-                )
+                _warn_malformed("require", raw_require, "is not 'any' or 'all'; the suggested command omits --require")
         else:
             column = criteria.get("column") or "max_containment"
             genome_part = f"--genome-id {shlex.quote(str(column))}"
@@ -326,7 +327,7 @@ class StatusCommand(BaseCommand):
         if top_n:
             command += f" --top-n {top_n}"
         elif raw_top_n is not None:
-            logger.warning("Recorded %s %r is not a number; the suggested command uses the default", "top_n", raw_top_n)
+            _warn_malformed("top_n", raw_top_n, "is not a number; the suggested command uses the default")
         table = criteria.get("table")
         if table and str(table) != DEFAULT_PARSED_CONTAINMENT_FILE:
             command += f" --parsed-containment {shlex.quote(str(table))}"

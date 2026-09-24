@@ -86,6 +86,22 @@ def test_selection_without_metadata_file_records_none(tmp_path, monkeypatch):
     assert data["datasets"]["SRR1"]["selection"]["criteria"]["metadata_file"] is None
 
 
+def test_selection_records_no_metadata_file_without_a_metadata_column(tmp_path, monkeypatch):
+    """--metadata-file without --metadata-column has no effect on the run (execute() only
+    resolves it when args.metadata_column is set), so it must not be recorded either: a
+    reselect command built from it would carry a --metadata-file flag that does nothing."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    meta = tmp_path / "meta.txt"
+    meta.write_text("\tcountry\nSRR1\tSweden\nSRR2\tNorway\n")
+    rc = SelectDatasetsCommand().execute(
+        _args(tmp_path, genome_id="GCF_A", threshold=0.5, registry=None, metadata_file=str(meta))
+    )
+    assert rc == 0
+    data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    assert data["datasets"]["SRR1"]["selection"]["criteria"]["metadata_file"] is None
+
+
 def test_no_record_leaves_registry_untouched(tmp_path, monkeypatch):
     """--no-record writes the output file but must not redefine the project's target list:
     a later, differently-thresholded --no-record run leaves the registry's selected set
