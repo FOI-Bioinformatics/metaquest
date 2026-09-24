@@ -77,6 +77,32 @@ def test_selection_records_resolved_metadata_file(tmp_path, monkeypatch):
     assert criteria["metadata_file"] == str(meta.resolve())
 
 
+def test_selection_records_autodetected_metadata_file(tmp_path, monkeypatch):
+    """When --metadata-file is not given but --metadata-column is, execute() autodetects the
+    default metadata table via resolve_metadata_table (see lines ~114-116); the recorded
+    criteria must carry that table's resolved path too, not just an explicit --metadata-file,
+    so a reselect built from the criteria does not depend on cwd-relative autodetection
+    happening again."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    meta = tmp_path / "metadata_table.txt"
+    meta.write_text("\tcountry\nSRR1\tSweden\nSRR2\tNorway\n")
+    rc = SelectDatasetsCommand().execute(
+        _args(
+            tmp_path,
+            genome_id="GCF_A",
+            threshold=0.5,
+            registry=None,
+            metadata_column="country",
+            metadata_value="Sweden",
+        )
+    )
+    assert rc == 0
+    data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    criteria = data["datasets"]["SRR1"]["selection"]["criteria"]
+    assert criteria["metadata_file"] == str(meta.resolve())
+
+
 def test_selection_without_metadata_file_records_none(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
