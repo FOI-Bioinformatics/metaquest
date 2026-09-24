@@ -79,6 +79,22 @@ class TestStoreGcCommand:
         rc = StoreGcCommand().execute(_gc_args(registry=str(project_dir / "metaquest_registry.json")))
         assert rc == 1
 
+    def test_json_refusal_prints_an_error_object(self, tmp_path, capsys):
+        """A refusal before --json can even build a report must still be visible on stdout as
+        JSON, not only logged, so a script driving store_gc --json can parse it."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(_sidecar("SRR1"))  # no project recorded at all
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        payload = json.loads(out)
+        assert "records no project at all" in payload["error"]
+
     def test_unused_dataset_listed_with_bytes(self, tmp_path, capsys):
         root = tmp_path / "store"
         paths = init_store(root)
@@ -547,6 +563,22 @@ class TestStoreGcAfterARebuildWithoutProjects:
         StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
         self._register_project(paths, tmp_path)
         assert self._flag(paths)
+
+        rc = StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+
+        assert rc == 0
+        assert self._flag(paths) is None
+
+    def test_empty_reindex_clears_a_stale_rebuilt_flag(self, tmp_path):
+        """Once every dataset is removed from disk, a reindex restores no project and finds no
+        datasets either; the flag must not survive as stale forever in that case."""
+        import shutil
+
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+        assert self._flag(paths)
+
+        shutil.rmtree(sra_dir(paths, "SRR1"))
 
         rc = StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
 

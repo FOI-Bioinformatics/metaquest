@@ -1,6 +1,10 @@
 import json
+import sqlite3
 
-from metaquest.store.catalog import catalog_write
+import pytest
+
+from metaquest.core.exceptions import DataAccessError
+from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store
 from metaquest.store import journal
 
@@ -94,3 +98,28 @@ def test_backfill_from_catalog_is_a_noop_on_an_empty_catalog(tmp_path):
     with catalog_write(paths) as c:
         assert journal.backfill_from_catalog(paths, c) == (0, 0)
     assert not (paths.journal / "projects.jsonl").exists()
+
+
+def test_backfill_sqlite_error_becomes_data_access_error(tmp_path, monkeypatch):
+    """backfill_from_catalog's own sqlite calls must be wrapped like every other catalogue
+    method: a raw sqlite3.Error must never reach the caller of catalog_write."""
+    paths = init_store(tmp_path / "store")
+    with Catalog(paths, create=True) as c:
+        c.migrate()
+        c.journal_enabled = False  # a pre-journal project: nothing appended yet
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.conn.commit()
+    assert not (paths.journal / "projects.jsonl").exists()
+
+    class _RaisingConn:
+        def execute(self, *args, **kwargs):
+            raise sqlite3.OperationalError("boom")
+
+    # sqlite3.Connection is a C extension type: its methods cannot be monkeypatched directly
+    # (setattr on an instance or the class both raise), so the ``conn`` property itself is
+    # patched to hand back a stand-in whose ``execute`` raises, same effect as if the real
+    # connection had failed mid-query.
+    monkeypatch.setattr(Catalog, "conn", property(lambda self: _RaisingConn()))
+    with Catalog(paths) as c:
+        with pytest.raises(DataAccessError):
+            journal.backfill_from_catalog(paths, c)

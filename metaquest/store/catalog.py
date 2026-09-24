@@ -316,13 +316,19 @@ class Catalog:
     # ---------------------------------------------------------------- projects
 
     @_wrap_sqlite_errors
-    def upsert_project(self, project_id: str, name: str, path: str, registry: str) -> None:
+    def upsert_project(
+        self, project_id: str, name: str, path: str, registry: str, hostname: Optional[str] = None
+    ) -> None:
         """Insert or update one project's row, keeping its original ``created`` timestamp.
 
         The row records the host that wrote it, so a shared store used from two machines can
-        say where a project it cannot see from here was last written.
+        say where a project it cannot see from here was last written. ``hostname`` defaults to
+        this machine (``socket.gethostname()``); ``journal.replay`` passes the host a journal
+        line actually recorded, so rebuilding a lost catalogue on a different machine does not
+        overwrite every project's real host with the rebuilding machine's.
         """
         now = _now()
+        host = hostname if hostname is not None else socket.gethostname()
         self.conn.execute(
             """
             INSERT INTO projects (project_id, name, path, registry, created, last_seen, hostname)
@@ -334,17 +340,25 @@ class Catalog:
                 last_seen=excluded.last_seen,
                 hostname=excluded.hostname
             """,
-            (project_id, name, path, registry, now, now, socket.gethostname()),
+            (project_id, name, path, registry, now, now, host),
         )
         if self.journal_enabled:
             from metaquest.store import journal
 
-            journal.append_project(self.paths, project_id, name, path, registry)
+            journal.append_project(self.paths, project_id, name, path, registry, hostname=host)
 
     # ------------------------------------------------------------------- usage
 
     @_wrap_sqlite_errors
-    def record_usage(self, accession: str, project_id: str, genome_id: str, stage: str, detail: str = "") -> None:
+    def record_usage(
+        self,
+        accession: str,
+        project_id: str,
+        genome_id: str,
+        stage: str,
+        detail: str = "",
+        at: Optional[str] = None,
+    ) -> None:
         """Record that ``project_id`` used ``accession`` (for ``genome_id``, at ``stage``).
 
         ``first_used`` is set once and kept on every later call for the same
@@ -355,6 +369,10 @@ class Catalog:
         inserted first so the foreign key from ``usage`` to ``datasets`` is
         satisfied; a later ``upsert_dataset`` or ``reindex`` fills it in properly.
 
+        ``at`` sets ``first_used``/``last_used`` to a specific timestamp instead of now;
+        ``journal.replay`` passes the journal line's own ``at`` so a rebuilt catalogue keeps
+        the date usage actually happened rather than the date it was replayed.
+
         Raises ``DataAccessError`` if ``project_id`` is not a known project (from
         ``upsert_project``); usage is never recorded against a fabricated project.
         """
@@ -362,7 +380,7 @@ class Catalog:
         if known is None:
             raise DataAccessError(f"Unknown project_id: {project_id}")
 
-        now = _now()
+        now = at or _now()
         genome_id = genome_id or ""
 
         self.conn.execute(
@@ -382,7 +400,7 @@ class Catalog:
         if self.journal_enabled:
             from metaquest.store import journal
 
-            journal.append_usage(self.paths, accession, project_id, genome_id, stage, detail)
+            journal.append_usage(self.paths, accession, project_id, genome_id, stage, detail, at=now)
 
     # ----------------------------------------------------------------- queries
 
