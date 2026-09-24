@@ -230,13 +230,14 @@ class GenomeDownloadCommand(BaseCommand):
             genome_paths = extract_and_organize(zip_path, output_dir)
             self.logger.info("Downloaded and extracted %d genome(s)", len(genome_paths))
 
-            with registry_transaction(args.registry) as reg:
-                for genome_id, path in genome_paths.items():
-                    # genome_download writes no manifest; keep one an earlier genome_prepare
-                    # recorded for this genome rather than blanking it on a --force redownload.
-                    earlier = (reg.genomes.get(genome_id) or {}).get("manifest")
-                    manifest = resolve_project_path(reg, earlier) if earlier else ""
-                    record_genome(reg, genome_id, path, manifest)
+            if genome_paths:
+                with registry_transaction(args.registry) as reg:
+                    for genome_id, path in genome_paths.items():
+                        # genome_download writes no manifest; keep one an earlier genome_prepare
+                        # recorded for this genome rather than blanking it on a --force redownload.
+                        earlier = (reg.genomes.get(genome_id) or {}).get("manifest")
+                        manifest = resolve_project_path(reg, earlier) if earlier else ""
+                        record_genome(reg, genome_id, path, manifest)
 
             return 0
         except MetaQuestError as e:

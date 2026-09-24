@@ -241,6 +241,33 @@ class TestGenomeDownloadCommand:
 
     @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_execute_with_no_extracted_genomes_leaves_registry_untouched(self, mock_download, mock_extract):
+        """When extract_and_organize returns nothing (e.g. the zip held no usable genome
+        files), no registry transaction should even open: there is nothing to record, so no
+        registry file should be created."""
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {}
+        cmd = GenomeDownloadCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_file = Path(tmpdir) / "metaquest_registry.json"
+            args = argparse.Namespace(
+                accessions=["GCF_000006945.2"],
+                accession_file=None,
+                species=None,
+                genus=None,
+                output_dir=tmpdir,
+                representative_only=True,
+                assembly_level=None,
+                force=False,
+                dry_run=False,
+                registry=str(registry_file),
+            )
+            result = cmd.execute(args)
+            assert result == 0
+            assert not registry_file.exists()
+
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
     def test_execute_with_accession_file(self, mock_download, mock_extract):
         mock_download.return_value = Path("genomes/download.zip")
         mock_extract.return_value = {"GCF_000006945.2": Path("genomes/GCF_000006945.2.fna.gz")}
