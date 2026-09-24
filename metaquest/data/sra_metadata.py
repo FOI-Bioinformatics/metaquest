@@ -174,8 +174,11 @@ class SRAMetadataClient:
         ``requested``, when given, is the set of accessions the caller actually asked for.
         Filtering happens per EXPERIMENT_PACKAGE, not per RUN: a package is kept (every RUN
         in it returned) when any requested accession matches, case-insensitively, that
-        package's EXPERIMENT, STUDY or SAMPLE accession, or any of its RUN accessions; a
-        package matching none of those is dropped entirely. A request list may reasonably
+        package's EXPERIMENT, STUDY or SAMPLE accession, any of its RUN accessions, or an
+        identifier listed under one of those elements (a BioProject or BioSample accession); a
+        package matching none of those is dropped. When a non-empty reply would be filtered
+        down to nothing, every package is kept and a WARNING is logged, so the caller sees the
+        runs that were returned rather than a false report that nothing could be fetched. A request list may reasonably
         hold an accession from any of those levels (nothing about how it is built rules out
         an experiment, study or sample accession alongside RUN accessions), and one package
         can bundle several RUNs (e.g. other lanes/replicates of the same experiment) that a
@@ -190,9 +193,15 @@ class SRAMetadataClient:
             results = {}
             requested_upper = {r.upper() for r in requested} if requested is not None else None
 
-            for package in root.findall(".//EXPERIMENT_PACKAGE"):
-                if requested_upper is not None and not self._package_matches_requested(package, requested_upper):
-                    continue
+            packages = root.findall(".//EXPERIMENT_PACKAGE")
+            if requested_upper is not None:
+                matched = [p for p in packages if self._package_matches_requested(p, requested_upper)]
+                if packages and not matched:
+                    logger.warning("requested accessions matched no package in the reply; listing every run returned")
+                else:
+                    packages = matched
+
+            for package in packages:
                 try:
                     for info in self._extract_dataset_info(package):
                         results[info.accession] = info
@@ -207,23 +216,24 @@ class SRAMetadataClient:
 
     @staticmethod
     def _package_matches_requested(package, requested_upper: Set[str]) -> bool:
-        """True when this EXPERIMENT_PACKAGE's EXPERIMENT, STUDY or SAMPLE accession, or any
-        of its RUN accessions, is in ``requested_upper`` (already uppercased).
+        """True when any accession this EXPERIMENT_PACKAGE carries is in ``requested_upper``
+        (already uppercased).
 
-        Comparison is case-insensitive on this side too, since an accession's own casing in
-        the XML is not guaranteed to match how a caller wrote it.
+        The accessions compared are the ``accession`` attribute of its EXPERIMENT, STUDY and
+        SAMPLE and of each RUN, plus the text of every IDENTIFIERS/PRIMARY_ID, EXTERNAL_ID and
+        SECONDARY_ID under those elements, which is where a BioProject (PRJNA...) or BioSample
+        (SAMN...) accession appears. Comparison is case-insensitive on this side too, since an
+        accession's own casing in the XML is not guaranteed to match how a caller wrote it.
         """
+        elements = [package.find(".//EXPERIMENT"), package.find(".//STUDY"), package.find(".//SAMPLE")]
+        elements.extend(package.findall(".//RUN_SET/RUN"))
         candidates = []
-        experiment = package.find(".//EXPERIMENT")
-        if experiment is not None:
-            candidates.append(experiment.get("accession", ""))
-        study = package.find(".//STUDY")
-        if study is not None:
-            candidates.append(study.get("accession", ""))
-        sample = package.find(".//SAMPLE")
-        if sample is not None:
-            candidates.append(sample.get("accession", ""))
-        candidates.extend(run.get("accession", "") for run in package.findall(".//RUN_SET/RUN"))
+        for element in elements:
+            if element is None:
+                continue
+            candidates.append(element.get("accession", ""))
+            for tag in ("PRIMARY_ID", "EXTERNAL_ID", "SECONDARY_ID"):
+                candidates.extend((node.text or "").strip() for node in element.findall(f"IDENTIFIERS/{tag}"))
         return any(candidate and candidate.upper() in requested_upper for candidate in candidates)
 
     def _extract_platform(self, experiment) -> Tuple[str, str]:

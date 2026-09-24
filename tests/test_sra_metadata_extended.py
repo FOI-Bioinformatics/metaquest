@@ -1043,7 +1043,9 @@ published="2023-03-23"/></RUN_SET>
 <PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
 <SUBMISSION accession="SRA200" received="2023-04-01"/>
 <STUDY accession="SRP2"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA2</EXTERNAL_ID></IDENTIFIERS></STUDY>
-<SAMPLE accession="SRS2"><SAMPLE_NAME><SCIENTIFIC_NAME>soil metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<SAMPLE accession="SRS2"><IDENTIFIERS><PRIMARY_ID>SRS2</PRIMARY_ID>
+<EXTERNAL_ID namespace="BioSample">SAMN2</EXTERNAL_ID></IDENTIFIERS>
+<SAMPLE_NAME><SCIENTIFIC_NAME>soil metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
 <RUN_SET><RUN accession="SRR200" total_spots="1000" total_bases="150000" size="100000"
 published="2023-04-02"/></RUN_SET>
 </EXPERIMENT_PACKAGE>
@@ -1057,6 +1059,35 @@ def test_parse_sra_xml_requested_excludes_runs_from_a_different_package():
     client = SRAMetadataClient(email="a@b.c")
     results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"SRR100"})
     assert set(results) == {"SRR100"}
+
+
+def test_parse_sra_xml_requested_bioproject_keeps_its_package():
+    """A BioProject accession is carried as an EXTERNAL_ID of the package's STUDY; a request
+    for it keeps that package and not the other one."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"PRJNA1"})
+    assert set(results) == {"SRR100"}
+
+
+def test_parse_sra_xml_requested_biosample_keeps_its_package():
+    """A BioSample accession is carried as an EXTERNAL_ID of the package's SAMPLE; matching is
+    case-insensitive like the other levels."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"samn2"})
+    assert set(results) == {"SRR200"}
+
+
+def test_parse_sra_xml_requested_matching_nothing_keeps_the_batch(caplog):
+    """When the requested accessions match no package of a non-empty reply, every run is
+    listed with a WARNING instead of reporting a false failure."""
+    client = SRAMetadataClient(email="a@b.c")
+    with caplog.at_level("WARNING"):
+        results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"nomatch"})
+    assert set(results) == {"SRR100", "SRR101"}
+    assert any(
+        "requested accessions matched no package in the reply; listing every run returned" in r.message
+        for r in caplog.records
+    )
 
 
 def test_fetch_batch_metadata_filters_to_the_requested_batch():
