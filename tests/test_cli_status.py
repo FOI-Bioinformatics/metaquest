@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import json
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -430,8 +431,6 @@ class TestStatusWithRegistry:
         the same metadata table rather than falling back to metadata table autodetection. The
         path holds a space, so this also exercises that it is shell-quoted like the metadata
         value already is (test_reselect_suggestion_quotes_values_with_spaces)."""
-        import shlex
-
         root = tmp_path
         _project_tree(root)
         monkeypatch.chdir(root)
