@@ -125,9 +125,10 @@ Store discovery rules for agents:
 4. **Journal replay for usage records**: sidecars record a dataset's own state but nothing about which
    projects used it; that lives only in the SQLite catalogue's `projects`/`usage` tables. `store_reindex`
    rebuilds the catalogue from sidecars and then replays `<data-root>/journal/*.jsonl` (append-only,
-   written by every `upsert_project`/`record_usage` call, each line stamped with the hostname that wrote
-   it and the time it was appended) to restore those tables. Code that adds a new way to record project
-   or usage data should append to the journal the same way, or `store_reindex` will silently lose it.
+   written by every `upsert_project`/`record_usage` call, each line stamped with the time it was
+   appended; a project line also carries the hostname that wrote it, a usage line does not) to restore
+   those tables. Code that adds a new way to record project or usage data should append to the journal
+   the same way, or `store_reindex` will silently lose it.
 5. **`rebuilt_without_projects` blocks `store_gc`**: when a `store_reindex` replay restores no project
    at all but the rebuilt catalogue still holds datasets, every dataset would look unused to `store_gc`
    until each project re-registers, so `store_reindex` sets this catalogue flag and `store_gc` refuses

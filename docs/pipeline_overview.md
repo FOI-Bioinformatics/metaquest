@@ -76,10 +76,12 @@ their reason in the registry and in `blacklist.txt`, and `download_sra` honours 
 flags. `--top-n` keeps only the highest-containment accessions after every other filter; excluded
 accessions are dropped by default (`--skip-excluded`) and `--skip-downloaded` also drops accessions the
 registry already records as downloaded. `select_datasets` has no filter on dataset size; `sra_info` (see
-[README](../README.md#downloading-reads)) reports sizes separately, before downloading, and lists only
-the runs belonging to the requested accessions (an SRR request shows that run; an SRX/SRS/SRP request
-shows every run in that package). `--no-record` writes `accessions.txt` and logs the counts without
-touching the registry, for an exploratory run that should not replace the recorded selection.
+[README](../README.md#downloading-reads)) reports sizes separately, before downloading. It filters per
+experiment package, not per run: it lists every run of each experiment package that a requested run,
+experiment, sample or study accession matches (including sibling lanes or replicates of the same
+experiment as a requested run), and drops runs of packages that match none of the requested accessions.
+`--no-record` writes `accessions.txt` and logs the counts without touching the registry, for an
+exploratory run that should not replace the recorded selection.
 
 ## 3. Download
 

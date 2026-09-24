@@ -487,9 +487,10 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 `--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`,
 `blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
-`docs/SRA_ENHANCED_FEATURES.md`. `sra_info` lists only the runs belonging to the accessions requested:
-an SRR request shows that run, and an SRX/SRS/SRP request shows every run in that experiment, sample or
-study package.
+`docs/SRA_ENHANCED_FEATURES.md`. `sra_info` filters per experiment package, not per run: it lists every
+run of each experiment package that a requested run, experiment, sample or study accession matches
+(including sibling lanes or replicates of the same experiment as a requested run), and drops runs of
+packages that match none of the requested accessions.
 
 By default, `download_sra` runs `prefetch` before `fasterq-dump` (`--no-prefetch` reverts to calling
 `fasterq-dump` directly) and gzip-compresses the resulting FASTQ files (`--no-compress` leaves them
