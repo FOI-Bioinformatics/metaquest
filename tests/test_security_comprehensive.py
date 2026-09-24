@@ -221,103 +221,94 @@ class TestParameterValidation:
         assert not missing, f"megahit allow-list is missing: {sorted(missing)}"
 
     def test_minimap2_flags_used_by_read_extraction_pass_validation(self, tmp_path):
-        """read_extraction.py has no standalone ``_minimap2_args`` builder (unlike
-        ``_megahit_args``); its minimap2 calls are literal argument lists inline in
-        ``build_index``, ``_run_minimap2``, and ``assembly_coverage``. This reproduces
-        those exact literals and runs them through the real validator, as a regression
-        guard for the same class of gap ``--tmp-dir`` fell into (audit deferred S7-2, Task
-        2 fix round 1). No gap currently exists for minimap2; this test documents that and
-        catches it if one is introduced.
+        """read_extraction.py's minimap2 calls go through ``_minimap2_index_args``
+        (``build_index``) and ``_minimap2_map_args`` (``_run_minimap2``, its FASTA-fallback
+        retry, and ``assembly_coverage``, all the same shape). Built with the real builders
+        and run through the real validator, not a mock, as a regression guard for the same
+        class of gap ``--tmp-dir`` fell into (audit deferred S7-2, Task 2 fix round 1): a
+        flag a builder emits but the allow-list rejects would otherwise pass every unit
+        test that mocks ``run_secure`` and only surface once minimap2 actually runs.
         """
+        from metaquest.data.read_extraction import _minimap2_index_args, _minimap2_map_args
+
         calls = [
             # build_index
-            ["-x", "sr", "-d", str(tmp_path / "idx.mmi"), str(tmp_path / "genome.fna")],
-            # _run_minimap2 (and its FASTA-fallback retry, which uses the same flags)
-            [
-                "-a",
-                "-x",
+            _minimap2_index_args("sr", tmp_path / "idx.mmi", tmp_path / "genome.fna"),
+            # _run_minimap2 against the prebuilt index
+            _minimap2_map_args(
                 "sr",
-                "-t",
-                "4",
-                "-o",
-                str(tmp_path / "out.sam"),
-                str(tmp_path / "ref.mmi"),
-                str(tmp_path / "r1.fastq.gz"),
-                str(tmp_path / "r2.fastq.gz"),
-            ],
+                4,
+                tmp_path / "out.sam",
+                tmp_path / "ref.mmi",
+                [tmp_path / "r1.fastq.gz", tmp_path / "r2.fastq.gz"],
+            ),
+            # _run_minimap2's FASTA-fallback retry (same shape, a FASTA in place of the index)
+            _minimap2_map_args(
+                "sr",
+                4,
+                tmp_path / "out.sam",
+                tmp_path / "genome.fna",
+                [tmp_path / "r1.fastq.gz", tmp_path / "r2.fastq.gz"],
+            ),
             # assembly_coverage
-            [
-                "-a",
-                "-x",
-                "sr",
-                "-t",
-                "4",
-                "-o",
-                str(tmp_path / "coverage.sam"),
-                str(tmp_path / "contigs.fa"),
-                str(tmp_path / "r1.fastq.gz"),
-            ],
+            _minimap2_map_args("sr", 4, tmp_path / "coverage.sam", tmp_path / "contigs.fa", [tmp_path / "r1.fastq.gz"]),
         ]
         for args in calls:
             SecureSubprocess._build_validated_command("minimap2", args)  # must not raise
 
+        flags_emitted = {a for call in calls for a in call if a.startswith("-")}
+        missing = flags_emitted - SecureSubprocess.SAFE_PARAMETERS["minimap2"]
+        assert not missing, f"minimap2 allow-list is missing: {sorted(missing)}"
+
     def test_samtools_flags_used_by_read_extraction_pass_validation(self, tmp_path):
-        """read_extraction.py has no standalone samtools argument builder; its calls are
-        literal argument lists inline in ``_count_records``, ``_filter_and_merge_bam``,
-        ``_export_mapped_fastq``, and ``assembly_coverage``. This reproduces those exact
-        literals and runs them through the real validator, as a regression guard for the
-        same class of gap ``--tmp-dir`` fell into (audit deferred S7-2, Task 2 fix round
-        1). No gap currently exists for samtools; this test documents that and catches it
-        if one is introduced.
+        """read_extraction.py's samtools calls go through ``_samtools_count_args``
+        (``_count_records``), ``_samtools_view_args`` (``_filter_and_merge_bam``'s
+        single-SAM and per-mate cases, and ``assembly_coverage``), ``_samtools_cat_args``
+        (``_filter_and_merge_bam``'s merge step) and ``_samtools_fastq_single_args``/
+        ``_samtools_fastq_paired_args`` (``_export_mapped_fastq``). Built with the real
+        builders and run through the real validator, not a mock, as a regression guard for
+        the same class of gap ``--tmp-dir`` fell into (audit deferred S7-2, Task 2 fix
+        round 1): a flag a builder emits but the allow-list rejects would otherwise pass
+        every unit test that mocks ``run_secure`` and only surface once samtools actually
+        runs.
         """
+        from metaquest.data.read_extraction import (
+            _samtools_cat_args,
+            _samtools_count_args,
+            _samtools_fastq_paired_args,
+            _samtools_fastq_single_args,
+            _samtools_view_args,
+        )
+
         calls = [
             # _count_records
-            ["view", "-c", "-F", "4", str(tmp_path / "x.sam")],
-            # _filter_and_merge_bam, with an explicit --min-mapq
-            [
-                "view",
-                "-b",
-                "-F",
-                "0x904",
-                "-q",
-                "20",
-                "-@",
-                "4",
-                "-o",
-                str(tmp_path / "x.bam"),
-                str(tmp_path / "x.sam"),
-            ],
-            ["cat", "-o", str(tmp_path / "merged.bam"), str(tmp_path / "a.bam"), str(tmp_path / "b.bam")],
+            _samtools_count_args(("-F", "4"), tmp_path / "x.sam"),
+            # _filter_and_merge_bam, single-SAM case, with an explicit --min-mapq
+            _samtools_view_args(["-F", "0x904", "-q", "20"], 4, tmp_path / "x.bam", tmp_path / "x.sam"),
+            # _filter_and_merge_bam, per-mate loop of the unequal-mates fallback
+            _samtools_view_args(["-F", "0x904"], 4, tmp_path / "x.mate1.bam", tmp_path / "x.mate1.sam"),
+            # _filter_and_merge_bam, merging the per-mate BAMs
+            _samtools_cat_args(tmp_path / "merged.bam", [tmp_path / "a.bam", tmp_path / "b.bam"]),
+            # _export_mapped_fastq, single-end output
+            _samtools_fastq_single_args(4, tmp_path / "o0.fastq.gz", tmp_path / "x.bam"),
             # _export_mapped_fastq, paired output
-            [
-                "fastq",
-                "-@",
-                "4",
-                "-1",
-                str(tmp_path / "o1.fastq.gz"),
-                "-2",
-                str(tmp_path / "o2.fastq.gz"),
-                "-s",
-                str(tmp_path / "s.fastq.gz"),
-                "-0",
-                str(tmp_path / "orphans.fastq.gz"),
-                str(tmp_path / "x.bam"),
-            ],
+            _samtools_fastq_paired_args(
+                4,
+                tmp_path / "o1.fastq.gz",
+                tmp_path / "o2.fastq.gz",
+                tmp_path / "s.fastq.gz",
+                tmp_path / "orphans.fastq.gz",
+                tmp_path / "x.bam",
+            ),
             # assembly_coverage
-            [
-                "view",
-                "-b",
-                "-F",
-                "0x904",
-                "-@",
-                "4",
-                "-o",
-                str(tmp_path / "coverage.bam"),
-                str(tmp_path / "coverage.sam"),
-            ],
+            _samtools_view_args(["-F", "0x904"], 4, tmp_path / "coverage.bam", tmp_path / "coverage.sam"),
         ]
         for args in calls:
             SecureSubprocess._build_validated_command("samtools", args)  # must not raise
+
+        flags_emitted = {a for call in calls for a in call if a.startswith("-")}
+        missing = flags_emitted - SecureSubprocess.SAFE_PARAMETERS["samtools"]
+        assert not missing, f"samtools allow-list is missing: {sorted(missing)}"
 
 
 class TestPathValidation:
