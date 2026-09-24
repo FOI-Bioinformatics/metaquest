@@ -302,6 +302,41 @@ def test_missing_run_column_is_an_error(tables, filters, flag, column):
     assert str(excinfo.value) == expected
 
 
+@pytest.mark.parametrize(
+    "filters,flag,column",
+    [
+        ({"max_run_size": 1000}, "--max-run-size", "Run_Size"),
+        ({"min_spots": 5}, "--min-spots", "Run_Total_Spots"),
+        ({"platform": "ILLUMINA"}, "--platform", "Platform"),
+    ],
+)
+def test_run_filter_warns_when_no_candidate_has_a_value(tables, caplog, filters, flag, column):
+    from metaquest.processing.selection import RunFilters
+
+    cont, _ = tables
+    meta = cont.parent / "metadata_table.txt"
+    meta.write_text("Run_ID\tRun_Size\tRun_Total_Spots\tPlatform\nSRR1\t\t\t\nSRR2\t\t\t\n")
+    with caplog.at_level("INFO"):
+        result = select_accessions(cont, threshold=0.0, metadata_file=meta, run_filters=RunFilters(**filters))
+    assert result == []
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [
+        f"{flag} dropped all 3 remaining candidate(s); none has a {column} value. "
+        "Run download_metadata for the candidate list first."
+    ]
+    assert f"3 accession(s) dropped by {flag}" in caplog.text
+
+
+def test_run_filter_does_not_warn_when_some_candidates_have_a_value(run_tables, caplog):
+    from metaquest.processing.selection import RunFilters
+
+    cont, meta = run_tables
+    with caplog.at_level("INFO"):
+        result = select_accessions(cont, threshold=0.0, metadata_file=meta, run_filters=RunFilters(max_run_size=1))
+    assert result == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
 def test_run_filters_apply_before_top_n(run_tables):
     from metaquest.processing.selection import RunFilters
 

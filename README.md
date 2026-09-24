@@ -506,8 +506,9 @@ exclusions and the metadata filter and before `--top-n`. A run absent from the t
 the filtered column is dropped, since the bound cannot be checked for it, and the log counts such runs.
 A requested filter whose column is missing from the table is an error: `select_datasets` exits with
 status 1 without writing its output or recording a selection. Branchwater-derived tables carry none of
-these columns, so run `download_metadata` and `parse_metadata` for the candidate list first. The log also
-reports the summed size of the selected runs.
+these columns, so run `download_metadata` and `parse_metadata` for the candidate list first. When the column
+exists but a filter drops every remaining candidate because none has a value, a warning gives the same
+hint. The log also reports the summed size of the selected runs.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see

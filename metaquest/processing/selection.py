@@ -164,13 +164,15 @@ def _apply_run_test(
     values: pd.Series,
     keep: Callable[[Any], bool],
     column: str,
+    flag: str,
     description: str,
 ) -> List[Entry]:
     """Keep entries whose value passes ``keep``; a run absent from ``values`` or without a value is dropped.
 
     An unknown value is dropped rather than kept because the requested bound cannot be checked
     for it (an unknown size may lie far above a ceiling); the number of such runs is logged so
-    the loss stays visible.
+    the loss stays visible. When the filter drops every remaining candidate and none of them
+    had a value, the table has no metadata for this candidate list yet, and a warning says so.
     """
     kept: List[Entry] = []
     unknown = 0
@@ -183,6 +185,14 @@ def _apply_run_test(
     logger.info(
         "%d accession(s) dropped by %s (%d with no %s value)", len(ranked) - len(kept), description, unknown, column
     )
+    if ranked and unknown == len(ranked):
+        logger.warning(
+            "%s dropped all %d remaining candidate(s); none has a %s value. "
+            "Run download_metadata for the candidate list first.",
+            flag,
+            len(ranked),
+            column,
+        )
     return kept
 
 
@@ -197,20 +207,32 @@ def _filter_by_run(ranked: List[Entry], metadata: pd.DataFrame, filters: RunFilt
         sizes = pd.to_numeric(metadata[RUN_SIZE_COLUMN], errors="coerce")
         ceiling = filters.max_run_size
         ranked = _apply_run_test(
-            ranked, sizes, lambda v: v <= ceiling, RUN_SIZE_COLUMN, f"--max-run-size > {ceiling} bytes"
+            ranked,
+            sizes,
+            lambda v: v <= ceiling,
+            RUN_SIZE_COLUMN,
+            "--max-run-size",
+            f"--max-run-size > {ceiling} bytes",
         )
     spots = pd.to_numeric(metadata[SPOTS_COLUMN], errors="coerce") if SPOTS_COLUMN in metadata.columns else None
     if filters.min_spots is not None:
         floor = filters.min_spots
-        ranked = _apply_run_test(ranked, spots, lambda v: v >= floor, SPOTS_COLUMN, f"--min-spots < {floor}")
+        ranked = _apply_run_test(
+            ranked, spots, lambda v: v >= floor, SPOTS_COLUMN, "--min-spots", f"--min-spots < {floor}"
+        )
     if filters.max_spots is not None:
         cap = filters.max_spots
-        ranked = _apply_run_test(ranked, spots, lambda v: v <= cap, SPOTS_COLUMN, f"--max-spots > {cap}")
+        ranked = _apply_run_test(ranked, spots, lambda v: v <= cap, SPOTS_COLUMN, "--max-spots", f"--max-spots > {cap}")
     if filters.platform is not None:
         wanted = filters.platform.strip().lower()
         platforms = metadata[PLATFORM_COLUMN].map(lambda v: v.strip().lower() if isinstance(v, str) else v)
         ranked = _apply_run_test(
-            ranked, platforms, lambda v: v == wanted, PLATFORM_COLUMN, f"--platform != {filters.platform!r}"
+            ranked,
+            platforms,
+            lambda v: v == wanted,
+            PLATFORM_COLUMN,
+            "--platform",
+            f"--platform != {filters.platform!r}",
         )
     logger.info("%d accession(s) remain after the run filters", len(ranked))
     return ranked
