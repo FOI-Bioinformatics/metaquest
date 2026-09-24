@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -44,7 +45,18 @@ BRANCHWATER_COLUMNS = [
     "organism",
     "lat_lon",
 ]
-SOURMASH_HINT = "sourmash is required to sketch a genome. Install it with: pip install 'metaquest[sourmash]'"
+
+
+def sourmash_hint() -> str:
+    """Install hint naming the interpreter this process runs under, so a user with several
+    Python environments installs sourmash into the one metaquest actually uses."""
+    return (
+        "sourmash is required to sketch a genome. Install it into this interpreter with: "
+        f"{sys.executable} -m pip install 'metaquest[sourmash]'"
+    )
+
+
+SOURMASH_HINT = sourmash_hint()
 
 
 def sketch_fasta(fasta_path: Union[str, Path]) -> Dict[str, Any]:
