@@ -275,8 +275,10 @@ class TestParameterValidation:
         from metaquest.data.read_extraction import (
             _samtools_cat_args,
             _samtools_count_args,
+            _samtools_coverage_args,
             _samtools_fastq_paired_args,
             _samtools_fastq_single_args,
+            _samtools_sort_args,
             _samtools_view_args,
         )
 
@@ -302,6 +304,9 @@ class TestParameterValidation:
             ),
             # assembly_coverage
             _samtools_view_args(["-F", "0x904"], 4, tmp_path / "coverage.bam", tmp_path / "coverage.sam"),
+            # reference_coverage: coordinate sort, then per-contig coverage
+            _samtools_sort_args(4, tmp_path / "x.mapped.sorted.bam", tmp_path / "x.mapped.bam"),
+            _samtools_coverage_args(tmp_path / "x_coverage.tsv", tmp_path / "x.mapped.sorted.bam"),
         ]
         for args in calls:
             SecureSubprocess._build_validated_command("samtools", args)  # must not raise

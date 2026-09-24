@@ -163,6 +163,8 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "view",
             "fastq",
             "cat",
+            "sort",
+            "coverage",
             "-b",
             "-F",
             "-f",
@@ -176,7 +178,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "-@",
             "--version",
         },
-        "description": "SAM/BAM utilities (filter and export mapped reads)",
+        "description": "SAM/BAM utilities (filter and export mapped reads, reference coverage)",
     },
     "seqkit": {
         "safe_params": {

@@ -26,11 +26,13 @@ from metaquest.data.read_extraction import (
     fasta_length,
     resolve_assembly_threads,
     resolve_index_path,
+    reference_coverage,
     select_samples_for_genome,
     summarise_contigs,
+    summarise_coverage_table,
 )
 from metaquest.data.registry import load_registry, record_extraction, resolve_project_path, save_registry
-from helpers_extraction import _fake_tools
+from helpers_extraction import _fake_tools, coverage_table
 
 
 def _make_tree(tmp, paired=True):
@@ -126,7 +128,8 @@ class TestExtractTargetReads:
 
         tools = [c[0] for c in state["calls"]]
         # First minimap2 call builds the shared index (-d); the second aligns the sample.
-        assert tools == ["minimap2", "minimap2", "samtools", "samtools", "samtools", "samtools"]
+        # The last two samtools calls sort the filtered BAM and write its reference coverage.
+        assert tools == ["minimap2", "minimap2"] + ["samtools"] * 6
         assert "-d" in state["calls"][0][1]
         assert state["calls"][1][1][:2] == ["-a", "-x"]
         assert state["calls"][2][1][:2] == ["view", "-c"]
@@ -135,6 +138,7 @@ class TestExtractTargetReads:
         fastq_args = state["calls"][5][1]
         assert fastq_args[0] == "fastq"
         assert all(flag in fastq_args for flag in ("-1", "-2", "-s", "-0", "-@"))
+        assert state["calls"][6][1][0] == "sort" and state["calls"][7][1][0] == "coverage"
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_single_end_uses_flag_0(self, mock_run):
@@ -1216,3 +1220,124 @@ class TestAssemblyCoverage:
         fargs = filter_call.args[1]
         assert fargs[fargs.index("-F") + 1] == "0x904"
         assert fargs[fargs.index("-@") + 1] == "3"
+
+
+class TestReferenceCoverage:
+    """Breadth and mean depth against the reference genome, from the filtered BAM."""
+
+    def _extract(self, root, table, genome, **kwargs):
+        return extract_target_reads(
+            parsed_containment=table,
+            genome_id="GCF_1",
+            genome_fasta=genome,
+            fastq_folder=root / "fastq",
+            output_folder=root / "targeted",
+            threshold=0.5,
+            **kwargs,
+        )
+
+    def test_summary_aggregates_contigs_by_length(self, tmp_path):
+        tsv = tmp_path / "cov.tsv"
+        tsv.write_text(coverage_table([("c1", 100, 50, 2.0), ("c2", 300, 300, 10.0)]))
+        summary = summarise_coverage_table(tsv)
+        assert summary["breadth"] == 0.875
+        assert summary["mean_depth"] == 8.0
+        assert summary["covered_bases"] == 350
+        assert summary["reference_bp"] == 400
+
+    def test_summary_rounds_to_four_decimals(self, tmp_path):
+        tsv = tmp_path / "cov.tsv"
+        tsv.write_text(coverage_table([("c1", 3, 1, 1.0)]))
+        summary = summarise_coverage_table(tsv)
+        assert summary["breadth"] == 0.3333
+
+    def test_summary_of_an_empty_table_reports_none(self, tmp_path):
+        tsv = tmp_path / "cov.tsv"
+        tsv.write_text(coverage_table([]))
+        summary = summarise_coverage_table(tsv)
+        assert summary["reference_bp"] == 0
+        assert summary["breadth"] is None and summary["mean_depth"] is None
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_reference_coverage_returns_the_summary_and_table_path(self, mock_run, tmp_path):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        bam = tmp_path / "GCF_1.mapped.bam"
+        bam.write_bytes(b"")
+        (tmp_path / "out").mkdir()
+        (tmp_path / "sam").mkdir()
+        coverage = reference_coverage("SRR1", "GCF_1", bam, tmp_path / "out", tmp_path / "sam", 2)
+        sorted_bam = tmp_path / "sam" / "GCF_1.mapped.sorted.bam"
+        tsv = tmp_path / "out" / "GCF_1_coverage.tsv"
+        assert coverage["breadth"] == 0.875 and coverage["mean_depth"] == 8.0
+        assert coverage["coverage_tsv"] == tsv
+        assert tsv.exists()
+        assert not sorted_bam.exists()
+        assert state["calls"][0][1] == ["sort", "-@", "2", "-o", str(sorted_bam), str(bam)]
+        assert state["calls"][1][1] == ["coverage", "-o", str(tsv), str(sorted_bam)]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_extraction_writes_the_table_and_records_breadth(self, mock_run, tmp_path):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        results = self._extract(root, table, genome)
+        sample_dir = root / "targeted" / "SRR1"
+        assert (sample_dir / "GCF_1_coverage.tsv").exists()
+        coverage = results["SRR1"].coverage
+        assert coverage["breadth"] == 0.875 and coverage["mean_depth"] == 8.0
+        assert coverage["covered_bases"] == 350 and coverage["reference_bp"] == 400
+        assert Path(coverage["coverage_tsv"]) == sample_dir / "GCF_1_coverage.tsv"
+        assert list(root.rglob("*.sorted.bam")) == []
+        assert not (sample_dir / "GCF_1.mapped.bam").exists()
+        subcommands = [args[0] for tool, args in state["calls"] if tool == "samtools"]
+        assert subcommands.index("fastq") < subcommands.index("sort") < subcommands.index("coverage")
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_zero_mapped_sample_runs_neither_sort_nor_coverage(self, mock_run, tmp_path):
+        state = {"mapped": 0, "mapped_total": 0}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        results = self._extract(root, table, genome)
+        assert results["SRR1"].coverage is None
+        subcommands = [args[0] for tool, args in state["calls"] if tool == "samtools"]
+        assert "sort" not in subcommands and "coverage" not in subcommands
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_zero_kept_after_filter_runs_neither_sort_nor_coverage(self, mock_run, tmp_path):
+        state = {"mapped": 0, "mapped_total": 5}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        results = self._extract(root, table, genome)
+        assert results["SRR1"].coverage is None
+        subcommands = [args[0] for tool, args in state["calls"] if tool == "samtools"]
+        assert "sort" not in subcommands and "coverage" not in subcommands
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_coverage_failure_is_a_warning_and_the_fastq_still_lands(self, mock_run, tmp_path, caplog):
+        state = {"coverage_fail": True}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        with caplog.at_level(logging.WARNING, logger="metaquest.data.read_extraction"):
+            results = self._extract(root, table, genome)
+        sample_dir = root / "targeted" / "SRR1"
+        assert results["SRR1"].coverage is None
+        assert [p.name for p in results["SRR1"].files] == ["GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"]
+        assert all(p.exists() for p in results["SRR1"].files)
+        assert not (sample_dir / "GCF_1_coverage.tsv").exists()
+        assert list(root.rglob("*.sorted.bam")) == []
+        assert any(
+            r.levelno == logging.WARNING and "SRR1: reference coverage skipped" in r.getMessage()
+            for r in caplog.records
+        )
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_sorted_bam_is_placed_under_the_temp_folder(self, mock_run, tmp_path):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        temp_folder = root / "scratch"
+        self._extract(root, table, genome, temp_folder=temp_folder)
+        sort_args = next(args for tool, args in state["calls"] if tool == "samtools" and args[0] == "sort")
+        assert Path(sort_args[sort_args.index("-o") + 1]) == temp_folder / "GCF_1.mapped.sorted.bam"
+        assert list(temp_folder.glob("*.sorted.bam")) == []

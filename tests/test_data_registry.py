@@ -414,6 +414,21 @@ class TestRecords:
         reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {})
         assert r.datasets["SRR1"]["extractions"]["GCF_1"]["mapped_total"] is None
 
+    def test_record_extraction_stores_reference_coverage(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        tsv = tmp_path / "targeted" / "SRR1" / "GCF_1_coverage.tsv"
+        coverage = {"breadth": 0.875, "mean_depth": 8.0, "covered_bases": 350, "reference_bp": 400, "coverage_tsv": tsv}
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {}, coverage=coverage)
+        entry = r.datasets["SRR1"]["extractions"]["GCF_1"]
+        assert entry["breadth"] == 0.875 and entry["mean_depth"] == 8.0
+        assert entry["coverage_tsv"] == "targeted/SRR1/GCF_1_coverage.tsv"
+
+    def test_record_extraction_coverage_defaults_to_none(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {})
+        entry = r.datasets["SRR1"]["extractions"]["GCF_1"]
+        assert entry["breadth"] is None and entry["mean_depth"] is None and entry["coverage_tsv"] is None
+
     def test_record_assembly_passes_the_whole_stats_dict_through(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_extraction(r, "SRR1", "GCF_1", [], 100, False, {})
@@ -822,6 +837,14 @@ class TestScanners:
         datasets, extractions = reg.to_dataframes(r)
         assert list(datasets.index) == ["SRR1"] and bool(datasets.loc["SRR1", "selected"]) is True
         assert extractions.loc[0, "genome_id"] == "GCF_1" and int(extractions.loc[0, "mapped_reads"]) == 7
+        assert "breadth" in extractions.columns and "mean_depth" in extractions.columns
+
+    def test_to_dataframes_carries_breadth_and_mean_depth(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        coverage = {"breadth": 0.5, "mean_depth": 3.25, "coverage_tsv": tmp_path / "c.tsv"}
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 7, False, {}, coverage=coverage)
+        _, extractions = reg.to_dataframes(r)
+        assert extractions.loc[0, "breadth"] == 0.5 and extractions.loc[0, "mean_depth"] == 3.25
 
 
 class TestStoreLinksInTheRegistry:

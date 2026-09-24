@@ -454,7 +454,10 @@ never look like real FASTQ or genome files.
 Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally
 discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
 20 is reasonable for a close relative of the target genome, but a divergent strain can genuinely map
-with a low MAPQ, so raising the threshold can discard real matches. `--assembly-preset` selects
+with a low MAPQ, so raising the threshold can discard real matches. For each sample with kept reads,
+`samtools coverage` on the filtered alignments writes `targeted/<ACC>/<genome>_coverage.tsv`, and the
+registry records the breadth of the reference covered at 1x or more and the length-weighted mean depth
+(a failure of this step is logged as a warning and leaves the extracted reads in place). `--assembly-preset` selects
 megahit's `--presets` value: `meta-sensitive` (the default, suited to these small targeted read sets),
 `meta-large`, or `default` (no `--presets` flag). Unless `--no-coverage`, the extracted reads are mapped
 back onto the assembled contigs to report a mapping rate and estimated mean depth alongside the other

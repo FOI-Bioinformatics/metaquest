@@ -157,7 +157,9 @@ metaquest extract_target_reads --parsed-containment parsed_containment.txt \
 Samples at or above the threshold in the containment table are mapped with minimap2 (preset `sr` by
 default, `--threads` default 4) and the mapped reads are written with samtools to `targeted/<accession>/`
 as `<genome>_*.fastq.gz`. The registry records the number of mapped reads, the genome FASTA, preset,
-threshold and the files written, including samples that mapped no reads. A rerun with the same genome,
+threshold and the files written, including samples that mapped no reads. For samples with mapped reads it
+also records the breadth of the reference genome covered at 1x or more and the length-weighted mean depth,
+computed with `samtools coverage` and written per sequence to `targeted/<accession>/<genome>_coverage.tsv`. A rerun with the same genome,
 preset and threshold skips samples already recorded; `--dry-run` lists what would be extracted and what
 would be skipped without running any tool (and without requiring minimap2/samtools/megahit to be on
 PATH), printing one summary line for samples not yet downloaded rather than one warning per sample;

@@ -591,11 +591,20 @@ def record_extraction(
     unequal_mates: bool,
     params: Dict[str, Any],
     mapped_total: Optional[int] = None,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """Record one sample's extraction against one genome.
+
+    ``coverage`` is ``ExtractionResult.coverage``: its ``breadth`` and ``mean_depth`` are
+    recorded as given and its ``coverage_tsv`` project-relative; all three are None when
+    ``coverage`` is None (nothing mapped, or the coverage step failed).
+    """
     root = project_root(registry)
     extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
     previous = extractions.get(genome_id, {})
     genome_fasta = params.get("genome_fasta")
+    coverage = coverage or {}
+    coverage_tsv = coverage.get("coverage_tsv")
     extractions[genome_id] = {
         "date": _now(),
         "genome_fasta": _project_relative(genome_fasta, root) if genome_fasta is not None else None,
@@ -608,6 +617,9 @@ def record_extraction(
         "mapped_total": int(mapped_total) if mapped_total is not None else None,
         "unequal_mates": bool(unequal_mates),
         "files": [_project_relative(p, root) for p in files],
+        "breadth": coverage.get("breadth"),
+        "mean_depth": coverage.get("mean_depth"),
+        "coverage_tsv": _project_relative(coverage_tsv, root) if coverage_tsv is not None else None,
         "assembly": previous.get("assembly"),
     }
     registry.genomes.setdefault(genome_id, {})
@@ -1060,6 +1072,8 @@ def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
                     "accession": acc,
                     "genome_id": genome_id,
                     "mapped_reads": ext.get("mapped_reads"),
+                    "breadth": ext.get("breadth"),
+                    "mean_depth": ext.get("mean_depth"),
                     "extraction_date": ext.get("date"),
                     "contigs": asm.get("contigs"),
                     "total_bp": asm.get("total_bp"),

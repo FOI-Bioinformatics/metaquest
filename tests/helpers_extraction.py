@@ -5,6 +5,7 @@ compression sequence in ``download_accession``.
 """
 
 import gzip
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,6 +14,22 @@ UNEQUAL_WARNING = "[W::mm_bseq_read_frag2] query files have different number of 
 # Flags (across the tools this fake stands in for) whose next token is a value, not
 # another flag or the positional argument.
 _VALUE_FLAGS = frozenset({"-O", "--temp", "--threads", "--max-size", "-p"})
+
+# ``samtools coverage`` header, as samtools 1.10+ writes it.
+COVERAGE_HEADER = "#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeandepth\tmeanbaseq\tmeanmapq"
+
+# Two contigs: 100 bp with 50 covered at mean depth 2, and 300 bp fully covered at mean
+# depth 10 (breadth 350/400 = 0.875, length-weighted mean depth 3200/400 = 8.0).
+DEFAULT_COVERAGE_ROWS = [("contig1", 100, 50, 2.0), ("contig2", 300, 300, 10.0)]
+
+
+def coverage_table(rows):
+    """``samtools coverage`` output for ``rows`` of ``(rname, length, covbases, meandepth)``."""
+    lines = [COVERAGE_HEADER]
+    for rname, length, covbases, meandepth in rows:
+        percent = 100.0 * covbases / length if length else 0.0
+        lines.append(f"{rname}\t1\t{length}\t10\t{covbases}\t{percent:.4f}\t{meandepth}\t36\t60")
+    return "\n".join(lines) + "\n"
 
 
 def _positional(args):
@@ -47,7 +64,9 @@ def _fake_tools(state):
     ("-1", "-2")), unequal (bool, emit minimap2's mate-count warning), single (bool,
     fasterq-dump writes a single ``<acc>.fastq`` instead of a ``<acc>_1.fastq``/
     ``<acc>_2.fastq`` pair), reads (int, records per FASTQ file fasterq-dump writes,
-    default 4).
+    default 4), coverage_rows (``(rname, length, covbases, meandepth)`` tuples written by
+    ``samtools coverage``; defaults to ``DEFAULT_COVERAGE_ROWS``), coverage_fail (bool,
+    ``samtools coverage`` exits non-zero).
     """
 
     def run(executable, args, **kwargs):
@@ -83,6 +102,18 @@ def _fake_tools(state):
             out_path = Path(args[args.index("-o") + 1])
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(b"")
+        if executable == "samtools" and args[0] == "sort":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"")
+        if executable == "samtools" and args[0] == "coverage":
+            out_path = Path(args[args.index("-o") + 1])
+            if state.get("coverage_fail"):
+                # A real failure can leave a partial table behind.
+                out_path.write_text(COVERAGE_HEADER + "\n")
+                raise subprocess.CalledProcessError(1, ["samtools", *args], stderr="coverage failed")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(coverage_table(state.get("coverage_rows", DEFAULT_COVERAGE_ROWS)))
         if executable == "samtools" and args[0] == "fastq":
             for flag in ("-1", "-2", "-0", "-s"):
                 if flag in args and flag in state.get("nonempty", ("-1", "-2")):
