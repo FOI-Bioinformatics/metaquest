@@ -194,14 +194,19 @@ class SRAMetadataClient:
             requested_upper = {r.upper() for r in requested} if requested is not None else None
 
             packages = root.findall(".//EXPERIMENT_PACKAGE")
-            if requested_upper is not None:
-                matched = [p for p in packages if self._package_matches_requested(p, requested_upper)]
-                if packages and not matched:
-                    logger.warning("requested accessions matched no package in the reply; listing every run returned")
-                else:
-                    packages = matched
 
+            matched = []
             for package in packages:
+                try:
+                    if requested_upper is None or self._package_matches_requested(package, requested_upper):
+                        matched.append(package)
+                except Exception as e:
+                    logger.warning(f"Failed to inspect dataset package: {e}")
+            if requested_upper is not None and packages and not matched:
+                logger.warning("requested accessions matched no package in the reply; listing every run returned")
+                matched = packages
+
+            for package in matched:
                 try:
                     for info in self._extract_dataset_info(package):
                         results[info.accession] = info
