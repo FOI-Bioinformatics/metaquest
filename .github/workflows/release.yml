@@ -39,10 +39,11 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           awk -v ver="$VERSION" '
-            BEGIN { found = 0 }
+            # The dots in the version are matched literally ("[.]"), so 0.4.0 cannot match 0x4y0.
+            BEGIN { found = 0; pat = ver; gsub(/\./, "[.]", pat) }
             /^## \[/ {
               if (found) exit
-              if ($0 ~ "\\[" ver "\\]") { found = 1; next }
+              if ($0 ~ "\\[" pat "\\]") { found = 1; next }
             }
             found { print }
           ' CHANGELOG.md > release_notes.md
