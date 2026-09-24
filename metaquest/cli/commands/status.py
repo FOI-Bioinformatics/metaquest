@@ -111,6 +111,33 @@ def _run_filter_flags(criteria: Dict[str, Any]) -> str:
     return part
 
 
+def _format_bytes(count: int) -> str:
+    """A byte count in decimal units, as the run size flags read them (e.g. 600 MB, 1.5 GB)."""
+    for factor, unit in ((10**12, "TB"), (10**9, "GB"), (10**6, "MB"), (10**3, "KB")):
+        if count >= factor:
+            return f"{count / factor:g} {unit}"
+    return f"{count} bytes"
+
+
+def _run_filter_detail(criteria: Dict[str, Any]) -> List[str]:
+    """The run filters a selection recorded, for the selected stage row.
+
+    A malformed value is left out; ``status --next`` warns about it when it builds the
+    reselect command.
+    """
+    parts = []
+    size = _as_positive_int(criteria.get("max_run_size"))
+    if size is not None:
+        parts.append(f"max size {_format_bytes(size)}")
+    for key, symbol in (("min_spots", ">="), ("max_spots", "<=")):
+        spots = _as_non_negative_int(criteria.get(key))
+        if spots is not None:
+            parts.append(f"spots {symbol} {spots}")
+    if criteria.get("platform") is not None:
+        parts.append(f"platform {criteria['platform']}")
+    return parts
+
+
 class StatusCommand(BaseCommand):
     """Command to report locally available data and the registry's per-accession stages."""
 
@@ -558,6 +585,7 @@ class StatusCommand(BaseCommand):
             parts.append(f"threshold {criteria['threshold']}")
         if criteria.get("metadata_column"):
             parts.append(f"{criteria['metadata_column']} = {criteria.get('metadata_value')}")
+        parts.extend(_run_filter_detail(criteria))
         parts.append(str(latest.get("date", "")))
         return ", ".join(p for p in parts if p)
 

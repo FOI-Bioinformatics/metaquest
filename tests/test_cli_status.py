@@ -7,6 +7,8 @@ import shlex
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from metaquest.cli.commands.status import StatusCommand
 from metaquest.data.registry import (
     Registry,
@@ -735,6 +737,49 @@ class TestStatusWithRegistry:
         out = capsys.readouterr().out
         assert "column GCF_1" in out and "threshold 0.5" in out and "organism = soil" in out
         assert "16S amplicon: 2" in out
+
+    def test_text_report_shows_the_selection_run_filters(self, tmp_path, capsys):
+        _project_tree(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        seeded = load_registry(tmp_path / "metaquest_registry.json")
+        record_selection(
+            seeded,
+            ["SRR1"],
+            {
+                "column": "GCF_1",
+                "threshold": 0.5,
+                "max_run_size": 600_000_000,
+                "min_spots": 3_000_000,
+                "max_spots": 9_000_000,
+                "platform": "illumina",
+            },
+            tmp_path / "accessions.txt",
+        )
+        save_registry(seeded)
+        capsys.readouterr()
+
+        StatusCommand().execute(_status_args(tmp_path, json=False))
+        out = capsys.readouterr().out
+        assert (
+            "column GCF_1, threshold 0.5, max size 600 MB, spots >= 3000000, spots <= 9000000, platform illumina" in out
+        )
+
+    @pytest.mark.parametrize(
+        "size,text",
+        [(2_000_000_000, "max size 2 GB"), (1_500_000, "max size 1.5 MB"), (512, "max size 512 bytes")],
+    )
+    def test_selection_detail_formats_the_run_size(self, tmp_path, size, text):
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        record_selection(registry, ["SRR1"], {"column": "GCF_1", "max_run_size": size}, tmp_path / "a.txt")
+        assert text in StatusCommand._selection_detail(registry)
+
+    def test_selection_detail_leaves_out_a_malformed_run_filter(self, tmp_path):
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        record_selection(
+            registry, ["SRR1"], {"column": "GCF_1", "max_run_size": "lots", "min_spots": -3}, tmp_path / "a.txt"
+        )
+        detail = StatusCommand._selection_detail(registry)
+        assert "max size" not in detail and "spots" not in detail
 
     def test_export_tsv(self, tmp_path, capsys, caplog):
         _project_tree(tmp_path)
