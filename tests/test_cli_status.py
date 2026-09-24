@@ -342,6 +342,59 @@ class TestStatusWithRegistry:
             "--threshold 0.3 --skip-excluded --output sel_noskip.txt"
         )
 
+    def test_reselect_suggestion_reproduces_metadata_filter_top_n_and_table(self, tmp_path, monkeypatch):
+        """A selection made with a metadata filter, a top-N cap and a non-default containment
+        table must reselect the same way: dropping any of those would reproduce a different,
+        looser selection or read the wrong file."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "column": "GCF_A",
+                    "threshold": 0.5,
+                    "metadata_column": "country",
+                    "metadata_value": "Sweden",
+                    "top_n": 10,
+                    "table": "custom_containment.txt",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert reselect == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded "
+            "--output sel_noskip.txt --metadata-column country --metadata-value Sweden "
+            "--top-n 10 --parsed-containment custom_containment.txt"
+        )
+
+    def test_reselect_suggestion_omits_table_flag_when_it_is_the_default(self, tmp_path, monkeypatch):
+        """A recorded table equal to select_datasets' own default must not be echoed back as
+        --parsed-containment; only a non-default table needs to be named explicitly."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5, "table": "parsed_containment.txt"},
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert reselect == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded --output sel_noskip.txt"
+        )
+
     def test_next_extraction_command_is_runnable(self, tmp_path, capsys):
         """The extract suggestion carries the table it was selected from and a FASTA that exists."""
         _project_tree(tmp_path)

@@ -248,7 +248,10 @@ class StatusCommand(BaseCommand):
         """A runnable ``select_datasets`` command that redoes a selection with ``--skip-excluded``.
 
         Built from the criteria the original ``--no-skip-excluded`` run recorded, targeting the
-        same ``--output`` so rerunning it corrects that selection's file in place.
+        same ``--output`` so rerunning it corrects that selection's file in place. Reproduces
+        every criterion ``record_selection`` stores that changes which accessions are chosen
+        (metadata filter, top-N cap, source table), not just the genome column and threshold, so
+        the suggested command redoes the same selection rather than a looser one.
         """
         threshold = criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD)
         genome_ids = criteria.get("genome_ids")
@@ -258,7 +261,19 @@ class StatusCommand(BaseCommand):
         else:
             column = criteria.get("column") or "max_containment"
             genome_part = f"--genome-id {column}"
-        return f"metaquest select_datasets {genome_part} --threshold {threshold} --skip-excluded --output {output}"
+        command = f"metaquest select_datasets {genome_part} --threshold {threshold} --skip-excluded --output {output}"
+
+        metadata_column = criteria.get("metadata_column")
+        metadata_value = criteria.get("metadata_value")
+        if metadata_column and metadata_value is not None:
+            command += f" --metadata-column {metadata_column} --metadata-value {metadata_value}"
+        top_n = criteria.get("top_n")
+        if top_n:
+            command += f" --top-n {top_n}"
+        table = criteria.get("table")
+        if table and str(table) != DEFAULT_PARSED_CONTAINMENT_FILE:
+            command += f" --parsed-containment {table}"
+        return command
 
     @staticmethod
     def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
