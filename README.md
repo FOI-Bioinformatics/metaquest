@@ -797,7 +797,8 @@ MetaQuest follows modern Python development practices with comprehensive testing
 Significant improvements have been implemented across the codebase:
 
 - **Intelligent SRA Package**: Complete implementation of next-generation SRA capabilities including intelligent downloads with resume functionality, comprehensive quality profiling, and interactive dashboard generation
-- **Major Test Coverage Achievement**: Substantial coverage improvement with a large batch of comprehensive tests added across multiple files
+- **Major Test Coverage Achievement**: Substantial coverage improvement with a large batch of comprehensive
+  tests added across multiple files
   - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy)
   - Integration test suite with end-to-end workflow tests
   - Performance benchmarks using pytest-benchmark

@@ -70,7 +70,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `status --next` prints a runnable reselect command that reproduces the metadata filter, top-N,
   source table, and the new size/spot/platform filters, shell-quoted where needed.
 - `select_datasets` now records the metadata table it actually used, whether autodetected or
-  passed explicitly, and warns once on a malformed filter value instead of failing silently.
+  passed explicitly. The `status --next` reselect hint warns once on a malformed recorded filter
+  value and leaves that flag out of the suggested command (or uses its default) instead of failing
+  silently.
 
 ### Extraction and assembly
 
@@ -85,8 +87,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   discarding it.
 - Extraction and assembly dry runs summarise what would run; megahit errors surface the tool's own
   message, and tmp-dir and parameter changes are logged explicitly.
-- `results_table --output` no longer leaves a stale coverage column behind when a run has zero
-  kept reads.
+- A forced `extract_target_reads` rerun that keeps no reads now removes the earlier
+  `<genome>_coverage.tsv`.
 
 ### Results
 
@@ -103,6 +105,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `EXPERIMENT`/`DESIGN` section when present.
 - `sra_compare` writes JSON-safe results (no raw numpy types) and works from a single accession or
   a quality-profiles directory without requiring `--accessions-file`.
+- A package whose inspection fails no longer makes `sra_info` fall back to listing every run
+  returned; that fallback now applies only when every package was inspected without error, and a
+  separate warning names how many packages could not be inspected.
 
 ### Documentation
 
