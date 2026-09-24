@@ -12,7 +12,7 @@ import pytest
 
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.cli.commands.status import StatusCommand
-from metaquest.core.exceptions import ProcessingError
+from metaquest.core.exceptions import ProcessingError, SecurityError
 from metaquest.data.read_extraction import ExtractionResult
 from metaquest.data.registry import load_registry, record_extraction, save_registry
 from helpers_extraction import _fake_tools
@@ -1247,3 +1247,130 @@ class TestExtractTargetReadsCommand:
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         dangling_warnings = [w for w in warnings if "dangling" in w and "SRR9" in w]
         assert len(dangling_warnings) == 1
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_forced_assembly_failure_clears_the_stale_record(self, mock_run):
+        """A forced --assemble redo removes the old assembly folder on disk (the megahit
+        output directory) before megahit reruns. If megahit then fails, the registry must
+        not keep describing contigs that no longer exist (audit deferred, Task 2 fix round
+        1, second item)."""
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(args) == 0
+            before = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+            assert before is not None and before["contigs"] > 0
+
+            fake = _fake_tools(state)
+
+            def raise_on_megahit_assembly_run(executable, run_args, **kwargs):
+                if executable == "megahit" and "-o" in run_args:
+                    raise SecurityError("Parameter '--tmp-dir' not allowed for megahit")
+                return fake(executable, run_args, **kwargs)
+
+            mock_run.side_effect = raise_on_megahit_assembly_run
+            forced_args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                force=True,
+                registry=str(registry_file),
+            )
+            rc = cmd.execute(forced_args)
+            after = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert rc == 1
+        assert after is None
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_forced_extraction_without_assemble_keeps_the_assembly_record(self, mock_run):
+        """A --force redo that does not also pass --assemble leaves the assembly folder on
+        disk untouched, so its registry record must survive too."""
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(args) == 0
+            before = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+            assert before is not None and before["contigs"] > 0
+
+            forced_no_assemble = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=False,
+                force=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(forced_no_assemble) == 0
+            after = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert after == before
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_successful_forced_assembly_ends_with_a_fresh_record(self, mock_run):
+        """A forced --assemble redo that succeeds must not leave the record cleared; it
+        ends with the new assembly block, not None."""
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(args) == 0
+
+            forced_args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                force=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(forced_args) == 0
+            after = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert after is not None
+        assert after["contigs"] > 0

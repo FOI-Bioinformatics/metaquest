@@ -461,6 +461,21 @@ class TestRecords:
         assert assembly["contigs"] == 1
         assert assembly["total_bp"] == 0 and assembly["n50"] == 0 and assembly["largest"] == 0
 
+    def test_clear_assembly_removes_the_block_but_keeps_the_extraction(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [tmp_path / "r.fastq.gz"], 10, False, {})
+        reg.record_assembly(r, "SRR1", "GCF_1", tmp_path / "asm", {"contigs": 1}, "v1.2.9", {})
+        reg.clear_assembly(r, "SRR1", "GCF_1")
+        entry = r.datasets["SRR1"]["extractions"]["GCF_1"]
+        assert entry["assembly"] is None
+        assert entry["mapped_reads"] == 10  # the extraction record itself is untouched
+
+    def test_clear_assembly_is_a_no_op_without_an_existing_record(self, tmp_path):
+        """Nothing to clear (no extraction record at all yet) must not raise or create one."""
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.clear_assembly(r, "SRR1", "GCF_1")
+        assert "SRR1" not in r.datasets
+
     def test_real_records_clear_the_inferred_flag(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_screening(r, "SRR1", "GCF_1", 0.5, None, "matches", 0.0, None)

@@ -639,6 +639,19 @@ def record_assembly(
     entry["assembly"] = assembly
 
 
+def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
+    """Remove one extraction's recorded assembly block, leaving the extraction itself alone.
+
+    Called when a forced ``--assemble`` redo removes the assembly folder from disk before
+    megahit reruns: if megahit then fails, the registry must not go on describing contigs
+    (and a ``dir``) that no longer exist. A no-op when there is no extraction record (or no
+    assembly block) for this accession/genome.
+    """
+    entry = registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
+    if entry is not None:
+        entry["assembly"] = None
+
+
 def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
     return registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
 

@@ -26,6 +26,7 @@ from metaquest.data.read_extraction import (
 )
 from metaquest.data.registry import (
     Registry,
+    clear_assembly,
     extraction_record,
     load_registry,
     record_assembly,
@@ -406,6 +407,14 @@ class ExtractTargetReadsCommand(BaseCommand):
         genome_length = fasta_length(args.genome_fasta)
         for accession, reads in with_reads.items():
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
+            if args.force and out_dir.exists():
+                # assemble_extracted_reads is about to remove this folder (force redoes an
+                # assembly regardless of what is in it) before megahit reruns. If megahit
+                # then fails, the registry must not go on describing contigs that no longer
+                # exist on disk, so the recorded assembly is cleared now rather than left to
+                # a record_assembly call that may never come.
+                with registry_transaction(args.registry) as reg:
+                    clear_assembly(reg, accession, args.genome_id)
             # megahit needs FIFOs for its scratch files, which some filesystems (e.g. ExFAT)
             # do not provide; --temp-folder points it elsewhere when given, else a fresh
             # scratch directory is created for this run alone under the project's output
