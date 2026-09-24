@@ -520,8 +520,6 @@ class TestStatusWithRegistry:
     def test_reselect_suggestion_quotes_values_with_spaces(self, tmp_path, monkeypatch):
         """A metadata value containing a space must be shell-quoted, so the suggested command
         is actually safe to paste and run rather than breaking the shell's argument split."""
-        import shlex
-
         root = tmp_path
         _project_tree(root)
         monkeypatch.chdir(root)
