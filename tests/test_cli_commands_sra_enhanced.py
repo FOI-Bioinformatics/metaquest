@@ -472,6 +472,32 @@ class TestSRAValidateCommand:
         dir_names = {d.name for d in result}
         assert dir_names == {"SRR123", "SRR789"}
 
+    def test_find_accession_dirs_skips_hidden_dirs(self, tmp_path):
+        """A hidden folder (e.g. ``.Trashes`` or ``._SRR123``) is not an accession."""
+        command = SRAValidateCommand()
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        (fastq_folder / "SRR123").mkdir()
+        (fastq_folder / "._SRR123").mkdir()
+        (fastq_folder / ".Trashes").mkdir()
+
+        result = command._find_accession_dirs(fastq_folder)
+
+        assert [d.name for d in result] == ["SRR123"]
+
+    @patch("builtins.print")
+    def test_validate_directory_ignores_appledouble_files(self, mock_print, tmp_path):
+        """A ``._<name>.fastq.gz`` AppleDouble file is not counted as a FASTQ file."""
+        command = SRAValidateCommand()
+        acc_dir = tmp_path / "SRR123"
+        acc_dir.mkdir()
+        (acc_dir / "test.fastq").write_text("@read1\nACGT\n+\n!!!!\n")
+        (acc_dir / "._test.fastq").write_bytes(b"\x00" * 4096)
+
+        result = command._validate_directory(acc_dir)
+
+        assert result["num_files"] == 1
+
     @patch("builtins.print")
     def test_validate_directory_no_files(self, mock_print, tmp_path):
         """Test validation of directory with no FASTQ files."""

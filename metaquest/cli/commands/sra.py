@@ -211,6 +211,16 @@ class DownloadSraCommand(BaseCommand):
             if args.max_downloads:
                 self.logger.info(f"  Limited to {args.max_downloads} downloads")
 
+    @staticmethod
+    def _count_linked(stats: dict) -> int:
+        """How many of this run's results the store served from a copy it already had.
+
+        Counts result messages the data layer prefixes with ``STORE_LINKED_PREFIX``; a
+        dataset this run downloaded and saved into the store carries a different message
+        (``STORE_SAVED_SUFFIX``) and is not counted here.
+        """
+        return sum(1 for message in stats.get("results", {}).values() if message.startswith(STORE_LINKED_PREFIX))
+
     def _log_download_summary(self, stats: dict) -> None:
         """Log the summary for a completed download run."""
         self.logger.info("Download summary:")
@@ -219,6 +229,8 @@ class DownloadSraCommand(BaseCommand):
         self.logger.info(f"  Already downloaded: {stats['already_downloaded']} datasets")
         if stats.get("blacklisted", 0) > 0:
             self.logger.info(f"  Blacklisted: {stats['blacklisted']} datasets")
+        if stats.get("linked", 0) > 0:
+            self.logger.info(f"  Linked from store: {stats['linked']} datasets")
         self.logger.info(f"  Total processed: {stats['total']} datasets")
 
     def _report_failed_downloads(self, args: argparse.Namespace, stats: dict) -> None:
@@ -454,6 +466,14 @@ class DownloadSraCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
+            return self._run(args)
+        except KeyboardInterrupt:
+            # download_sra has already cancelled pending downloads and stopped running tools.
+            self.logger.error("Download interrupted by the user")
+            return 130
+
+    def _run(self, args: argparse.Namespace) -> int:
+        try:
             if not args.dry_run and shutil.which("fasterq-dump") is None:
                 self.logger.error(
                     "fasterq-dump not found on PATH. Install sra-tools, "
@@ -518,6 +538,7 @@ class DownloadSraCommand(BaseCommand):
                 compress=compress,
                 **self._store_options(args, store, project_registry),
             )
+            download_stats["linked"] = self._count_linked(download_stats)
 
             if args.dry_run:
                 self._log_dry_run_summary(args, download_stats)

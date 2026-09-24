@@ -32,6 +32,7 @@ class StorePaths:
     tmp: Path
     sra: Path
     metadata: Path
+    journal: Path
 
 
 def store_paths(root: Path) -> StorePaths:
@@ -46,6 +47,7 @@ def store_paths(root: Path) -> StorePaths:
         tmp=root / "tmp",
         sra=root / "sra",
         metadata=root / "metadata",
+        journal=root / "journal",
     )
 
 
@@ -57,7 +59,7 @@ def init_store(root: Path) -> StorePaths:
     """
     paths = store_paths(root)
 
-    for directory in (paths.root, paths.locks, paths.tmp, paths.sra, paths.metadata):
+    for directory in (paths.root, paths.locks, paths.tmp, paths.sra, paths.metadata, paths.journal):
         directory.mkdir(parents=True, exist_ok=True)
 
     if not paths.marker.exists():

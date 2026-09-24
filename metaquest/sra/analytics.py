@@ -24,10 +24,33 @@ from Bio import SeqIO
 from scipy import stats
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import visible_files
 from metaquest.data.sra import iter_fastq_records
 from metaquest.data.sra_metadata import SRADatasetInfo
 
 logger = logging.getLogger(__name__)
+
+
+def json_safe(value: Any) -> Any:
+    """Return ``value`` with numpy scalars, sets and non-finite floats replaced by JSON-safe
+    Python values, recursively.
+
+    ``json.dump``/``json.dumps`` reject a numpy ``bool_``/integer/floating scalar (e.g. the
+    ``p_value < 0.05`` comparison in ``_perform_statistical_tests`` produces a numpy ``bool_``,
+    not a Python ``bool``) and a bare ``set``, and turn a non-finite float (``nan``/``inf``)
+    into invalid JSON tokens rather than raising. Call this on a payload before dumping it.
+    """
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        return None if not np.isfinite(value) else float(value)
+    return value
 
 
 @dataclass
@@ -160,7 +183,7 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
     if not directory.is_dir():
         return profiles
 
-    for path in sorted(directory.glob(f"*{_QUALITY_PROFILE_SUFFIX}")):
+    for path in visible_files(directory, f"*{_QUALITY_PROFILE_SUFFIX}"):
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as e:
@@ -1006,7 +1029,7 @@ class SRADatasetAnalyzer:
 
                         tests[col]["statistic"] = float(statistic)
                         tests[col]["p_value"] = float(p_value)
-                        tests[col]["significant"] = p_value < 0.05
+                        tests[col]["significant"] = bool(p_value < 0.05)
                     except RuntimeWarning:
                         # Handle precision loss warnings gracefully
                         tests[col]["test"] = "failed (precision loss)"

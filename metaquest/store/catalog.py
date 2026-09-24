@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 # Bump when the catalogue's schema changes shape.
 SCHEMA_VERSION = 1
 
+# ``store_meta`` key set by ``store_reindex`` when it rebuilds a catalogue that holds datasets
+# but restores no project: every dataset then looks unused, so ``store_gc`` refuses to run
+# until the user confirms with ``--accept-rebuilt`` (or a later reindex restores a project).
+REBUILT_WITHOUT_PROJECTS = "rebuilt_without_projects"
+
 _SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS store_meta (
@@ -148,6 +153,9 @@ class Catalog:
         self.paths = paths
         self.create = create
         self._conn: Optional[sqlite3.Connection] = None
+        # Suspended by journal.replay() while it feeds journaled records back in, so a
+        # rebuilt catalogue does not duplicate the lines it is replaying.
+        self.journal_enabled: bool = True
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -203,6 +211,24 @@ class Catalog:
             "INSERT OR IGNORE INTO store_meta (key, value) VALUES ('schema_version', ?)",
             (str(SCHEMA_VERSION),),
         )
+
+    # -------------------------------------------------------------------- meta
+
+    @_wrap_sqlite_errors
+    def get_meta(self, key: str) -> Optional[str]:
+        """The ``store_meta`` value for ``key``, or None when it is not set."""
+        row = self.conn.execute("SELECT value FROM store_meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else row["value"]
+
+    @_wrap_sqlite_errors
+    def set_meta(self, key: str, value: str) -> None:
+        """Set the ``store_meta`` value for ``key``, replacing any earlier value."""
+        self.conn.execute("INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)", (key, value))
+
+    @_wrap_sqlite_errors
+    def delete_meta(self, key: str) -> None:
+        """Remove ``key`` from ``store_meta``; a key that is not set is left as it is."""
+        self.conn.execute("DELETE FROM store_meta WHERE key = ?", (key,))
 
     # ---------------------------------------------------------------- datasets
 
@@ -310,6 +336,10 @@ class Catalog:
             """,
             (project_id, name, path, registry, now, now, socket.gethostname()),
         )
+        if self.journal_enabled:
+            from metaquest.store import journal
+
+            journal.append_project(self.paths, project_id, name, path, registry)
 
     # ------------------------------------------------------------------- usage
 
@@ -349,6 +379,10 @@ class Catalog:
             """,
             (accession, project_id, genome_id, stage, now, now, detail),
         )
+        if self.journal_enabled:
+            from metaquest.store import journal
+
+            journal.append_usage(self.paths, accession, project_id, genome_id, stage, detail)
 
     # ----------------------------------------------------------------- queries
 
@@ -455,10 +489,11 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
 
     Acquires ``paths.catalog_lock`` (blocking, with the same wait/stale-lock
     protocol as the per-project registry's ``_acquire_lock``), opens the
-    catalogue, migrates its schema, yields it for the caller to write through,
-    commits on a clean exit, and always releases the lock. If the block raises,
-    the connection is closed without committing (uncommitted changes are
-    discarded) and the lock is still released.
+    catalogue, migrates its schema, backfills the journal from any ``projects``/``usage`` rows
+    that predate it (``journal.backfill_from_catalog``, a no-op once the journal already has
+    project lines), yields it for the caller to write through, commits on a clean exit, and
+    always releases the lock. If the block raises, the connection is closed without committing
+    (uncommitted changes are discarded) and the lock is still released.
 
     Not re-entrant: nesting a second ``catalog_write`` (or ``Catalog.__enter__``, opened
     against the same store root) inside this block's body will deadlock against the
@@ -469,6 +504,9 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     try:
         with Catalog(paths, create=True) as catalog:
             catalog.migrate()
+            from metaquest.store import journal
+
+            journal.backfill_from_catalog(paths, catalog)
             yield catalog
             try:
                 catalog.conn.commit()

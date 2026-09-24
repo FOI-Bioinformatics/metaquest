@@ -2,7 +2,9 @@
 
 import gzip
 import json
+import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,6 +16,7 @@ import pytest
 from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
 from metaquest.data.read_extraction import (
     ExtractionResult,
+    _record_matches,
     _run_minimap2,
     _sample_reads,
     assemble_extracted_reads,
@@ -569,6 +572,22 @@ class TestMateCountMismatch:
         assert len(alignment_calls) == 1
 
 
+class TestRecordMatches:
+    def test_record_matches_compares_min_mapq(self, tmp_path):
+        """A record's min_mapq is compared like every other extraction parameter: a
+        mismatch means the sample must be redone rather than skipped."""
+        record = {
+            "genome_fasta": str(tmp_path / "g.fna"),
+            "preset": "sr",
+            "threshold": 0.1,
+            "min_mapq": 20,
+            "mapped_reads": 0,
+        }
+        (tmp_path / "g.fna").write_text(">a\nA\n")
+        assert _record_matches(record, tmp_path / "g.fna", "sr", 0.1, min_mapq=20)
+        assert not _record_matches(record, tmp_path / "g.fna", "sr", 0.1, min_mapq=0)
+
+
 class TestExtractionIdempotency:
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_recorded_extraction_is_skipped_unless_forced(self, mock_run):
@@ -800,6 +819,69 @@ class TestExtractionIdempotency:
         assert "would skip SRR1 (already extracted, 42 mapped reads); use --force to redo" in caplog.text
         mock_run.assert_not_called()
 
+    def test_dry_run_summarises_missing_fastq(self, tmp_path, caplog):
+        """With ``available`` given, samples without FASTQ are reported once as a count,
+        not with a warning per sample (an audit found one WARNING per non-downloaded
+        sample on a 16603-sample dry run)."""
+        root, table, genome = _make_tree(tmp_path)
+        (root / "fastq" / "SRR2").rename(root / "fastq" / "SRR2_gone")
+        with caplog.at_level(logging.INFO):
+            extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.0,
+                dry_run=True,
+                available={"SRR1", "SRR3"},
+            )
+        assert caplog.text.count("No FASTQ files found for") == 0
+        assert "1 of the 3 selected sample(s) have no FASTQ" in caplog.text
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_available_filter_keeps_already_done_samples_without_fastq(self, mock_run, tmp_path, caplog):
+        """A sample whose extraction is already recorded must not be dropped as 'no FASTQ'
+        just because its input FASTQ folder is gone (e.g. after store_gc/store_unlink runs
+        once a project's extraction against a genome is complete); it is still reported as
+        already extracted, not as missing."""
+        mock_run.side_effect = _fake_tools({})
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        extracted_dir = root / "targeted" / "SRR1"
+        extracted_dir.mkdir(parents=True)
+        extracted_files = [extracted_dir / "GCF_1_1.fastq.gz", extracted_dir / "GCF_1_2.fastq.gz"]
+        for f in extracted_files:
+            f.write_text("@r\nACGT\n+\nIIII\n")
+        record = {
+            "SRR1": {
+                "genome_fasta": str(genome),
+                "preset": "sr",
+                "threshold": 0.5,
+                "mapped_reads": 42,
+                "unequal_mates": False,
+                "files": [str(p) for p in extracted_files],
+            }
+        }
+        # The input FASTQ folder is gone, so a caller computing "available" from the
+        # registry's download state and the FASTQ folder on disk would not include SRR1.
+        shutil.rmtree(root / "fastq" / "SRR1")
+
+        with caplog.at_level("INFO"):
+            results = extract_target_reads(
+                parsed_containment=table,
+                genome_id="GCF_1",
+                genome_fasta=genome,
+                fastq_folder=root / "fastq",
+                output_folder=root / "targeted",
+                threshold=0.5,
+                already_done=record,
+                available={"SRR2"},
+            )
+        assert results["SRR1"].skipped is True and results["SRR1"].mapped_records == 42
+        assert "already extracted against GCF_1" in caplog.text
+        assert "have no FASTQ" not in caplog.text
+        mock_run.assert_not_called()
+
 
 class TestAssembleExtractedReads:
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
@@ -887,6 +969,41 @@ class TestAssembleExtractedReads:
 
             assert ran is False
             assert (out / "intermediate_contigs").exists()
+
+    def test_megahit_failure_reports_stderr(self, tmp_path):
+        """A megahit failure (e.g. on a filesystem without FIFOs) must surface its stderr,
+        not just the bare CalledProcessError."""
+        reads = [tmp_path / "r.fastq.gz"]
+        reads[0].write_bytes(b"x")
+        err = subprocess.CalledProcessError(
+            1, ["megahit"], output="", stderr="line1\nOSError: [Errno 45] Operation not supported\n"
+        )
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=err):
+            with pytest.raises(ProcessingError) as excinfo:
+                assemble_extracted_reads(reads, tmp_path / "asm", threads=1, tmp_dir=tmp_path / "scratch")
+        assert "Operation not supported" in str(excinfo.value)
+
+    def test_megahit_receives_tmp_dir(self, tmp_path):
+        state = {"calls": []}
+        reads = [tmp_path / "r.fastq.gz"]
+        reads[0].write_bytes(b"x")
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+            assemble_extracted_reads(reads, tmp_path / "asm", threads=1, tmp_dir=tmp_path / "scratch")
+        megahit_call = next(c for c in state["calls"] if c[0] == "megahit")
+        assert "--tmp-dir" in megahit_call[1]
+
+    def test_tmp_dir_inside_output_dir_is_rejected(self, tmp_path):
+        """megahit requires its -o directory not to already exist. A tmp_dir nested under
+        output_dir would create output_dir itself (via tmp_dir.mkdir(parents=True)) before
+        megahit ever runs, so it must be rejected up front rather than passed through."""
+        reads = [tmp_path / "r.fastq.gz"]
+        reads[0].write_bytes(b"x")
+        out_dir = tmp_path / "asm"
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure") as mock_run:
+            with pytest.raises(ProcessingError, match="must not"):
+                assemble_extracted_reads(reads, out_dir, threads=1, tmp_dir=out_dir / "scratch")
+        mock_run.assert_not_called()
+        assert not out_dir.exists()
 
 
 class TestResolveAssemblyThreads:

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from metaquest.cli.base import BaseCommand
+from metaquest.core.exceptions import ValidationError
 from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
 from metaquest.data.sra import fastq_files
 from metaquest.data.sra_metadata import _resolved_sidecar_path
@@ -19,6 +20,7 @@ from metaquest.sra import (
     SRAReportGenerator,
     QualityProfile,
     load_quality_profiles,
+    json_safe,
 )
 from metaquest.store.layout import StorePaths
 from metaquest.store.resolve import resolve_optional_store
@@ -76,8 +78,8 @@ class SRAQualityProfileCommand(BaseCommand):
     def configure_parser(self, parser):
         parser.add_argument(
             "--accessions-file",
-            required=True,
-            help="File containing SRA accessions, one per line",
+            required=False,
+            help="File containing SRA accessions, one per line. Required unless --accession is given",
         )
         parser.add_argument(
             "--fastq-dir",
@@ -91,7 +93,7 @@ class SRAQualityProfileCommand(BaseCommand):
         )
         parser.add_argument(
             "--accession",
-            help="Profile single accession instead of batch",
+            help="Profile single accession instead of batch. Required unless --accessions-file is given",
         )
         parser.add_argument(
             "--detailed-reports",
@@ -151,10 +153,16 @@ class SRAQualityProfileCommand(BaseCommand):
             print(f"⚠️  Adapter contamination: {adapter_contamination:.1%}")
 
     def _resolve_accessions(self, args) -> List[str]:
-        """Return the accessions to profile (single or batch), or [] if none."""
+        """Return the accessions to profile (single or batch), or [] if none.
+
+        Raises ValidationError when neither --accession nor --accessions-file was given,
+        rather than letting a missing accessions_file surface as a bare open(None) error.
+        """
         if args.accession:
             print(f"Profiling single accession: {args.accession}")
             return [args.accession]
+        if not args.accessions_file:
+            raise ValidationError("Give --accessions-file or --accession")
         accessions = self._read_accessions(args.accessions_file)
         if accessions:
             print(f"Profiling {len(accessions)} accessions...")
@@ -399,14 +407,16 @@ class SRAInteractiveDashboardCommand(BaseCommand):
     def configure_parser(self, parser):
         parser.add_argument(
             "--accessions-file",
-            required=True,
-            help="File containing SRA accessions, one per line",
+            required=False,
+            help="File containing SRA accessions, one per line. Required unless "
+            "--quality-profiles names a directory holding saved profiles",
         )
         parser.add_argument(
             "--quality-profiles",
             help="Directory of per-accession quality profile JSONs written by "
             "sra_profile_quality --output-dir; an accession found there is reused as-is "
-            "instead of being reprofiled from FASTQ",
+            "instead of being reprofiled from FASTQ. With no --accessions-file, every "
+            "accession found here is dashboarded",
         )
         parser.add_argument("--fastq-dir", default="fastq", help="Directory containing downloaded FASTQ files")
         parser.add_argument(
@@ -435,19 +445,36 @@ class SRAInteractiveDashboardCommand(BaseCommand):
         """Read accessions from file."""
         return _read_accession_file(filename)
 
+    def _resolve_accessions(self, args, profiles: Dict[str, QualityProfile]) -> List[str]:
+        """Return the accessions to dashboard, or [] if none.
+
+        With --accessions-file given, that file drives the list as before. Without it, the
+        accessions already loaded into ``profiles`` from --quality-profiles are used instead,
+        so a directory of saved quality profiles is enough on its own. Raises ValidationError
+        when neither source yields anything to work with.
+        """
+        if args.accessions_file:
+            return self._read_accessions(args.accessions_file)
+        if profiles:
+            return sorted(profiles)
+        raise ValidationError("Give --accessions-file or a --quality-profiles directory with saved profiles")
+
     def execute(self, args):
         try:
             # Setup
             output_dir = Path(args.output_dir)
             output_dir.mkdir(exist_ok=True)
 
-            accessions = self._read_accessions(args.accessions_file)
+            profiles: Dict[str, QualityProfile] = {}
+            if args.quality_profiles:
+                if Path(args.quality_profiles).is_dir():
+                    profiles = load_quality_profiles(args.quality_profiles)
+                else:
+                    logger.warning("Quality profiles directory not found: %s", args.quality_profiles)
+
+            accessions = self._resolve_accessions(args, profiles)
             if not accessions:
                 return 1
-
-            profiles: Dict[str, QualityProfile] = {}
-            if args.quality_profiles and Path(args.quality_profiles).is_dir():
-                profiles = load_quality_profiles(args.quality_profiles)
 
             reporter = SRAReportGenerator(output_dir=str(output_dir), fastq_dir=args.fastq_dir)
             missing = [acc for acc in accessions if acc not in profiles and reporter.analyzer.find_fastq(acc) is None]
@@ -476,7 +503,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
                 # Group accessions by some criteria (could be enhanced later)
                 groups = {"All Datasets": accessions}
                 dashboard_path = reporter.create_comparative_analysis(
-                    groups, title=f"{args.title} - Comparative Analysis"
+                    groups, title=f"{args.title} - Comparative Analysis", profiles=profiles or None
                 )
 
             if dashboard_path:
@@ -597,18 +624,26 @@ class SRAComparativeAnalysisCommand(BaseCommand):
 
     @staticmethod
     def _save_comparison_results(output_dir, groups, comparison) -> Path:
-        """Write the comparison results as JSON and return the output path."""
+        """Write the comparison results as JSON and return the output path.
+
+        ``comparison.statistical_tests`` holds real scipy t-test/ANOVA output, whose
+        ``significant`` flag is a numpy bool (not a Python bool) and is not JSON-serialisable
+        on its own; the whole payload goes through ``json_safe`` first so a numpy scalar here
+        never turns into an unhandled TypeError.
+        """
         significant_differences = [col for col, test in comparison.statistical_tests.items() if test.get("significant")]
         results_file = output_dir / "comparative_analysis.json"
         with open(results_file, "w") as results_f:
             json.dump(
-                {
-                    "groups": groups,
-                    "summary_statistics": comparison.summary_statistics,
-                    "statistical_tests": comparison.statistical_tests,
-                    "significant_differences": significant_differences,
-                    "outlier_datasets": comparison.outlier_datasets,
-                },
+                json_safe(
+                    {
+                        "groups": groups,
+                        "summary_statistics": comparison.summary_statistics,
+                        "statistical_tests": comparison.statistical_tests,
+                        "significant_differences": significant_differences,
+                        "outlier_datasets": comparison.outlier_datasets,
+                    }
+                ),
                 results_f,
                 indent=2,
             )

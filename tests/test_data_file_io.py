@@ -11,9 +11,11 @@ import pytest
 
 from metaquest.data.file_io import (
     ensure_directory,
+    is_hidden_name,
     list_files,
     copy_file,
     read_csv,
+    visible_files,
     write_csv,
 )
 from metaquest.core.exceptions import DataAccessError
@@ -319,6 +321,33 @@ class TestFileIoIntegration:
         assert len(result_df) == len(original_df)
         assert list(result_df.columns) == list(original_df.columns)
         assert result_df["name"].tolist() == original_df["name"].tolist()
+
+
+class TestVisibleFiles:
+    def test_hidden_names(self):
+        assert is_hidden_name("._SRR1_1.fastq.gz")
+        assert is_hidden_name(".DS_Store")
+        assert not is_hidden_name("SRR1_1.fastq.gz")
+
+    def test_visible_files_drops_appledouble_and_sorts(self, tmp_path):
+        (tmp_path / "b.fna").write_text(">b\nA\n")
+        (tmp_path / "a.fna").write_text(">a\nA\n")
+        (tmp_path / "._a.fna").write_bytes(b"\x00\x05\x16\x07")
+        (tmp_path / ".DS_Store").write_bytes(b"\x00")
+        (tmp_path / "sub").mkdir()
+        assert [p.name for p in visible_files(tmp_path, "*.fna")] == ["a.fna", "b.fna"]
+        assert [p.name for p in visible_files(tmp_path, "*", dirs=True)] == ["sub"]
+        assert visible_files(tmp_path / "missing", "*") == []
+
+    def test_visible_files_two_patterns_no_duplicates(self, tmp_path):
+        (tmp_path / "x.fastq.gz").write_text("@r\nA\n+\nI\n")
+        assert [p.name for p in visible_files(tmp_path, "*.fastq.gz", "*.gz")] == ["x.fastq.gz"]
+
+    def test_list_files_hides_dotfiles_by_default(self, tmp_path):
+        (tmp_path / "g.csv").write_text("a\n")
+        (tmp_path / "._g.csv").write_bytes(b"\x00")
+        assert [p.name for p in list_files(tmp_path, "*.csv")] == ["g.csv"]
+        assert len(list_files(tmp_path, "*.csv", include_hidden=True)) == 2
 
 
 if __name__ == "__main__":

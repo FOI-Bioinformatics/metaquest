@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
-from metaquest.data.file_io import write_csv
+from metaquest.data.file_io import visible_files, write_csv
 from metaquest.data.registry import (
     ProjectPaths,
     ReconcileReport,
@@ -137,14 +137,13 @@ class StatusCommand(BaseCommand):
         meta_dir = Path(args.metadata_folder)
         genomes_dir = Path(args.genomes_folder)
 
-        if fastq_dir.is_dir():
-            on_disk_fastq = sorted(
-                d.name for d in fastq_dir.iterdir() if not is_transient_folder(d.name) and accession_has_fastq(d)
-            )
-        else:
-            on_disk_fastq = []
-        on_disk_meta = sorted(p.name[: -len("_metadata.xml")] for p in meta_dir.glob("*_metadata.xml"))
-        on_disk_genomes = sorted({p.name for g in GENOME_FASTA_GLOBS for p in genomes_dir.glob(g)})
+        on_disk_fastq = sorted(
+            d.name
+            for d in visible_files(fastq_dir, dirs=True)
+            if not is_transient_folder(d.name) and accession_has_fastq(d)
+        )
+        on_disk_meta = sorted(p.name[: -len("_metadata.xml")] for p in visible_files(meta_dir, "*_metadata.xml"))
+        on_disk_genomes = sorted(p.name for p in visible_files(genomes_dir, *GENOME_FASTA_GLOBS))
 
         report: Dict[str, Any] = {
             "on_disk": {
@@ -230,14 +229,32 @@ class StatusCommand(BaseCommand):
         ]
         if not to_download:
             return []
+        # A selection recorded with --no-skip-excluded may still list an excluded
+        # accession, so its output file is never suggested for direct download;
+        # such accessions instead point at re-running select_datasets with
+        # --skip-excluded so the excluded run is dropped before download.
         by_output: Dict[str, List[str]] = {}
+        needs_reselect: List[str] = []
         for acc in to_download:
-            output = registry.datasets[acc].get("selection", {}).get("output") or "accessions.txt"
+            selection = registry.datasets[acc].get("selection", {})
+            criteria = selection.get("criteria") or {}
+            if criteria.get("skip_excluded") is False:
+                needs_reselect.append(acc)
+                continue
+            output = selection.get("output") or "accessions.txt"
             by_output.setdefault(output, []).append(acc)
-        return [
+        steps = [
             {"command": f"metaquest download_sra --accessions-file {output}", "accessions": accs}
             for output, accs in by_output.items()
         ]
+        if needs_reselect:
+            steps.append(
+                {
+                    "command": "metaquest select_datasets ... --skip-excluded  (the last selection kept excluded runs)",
+                    "accessions": needs_reselect,
+                }
+            )
+        return steps
 
     @staticmethod
     def _selection_table(registry: Registry) -> str:
@@ -291,8 +308,11 @@ class StatusCommand(BaseCommand):
 
     def _export_tsv(self, registry: Registry, prefix: str) -> None:
         datasets_df, extractions_df = to_dataframes(registry)
-        write_csv(datasets_df, f"{prefix}_datasets.tsv", sep="\t")
-        write_csv(extractions_df, f"{prefix}_extractions.tsv", sep="\t")
+        datasets_path = f"{prefix}_datasets.tsv"
+        extractions_path = f"{prefix}_extractions.tsv"
+        write_csv(datasets_df, datasets_path, sep="\t")
+        write_csv(extractions_df, extractions_path, sep="\t", index=False)
+        self.logger.info("Wrote %s and %s", datasets_path, extractions_path)
 
     # -------------------------------------------------------------------- store
 

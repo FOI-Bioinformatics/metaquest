@@ -18,7 +18,10 @@ files they produce and what the registry keeps. The [README](../README.md) docum
 | 5. Extract | `extract_target_reads` | `targeted/<accession>/<genome>_*.fastq.gz` | mapped read count, parameters, files |
 | 6. Assemble | `extract_target_reads --assemble` | `targeted/<accession>/<genome>_assembly/final.contigs.fa` | contig count, total length, N50, megahit version |
 
-Metadata commands run alongside stages 1 and 2 and are listed after the stages below.
+Metadata commands run alongside stages 1 and 2 and are listed after the stages below. A genome FASTA is
+needed before stage 1 can run at all: `genome_prepare` (search GTDB, download, write a manifest and a
+registry entry) or `genome_download` (download by accession/species/genus, no registry entry) get one;
+see the [README](../README.md#0-getting-a-target-genome-fasta).
 
 ## 1. Screen
 
@@ -36,15 +39,20 @@ metaquest parse_containment --matches-folder matches
 ```
 
 `parse_containment` writes `parsed_containment.txt` (one row per SRA accession, one column per genome,
-plus `max_containment`) and `summary_containment.txt` (how many samples pass each containment step), as
-well as `parsed_containment_details.tsv` with cANI and the sample metadata columns kept alongside the
-containment values. `plot_containment` draws the distribution. The registry keeps every screened
-accession with its containment per genome, capped per genome by `--registry-max-screened` (default
-5000).
+plus `max_containment`) and, by default, `top_containments.txt` (how many samples pass each containment
+step, at `--step-size` intervals, default 0.1; the name and step size shown in the README's example are
+passed explicitly, not the defaults), as well as `parsed_containment_details.tsv` with cANI and the
+sample metadata columns kept alongside the containment values. `plot_containment` writes a plot image
+(png by default) rather than only displaying one. The registry keeps every screened accession with its
+containment per genome, capped per genome by `--registry-max-screened` (default 5000). An unreadable
+match file makes `use_branchwater`, `parse_containment`, and `extract_branchwater_metadata` exit with
+status 1 rather than skipping it silently.
 
 `branchwater_search` retries a failing request automatically and caches a response under
 `.branchwater-cache/` next to its output, keyed by the genome, thresholds and server; `--no-cache`,
-`--refresh` and `--max-cache-age-days` control the cache.
+`--refresh` and `--max-cache-age-days` control the cache. The server is sent `--threshold` but is not
+always relied on to honour it; the client re-applies the threshold to the response and drops anything
+below it.
 
 ## 2. Select
 
@@ -67,7 +75,8 @@ selection; running `select_datasets` again replaces the previous selection. Excl
 their reason in the registry and in `blacklist.txt`, and `download_sra` honours them without further
 flags. `--top-n` keeps only the highest-containment accessions after every other filter; excluded
 accessions are dropped by default (`--skip-excluded`) and `--skip-downloaded` also drops accessions the
-registry already records as downloaded.
+registry already records as downloaded. `select_datasets` has no filter on dataset size; `sra_info` (see
+[README](../README.md#downloading-reads)) reports sizes separately, before downloading.
 
 ## 3. Download
 
@@ -75,14 +84,20 @@ registry already records as downloaded.
 metaquest download_sra --accessions-file accessions.txt --fastq-folder fastq --max-workers 4
 ```
 
-Reads land in `fastq/<accession>/` by default: `prefetch` fetches the archive, then `fasterq-dump`
-converts it (`--no-prefetch` calls fasterq-dump directly), and the resulting FASTQ files are
-gzip-compressed unless `--no-compress` is given. As each download finishes the registry records it as
-downloaded (with file sizes and a completeness verdict from comparing the read count against NCBI's
-spot count), failed (with the attempt count and message) or skipped (blacklisted or cut by
-`--max-downloads`). Failed accessions are also written to `fastq/failed_accessions.txt` for a retry,
-and `--report-file` writes one row per accession. A rerun skips accessions already on disk; `--force`
-downloads them again. `--dry-run` reports the plan and touches neither the disk nor the registry.
+Reads land in `fastq/<accession>/` by default (as `<accession>_1.fastq.gz`, `_2` for paired runs):
+`prefetch` fetches the archive, then `fasterq-dump` converts it (`--no-prefetch` calls fasterq-dump
+directly), and the resulting FASTQ files are gzip-compressed unless `--no-compress` is given. As each
+download finishes the registry records it as downloaded (with file sizes and a completeness verdict from
+comparing the read count against NCBI's spot count -- this verdict is only available when
+`download_metadata` (see "Metadata" below) has already fetched that accession's expected spot count, so
+run `download_metadata` before `download_sra` if the verdict matters), failed (with the attempt count and
+message) or skipped (blacklisted or cut by `--max-downloads`). Failed accessions are also written to
+`fastq/failed_accessions.txt` for a retry, and `--report-file` writes one row per accession. A rerun
+skips accessions already on disk; `--force` downloads them again. `--dry-run` reports the plan and
+touches neither the disk nor the registry. `--temp-folder DIR` sets where `fasterq-dump` writes scratch
+files; without it, a plain per-project download uses the system temp directory, while a store-backed one
+(below) defaults to `<data-root>/tmp/<accession>_fqtmp`. Ctrl-C cancels downloads not yet started and
+stops the running `prefetch`/`fasterq-dump` processes for the ones in progress.
 
 When a shared data store is configured (`--data-root`, `METAQUEST_DATA`, or the project's recorded
 store), `download_sra` looks up each accession in the store first. A complete or unverified dataset is
@@ -127,16 +142,20 @@ metaquest extract_target_reads --parsed-containment parsed_containment.txt \
 ```
 
 Samples at or above the threshold in the containment table are mapped with minimap2 (preset `sr` by
-default) and the mapped reads are written with samtools to `targeted/<accession>/`. The registry records
-the number of mapped reads, the genome FASTA, preset, threshold and the files written, including samples
-that mapped no reads. A rerun with the same genome, preset and threshold skips samples already recorded;
-`--dry-run` lists what would be extracted and what would be skipped; `--force` redoes them.
+default, `--threads` default 4) and the mapped reads are written with samtools to `targeted/<accession>/`
+as `<genome>_*.fastq.gz`. The registry records the number of mapped reads, the genome FASTA, preset,
+threshold and the files written, including samples that mapped no reads. A rerun with the same genome,
+preset and threshold skips samples already recorded; `--dry-run` lists what would be extracted and what
+would be skipped without running any tool (and without requiring minimap2/samtools/megahit to be on
+PATH), printing one summary line for samples not yet downloaded rather than one warning per sample;
+`--force` redoes them.
 
 The genome is indexed once per preset under `<output-folder>/.index/` and the index is reused across
 samples rather than rebuilt each time. Unmapped, secondary and supplementary alignments are always
 dropped; `--min-mapq` (default 0) additionally drops mapped records below a mapping-quality threshold.
 `--fastq-folder` accepts a folder made of store symlinks the same way it accepts plain per-accession
-folders, so extraction reads directly from the shared store when a project links into one.
+folders, so extraction reads directly from the shared store when a project links into one; `--data-root`
+resolves it against a shared store the same way the other store-aware commands do.
 
 ## 6. Assemble
 
@@ -149,7 +168,13 @@ With `--assemble` the extracted reads of each sample go through megahit into
 `targeted/<accession>/<genome>_assembly/`. The registry records contig count, total length, N50, largest
 contig, the megahit version and the parameters. An existing `final.contigs.fa` is kept unless `--force`;
 an assembly folder without contigs is reported as interrupted, and `--force` removes it and runs again.
-On macOS megahit runs single-threaded by default (`--assembly-threads` overrides).
+A megahit failure surfaces the tool's own stderr (last few lines), not just its exit code. On macOS
+megahit runs single-threaded by default (`--assembly-threads` overrides).
+
+megahit's scratch files need a filesystem with FIFOs, which ExFAT and some network shares do not
+provide; `--temp-folder DIR` points that scratch at a local POSIX filesystem instead of the default
+(`<output-folder>/.megahit-tmp` when `--temp-folder` is not given). On such a volume, stray `._*`
+AppleDouble sidecar files are ignored wherever MetaQuest lists a folder's contents.
 
 `--assembly-preset` sets megahit's `--presets` value: `meta-sensitive` (the default), `meta-large`, or
 `default` for no preset. `intermediate_contigs/` is removed after a successful assembly unless
@@ -158,25 +183,35 @@ contigs to report `reads_mapped`, `mapping_rate` and an estimated `mean_depth` i
 
 ## Metadata (alongside stages 1 and 2)
 
+Run `download_metadata` before `download_sra` if the download's spot-count verdict matters (see stage 3
+above); nothing in the command ordering below enforces this, it is on the user to sequence it that way.
+
 ```bash
-# Fast: the metadata embedded in the Branchwater CSVs
+# extract_branchwater_metadata only has real metadata to extract when the CSVs came from the
+# Branchwater web site; a branchwater_search (API) CSV carries only accession, containment and cANI
 metaquest extract_branchwater_metadata --branchwater-folder branchwater --metadata-folder metadata
 
-# Richer: NCBI metadata per accession, then a consolidated table
+# Richer, and the only route that works when branchwater_search was used: NCBI metadata per
+# accession, then a consolidated table
 metaquest download_metadata --email you@example.org --matches-folder matches --metadata-folder metadata
 metaquest parse_metadata --metadata-folder metadata --metadata-table-file metadata_table.txt
 
 # Summaries
-metaquest count_metadata --metadata-column Sample_Scientific_Name
-metaquest plot_metadata_counts --file-path counts_Sample_Scientific_Name.txt
+metaquest count_metadata --metadata-column Sample_Scientific_Name --threshold 0.5
+metaquest plot_metadata_counts --file-path metadata_counts.txt --save-format png
 ```
+
+`count_metadata` writes `metadata_counts.txt` by default and defaults `--threshold` to 0.5.
+`plot_metadata_counts`, unlike `plot_containment`, only writes a file when `--save-format` is given.
 
 `download_metadata --accessions-file accessions.txt` fetches metadata for the selected datasets only.
 The registry keeps the metadata file, run size, run checksum, library strategy and organism per
 accession. Accessions are fetched from NCBI in batches (`--batch-size`, default 200, one XML per
 accession written from each batch response) rather than one request per accession; `--api-key` (or the
 `NCBI_API_KEY` environment variable) raises the request rate limit. With `--data-root`, each fetched
-XML is also copied into `<data-root>/metadata/` so every project sharing the store has it.
+XML is also copied into `<data-root>/metadata/` so every project sharing the store has it, and
+`store_verify --spots` can find it there later even for a dataset downloaded before the metadata was
+fetched.
 
 ## Project state at any point
 

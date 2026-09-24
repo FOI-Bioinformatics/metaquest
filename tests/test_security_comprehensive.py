@@ -8,12 +8,24 @@ Run: pytest tests/test_security_comprehensive.py -v
 """
 
 import pytest
+import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from metaquest.utils.security import SecureSubprocess
 from metaquest.core.exceptions import SecurityError
+
+
+def _fake_proc(returncode=0, stdout="", stderr=""):
+    """A stand-in for subprocess.Popen's return value, as run_secure uses it."""
+    proc = Mock()
+    proc.communicate.return_value = (stdout, stderr)
+    proc.returncode = returncode
+    proc.poll.return_value = returncode
+    return proc
 
 
 class TestExecutableValidation:
@@ -246,9 +258,7 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_basic(self):
         """Test basic secure subprocess execution."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="success", stderr="")
-
+        with patch("subprocess.Popen", return_value=_fake_proc()) as mock_run:
             # Mock the validation to pass
             with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
@@ -263,7 +273,7 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_validates_parameters(self):
         """Test that run_secure validates parameters."""
-        with patch("subprocess.run"):
+        with patch("subprocess.Popen", return_value=_fake_proc()):
             with patch.object(SecureSubprocess, "validate_executable", return_value="fasterq-dump"):
                 with patch.object(SecureSubprocess, "validate_parameter", side_effect=SecurityError("Unsafe param")):
                     with pytest.raises(SecurityError, match="Unsafe param"):
@@ -271,16 +281,14 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_removes_dangerous_env_vars(self):
         """Test that dangerous environment variables are removed."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
+        with patch("subprocess.Popen", return_value=_fake_proc()) as mock_run:
             with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
                     SecureSubprocess.run_secure(
                         "echo", ["test"], env={"LD_PRELOAD": "/evil/lib.so", "SAFE_VAR": "value"}
                     )
 
-            # Check that subprocess.run was called
+            # Check that subprocess.Popen was called
             assert mock_run.called
             call_kwargs = mock_run.call_args[1]
 
@@ -289,8 +297,9 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_timeout_handling(self):
         """Test timeout handling in secure subprocess."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired("cmd", 10)
+        proc = _fake_proc()
+        proc.communicate.side_effect = [subprocess.TimeoutExpired("cmd", 10), ("", "")]
+        with patch("subprocess.Popen", return_value=proc):
 
             with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with pytest.raises(SecurityError, match="timed out"):
@@ -298,8 +307,7 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_preserves_calledprocesserror(self):
         """Test that CalledProcessError is preserved (not wrapped)."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
+        with patch("subprocess.Popen", return_value=_fake_proc(returncode=1)):
 
             with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with pytest.raises(subprocess.CalledProcessError):
@@ -307,9 +315,7 @@ class TestSecureSubprocessRun:
 
     def test_run_secure_with_cwd(self, tmp_path):
         """Test secure subprocess with working directory."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
+        with patch("subprocess.Popen", return_value=_fake_proc()) as mock_run:
             with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 with patch.object(SecureSubprocess, "validate_path", return_value=tmp_path):
                     SecureSubprocess.run_secure("echo", ["test"], cwd=str(tmp_path))
@@ -333,7 +339,7 @@ class TestAdvancedSecurityScenarios:
         for args in injection_attempts:
             # These should be caught by parameter validation
             try:
-                with patch("subprocess.run"):
+                with patch("subprocess.Popen", return_value=_fake_proc()):
                     with patch.object(SecureSubprocess, "validate_executable", return_value="tool"):
                         SecureSubprocess.run_secure("tool", args)
             except (SecurityError, subprocess.CalledProcessError):
@@ -348,9 +354,7 @@ class TestAdvancedSecurityScenarios:
             "PYTHONPATH": "/tmp/evil_modules",
         }
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0)
-
+        with patch("subprocess.Popen", return_value=_fake_proc()) as mock_run:
             with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
                 SecureSubprocess.run_secure("echo", ["test"], env=dangerous_env)
 
@@ -390,9 +394,7 @@ class TestArgumentParsing:
 
     def test_parse_flag_with_value(self):
         """Test parsing of flag with value argument."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0)
-
+        with patch("subprocess.Popen", return_value=_fake_proc()) as mock_run:
             with patch.object(SecureSubprocess, "validate_executable", return_value="tool"):
                 with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
                     with patch.object(SecureSubprocess, "validate_path", side_effect=lambda p, **k: Path(p)):
@@ -405,9 +407,7 @@ class TestArgumentParsing:
 
     def test_parse_standalone_argument(self):
         """Test parsing of standalone arguments."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0)
-
+        with patch("subprocess.Popen", return_value=_fake_proc()) as mock_run:
             with patch.object(SecureSubprocess, "validate_executable", return_value="fasterq-dump"):
                 with patch.object(SecureSubprocess, "validate_accession_for_subprocess", return_value="SRR000001"):
                     with patch.object(SecureSubprocess, "validate_parameter", side_effect=lambda e, p: p):
@@ -519,8 +519,8 @@ class TestDefensiveGuards:
             SecureSubprocess.validate_path("foo/../bar", allow_creation=False)
 
     def test_run_secure_wraps_unexpected_subprocess_error(self):
-        """A non-CalledProcessError from subprocess.run becomes a SecurityError."""
-        with patch("subprocess.run", side_effect=ValueError("boom")):
+        """A non-CalledProcessError from subprocess.Popen becomes a SecurityError."""
+        with patch("subprocess.Popen", side_effect=ValueError("boom")):
             with pytest.raises(SecurityError, match="Subprocess execution failed"):
                 SecureSubprocess.run_secure("datasets", ["--version"])
 
@@ -609,6 +609,113 @@ class TestAllowedRoots:
         SecureSubprocess.add_allowed_root(tmp_path)
         SecureSubprocess.add_allowed_root(tmp_path)
         assert SecureSubprocess._extra_roots.count(tmp_path.resolve()) == 1
+
+
+class TestChildProcessTracking:
+    """run_secure records every child it starts so an interrupt can stop them."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_stopping(self):
+        SecureSubprocess.clear_stopping()
+        yield
+        SecureSubprocess.clear_stopping()
+
+    def test_child_started_after_terminate_children_is_killed_at_once(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        assert SecureSubprocess.terminate_children(grace=0.0) == 0
+        proc = _fake_proc(returncode=-9)
+        with patch("subprocess.Popen", return_value=proc):
+            with pytest.raises(subprocess.CalledProcessError):
+                SecureSubprocess.run_secure("datasets", ["--version"])
+        proc.kill.assert_called_once()
+        assert not SecureSubprocess._children
+
+    def test_clear_stopping_lets_children_run_again(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        SecureSubprocess.terminate_children(grace=0.0)
+        SecureSubprocess.clear_stopping()
+        proc = _fake_proc()
+        with patch("subprocess.Popen", return_value=proc):
+            SecureSubprocess.run_secure("datasets", ["--version"])
+        proc.kill.assert_not_called()
+
+    @pytest.mark.skipif(shutil.which("sleep") is None, reason="needs a sleep executable")
+    def test_run_secure_tracks_children_and_terminate_children_kills_them(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "ALLOWED_EXECUTABLES", SecureSubprocess.ALLOWED_EXECUTABLES | {"sleep"})
+        started = threading.Event()
+        outcome = {}
+
+        def run_sleep():
+            started.set()
+            try:
+                SecureSubprocess.run_secure("sleep", ["30"])
+            except Exception as e:  # the terminated child exits non-zero
+                outcome["error"] = e
+
+        t = threading.Thread(target=run_sleep)
+        t.start()
+        try:
+            started.wait(2)
+            deadline = time.monotonic() + 5
+            while not SecureSubprocess._children and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert SecureSubprocess.terminate_children(grace=1.0) == 1
+            t.join(5)
+            assert not t.is_alive()
+            assert isinstance(outcome.get("error"), subprocess.CalledProcessError)
+            assert not SecureSubprocess._children
+        finally:
+            SecureSubprocess.terminate_children(grace=1.0)
+            t.join(5)
+
+    def test_terminate_children_kills_a_child_that_ignores_terminate(self, monkeypatch):
+        child = Mock()
+        child.poll.return_value = None
+        child.wait.side_effect = subprocess.TimeoutExpired("cmd", 0)
+        monkeypatch.setattr(SecureSubprocess, "_children", {child})
+        assert SecureSubprocess.terminate_children(grace=0.0) == 1
+        child.terminate.assert_called_once()
+        child.kill.assert_called_once()
+
+    def test_terminate_children_with_nothing_running_returns_zero(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        assert SecureSubprocess.terminate_children(grace=0.0) == 0
+
+    def test_failed_run_raises_calledprocesserror_with_output_and_stderr(self):
+        with patch("subprocess.Popen", return_value=_fake_proc(returncode=3, stdout="out", stderr="err")):
+            with pytest.raises(subprocess.CalledProcessError) as excinfo:
+                SecureSubprocess.run_secure("datasets", ["--version"])
+        assert excinfo.value.returncode == 3
+        assert excinfo.value.cmd == ["datasets", "--version"]
+        assert excinfo.value.output == "out"
+        assert excinfo.value.stderr == "err"
+        assert not SecureSubprocess._children
+
+    def test_check_false_returns_the_failed_result(self):
+        with patch("subprocess.Popen", return_value=_fake_proc(returncode=3, stderr="err")):
+            result = SecureSubprocess.run_secure("datasets", ["--version"], check=False)
+        assert result.returncode == 3
+        assert result.stderr == "err"
+
+    def test_interrupt_while_waiting_kills_the_child_and_propagates(self):
+        """As with subprocess.run, a KeyboardInterrupt in the waiting thread kills the child."""
+        proc = _fake_proc()
+        proc.communicate.side_effect = KeyboardInterrupt
+        with patch("subprocess.Popen", return_value=proc):
+            with pytest.raises(KeyboardInterrupt):
+                SecureSubprocess.run_secure("datasets", ["--version"])
+        proc.kill.assert_called_once()
+        proc.wait.assert_called_once()
+        assert not SecureSubprocess._children
+
+    def test_timeout_kills_the_child_and_raises_security_error(self):
+        proc = _fake_proc()
+        proc.communicate.side_effect = [subprocess.TimeoutExpired("cmd", 1), ("", "")]
+        with patch("subprocess.Popen", return_value=proc):
+            with pytest.raises(SecurityError, match="timed out"):
+                SecureSubprocess.run_secure("datasets", ["--version"], timeout=1)
+        proc.kill.assert_called_once()
+        assert not SecureSubprocess._children
 
 
 # ============================================================================

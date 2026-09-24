@@ -10,11 +10,11 @@ import json
 
 import pytest
 
-from metaquest.cli.commands.store import StoreGcCommand
+from metaquest.cli.commands.store import StoreGcCommand, StoreReindexCommand
 from metaquest.core.constants import STORE_ENV
-from metaquest.store.catalog import Catalog, catalog_write
-from metaquest.store.layout import init_store, sra_dir
-from metaquest.store.sidecar import Sidecar
+from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, Catalog, catalog_write
+from metaquest.store.layout import init_store, sidecar_path, sra_dir
+from metaquest.store.sidecar import Sidecar, write_sidecar
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +34,7 @@ def _gc_args(**overrides):
         older_than=None,
         keep_partial=False,
         include_stale=False,
+        accept_rebuilt=False,
         json=False,
     )
     base.update(overrides)
@@ -83,6 +84,7 @@ class TestStoreGcCommand:
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
@@ -147,6 +149,7 @@ class TestStoreGcCommand:
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1", state="partial"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), keep_partial=True, json=True))
@@ -167,6 +170,7 @@ class TestStoreGcCommand:
 
         recent = datetime.now(timezone.utc).isoformat()
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1", downloaded=recent))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), older_than=30, json=True))
@@ -209,6 +213,7 @@ class TestStoreGcCommand:
         (paths.tmp / "SRR9_temp").mkdir(parents=True)
         (paths.tmp / "SRR9_temp" / "f").write_bytes(b"x" * 10)
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root)))
@@ -226,6 +231,7 @@ class TestStoreGcCommand:
         (paths.tmp / "SRR9_temp").mkdir(parents=True)
         (paths.tmp / "SRR9_temp" / "f").write_bytes(b"x" * 10)
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
 
         rc = StoreGcCommand().execute(_gc_args(data_root=str(root), dry_run=False, yes=True, json=True))
@@ -308,6 +314,20 @@ class TestStoreGcCommand:
         assert row["registry"] == str(missing_registry)
         assert row["reason"] == "registry missing"
 
+    def test_gc_refuses_when_catalog_has_no_projects(self, tmp_path, caplog):
+        import logging
+
+        paths = init_store(tmp_path / "store")
+        _write_dataset_dir(paths, "SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        with catalog_write(paths) as c:
+            c.upsert_dataset(_sidecar("SRR1"))
+        with caplog.at_level(logging.ERROR):
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), yes=True))
+        assert rc == 1
+        assert (paths.sra / "SRR1" / "SRR1.fastq.gz").exists()
+        assert any("no project" in record.message.lower() for record in caplog.records)
+
 
 class TestStoreGcRespectsLocksAndPlaceholders:
     """Never remove what another run is working on, or a row that stands for no files."""
@@ -328,6 +348,7 @@ class TestStoreGcRespectsLocksAndPlaceholders:
         paths = init_store(root)
         _write_dataset_dir(paths, "SRR1")
         with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
             cat.upsert_dataset(_sidecar("SRR1"))
         self._hold(paths, "SRR1")
 
@@ -359,6 +380,42 @@ class TestStoreGcRespectsLocksAndPlaceholders:
         assert report["leftovers"] == []
         assert building.is_dir()
         assert cached.is_dir()
+
+    def test_fasterq_dump_scratch_of_a_locked_accession_is_kept(self, tmp_path, capsys):
+        """``<store>/tmp/<ACC>_fqtmp`` is fasterq-dump's live scratch folder while the
+        accession's lock is held; gc must map it back to the accession and leave it alone."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
+        scratch = paths.tmp / "SRR1_fqtmp"
+        scratch.mkdir(parents=True)
+        (scratch / "fasterq.tmp.part").write_bytes(b"x" * 10)
+        self._hold(paths, "SRR1")
+
+        assert StoreGcCommand._accession_of_leftover("SRR1_fqtmp") == "SRR1"
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["leftovers"] == []
+        assert report["removed_leftovers"] == []
+        assert scratch.is_dir()
+
+    def test_fasterq_dump_scratch_without_a_lock_is_a_leftover(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
+        scratch = paths.tmp / "SRR1_fqtmp"
+        scratch.mkdir(parents=True)
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert any("SRR1_fqtmp" in entry for entry in report["removed_leftovers"])
+        assert not scratch.exists()
 
     def test_a_placeholder_row_is_never_a_candidate(self, tmp_path, capsys):
         """A usage row for an accession that is not catalogued yet inserts a state="unknown"
@@ -392,3 +449,106 @@ class TestStoreGcRespectsLocksAndPlaceholders:
         row = report["stale_projects"][0]
         assert row["reason"] == "registry missing"
         assert row["hostname"]
+
+
+class TestStoreGcAfterARebuildWithoutProjects:
+    """A reindex that restores no project leaves every dataset looking unused. The refusal must
+    outlast the first project to register again, until the user says every project is back."""
+
+    @staticmethod
+    def _store_with_unjournaled_dataset(tmp_path):
+        paths = init_store(tmp_path / "store")
+        _write_dataset_dir(paths, "SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        return paths
+
+    @staticmethod
+    def _flag(paths):
+        with Catalog(paths) as catalog:
+            return catalog.get_meta(REBUILT_WITHOUT_PROJECTS)
+
+    @staticmethod
+    def _register_project(paths, tmp_path, project_id="p1"):
+        proj = tmp_path / project_id
+        proj.mkdir(exist_ok=True)
+        with catalog_write(paths) as cat:
+            cat.upsert_project(project_id, project_id, str(proj), str(proj / "metaquest_registry.json"))
+
+    def test_reindex_without_a_journal_sets_the_flag(self, tmp_path, caplog):
+        import logging
+
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+
+        with caplog.at_level(logging.WARNING):
+            rc = StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+
+        assert rc == 0
+        assert self._flag(paths)
+        assert any("--accept-rebuilt" in record.message for record in caplog.records)
+
+    def test_gc_refuses_while_the_flag_is_set_even_after_one_project_registers(self, tmp_path, caplog):
+        import logging
+
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+        self._register_project(paths, tmp_path)
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), yes=True))
+
+        assert rc == 1
+        assert sra_dir(paths, "SRR1").is_dir()
+        message = " ".join(record.message for record in caplog.records)
+        assert "--accept-rebuilt" in message
+        assert "store_init" in message
+
+    def test_accept_rebuilt_clears_the_flag_and_gc_proceeds(self, tmp_path, capsys):
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+        self._register_project(paths, tmp_path)
+        capsys.readouterr()
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), accept_rebuilt=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert [row["accession"] for row in report["datasets"]] == ["SRR1"]
+        assert self._flag(paths) is None
+        # Nothing was removed: without --yes this is still a dry run.
+        assert sra_dir(paths, "SRR1").is_dir()
+
+    def test_accept_rebuilt_is_refused_until_a_project_registers(self, tmp_path, caplog):
+        """--accept-rebuilt with no project recorded must not clear the flag: otherwise the first
+        project to register would let a plain gc treat every other project's data as unused."""
+        import logging
+
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), accept_rebuilt=True, yes=True))
+
+        assert rc == 1
+        assert self._flag(paths)
+        assert sra_dir(paths, "SRR1").is_dir()
+        assert any("store_init" in record.message for record in caplog.records)
+
+        self._register_project(paths, tmp_path)
+        assert StoreGcCommand().execute(_gc_args(data_root=str(paths.root), yes=True)) == 1
+        assert sra_dir(paths, "SRR1").is_dir()
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(paths.root), accept_rebuilt=True))
+
+        assert rc == 0
+        assert self._flag(paths) is None
+
+    def test_reindex_that_restores_a_project_clears_the_flag(self, tmp_path):
+        paths = self._store_with_unjournaled_dataset(tmp_path)
+        StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+        self._register_project(paths, tmp_path)
+        assert self._flag(paths)
+
+        rc = StoreReindexCommand().execute(argparse.Namespace(data_root=str(paths.root), registry=None))
+
+        assert rc == 0
+        assert self._flag(paths) is None

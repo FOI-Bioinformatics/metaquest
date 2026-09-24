@@ -86,7 +86,13 @@ def _adopt_args(**overrides):
 
 def _verify_args(accessions=None, **overrides):
     base = dict(
-        accessions=list(accessions or []), data_root=None, registry=None, md5=False, spots=False, fix_state=False
+        accessions=list(accessions or []),
+        data_root=None,
+        registry=None,
+        md5=False,
+        spots=False,
+        fix_state=False,
+        rescan=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -479,11 +485,17 @@ def _write_fastq_gz(path, text="@r\nACGT\n+\nIIII\n"):
 
 
 def _sidecar_matching_disk(acc_dir, accession, state="complete", reads=5):
-    """A sidecar whose one file record has the accession's real on-disk size, so a plain
-    `store_verify` (no --md5) reports it as healthy."""
-    file_path = acc_dir / f"{accession}.fastq.gz"
+    """A sidecar whose file records match the FASTQ files actually on disk for this accession
+    (`<accession>.fastq.gz` by default, but also a mate-suffixed name such as
+    `<accession>_1.fastq.gz`), so a plain `store_verify` (no --md5) reports it as healthy."""
+    file_paths = sorted(p for p in acc_dir.glob("*.fastq.gz") if not p.name.startswith("."))
+    if not file_paths:
+        file_paths = [acc_dir / f"{accession}.fastq.gz"]
     sidecar = _sidecar(accession, state=state)
-    sidecar.files = [{"name": file_path.name, "bytes": file_path.stat().st_size, "md5": "ignored", "reads": reads}]
+    sidecar.files = [
+        {"name": file_path.name, "bytes": file_path.stat().st_size, "md5": "ignored", "reads": reads}
+        for file_path in file_paths
+    ]
     return sidecar
 
 
@@ -598,6 +610,32 @@ class TestStoreAdoptCommand:
         assert not (project_dir / "fastq" / "SRR1").is_symlink()
         assert not registry_path.exists()
 
+    def test_dry_run_reports_empty_and_failed_accessions(self, tmp_path, monkeypatch, capsys):
+        """A dry run lists the folders it would leave alone as empty or failed, the same as a
+        real run, rather than only the planned adoptions and conflicts."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        project_dir = tmp_path / "project"
+        (project_dir / "fastq" / "SRR1").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR1" / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (project_dir / "fastq" / "SRR2").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR3").mkdir(parents=True)
+        (project_dir / "fastq" / "SRR3" / "SRR3.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        store_copy = sra_dir(paths, "SRR3")
+        store_copy.mkdir(parents=True)
+        (store_copy / "SRR3.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        write_sidecar(sidecar_path(paths, "SRR3"), _sidecar("SRR3", state="failed"))
+        monkeypatch.chdir(project_dir)
+
+        registry_path = project_dir / "metaquest_registry.json"
+        rc = StoreAdoptCommand().execute(_adopt_args(data_root=str(root), registry=str(registry_path), dry_run=True))
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "Would adopt 1 dataset(s)" in out
+        assert "Empty folders, not adopted: SRR2" in out
+        assert "SRR3" in [line for line in out.splitlines() if line.startswith("Failed")][0]
+
     def test_copy_mode_leaves_project_folder_untouched_and_unlinked(self, tmp_path, monkeypatch):
         root = tmp_path / "store"
         init_store(root)
@@ -620,6 +658,39 @@ class TestStoreAdoptCommand:
 
         # No registry write is needed: the project's own download record did not change.
         assert not registry_path.exists()
+
+    def test_copy_mode_dedup_does_not_record_link(self, tmp_path, monkeypatch):
+        """A --copy run that finds the store already holds an identical copy (a dedup) must
+        not be recorded as linked: the project's folder is left exactly as it was, a real
+        directory, the same as a fresh --copy adoption, so no store-sourced download record
+        or store["linked"] entry should appear."""
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        entry = project_dir / "fastq" / "SRR1"
+        entry.mkdir(parents=True)
+        (entry / "SRR1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir, registry=str(registry_path))) == 0
+
+        first_rc = StoreAdoptCommand().execute(
+            _adopt_args(data_root=str(root), registry=str(registry_path), move=False)
+        )
+        assert first_rc == 0
+
+        second_rc = StoreAdoptCommand().execute(
+            _adopt_args(data_root=str(root), registry=str(registry_path), move=False)
+        )
+        assert second_rc == 0
+
+        assert entry.is_dir() and not entry.is_symlink()
+        assert (entry / "SRR1.fastq").is_file()
+
+        registry = load_registry(registry_path)
+        assert not registry.store.get("linked")
+        assert "SRR1" not in registry.datasets
 
 
 class TestStoreVerifyCommand:
@@ -819,6 +890,213 @@ class TestStoreVerifyCommand:
 
         assert rc == 1
         assert "corrupt" in out
+
+    def test_spots_from_store_metadata_xml(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz", "@r1\nACGT\n+\nIIII\n@r2\nACGT\n+\nIIII\n")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=2)
+        sc.ncbi = {}
+        sc.error = "._SRR1_1.fastq.gz: missing"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        (paths.metadata / "SRR1_metadata.xml").write_text(
+            "<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE><RUN_SET>"
+            '<RUN accession="SRR1" total_spots="2" total_bases="8" size="100">'
+            '<SRAFiles><SRAFile filename="SRR1_1.fastq.gz" md5="00"/></SRAFiles></RUN></RUN_SET>'
+            "</EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>"
+        )
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), spots=True, fix_state=True))
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete"
+        assert fixed.completeness["verdict"] == "complete"
+        assert fixed.ncbi.get("spots") == 2
+        assert fixed.error is None
+
+    def test_fix_state_promotes_readable_dataset_without_spots(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=1)
+        sc.ncbi = {}
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), spots=True, fix_state=True))
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete" and fixed.error is None
+        assert fixed.completeness["verdict"] == "unverified"
+
+    def test_rescan_rebuilds_file_list_from_disk(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=1)
+        sc.files.insert(0, {"name": "._SRR1_1.fastq.gz", "bytes": 4096, "md5": "x", "reads": None})
+        # The recorded spot count matches the one read on disk: --fix-state compares against it.
+        sc.ncbi = {"spots": 1}
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), rescan=True, fix_state=True))
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert [f["name"] for f in fixed.files] == ["SRR1_1.fastq.gz"]
+        assert fixed.state == "complete"
+
+    def test_fix_state_without_spots_requires_a_read_through(self, tmp_path, monkeypatch, capsys):
+        """A file that matches its recorded size can still be a corrupt gzip stream that was
+        never opened; --fix-state without --spots must read it before promoting to complete,
+        not promote on size alone."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        # Looks like a gzip file (magic bytes) but is not valid gzip data.
+        (acc_dir / "SRR1.fastq.gz").write_bytes(b"\x1f\x8b\x00not-really-gzip")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=1)
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "corrupt" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error and "SRR1.fastq.gz" in fixed.error
+
+    def test_fix_state_never_promotes_a_dataset_with_no_files_recorded(self, tmp_path, monkeypatch, capsys):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        sc = _sidecar("SRR1", state="failed")
+        sc.files = []
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+        out = capsys.readouterr().out
+
+        # A dataset --fix-state leaves (or marks) failed is never reported as ok.
+        assert rc == 1
+        assert "corrupt" in out
+        assert "failed" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error == "no files recorded"
+
+    def test_fix_state_without_spots_keeps_a_known_truncated_dataset_partial(self, tmp_path, monkeypatch, capsys):
+        """The sidecar already records NCBI's spot count, so --fix-state alone must compare
+        against it rather than promote a truncated dataset to complete as unverified."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", "@r\nACGT\n+\nIIII\n" * 10)
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="partial", reads=10)
+        sc.ncbi = {"spots": 100}
+        sc.completeness = {"method": "spots", "ratio": 0.1, "verdict": "truncated"}
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "truncated" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "partial"
+        assert fixed.completeness == {"method": "spots", "ratio": 0.1, "verdict": "truncated"}
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1")["state"] == "partial"
+
+    def test_fix_state_without_spots_promotes_a_complete_dataset_by_its_known_spot_count(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", "@r\nACGT\n+\nIIII\n" * 10)
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=10)
+        sc.ncbi = {"spots": 10}
+        sc.error = "old error"
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+
+        assert rc == 0
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete" and fixed.error is None
+        assert fixed.completeness == {"method": "spots", "ratio": 1.0, "verdict": "complete"}
+
+    def test_fix_state_with_spots_still_reads_the_mate_2_file(self, tmp_path, monkeypatch, capsys):
+        """--spots counts mate 1 only, so --fix-state must read mate 2 before promoting."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz", "@r\nACGT\n+\nIIII\n" * 10)
+        (acc_dir / "SRR1_2.fastq.gz").write_bytes(b"\x1f\x8b\x00not-really-gzip")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=10)
+        sc.ncbi = {"spots": 10}
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), spots=True, fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "corrupt" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error and "SRR1_2.fastq.gz" in fixed.error
+
+    def test_fix_state_with_a_known_spot_count_still_reads_the_mate_2_file(self, tmp_path, monkeypatch, capsys):
+        """The spot comparison counts mate 1 only; a corrupt mate 2 file must still be found."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz", "@r\nACGT\n+\nIIII\n" * 10)
+        (acc_dir / "SRR1_2.fastq.gz").write_bytes(b"\x1f\x8b\x00not-really-gzip")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="failed", reads=10)
+        sc.ncbi = {"spots": 10}
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "corrupt" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "failed"
+        assert fixed.error and "SRR1_2.fastq.gz" in fixed.error
+
+    def test_rescan_no_fastq_left_reports_missing_and_leaves_sidecar_untouched(self, tmp_path, monkeypatch, capsys):
+        """The accession's folder (and its sidecar) still exist, but every FASTQ file was
+        removed from it by hand; --rescan must not silently rebuild an empty file list and let
+        --fix-state promote that to "complete", so it reports the dataset missing instead and
+        leaves the sidecar exactly as it was."""
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        _write_fastq_gz(acc_dir / "SRR1_1.fastq.gz")
+        sc = _sidecar_matching_disk(acc_dir, "SRR1", state="complete", reads=1)
+        write_sidecar(sidecar_path(paths, "SRR1"), sc)
+        original_files = [dict(f) for f in sc.files]
+        (acc_dir / "SRR1_1.fastq.gz").unlink()
+
+        rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root), rescan=True, fix_state=True))
+        out = capsys.readouterr().out
+
+        assert rc == 1
+        assert "missing" in out
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "complete"
+        assert fixed.files == original_files
 
 
 class TestStoreLinkCommand:
@@ -1349,6 +1627,63 @@ class TestStoreReindexNeverLosesHistory:
         with Catalog(paths) as catalog:
             assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
 
+    def test_reindex_after_catalog_loss_restores_projects_and_usage(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        monkeypatch.chdir(tmp_path)
+        write_sidecar(sidecar_path(paths, "SRR1"), _sidecar("SRR1"))
+        with catalog_write(paths) as c:
+            c.upsert_dataset(_sidecar("SRR1"))
+            c.upsert_project("pid1", "proj", str(tmp_path), "r.json")
+            c.record_usage("SRR1", "pid1", "", "linked", "")
+        (paths.root / "catalog.sqlite").unlink()
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
+        with catalog_write(paths) as c:
+            assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+            assert c.conn.execute("SELECT COUNT(*) FROM usage WHERE accession='SRR1'").fetchone()[0] == 1
+
+    def test_reindex_survives_a_corrupt_project_journal_line(self, tmp_path, caplog):
+        """A damaged project line must not sink the whole reindex: the dataset rebuild (already
+        done in the same catalog_write transaction) must still be kept, and the command must
+        still return 0, with the usage row that referenced the lost project simply skipped."""
+        import logging
+
+        root, paths = self._store_with_dataset(tmp_path)
+        (paths.journal / "projects.jsonl").write_text("{ this is not json\n")
+        (paths.root / "catalog.sqlite").unlink()
+
+        with caplog.at_level(logging.WARNING):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 0
+        with Catalog(paths) as catalog:
+            assert catalog.conn.execute("SELECT COUNT(*) FROM datasets").fetchone()[0] == 1
+            assert catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+            assert catalog.conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] == 0
+        assert any("Skipping unreadable journal line" in r.message for r in caplog.records)
+        assert any("Skipped 1 usage record" in r.message for r in caplog.records)
+
+    def test_reindex_recovers_a_pre_journal_project_once_backfilled(self, tmp_path):
+        """A project and usage row written before the journal existed (journaling disabled)
+        are copied into the journal the next time the store is opened for writing, while
+        catalog.sqlite still holds them; only then does losing catalog.sqlite stay recoverable."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths) as c:
+            c.journal_enabled = False
+            c.upsert_project("pid1", "proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            c.record_usage("SRR1", "pid1", "", "linked", "")
+        assert not (paths.journal / "projects.jsonl").exists()
+
+        with catalog_write(paths):
+            pass  # any ordinary write session backfills the journal from catalog.sqlite
+        assert (paths.journal / "projects.jsonl").is_file()
+
+        (paths.root / "catalog.sqlite").unlink()
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(root))) == 0
+        with catalog_write(paths) as c:
+            assert c.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+            assert c.conn.execute("SELECT COUNT(*) FROM usage WHERE accession='SRR1'").fetchone()[0] == 1
+
 
 class TestCorruptStoreMarker:
     def test_a_corrupt_marker_reads_as_missing_with_a_warning(self, tmp_path, caplog):
@@ -1364,3 +1699,17 @@ class TestCorruptStoreMarker:
             assert read_marker(root) is None
 
         assert any("marker" in record.message for record in caplog.records)
+
+
+def test_reindex_and_verify_ignore_hidden_entries(tmp_path, monkeypatch):
+    paths = init_store(tmp_path / "store")
+    monkeypatch.chdir(tmp_path)
+    acc_dir = sra_dir(paths, "SRR1")
+    _write_fastq_gz(acc_dir / "SRR1.fastq.gz")
+    write_sidecar(sidecar_path(paths, "SRR1"), _sidecar_matching_disk(acc_dir, "SRR1"))
+    (paths.sra / "._SRR1").write_bytes(b"\x00\x05")
+    (paths.sra / ".sra-cache").mkdir()
+    (paths.sra / ".hidden_dir").mkdir()
+    assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
+    rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root)))
+    assert rc == 0

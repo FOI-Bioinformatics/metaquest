@@ -43,7 +43,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
-from metaquest.data.sra import compress_fastq, count_fastq_reads, fastq_files, fastq_stem, is_transient_folder
+from metaquest.data.file_io import is_hidden_name, visible_files
+from metaquest.data.sra import (
+    STORE_READY_STATES,
+    compress_fastq,
+    count_fastq_reads,
+    fastq_files,
+    fastq_stem,
+    is_transient_folder,
+)
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
@@ -66,6 +74,11 @@ _ADOPT_COMPRESS_THREADS = 4
 # Suffix on a staging folder under paths.tmp, e.g. "SRR1_adopt".
 _STAGING_SUFFIX = "_adopt"
 
+# Names shutil.copytree leaves behind when staging a project folder: the AppleDouble sidecar
+# files (``._<name>``) macOS writes next to every file on a volume without native extended
+# attributes, and the per-folder Finder metadata file ``.DS_Store``. Neither is project data.
+ADOPT_COPY_IGNORE = shutil.ignore_patterns("._*", ".DS_Store")
+
 
 @dataclass
 class AdoptReport:
@@ -78,6 +91,12 @@ class AdoptReport:
     conflicts: List[str] = field(default_factory=list)
     # Entries in project_fastq that were already store links, so nothing to adopt.
     skipped: List[str] = field(default_factory=list)
+    # Real folders with no FASTQ files at all (an empty or interrupted download); not adopted,
+    # the project's folder is left exactly as it was.
+    empty: List[str] = field(default_factory=list)
+    # Staged (or already-in-store) copy came back in a non-ready sidecar state (state not in
+    # STORE_READY_STATES, e.g. "failed" or "partial"); the project's copy is kept untouched.
+    failed: List[str] = field(default_factory=list)
     # Populated instead of acting, when dry_run is True.
     planned: List[str] = field(default_factory=list)
     # A stale <ACC>_adopt staging folder from an earlier, interrupted run of this same
@@ -228,9 +247,12 @@ def _finish_sidecar(
 
 
 def _folder_bytes(folder: Path) -> int:
-    """Total bytes of every file under ``folder``, skipping anything that cannot be stat'ed."""
+    """Total bytes of every file under ``folder``, skipping hidden names and anything that
+    cannot be stat'ed."""
     total = 0
     for sub in folder.rglob("*"):
+        if is_hidden_name(sub.name):
+            continue
         try:
             if sub.is_file():
                 total += sub.stat().st_size
@@ -290,7 +312,7 @@ def _stage_into_store(
         shutil.rmtree(staged)
         report.resumed.append(accession)
 
-    shutil.copytree(entry, staged)
+    shutil.copytree(entry, staged, ignore=ADOPT_COPY_IGNORE)
 
     if compress:
         for file_path in fastq_files(staged):
@@ -314,6 +336,8 @@ def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]
         return real_dirs
     for candidate in sorted(project_dir.iterdir()):
         name = candidate.name
+        if is_hidden_name(name):
+            continue
         if is_transient_folder(name):
             continue
         if candidate.is_symlink():
@@ -333,11 +357,7 @@ def _scan_foreign_incomplete(paths: StorePaths, real_dirs: Dict[str, Path]) -> L
     so a dataset another project is mid-download on cannot be claimed by this run.
     """
     foreign: List[str] = []
-    if not paths.sra.is_dir():
-        return foreign
-    for store_dir in sorted(paths.sra.iterdir()):
-        if not store_dir.is_dir():
-            continue
+    for store_dir in visible_files(paths.sra, dirs=True):
         accession = store_dir.name
         if accession in real_dirs or sidecar_path(paths, accession).is_file():
             continue
@@ -354,6 +374,7 @@ def _dedup_or_conflict(
     paths: StorePaths,
     project_dir: Path,
     dry_run: bool,
+    move: bool,
     on_progress: Optional[Callable[[str, str], None]],
     report: AdoptReport,
 ) -> None:
@@ -361,13 +382,40 @@ def _dedup_or_conflict(
 
     ``entry`` is None only for an accession already fully migrated (store has it, sidecar
     exists, nothing local left to reconcile); nothing to do in that case.
+
+    A dedup is reported the same way whether or not the project's folder is actually removed:
+    ``--copy`` (``move=False``) leaves it in place, unlinked, exactly as ``--copy`` does for a
+    freshly adopted accession (see ``_apply_move_or_copy``).
+
+    A store sidecar whose state is outside ``STORE_READY_STATES`` (left behind by an earlier
+    run whose staged copy could not be verified, see ``_adopt_one``'s own check) is never
+    treated as a match, even when its files are byte-identical to the project's: that copy is
+    known bad, so an identical-content project folder is the only good copy left, and a dedup
+    would remove it and link the project to the bad one instead. Such an accession is reported
+    in ``failed`` and both copies are left exactly as they are.
     """
     if entry is None:
         return
     existing = read_sidecar(sc_path)
+    if existing is not None and existing.state not in STORE_READY_STATES:
+        report.failed.append(accession)
+        logger.error(
+            "%s: store copy's sidecar state is %s, not a verified copy; project copy kept "
+            "(run 'store_verify --spots --fix-state %s' or remove the store copy and re-adopt)",
+            accession,
+            existing.state,
+            accession,
+        )
+        _notify(on_progress, accession, "failed")
+        return
     if existing is not None and _files_match(entry, store_dir, existing):
         if dry_run:
             report.planned.append(accession)
+            return
+        if not move:
+            report.deduplicated.append(accession)
+            logger.info("%s: identical copy already in the store; project copy kept (--copy)", accession)
+            _notify(on_progress, accession, "deduplicated")
             return
         shutil.rmtree(entry)
         link_dataset(project_dir, accession, paths)
@@ -457,7 +505,19 @@ def _adopt_one(
     if published_elsewhere:
         # Someone published this accession while we waited for the lock; the project's copy is
         # now a second copy to compare, not something to move on top of theirs.
-        _dedup_or_conflict(accession, entry, store_dir, sc_path, paths, project_dir, False, on_progress, report)
+        _dedup_or_conflict(accession, entry, store_dir, sc_path, paths, project_dir, False, move, on_progress, report)
+        return
+
+    published = read_sidecar(sc_path)
+    if published is None or published.state not in STORE_READY_STATES:
+        state = published.state if published else "missing sidecar"
+        logger.error(
+            "%s: store copy is %s (%s); project copy kept",
+            accession,
+            state,
+            (published.error if published else ""),
+        )
+        report.failed.append(accession)
         return
 
     _apply_move_or_copy(accession, entry, paths, project_dir, move, on_progress, report)
@@ -476,12 +536,26 @@ def adopt(
     """Fold every real accession folder in ``project_fastq`` into the shared store.
 
     For each real (non-symlink, non-transient) directory ``project_fastq/<ACC>``: if the store
-    already has ``<ACC>`` with a sidecar, an identical set of files is deduplicated (the project
-    copy is dropped and replaced with a link) and a differing set is left as a conflict (both
-    copies kept); otherwise the folder is staged into the store, compressed, sidecar'd and
-    catalogued, then either linked back (``--move``, removing the project's folder) or left alone
-    (``--copy``, the project keeps its own folder, unlinked). A symlink already in
-    ``project_fastq`` is counted in ``skipped`` and left untouched.
+    already has ``<ACC>`` with a sidecar in a ready state (``STORE_READY_STATES``), an identical
+    set of files is deduplicated (the project copy is dropped and replaced with a link) and a
+    differing set is left as a conflict (both copies kept); otherwise the folder is staged into
+    the store, compressed, sidecar'd and catalogued, then either linked back (``--move``,
+    removing the project's folder) or left alone (``--copy``, the project keeps its own folder,
+    unlinked). A symlink already in ``project_fastq`` is counted in ``skipped`` and left
+    untouched. A dedup under ``--copy`` is still counted in ``deduplicated``, but the project's
+    folder is left in place and unlinked, the same as a fresh ``--copy`` adoption.
+
+    A store sidecar outside a ready state is never matched against, even byte-identical: that
+    copy already failed verification once, so an identical project folder is the only good copy
+    and must not be removed on top of it. Such an accession lands in ``failed`` on this call too
+    (not just on the run that first staged it), and both copies are left exactly as they are.
+
+    A real folder with no FASTQ files at all is never adopted (the store gains nothing from an
+    empty accession) and is listed in ``empty``; the project's folder is left exactly as it was.
+    A staged (or already-in-store) copy whose sidecar comes back outside
+    ``metaquest.data.sra.STORE_READY_STATES`` (``"failed"`` or ``"partial"``) is listed in
+    ``failed`` instead of being linked or copied over the project's folder, which is left
+    untouched; the store keeps its own copy for inspection.
 
     Only the project's own folders are ever adopted. A sidecar-less ``<store>/sra/<ACC>`` for an
     accession this project also has is finished in place (an earlier run of this project died
@@ -507,11 +581,19 @@ def adopt(
 
     for accession in sorted(real_dirs):
         entry = real_dirs[accession]
+
+        if not fastq_files(entry):
+            logger.warning("%s: no FASTQ files in %s; not adopted", accession, entry)
+            report.empty.append(accession)
+            continue
+
         store_dir = sra_dir(paths, accession)
         sc_path = sidecar_path(paths, accession)
 
         if store_dir.is_dir() and sc_path.is_file():
-            _dedup_or_conflict(accession, entry, store_dir, sc_path, paths, project_dir, dry_run, on_progress, report)
+            _dedup_or_conflict(
+                accession, entry, store_dir, sc_path, paths, project_dir, dry_run, move, on_progress, report
+            )
             continue
 
         # Either a fresh accession (no store folder yet) or one this project left incomplete

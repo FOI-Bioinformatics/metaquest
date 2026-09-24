@@ -113,3 +113,26 @@ class TestLockInspection:
         stale_time = time.time() - 60
         os.utime(lock, (stale_time, stale_time))
         assert lock_is_held(paths, "SRR6") is False
+
+
+class TestDatasetLockStop:
+    """A waiter gives up as soon as its stop predicate is true, so Ctrl-C never waits on a lock."""
+
+    def test_wait_on_a_held_lock_ends_once_stop_is_requested(self, paths):
+        from metaquest.store.locks import LockWaitStopped
+
+        with dataset_lock(paths, "SRR1"):
+            started = time.monotonic()
+            with pytest.raises(LockWaitStopped, match="SRR1"):
+                with dataset_lock(paths, "SRR1", wait_seconds=0, should_stop=lambda: True):
+                    pass
+            assert time.monotonic() - started < 1.0
+
+    def test_stop_is_a_data_access_error_for_existing_callers(self):
+        from metaquest.store.locks import LockWaitStopped
+
+        assert issubclass(LockWaitStopped, DataAccessError)
+
+    def test_a_free_lock_is_taken_whatever_the_predicate(self, paths):
+        with dataset_lock(paths, "SRR2", should_stop=lambda: True) as lock:
+            assert lock.exists()

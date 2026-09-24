@@ -5,7 +5,10 @@ Tests for metaquest.data.sra module.
 import gzip
 import inspect
 import json
+import logging
+import os
 import shutil
+import time
 
 import pytest
 from pathlib import Path
@@ -18,6 +21,7 @@ from metaquest.data.sra import (
     _check_existing_download,
     _cached_sra_archive,
     _handle_download_output,
+    _safe_rmtree,
     download_accession,
     _check_existing_downloads,
     _process_download_results,
@@ -260,6 +264,22 @@ class TestFastqFiles:
         link.symlink_to(real_dir)
 
         assert [p.name for p in fastq_files(link)] == ["SRR1_1.fastq"]
+
+
+class TestFastqFilesIgnoresAppleDouble:
+    def test_appledouble_not_listed(self, tmp_path):
+        acc = tmp_path / "SRR1"
+        acc.mkdir()
+        (acc / "SRR1_1.fastq.gz").write_bytes(b"x" * 10)
+        (acc / "._SRR1_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        assert [p.name for p in fastq_files(acc)] == ["SRR1_1.fastq.gz"]
+
+    def test_folder_with_only_appledouble_has_no_fastq(self, tmp_path):
+        acc = tmp_path / "SRR2"
+        acc.mkdir()
+        (acc / "._SRR2_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        assert fastq_files(acc) == []
+        assert accession_has_fastq(acc) is False
 
 
 class TestAccessionHasFastq:
@@ -768,14 +788,15 @@ class TestDownloadAccession:
         output_folder = tmp_path / "downloads"
         temp_path = tmp_path / "temp"
 
-        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
-            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
-                with patch("metaquest.data.sra._handle_download_output") as mock_handle:
-                    mock_prep.return_value = temp_path
-                    mock_run.return_value = Mock(returncode=0, stdout="success", stderr="")
-                    mock_handle.return_value = (True, "Downloaded 2 files")
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+                with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                    with patch("metaquest.data.sra._handle_download_output") as mock_handle:
+                        mock_prep.return_value = temp_path
+                        mock_run.return_value = Mock(returncode=0, stdout="success", stderr="")
+                        mock_handle.return_value = (True, "Downloaded 2 files")
 
-                    success, message = download_accession("SRR123", output_folder, num_threads=8)
+                        success, message = download_accession("SRR123", output_folder, num_threads=8)
 
         assert success is True
         assert "Downloaded 2 files" in message
@@ -791,18 +812,20 @@ class TestDownloadAccession:
     def test_download_accession_command_passes_validation(self, tmp_path, monkeypatch):
         """The command download_accession builds must survive SecureSubprocess validation unmocked.
 
-        No prefetch on PATH in this test environment, so this exercises the direct
+        prefetch is reported missing from PATH, so this exercises the direct
         fasterq-dump fallback with --split-3/--skip-technical appended.
         """
         monkeypatch.chdir(tmp_path)
-        with patch("metaquest.utils.security.subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
-                success, message = download_accession(
-                    "SRR2517620", tmp_path / "fastq", num_threads=4, temp_folder=tmp_path / "tmp"
-                )
+        proc = Mock(returncode=0)
+        proc.communicate.return_value = ("", "")
+        with patch("metaquest.utils.security.subprocess.Popen", return_value=proc) as mock_popen:
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
+                    success, message = download_accession(
+                        "SRR2517620", tmp_path / "fastq", num_threads=4, temp_folder=tmp_path / "tmp"
+                    )
         assert success is True, message
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert cmd[0] == "fasterq-dump"
         assert cmd[1:4] == ["--threads", "4", "--progress"]
         assert cmd[4] == "SRR2517620"
@@ -814,10 +837,12 @@ class TestDownloadAccession:
 
         SecureSubprocess._extra_roots.clear()
         monkeypatch.chdir(tmp_path)
-        with patch("metaquest.utils.security.subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
-                download_accession("SRR2517620", tmp_path / "fastq", temp_folder=tmp_path / "scratch")
+        proc = Mock(returncode=0)
+        proc.communicate.return_value = ("", "")
+        with patch("metaquest.utils.security.subprocess.Popen", return_value=proc):
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                with patch("metaquest.data.sra._handle_download_output", return_value=(True, "Downloaded 2 files")):
+                    download_accession("SRR2517620", tmp_path / "fastq", temp_folder=tmp_path / "scratch")
         assert (tmp_path / "fastq").resolve() in SecureSubprocess._extra_roots
         assert (tmp_path / "scratch").resolve() in SecureSubprocess._extra_roots
         SecureSubprocess._extra_roots.clear()
@@ -845,16 +870,17 @@ class TestDownloadAccession:
         output_path.mkdir(parents=True)
         (output_path / "SRR123.fastq").write_text("partial")
 
-        with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
-            with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
-                with patch("metaquest.data.sra._handle_download_output") as mock_handle:
-                    mock_prep.return_value = tmp_path / "temp"
-                    mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-                    mock_handle.return_value = (True, "Downloaded 1 files, complete (10 of 10 spots)")
+        with patch("metaquest.data.sra.shutil.which", return_value=None):
+            with patch("metaquest.data.sra._prepare_temp_folder") as mock_prep:
+                with patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run:
+                    with patch("metaquest.data.sra._handle_download_output") as mock_handle:
+                        mock_prep.return_value = tmp_path / "temp"
+                        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+                        mock_handle.return_value = (True, "Downloaded 1 files, complete (10 of 10 spots)")
 
-                    success, message = download_accession(
-                        "SRR123", output_folder, force=False, redownload_truncated=True
-                    )
+                        success, message = download_accession(
+                            "SRR123", output_folder, force=False, redownload_truncated=True
+                        )
 
         assert "already exists" not in message
         mock_run.assert_called_once()
@@ -1432,6 +1458,17 @@ class TestProcessDownloadResults:
         }
         assert failed_accessions == ["SRR456"]
         mock_logger.error.assert_called()
+
+    def test_final_count_logged_once(self, caplog):
+        """The final tally is logged exactly once, after the loop, not every fifth success."""
+        results = [("SRR1", (True, "ok")), ("SRR2", (False, "boom")), ("SRR3", (True, "linked from store, 2 files"))]
+
+        with caplog.at_level(logging.INFO, logger="metaquest.data.sra"):
+            ok, failed = _process_download_results(results, ["SRR1", "SRR2", "SRR3"], {}, [])
+
+        assert (ok, failed) == (2, 1)
+        assert "Downloaded 2 of 3 (1 failed)" in caplog.text
+        assert caplog.text.count("Downloaded 2 of 3") == 1
 
 
 class TestRetryFailedDownloads:
@@ -2174,6 +2211,73 @@ class TestDownloadSraStore:
         assert calls[0][1] == fastq_folder
         assert stats["results"]["SRR1"] == "Downloaded 1 files, unverified"
 
+    @staticmethod
+    def _fake_download_using_scratch(calls):
+        """A download_accession stand-in that actually creates kwargs["temp_folder"] and
+        drops a marker file in it before returning, so a test asserting the folder is gone
+        afterwards is only satisfied if something really removed it.
+        """
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append((accession, Path(output_folder), kwargs))
+            scratch = Path(kwargs["temp_folder"])
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "marker").write_text("fasterq-dump scratch")
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        return _download
+
+    @staticmethod
+    def _fake_download_using_scratch_then_failing(calls):
+        """Like ``_fake_download_using_scratch``, but raises after creating the scratch folder,
+        so the removal path exercised is _store_fetch's ``finally`` block, not the success path.
+        """
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append((accession, Path(output_folder), kwargs))
+            scratch = Path(kwargs["temp_folder"])
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "marker").write_text("fasterq-dump scratch")
+            raise RuntimeError("fasterq-dump exploded")
+
+        return _download
+
+    def test_store_download_uses_store_tmp_for_fasterq_scratch(self, tmp_path):
+        """fasterq-dump's scratch folder is created under the store's tmp, not the system temp,
+        and is removed again once the download finishes, since download_accession only cleans
+        up a temp_folder it created itself.
+        """
+        paths = self._store(tmp_path)
+        calls: list = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download_using_scratch(calls)):
+            download_sra(tmp_path / "fastq", self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        kwargs = calls[0][2]
+        assert Path(kwargs["temp_folder"]).parent == paths.tmp
+        assert Path(kwargs["temp_folder"]).name == "SRR1_fqtmp"
+        assert not Path(kwargs["temp_folder"]).exists()
+
+    def test_store_download_removes_fasterq_scratch_after_a_failure(self, tmp_path):
+        """A download_accession that creates the scratch folder and then fails must not leak
+        it: _store_fetch's ``finally`` block removes it regardless of success or failure.
+        """
+        paths = self._store(tmp_path)
+        calls: list = []
+
+        with patch(
+            "metaquest.data.sra.download_accession",
+            side_effect=self._fake_download_using_scratch_then_failing(calls),
+        ):
+            stats = download_sra(tmp_path / "fastq", self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        kwargs = calls[0][2]
+        assert stats["failed"] == 1
+        assert not Path(kwargs["temp_folder"]).exists()
+
 
 class TestFasterqDumpVersion:
     """The tool version recorded in a store dataset's sidecar."""
@@ -2329,3 +2433,188 @@ class TestStoreDownloadPublishesAtomically:
             download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0, force=True)
 
         assert calls[0]["force"] is True
+
+
+class TestSafeRmtreeIgnoresMissingFiles:
+    """On a volume storing each file's AppleDouble sidecar (``._<name>``) next to it, macOS can
+    delete ``._X`` together with ``X``; ``_safe_rmtree`` must not treat that race as a failure."""
+
+    def test_a_file_removed_concurrently_during_cleanup_is_not_logged(self, tmp_path, caplog):
+        target = tmp_path / "acc_dir"
+        target.mkdir()
+        (target / "keep.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        missing_name = "._keep.fastq"
+        (target / missing_name).write_bytes(b"\x00\x05\x16\x07")
+
+        real_unlink = os.unlink
+
+        def _flaky_unlink(path, *args, **kwargs):
+            # `os.unlink` is called with just the entry name (plus `dir_fd`) on a platform
+            # using shutil's fd-based rmtree, not the full path, so the match is by basename.
+            if os.path.basename(str(path)) == missing_name:
+                raise FileNotFoundError(2, "No such file or directory", str(path))
+            return real_unlink(path, *args, **kwargs)
+
+        with caplog.at_level(logging.WARNING):
+            with patch("os.unlink", side_effect=_flaky_unlink):
+                _safe_rmtree(target)
+
+        assert not target.exists()
+        assert not any("Could not remove directory" in r.message for r in caplog.records)
+
+    def test_a_genuine_removal_failure_is_still_logged(self, tmp_path, caplog):
+        target = tmp_path / "acc_dir"
+        target.mkdir()
+        (target / "keep.fastq").write_text("@r\nACGT\n+\nIIII\n")
+
+        with caplog.at_level(logging.WARNING):
+            with patch("os.unlink", side_effect=PermissionError(13, "Permission denied")):
+                _safe_rmtree(target)
+
+        assert any("Could not remove directory" in r.message for r in caplog.records)
+
+
+class TestDownloadInterrupt:
+    @pytest.fixture(autouse=True)
+    def _clear_stop(self):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.STOP.clear()
+        sra_mod.SecureSubprocess.clear_stopping()
+        yield
+        sra_mod.STOP.clear()
+        sra_mod.SecureSubprocess.clear_stopping()
+
+    def test_keyboard_interrupt_during_submission_reaches_the_handler(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        def accessions():
+            yield "SRR1"
+            raise KeyboardInterrupt
+
+        worker = Mock(return_value=(True, "ok"))
+        with patch.object(sra_mod.SecureSubprocess, "terminate_children", return_value=0) as term:
+            with pytest.raises(KeyboardInterrupt):
+                sra_mod._execute_parallel_downloads(
+                    accessions(), tmp_path, 1, 1, False, None, {}, [], downloader=worker
+                )
+        term.assert_called_once()
+        assert sra_mod.STOP.is_set()
+
+    def test_a_new_run_clears_the_stopping_flag(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.SecureSubprocess.terminate_children(grace=0.0)
+        worker = Mock(return_value=(True, "ok"))
+        sra_mod._execute_parallel_downloads(["SRR1"], tmp_path, 1, 1, False, None, {}, [], downloader=worker)
+        assert sra_mod.SecureSubprocess._stopping is False
+
+    def test_tool_killed_by_the_interrupt_reports_interrupted(self, tmp_path):
+        import subprocess as sp
+
+        from metaquest.data import sra as sra_mod
+
+        def killed(executable, args, **kwargs):
+            sra_mod.STOP.set()
+            raise sp.CalledProcessError(-15, [executable], output="", stderr="")
+
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=killed):
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert (success, message) == (False, "interrupted")
+
+    def test_tool_failure_without_interrupt_is_still_an_error(self, tmp_path):
+        import subprocess as sp
+
+        from metaquest.data import sra as sra_mod
+
+        err = sp.CalledProcessError(3, ["fasterq-dump"], output="", stderr="network timeout")
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=err):
+            with patch("metaquest.data.sra.shutil.which", return_value=None):
+                success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert success is False
+        assert message.startswith("network:")
+
+    def test_compression_is_skipped_once_stopped(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        temp = tmp_path / "SRR1_temp"
+        temp.mkdir()
+        (temp / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (temp / "SRR1_2.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        sra_mod.STOP.set()
+        with patch("metaquest.data.sra.compress_fastq") as mock_compress:
+            success, message = sra_mod._handle_download_output(temp, tmp_path / "SRR1", compress=True)
+        assert success is True
+        mock_compress.assert_not_called()
+        assert "compression skipped (interrupted) for SRR1_1.fastq, SRR1_2.fastq" in message
+        assert (tmp_path / "SRR1" / "SRR1_1.fastq").exists()
+
+    def test_store_download_waiting_on_a_held_lock_returns_interrupted(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+        from metaquest.store.layout import init_store
+        from metaquest.store.locks import dataset_lock
+
+        store = init_store(tmp_path / "store")
+        sra_mod.STOP.set()
+        with dataset_lock(store, "SRR1"):
+            with patch("metaquest.data.sra._store_precheck", return_value=None):
+                with patch("metaquest.data.sra._store_fetch") as fetch:
+                    started = time.monotonic()
+                    result = sra_mod._store_download("SRR1", tmp_path / "fastq", store, lock_wait=0.0)
+        assert result == (False, "interrupted")
+        assert time.monotonic() - started < 1.0
+        fetch.assert_not_called()
+
+    def test_keyboard_interrupt_cancels_pending_and_terminates_children(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        calls = []
+
+        def worker(acc, *a, **kw):
+            calls.append(acc)
+            if acc == "SRR1":
+                raise KeyboardInterrupt
+            return True, "ok"
+
+        with patch.object(sra_mod.SecureSubprocess, "terminate_children", return_value=0) as term:
+            with pytest.raises(KeyboardInterrupt):
+                sra_mod._execute_parallel_downloads(
+                    ["SRR1", "SRR2", "SRR3", "SRR4"], tmp_path, 1, 1, False, None, {}, [], downloader=worker
+                )
+        term.assert_called_once()
+        assert sra_mod.STOP.is_set()
+
+    def test_download_accession_runs_no_tool_once_stopped(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.STOP.set()
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure") as mock_run:
+            with patch("metaquest.data.sra.shutil.which", return_value="/usr/bin/prefetch"):
+                success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert (success, message) == (False, "interrupted")
+        mock_run.assert_not_called()
+
+    def test_download_accession_skips_fasterq_dump_when_stopped_during_prefetch(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        def prefetch(executable, args, **kwargs):
+            sra_mod.STOP.set()
+
+        with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=prefetch) as mock_run:
+            with patch("metaquest.data.sra.shutil.which", return_value="/usr/bin/prefetch"):
+                with patch("metaquest.data.sra._cached_sra_archive", return_value=tmp_path / "SRR2517620.sra"):
+                    success, message = sra_mod.download_accession("SRR2517620", tmp_path / "fastq")
+        assert (success, message) == (False, "interrupted")
+        assert [c.args[0] for c in mock_run.call_args_list] == ["prefetch"]
+
+    def test_retry_pass_returns_early_once_stopped(self, tmp_path):
+        from metaquest.data import sra as sra_mod
+
+        sra_mod.STOP.set()
+        worker = Mock(return_value=(True, "ok"))
+        retried, failed, abort = sra_mod._retry_failed_downloads(
+            ["SRR1"], 2, tmp_path, 1, None, {"SRR1": "Download failed: timeout"}, downloader=worker
+        )
+        assert (retried, failed, abort) == (0, ["SRR1"], None)
+        worker.assert_not_called()

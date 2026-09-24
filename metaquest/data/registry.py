@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import visible_files
 from metaquest.data.read_extraction import summarise_contigs
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
 
@@ -724,9 +725,7 @@ def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
     downloaded accession.
     """
     found: Dict[str, Tuple[int, int]] = {}
-    if not fastq_folder.is_dir():
-        return found
-    for folder in sorted(p for p in fastq_folder.iterdir() if p.is_dir()):
+    for folder in visible_files(fastq_folder, dirs=True):
         if is_transient_folder(folder.name):
             continue
         if accession_has_fastq(folder):
@@ -738,19 +737,18 @@ def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
 
 
 def scan_metadata(metadata_folder: Path) -> Set[str]:
-    return {p.name[: -len("_metadata.xml")] for p in metadata_folder.glob("*_metadata.xml")}
+    return {p.name[: -len("_metadata.xml")] for p in visible_files(metadata_folder, "*_metadata.xml")}
 
 
 def _genome_ids_on_disk(paths: ProjectPaths, registry: Optional[Registry]) -> Set[str]:
     ids: Set[str] = set(known_genome_ids(registry)) if registry else set()
     for pattern in GENOME_FASTA_GLOBS:
-        for p in paths.genomes.glob(pattern):
-            ids.add(p.name[: -len(pattern[1:])] if p.name.endswith(pattern[1:]) else p.stem)
-    ids.update(p.stem for p in paths.matches.glob("*.csv"))
-    if paths.targeted.is_dir():
-        for acc_dir in paths.targeted.iterdir():
-            for asm in acc_dir.glob(f"*{_ASSEMBLY_SUFFIX}"):
-                ids.add(asm.name[: -len(_ASSEMBLY_SUFFIX)])
+        for p in visible_files(paths.genomes, pattern):
+            ids.add(p.name[: -len(pattern[1:])])
+    ids.update(p.stem for p in visible_files(paths.matches, "*.csv"))
+    for acc_dir in visible_files(paths.targeted, dirs=True):
+        for asm in visible_files(acc_dir, f"*{_ASSEMBLY_SUFFIX}", dirs=True):
+            ids.add(asm.name[: -len(_ASSEMBLY_SUFFIX)])
     return ids
 
 
@@ -758,8 +756,8 @@ def scan_extractions(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[s
     found: Dict[str, Dict[str, List[Path]]] = {}
     if not targeted_folder.is_dir():
         return found
-    for acc_dir in sorted(p for p in targeted_folder.iterdir() if p.is_dir()):
-        for path in sorted(p for p in acc_dir.iterdir() if p.is_file()):
+    for acc_dir in visible_files(targeted_folder, dirs=True):
+        for path in visible_files(acc_dir):
             split = split_extract_filename(path.name, genome_ids)
             if split:
                 found.setdefault(acc_dir.name, {}).setdefault(split[0], []).append(path)
@@ -770,8 +768,8 @@ def scan_assemblies(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[st
     found: Dict[str, Dict[str, Path]] = {}
     if not targeted_folder.is_dir():
         return found
-    for acc_dir in sorted(p for p in targeted_folder.iterdir() if p.is_dir()):
-        for asm in sorted(p for p in acc_dir.glob(f"*{_ASSEMBLY_SUFFIX}") if p.is_dir()):
+    for acc_dir in visible_files(targeted_folder, dirs=True):
+        for asm in visible_files(acc_dir, f"*{_ASSEMBLY_SUFFIX}", dirs=True):
             found.setdefault(acc_dir.name, {})[asm.name[: -len(_ASSEMBLY_SUFFIX)]] = asm
     return found
 
@@ -795,7 +793,7 @@ def _read_accession_list(path: Optional[Union[str, Path]]) -> List[str]:
 def _screening_from_matches(registry: Registry, matches_folder: Path) -> None:
     import csv
 
-    for csv_path in sorted(matches_folder.glob("*.csv")):
+    for csv_path in visible_files(matches_folder, "*.csv"):
         with open(csv_path, newline="") as handle:
             for row in csv.DictReader(handle):
                 acc = (row.get("acc") or row.get("SRA accession") or "").strip()

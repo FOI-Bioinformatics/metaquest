@@ -517,3 +517,105 @@ class TestAdoptPerAccessionLocking:
         # Nothing was staged or moved, since the lock was never acquired.
         assert not sra_dir(paths, "SRR1").exists()
         assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
+
+
+class TestAdoptIgnoresAppleDouble:
+    def test_staged_copy_has_no_appledouble_and_sidecar_is_complete(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        (acc / "._SRR1_1.fastq.gz").write_bytes(b"\x00\x05\x16\x07")
+        (project / "._SRR1").write_bytes(b"\x00\x05")
+        (project / ".DS_Store").write_bytes(b"\x00")
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.adopted == ["SRR1"]
+        names = sorted(p.name for p in (paths.sra / "SRR1").iterdir())
+        assert "._SRR1_1.fastq.gz" not in names
+        sc = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert sc.state == "complete"
+        assert [f["name"] for f in sc.files] == ["SRR1_1.fastq.gz"]
+
+
+class TestAdoptSafety:
+    def test_empty_folder_is_not_adopted(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        (project / "SRR9").mkdir(parents=True)
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.adopted == []
+        assert report.empty == ["SRR9"]
+        assert not (paths.sra / "SRR9").exists()
+        assert (project / "SRR9").is_dir() and not (project / "SRR9").is_symlink()
+
+    def test_failed_staged_copy_keeps_project_folder(self, tmp_path, monkeypatch):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        # metaquest.store's __init__ re-exports the `adopt` function under the same name as
+        # this submodule, so `import metaquest.store.adopt as x` (attribute lookup on the
+        # package) would resolve to the function, not the module; importlib sidesteps that.
+        import importlib
+
+        adopt_mod = importlib.import_module("metaquest.store.adopt")
+        real_build = adopt_mod.build_sidecar
+
+        def failing_build(*a, **kw):
+            sc = real_build(*a, **kw)
+            sc.state = "failed"
+            sc.error = "simulated gzip error"
+            return sc
+
+        monkeypatch.setattr(adopt_mod, "build_sidecar", failing_build)
+        report = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.failed == ["SRR1"]
+        assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
+        assert not (project / "SRR1").is_symlink()
+
+    def test_retry_after_failed_stage_does_not_delete_project_copy(self, tmp_path, monkeypatch):
+        """A second adopt() run must not dedup a project copy onto a store copy that a
+        previous run already found unverifiable: _dedup_or_conflict's content match alone
+        cannot tell a byte-identical bad copy from a good one, so it must also check the
+        existing sidecar's state before treating anything as a dedup."""
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        import importlib
+
+        adopt_mod = importlib.import_module("metaquest.store.adopt")
+        real_build = adopt_mod.build_sidecar
+
+        def failing_build(*a, **kw):
+            sc = real_build(*a, **kw)
+            sc.state = "failed"
+            sc.error = "simulated gzip error"
+            return sc
+
+        monkeypatch.setattr(adopt_mod, "build_sidecar", failing_build)
+        first = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert first.failed == ["SRR1"]
+
+        monkeypatch.undo()
+        second = adopt(project, paths, move=True, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert second.failed == ["SRR1"]
+        assert second.deduplicated == []
+        assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
+        assert not (project / "SRR1").is_symlink()
+
+    def test_copy_dedup_leaves_project_folder(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        adopt(project, paths, move=False, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert (project / "SRR1").is_dir() and not (project / "SRR1").is_symlink()
+        report = adopt(project, paths, move=False, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.deduplicated == ["SRR1"]
+        assert not (project / "SRR1").is_symlink()
+        assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()

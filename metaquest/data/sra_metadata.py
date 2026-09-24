@@ -16,6 +16,7 @@ import pandas as pd
 import requests
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import visible_files
 from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_records
 from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats, compute_dataset_stats, store_stats
 
@@ -164,7 +165,7 @@ class SRAMetadataClient:
         return self._parse_sra_xml(fetch_response)
 
     def _parse_sra_xml(self, xml_content: str) -> Dict[str, SRADatasetInfo]:
-        """Parse SRA XML response to extract metadata."""
+        """Parse SRA XML response to extract metadata, one entry per RUN accession."""
         try:
             import xml.etree.ElementTree as ET
 
@@ -173,9 +174,8 @@ class SRAMetadataClient:
 
             for package in root.findall(".//EXPERIMENT_PACKAGE"):
                 try:
-                    dataset_info = self._extract_dataset_info(package)
-                    if dataset_info:
-                        results[dataset_info.accession] = dataset_info
+                    for info in self._extract_dataset_info(package):
+                        results[info.accession] = info
                 except Exception as e:
                     logger.warning(f"Failed to parse dataset package: {e}")
                     continue
@@ -196,18 +196,16 @@ class SRAMetadataClient:
             return child.tag, instrument
         return "", ""
 
-    def _aggregate_runs(self, package) -> Tuple[int, int, float]:
-        """Sum spots, bases, and size (MB) across all RUN statistics in the package."""
-        spots = 0
-        bases = 0
-        size_mb = 0.0
-        run_set = package.find(".//RUN_SET")
-        if run_set is not None:
-            for run in run_set.findall(".//RUN"):
-                spots += int(self._get_text(run, ".//Statistics/@nspots", "0"))
-                bases += int(self._get_text(run, ".//Statistics/@nbases", "0"))
-                size_mb += float(self._get_text(run, ".//Statistics/@size", "0")) / (1024 * 1024)
-        return spots, bases, size_mb
+    @staticmethod
+    def _run_numbers(run) -> Tuple[int, int, float, str]:
+        """spots, bases, size in MB and published date of one ``<RUN>`` element."""
+
+        def _int(name: str) -> int:
+            value = run.get(name)
+            return int(value) if value and value.isdigit() else 0
+
+        size_bytes = _int("size")
+        return _int("total_spots"), _int("total_bases"), size_bytes / (1024 * 1024), run.get("published", "") or ""
 
     def _extract_biosample(self, package) -> str:
         """Return the BioSample accession from SAMPLE_ATTRIBUTE tags, or ''."""
@@ -216,12 +214,16 @@ class SRAMetadataClient:
                 return self._get_text(attr, ".//VALUE", "")
         return ""
 
-    def _extract_dataset_info(self, package) -> Optional[SRADatasetInfo]:
-        """Extract dataset information from XML package."""
+    def _extract_dataset_info(self, package) -> List[SRADatasetInfo]:
+        """Extract dataset information from an XML package, one entry per RUN.
+
+        A package with no RUN_SET/RUN elements still yields a single entry keyed by
+        the experiment accession, with zeroed run-level numbers.
+        """
         try:
             experiment = package.find(".//EXPERIMENT")
             if experiment is None:
-                return None
+                return []
 
             accession = experiment.get("accession", "")
             title = self._get_text(experiment, ".//TITLE", "")
@@ -232,43 +234,53 @@ class SRAMetadataClient:
             strategy = self._get_text(library_descriptor, ".//LIBRARY_STRATEGY", "")
             selection = self._get_text(library_descriptor, ".//LIBRARY_SELECTION", "")
             source = self._get_text(library_descriptor, ".//LIBRARY_SOURCE", "")
-            layout_elem = library_descriptor.find(".//LIBRARY_LAYOUT") if library_descriptor else None
-            layout = "PAIRED" if layout_elem and layout_elem.find(".//PAIRED") is not None else "SINGLE"
-
-            spots, bases, size_mb = self._aggregate_runs(package)
-            avg_length = bases / spots if spots > 0 else 0.0
+            layout_elem = library_descriptor.find(".//LIBRARY_LAYOUT") if library_descriptor is not None else None
+            layout = "PAIRED" if layout_elem is not None and layout_elem.find(".//PAIRED") is not None else "SINGLE"
 
             # Get sample / study / submission info
             sample = package.find(".//SAMPLE")
-            organism = self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample else ""
+            organism = self._get_text(sample, ".//SCIENTIFIC_NAME", "") if sample is not None else ""
             study = package.find(".//STUDY")
-            bioproject = self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "") if study else ""
+            bioproject = (
+                self._get_text(study, ".//EXTERNAL_ID[@namespace='BioProject']", "") if study is not None else ""
+            )
             submission = package.find(".//SUBMISSION")
-            release_date = self._get_text(submission, "./@received", "") if submission else ""
+            submission_received = submission.get("received", "") if submission is not None else ""
             biosample = self._extract_biosample(package)
 
-            return SRADatasetInfo(
-                accession=accession,
-                title=title,
-                organism=organism,
-                platform=platform,
-                instrument=instrument,
-                strategy=strategy,
-                layout=layout,
-                spots=spots,
-                bases=bases,
-                avg_length=avg_length,
-                size_mb=size_mb,
-                release_date=release_date,
-                bioproject=bioproject,
-                biosample=biosample,
-                library_selection=selection,
-                library_source=source,
-            )
+            runs = package.findall(".//RUN_SET/RUN")
+            infos = []
+            for run in runs or [None]:
+                if run is None:
+                    run_accession, spots, bases, size_mb, published = accession, 0, 0, 0.0, ""
+                else:
+                    run_accession = run.get("accession", "") or accession
+                    spots, bases, size_mb, published = self._run_numbers(run)
+                infos.append(
+                    SRADatasetInfo(
+                        accession=run_accession,
+                        title=title,
+                        organism=organism,
+                        platform=platform,
+                        instrument=instrument,
+                        strategy=strategy,
+                        layout=layout,
+                        spots=spots,
+                        bases=bases,
+                        avg_length=bases / spots if spots else 0.0,
+                        size_mb=size_mb,
+                        release_date=published or submission_received,
+                        bioproject=bioproject,
+                        biosample=biosample,
+                        library_selection=selection,
+                        library_source=source,
+                    )
+                )
+            return infos
 
         except Exception as e:
             logger.warning(f"Failed to extract dataset info: {e}")
-            return None
+            return []
 
     def _get_text(self, element, xpath: str, default: str = "") -> str:
         """Safely extract text from XML element."""
@@ -687,7 +699,7 @@ def generate_statistics_report(
 
     logger.info("Generating statistics report for downloaded datasets")
 
-    accession_dirs = [d for d in fastq_path.iterdir() if d.is_dir()]
+    accession_dirs = visible_files(fastq_path, dirs=True)
     if not accession_dirs:
         logger.warning("No accession directories found")
         return

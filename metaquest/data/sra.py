@@ -11,6 +11,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -18,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence,
 
 from metaquest.core.constants import DEFAULT_MAX_WORKERS, FAILED_ACCESSIONS_FILE, FASTQ_GLOBS, MAX_CONCURRENT_DOWNLOADS
 from metaquest.core.exceptions import DataAccessError, SecurityError
-from metaquest.data.file_io import ensure_directory
+from metaquest.data.file_io import ensure_directory, visible_files
 from metaquest.utils.security import SecureSubprocess
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: metaquest.store imports this module
@@ -46,6 +48,32 @@ _DISK_FULL_ERROR_RE = re.compile(r"no space left|enospc|disk[ -]full|storage exh
 _NOT_FOUND_ERROR_RE = re.compile(
     r"not[ -]found|invalid accession|cannot be found|403|404|does not exist", re.IGNORECASE
 )
+
+
+# Set when the user interrupts a download run (Ctrl-C). download_accession checks it
+# before each prefetch or fasterq-dump call, so a worker thread that has not yet
+# started a tool returns without starting one, and the retry pass does not run.
+STOP = threading.Event()
+
+
+class _DownloadInterrupted(Exception):
+    """Raised inside download_accession when STOP is set before a tool call."""
+
+
+def _run_download_tool(executable: str, args: List[str]) -> None:
+    """Run prefetch or fasterq-dump through ``run_secure`` unless STOP is set.
+
+    A tool that exits non-zero while STOP is set was stopped by the interrupt (or killed
+    as it started), so its failure is reported as an interruption rather than an error.
+    """
+    if STOP.is_set():
+        raise _DownloadInterrupted()
+    try:
+        SecureSubprocess.run_secure(executable, args)
+    except subprocess.CalledProcessError as e:
+        if STOP.is_set():
+            raise _DownloadInterrupted() from e
+        raise
 
 
 def classify_download_error(text: str) -> str:
@@ -88,11 +116,12 @@ def is_transient_folder(name: str) -> bool:
     """True for a folder name that is a download-in-progress artifact, not a real accession.
 
     Covers the ``<acc>_temp`` folder ``download_accession`` builds into (kept on disk after a
-    failure for inspection, see its except blocks) and fasterq-dump's own on-disk cache
-    directory (``.sra-cache``). Neither should be counted as a downloaded accession by
+    failure for inspection, see its except blocks), the ``<acc>_fqtmp`` scratch folder
+    ``_store_fetch`` points fasterq-dump at, and fasterq-dump's own on-disk cache directory
+    (``.sra-cache``). None of these should be counted as a downloaded accession by
     ``scan_downloads`` or the status command's on-disk inventory.
     """
-    return name.endswith("_temp") or name == ".sra-cache"
+    return name.endswith("_temp") or name.endswith("_fqtmp") or name == ".sra-cache"
 
 
 def transient_bytes(folder: Union[str, Path]) -> int:
@@ -123,10 +152,28 @@ def transient_bytes(folder: Union[str, Path]) -> int:
 
 
 def _safe_rmtree(path: Path) -> None:
-    """Remove a directory tree if present, logging on failure instead of raising."""
+    """Remove a directory tree if present, logging on failure instead of raising.
+
+    A missing file during removal is ignored rather than logged: on a volume that stores each
+    file's AppleDouble sidecar (``._<name>``) next to it, macOS can delete ``._X`` together with
+    ``X``, so ``rmtree`` reaching ``._X`` afterwards finds it already gone. That race is not a
+    real failure to remove the directory. ``onexc`` (Python 3.12+) hands the callback the
+    exception object directly; the older ``onerror`` (kept here for 3.11) hands it a
+    ``sys.exc_info()`` tuple instead, so the callback accepts either shape.
+    """
+
+    def _ignore_missing(func, target, exc_info):
+        exc = exc_info[1] if isinstance(exc_info, tuple) else exc_info
+        if isinstance(exc, FileNotFoundError):
+            return
+        raise exc
+
     try:
         if path.exists():
-            shutil.rmtree(path)
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=_ignore_missing)
+            else:
+                shutil.rmtree(path, onerror=_ignore_missing)
     except Exception as e:
         logger.warning(f"Could not remove directory {path}: {e}")
 
@@ -148,22 +195,23 @@ def _notify_result(
 
 
 def fastq_files(acc_dir: Union[str, Path]) -> List[Path]:
-    """Non-empty FASTQ files directly in ``acc_dir``, sorted by name.
+    """Non-empty, visible FASTQ files directly in ``acc_dir``, sorted by name (see ``visible_files``).
 
     Matches ``FASTQ_GLOBS`` (plain and gzipped ``.fastq``/``.fq``). A directory that does not
     exist (or a dangling symlink) yields an empty list; a symlinked directory is followed
     since ``Path.is_dir``/``Path.glob`` already resolve it transparently. A zero-byte file
-    (e.g. left behind by an interrupted download) is never returned.
+    (e.g. left behind by an interrupted download) is never returned, and neither is a hidden
+    name such as the ``._<name>`` AppleDouble files macOS writes next to every file on a
+    volume without native extended attributes.
     """
-    acc_path = Path(acc_dir)
-    if not acc_path.is_dir():
-        return []
-    found = set()
-    for pattern in FASTQ_GLOBS:
-        for candidate in acc_path.glob(pattern):
-            if candidate.is_file() and candidate.stat().st_size > 0:
-                found.add(candidate)
-    return sorted(found)
+    found = []
+    for candidate in visible_files(acc_dir, *FASTQ_GLOBS):
+        try:
+            if candidate.stat().st_size > 0:
+                found.append(candidate)
+        except OSError:
+            continue
+    return found
 
 
 def fastq_stem(path: Union[str, Path]) -> str:
@@ -584,8 +632,15 @@ def _handle_download_output(
     verdict = verify_download(output_path.name, output_path, expected_spots=expected_spots)
 
     compression_failures = []
+    compression_skipped: List[str] = []
     if compress:
-        for file in moved:
+        for index, file in enumerate(moved):
+            if STOP.is_set():
+                # The download itself is complete; leave the rest uncompressed rather than
+                # start pigz after an interrupt.
+                compression_skipped = [f.name for f in moved[index:]]
+                logger.info(f"Compression of {output_path.name} skipped: the run was interrupted")
+                break
             try:
                 compress_fastq(file, num_threads)
             except Exception as e:
@@ -607,6 +662,8 @@ def _handle_download_output(
         # Appended, never prepended, so parse_verdict_message's regex/substring checks
         # on the leading verdict text keep working unchanged.
         message += "; compression failed for " + ", ".join(compression_failures)
+    if compression_skipped:
+        message += "; compression skipped (interrupted) for " + ", ".join(compression_skipped)
 
     return True, message
 
@@ -753,7 +810,7 @@ def download_accession(
 
         if using_prefetch:
             SecureSubprocess.add_allowed_root(cache_path)
-            SecureSubprocess.run_secure(
+            _run_download_tool(
                 "prefetch",
                 ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
             )
@@ -766,7 +823,7 @@ def download_accession(
 
         # Run fasterq-dump command securely
         args = _fasterq_dump_args(source, temp_path, temp_folder_path, num_threads, using_prefetch)
-        SecureSubprocess.run_secure("fasterq-dump", args)
+        _run_download_tool("fasterq-dump", args)
 
         # Handle download output
         success, message = _handle_download_output(
@@ -777,6 +834,10 @@ def download_accession(
             _discard_cached_archive(cache_path, accession, message)
 
         return success, message
+
+    except _DownloadInterrupted:
+        logger.info(f"Download of {accession} not started or continued: the run was interrupted")
+        return False, "interrupted"
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading {accession}: {e.stderr}")
@@ -943,11 +1004,24 @@ def _store_fetch(
     if download_kwargs["sra_cache"] is None:
         download_kwargs["sra_cache"] = store.tmp / ".sra-cache"
 
+    # A caller that gave no temp_folder gets one under the store's own tmp, not the system
+    # temp directory: fasterq-dump's scratch space can run to several gigabytes per accession,
+    # and download_accession only cleans up a temp_folder it created itself (its finally block
+    # skips a folder the caller supplied), so this scratch folder is ours to remove afterwards.
+    own_scratch: Optional[Path] = None
+    if download_kwargs.get("temp_folder") is None:
+        own_scratch = store.tmp / f"{accession}_fqtmp"
+        download_kwargs["temp_folder"] = own_scratch
+
     # Whatever an earlier interrupted attempt left staged is not a resume point: the download
     # would otherwise be skipped as "already exists" and that partial copy published.
     _safe_rmtree(staged)
 
-    success, message = download_accession(accession, store.tmp, staging_folder=store.tmp, **download_kwargs)
+    try:
+        success, message = download_accession(accession, store.tmp, staging_folder=store.tmp, **download_kwargs)
+    finally:
+        if own_scratch is not None:
+            _safe_rmtree(own_scratch)
 
     if not success:
         _safe_rmtree(staged)
@@ -993,7 +1067,7 @@ def _store_download(
     ``lock_wait`` of zero waits for as long as the other project keeps working; a positive
     value gives up after that many seconds, naming the accession and the holder.
     """
-    from metaquest.store.locks import dataset_lock
+    from metaquest.store.locks import LockWaitStopped, dataset_lock
 
     project_path = Path(project_fastq)
     for directory in (store.sra, store.tmp, store.locks):
@@ -1005,7 +1079,7 @@ def _store_download(
             if settled is not None:
                 return settled
 
-        with dataset_lock(store, accession, wait_seconds=lock_wait):
+        with dataset_lock(store, accession, wait_seconds=lock_wait, should_stop=STOP.is_set):
             if not force:
                 settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
                 if settled is not None:
@@ -1013,6 +1087,9 @@ def _store_download(
             return _store_fetch(
                 accession, project_path, store, link_mode, store_metadata, force=force, **download_kwargs
             )
+    except LockWaitStopped:
+        logger.info(f"Stopped waiting for the store lock on {accession}: the run was interrupted")
+        return False, "interrupted"
     except DataAccessError as e:
         logger.error(f"Store download failed for {accession}: {e}")
         return False, f"store error: {e}"
@@ -1116,11 +1193,6 @@ def _process_download_results(futures_results, accessions_to_download, download_
 
             if success:
                 successful_count += 1
-                # Log progress periodically
-                if successful_count % 5 == 0:
-                    logger.info(
-                        f"Downloaded {successful_count}/{len(accessions_to_download)} " f"({failed_count} failed)"
-                    )
             else:
                 failed_count += 1
                 failed_accessions.append(accession)
@@ -1131,6 +1203,8 @@ def _process_download_results(futures_results, accessions_to_download, download_
             failed_accessions.append(accession)
             logger.error(f"Error processing download result for {accession}: {e}")
             download_results[accession] = f"Error: {str(e)}"
+
+    logger.info("Downloaded %d of %d (%d failed)", successful_count, len(accessions_to_download), failed_count)
 
     return successful_count, failed_count
 
@@ -1180,7 +1254,7 @@ def _retry_failed_downloads(
         (and notified too) without ever calling ``download_accession``, and no further retry
         round runs. ``abort_reason`` is ``None`` when every round ran to completion normally.
     """
-    if max_retries <= 0 or not failed_accessions:
+    if max_retries <= 0 or not failed_accessions or STOP.is_set():
         return 0, failed_accessions, None
 
     logger.info(f"Retrying {len(failed_accessions)} failed downloads")
@@ -1311,41 +1385,53 @@ def _execute_parallel_downloads(
 
     ``downloader`` replaces ``download_accession`` when the project reads through a shared
     store; it takes the same arguments so the tally, retries and callbacks are unchanged.
+
+    On ``KeyboardInterrupt`` STOP is set, downloads not yet started are cancelled, every
+    running prefetch or fasterq-dump child is terminated, and the interrupt is re-raised.
     """
+    STOP.clear()
+    SecureSubprocess.clear_stopping()
     expected_spots = expected_spots or {}
     futures_results: list = []
     worker = downloader or download_accession
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                worker,
-                acc,
-                fastq_path,
-                num_threads,
-                force,
-                temp_folder,
-                expected_spots=expected_spots.get(acc),
-                redownload_truncated=redownload_truncated,
-                sra_cache=sra_cache,
-                use_prefetch=use_prefetch,
-                keep_sra=keep_sra,
-                compress=compress,
-            ): acc
-            for acc in accessions
-        }
-        for future in as_completed(futures):
-            acc = futures[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                logger.error(f"Download failed for {acc}: {e}")
-                futures_results.append((acc, None))
-                _notify_result(on_result, acc, False, str(e))
-                continue
+        try:
+            futures = {
+                executor.submit(
+                    worker,
+                    acc,
+                    fastq_path,
+                    num_threads,
+                    force,
+                    temp_folder,
+                    expected_spots=expected_spots.get(acc),
+                    redownload_truncated=redownload_truncated,
+                    sra_cache=sra_cache,
+                    use_prefetch=use_prefetch,
+                    keep_sra=keep_sra,
+                    compress=compress,
+                ): acc
+                for acc in accessions
+            }
+            for future in as_completed(futures):
+                acc = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"Download failed for {acc}: {e}")
+                    futures_results.append((acc, None))
+                    _notify_result(on_result, acc, False, str(e))
+                    continue
 
-            futures_results.append((acc, result))
-            success, message = result
-            _notify_result(on_result, acc, success, message)
+                futures_results.append((acc, result))
+                success, message = result
+                _notify_result(on_result, acc, success, message)
+        except KeyboardInterrupt:
+            STOP.set()
+            logger.warning("Interrupted; cancelling pending downloads and stopping running tools")
+            executor.shutdown(wait=False, cancel_futures=True)
+            SecureSubprocess.terminate_children()
+            raise
 
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
 

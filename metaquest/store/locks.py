@@ -31,7 +31,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
 from metaquest.core.exceptions import DataAccessError
@@ -43,7 +43,11 @@ logger = logging.getLogger(__name__)
 LOCK_POLL_SECONDS = 1.0
 LOCK_WAIT_LOG_SECONDS = 30.0
 
-__all__ = ["dataset_lock", "lock_holder", "lock_is_held"]
+__all__ = ["LockWaitStopped", "dataset_lock", "lock_holder", "lock_is_held"]
+
+
+class LockWaitStopped(DataAccessError):
+    """Raised when a caller's stop predicate ends a wait for a held lock (for example on Ctrl-C)."""
 
 
 def _read_holder(lock: Path) -> Dict[str, Any]:
@@ -102,12 +106,15 @@ def _give_up(lock: Path, accession: str, waited: float) -> DataAccessError:
     )
 
 
-def _acquire(lock: Path, accession: str, wait_seconds: float) -> Dict[str, Any]:
+def _acquire(
+    lock: Path, accession: str, wait_seconds: float, should_stop: Optional[Callable[[], bool]] = None
+) -> Dict[str, Any]:
     """Take ``lock`` for ``accession``, waiting while another live holder keeps it.
 
     Waits for ever by default; ``wait_seconds`` above zero gives up after that long. A lock
     whose heartbeat stopped more than ``DATASET_LOCK_STALE_SECONDS`` ago is removed and taken
-    over, with a warning naming the dead holder.
+    over, with a warning naming the dead holder. ``should_stop`` is checked on every poll of
+    a held lock; once it returns True the wait ends with ``LockWaitStopped``.
     """
     started = time.monotonic()
     next_log = 0.0
@@ -131,6 +138,8 @@ def _acquire(lock: Path, accession: str, wait_seconds: float) -> Dict[str, Any]:
             continue
 
         waited = time.monotonic() - started
+        if should_stop is not None and should_stop():
+            raise LockWaitStopped(f"Stopped waiting for {accession} after {waited:.0f} s: a stop was requested")
         if wait_seconds and waited >= wait_seconds:
             raise _give_up(lock, accession, waited)
         if waited >= next_log:
@@ -181,16 +190,23 @@ def _release(lock: Path, holder: Dict[str, Any]) -> None:
 
 
 @contextmanager
-def dataset_lock(paths: StorePaths, accession: str, wait_seconds: float = 0.0) -> Iterator[Path]:
+def dataset_lock(
+    paths: StorePaths,
+    accession: str,
+    wait_seconds: float = 0.0,
+    should_stop: Optional[Callable[[], bool]] = None,
+) -> Iterator[Path]:
     """Hold ``<store>/locks/<ACC>.lock`` for the length of the block.
 
     ``wait_seconds`` of zero (the default) waits for as long as the current holder stays
     alive, since a download legitimately runs for hours; a positive value gives up after
     that many seconds with a ``DataAccessError`` naming the accession and the holder.
+    ``should_stop``, when given, ends a wait for a held lock with ``LockWaitStopped`` as
+    soon as it returns True; a free lock is taken regardless.
     """
     lock = lock_path(paths, accession)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    holder = _acquire(lock, accession, wait_seconds)
+    holder = _acquire(lock, accession, wait_seconds, should_stop)
     heartbeat = _Heartbeat(lock)
     heartbeat.start()
     try:

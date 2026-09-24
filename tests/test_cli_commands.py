@@ -6,6 +6,7 @@ focusing on argument parsing, validation, and proper delegation.
 """
 
 import argparse
+import logging
 import json
 import os
 from pathlib import Path
@@ -78,7 +79,7 @@ class TestUseBranchwaterCommand:
 
         result = command.execute(args)
         assert result == 0
-        mock_command.assert_called_once_with("test_folder", "matches")
+        mock_command.assert_called_once_with("test_folder", "matches", errors=[])
 
     @patch("metaquest.cli.commands.branchwater.process_branchwater_files")
     def test_execute_failure(self, mock_command):
@@ -90,7 +91,14 @@ class TestUseBranchwaterCommand:
 
         result = command.execute(args)
         assert result == 1
-        mock_command.assert_called_once_with("test_folder", "matches")
+        mock_command.assert_called_once_with("test_folder", "matches", errors=[])
+
+    def test_use_branchwater_returns_1_on_file_error(self, tmp_path):
+        source = tmp_path / "bw"
+        source.mkdir()
+        (source / "bad.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
+        args = argparse.Namespace(branchwater_folder=str(source), matches_folder=str(tmp_path / "m"))
+        assert UseBranchwaterCommand().execute(args) == 1
 
 
 class TestExtractBranchwaterMetadataCommand:
@@ -127,7 +135,7 @@ class TestExtractBranchwaterMetadataCommand:
         result = command.execute(args)
         assert result == 0
         mock_mkdir.assert_called_once_with(exist_ok=True)
-        mock_command.assert_called_once_with("test_folder", Path("metadata/branchwater_metadata.txt"))
+        mock_command.assert_called_once_with("test_folder", Path("metadata/branchwater_metadata.txt"), errors=[])
 
 
 class TestParseContainmentCommand:
@@ -200,7 +208,7 @@ class TestParseContainmentCommand:
         result = command.execute(args)
         assert result == 0
         mock_command.assert_called_once_with(
-            "test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05, details_file=None
+            "test_matches", str(tmp_path / "parsed.txt"), "summary.txt", 0.05, details_file=None, errors=[]
         )
 
     def test_execute_records_screening_in_registry(self, tmp_path):
@@ -1230,6 +1238,28 @@ class TestDownloadSraCommand:
         assert DownloadSraCommand().execute(args) == 0
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra", side_effect=KeyboardInterrupt)
+    def test_keyboard_interrupt_returns_130(self, _download, _which, tmp_path, caplog):
+        args = argparse.Namespace(
+            fastq_folder=str(tmp_path / "fastq"),
+            accessions_file=str(tmp_path / "acc.txt"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+        with caplog.at_level(logging.ERROR):
+            assert DownloadSraCommand().execute(args) == 130
+        assert "Download interrupted by the user" in caplog.text
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_report_file_lists_every_status(self, mock_download, _which, tmp_path):
         mock_download.return_value = {
@@ -2112,6 +2142,79 @@ class TestDownloadSraCommand:
         assert download["store_name"] == "SRR1"
         assert written["store"]["linked"] == ["SRR1"]
 
+    # ------------------------------------------------------- download summary logging
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_summary_reports_how_many_were_linked_from_store(self, mock_download, _which, tmp_path, caplog):
+        """The final summary counts only the results the store linked, not ones it downloaded."""
+        mock_download.return_value = {
+            "total": 2,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 2,
+            "failed": 0,
+            "failed_accessions": [],
+            "results": {
+                "SRR1": "linked from store, 1 files",
+                "SRR2": "Downloaded 1 files, complete (1 of 1 spots); stored",
+            },
+        }
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        with caplog.at_level("INFO"):
+            assert DownloadSraCommand().execute(args) == 0
+
+        assert "Linked from store: 1 datasets" in caplog.text
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_summary_omits_linked_line_when_nothing_was_linked(self, mock_download, _which, tmp_path, caplog):
+        """A run with no store-linked results does not mention linking at all."""
+        mock_download.return_value = {
+            "total": 1,
+            "already_downloaded": 0,
+            "blacklisted": 0,
+            "successful": 1,
+            "failed": 0,
+            "failed_accessions": [],
+            "results": {"SRR1": "Downloaded 1 files, complete (1 of 1 spots)"},
+        }
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        with caplog.at_level("INFO"):
+            assert DownloadSraCommand().execute(args) == 0
+
+        assert "Linked from store" not in caplog.text
+
     # ------------------------------------------------------- transient bytes warning
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
@@ -2529,7 +2632,7 @@ class TestPlotContainmentCommand:
         assert args.plot_type == "rank"
         assert args.title is None
         assert args.colors is None
-        assert args.save_format is None
+        assert args.save_format == "png"
 
     def test_configure_parser_with_options(self):
         """Test parser with optional arguments."""
@@ -2596,6 +2699,34 @@ class TestPlotContainmentCommand:
             threshold=None,
             plot_type="rank",
         )
+
+    @patch("metaquest.cli.commands.containment.viz_plot_containment")
+    def test_execute_logs_the_saved_path_and_a_next_hint(self, mock_command, caplog):
+        """The saved path the command logs must be the one _save_plot_if_needed actually
+        writes to; both are built from the shared plot_output_path helper so there is one
+        source of truth for the naming formula, not two copies that can drift apart."""
+        import matplotlib.pyplot as plt
+
+        mock_command.return_value = plt.figure()
+        command = PlotContainmentCommand()
+
+        args = argparse.Namespace(
+            file_path="parsed_containment.txt",
+            column="max_containment",
+            plot_type="rank",
+            title=None,
+            colors=None,
+            save_format="png",
+            threshold=None,
+            show_title=False,
+        )
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "parsed_containment_rank_max_containment.png" in caplog.text
+        assert "Next:" in caplog.text
 
 
 class TestPlotMetadataCountsCommand:

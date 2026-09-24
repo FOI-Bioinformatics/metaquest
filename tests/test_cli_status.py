@@ -8,12 +8,14 @@ from pathlib import Path
 
 from metaquest.cli.commands.status import StatusCommand
 from metaquest.data.registry import (
+    Registry,
     SCHEMA_VERSION,
     load_registry,
     record_exclusion,
     record_extraction,
     record_genome,
     record_selection,
+    registry_transaction,
     save_registry,
 )
 
@@ -192,6 +194,21 @@ def _status_args(root, **overrides):
     return argparse.Namespace(**base)
 
 
+def test_inventory_ignores_appledouble(tmp_path):
+    root = _make_tree(tmp_path)
+    (root / "metadata" / "._SRR1_metadata.xml").write_bytes(b"\x00\x05")
+    (root / "genomes" / "._g.fna").write_bytes(b"\x00\x05")
+    # A hidden accession directory with a real, non-empty FASTQ file inside: only the
+    # directory's own dotted name should exclude it, not an empty-folder accident.
+    hidden_acc = root / "fastq" / "._SRR1"
+    hidden_acc.mkdir()
+    (hidden_acc / "reads.fastq.gz").write_bytes(b"x" * 10)
+    report = StatusCommand()._inventory_report(_status_args(root), Registry())
+    assert report["on_disk"]["metadata_xml"] == 1
+    assert report["on_disk"]["genome_fasta"] == 1
+    assert report["on_disk"]["fastq_accessions"] == 1
+
+
 def _project_tree(root):
     for acc in ("SRR1", "SRR2"):
         d = root / "fastq" / acc
@@ -251,6 +268,32 @@ class TestStatusWithRegistry:
         assert any(
             "extract_target_reads" in c and "GCF_1" in c for c in commands
         )  # SRR1/SRR2 downloaded, not extracted
+
+    def test_next_does_not_suggest_a_no_skip_excluded_list(self, tmp_path, monkeypatch):
+        """A selection recorded with --no-skip-excluded may still list an excluded accession,
+        so --next must not suggest downloading that selection's output file directly; it
+        should instead point at re-running select_datasets with --skip-excluded.
+
+        SRR1 and SRR2 already have FASTQ on disk in `_project_tree`, so `--init` marks them
+        downloaded and `_download_next_steps` would drop them regardless of selection
+        criteria; SRR3 has no FASTQ on disk, so it is the accession left to download and the
+        one whose selection criteria this test exercises."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_exclusion(reg, "SRR2", "isolate")
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5},
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        assert not any("sel_noskip.txt" in c for c in commands)
+        assert any("select_datasets" in c and "--skip-excluded" in c for c in commands)
 
     def test_next_extraction_command_is_runnable(self, tmp_path, capsys):
         """The extract suggestion carries the table it was selected from and a FASTA that exists."""
@@ -396,10 +439,21 @@ class TestStatusWithRegistry:
         assert "column GCF_1" in out and "threshold 0.5" in out and "organism = soil" in out
         assert "16S amplicon: 2" in out
 
-    def test_export_tsv(self, tmp_path, capsys):
+    def test_export_tsv(self, tmp_path, capsys, caplog):
         _project_tree(tmp_path)
-        StatusCommand().execute(_status_args(tmp_path, init=True, export_tsv=str(tmp_path / "registry")))
+        extracted = tmp_path / "targeted" / "SRR1"
+        extracted.mkdir(parents=True)
+        for name in ("GCF_1_1.fastq.gz", "GCF_1_2.fastq.gz"):
+            with gzip.open(extracted / name, "wt") as handle:
+                handle.write("@r1\nACGT\n+\nIIII\n")
+
+        with caplog.at_level("INFO"):
+            StatusCommand().execute(_status_args(tmp_path, init=True, export_tsv=str(tmp_path / "registry")))
+
         assert (tmp_path / "registry_datasets.tsv").exists() and (tmp_path / "registry_extractions.tsv").exists()
+        ext = (tmp_path / "registry_extractions.tsv").read_text().splitlines()[0]
+        assert ext.startswith("accession\t")
+        assert "registry_datasets.tsv" in caplog.text and "registry_extractions.tsv" in caplog.text
 
     def test_text_report_shows_stage_matrix(self, tmp_path, capsys):
         _project_tree(tmp_path)

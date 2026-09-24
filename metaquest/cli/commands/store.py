@@ -22,19 +22,36 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
-from metaquest.data.registry import load_registry, record_download, registry_transaction
-from metaquest.data.sra import is_transient_folder, verify_download
+from metaquest.data.file_io import is_hidden_name, visible_files
+from metaquest.data.registry import load_registry, project_root, record_download, registry_transaction
+from metaquest.data.sra import (
+    count_fastq_reads,
+    fastq_files,
+    is_transient_folder,
+    orphan_fastq,
+    primary_fastq,
+    verify_download,
+)
+from metaquest.store import journal
 from metaquest.store.adopt import adopt
-from metaquest.store.catalog import Catalog, catalog_write
+from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, Catalog, catalog_write
 from metaquest.store.layout import StorePaths, init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.locks import lock_holder, lock_is_held
 from metaquest.store.resolve import resolve_store_root, write_config_data_root
-from metaquest.store.sidecar import Sidecar, md5_file, read_sidecar, sidecar_completeness, write_sidecar
+from metaquest.store.sidecar import (
+    Sidecar,
+    build_sidecar,
+    md5_file,
+    ncbi_from_metadata_xml,
+    read_sidecar,
+    sidecar_completeness,
+    write_sidecar,
+)
 from metaquest.store.usage import ensure_project_identity, linked_by, record_usage_many, stale_projects
 
 logger = logging.getLogger(__name__)
@@ -391,11 +408,7 @@ class StoreReindexCommand(BaseCommand):
         """
         sidecars: List[Sidecar] = []
         unreadable: List[str] = []
-        if not paths.sra.is_dir():
-            return sidecars, unreadable
-        for acc_dir in sorted(paths.sra.iterdir()):
-            if not acc_dir.is_dir() or acc_dir.name == ".sra-cache":
-                continue
+        for acc_dir in visible_files(paths.sra, dirs=True):
             sidecar = read_sidecar(sidecar_path(paths, acc_dir.name))
             if sidecar is None:
                 unreadable.append(acc_dir.name)
@@ -428,12 +441,35 @@ class StoreReindexCommand(BaseCommand):
                 return 1
             with catalog_write(paths) as catalog:
                 count = catalog.reindex(sidecars)
+                projects, usage = journal.replay(paths, catalog)
+                has_datasets = catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1").fetchone() is not None
+                if projects == 0 and has_datasets:
+                    catalog.set_meta(REBUILT_WITHOUT_PROJECTS, _now())
+                elif projects > 0:
+                    catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
+            if projects == 0:
+                self._warn_no_projects_restored(paths, has_datasets)
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1
 
-        print(f"Reindexed {count} dataset(s)")
+        print(f"Reindexed {count} dataset(s); restored {projects} project(s) and {usage} usage record(s)")
         return 0
+
+    def _warn_no_projects_restored(self, paths: StorePaths, flagged: bool) -> None:
+        """Warn that no project was restored. With no datasets there is nothing gc could take for
+        unused, so the ``rebuilt_without_projects`` flag is neither set nor cleared in that case."""
+        if not flagged:
+            self.logger.warning("No project records could be restored from %s", paths.journal)
+            return
+        self.logger.warning(
+            "No project records could be restored from %s; every dataset will look unused until each "
+            "project runs store_init or store_link again. store_gc now refuses to run (catalogue flag '%s') "
+            "until that is done and it is run once with --accept-rebuilt, or until a later store_reindex "
+            "restores at least one project",
+            paths.journal,
+            REBUILT_WITHOUT_PROJECTS,
+        )
 
 
 class StoreAdoptCommand(BaseCommand):
@@ -546,12 +582,20 @@ class StoreAdoptCommand(BaseCommand):
                 print("  " + ", ".join(sorted(report.planned)))
             if report.conflicts:
                 print(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
+            for label, accessions in (
+                ("Empty folders, not adopted", report.empty),
+                ("Failed (store copy not verified), project copy kept", report.failed),
+            ):
+                if accessions:
+                    print(f"{label}: {', '.join(sorted(accessions))}")
             return 0
 
-        # Only an accession the project now links to (adopted via --move, or deduplicated,
-        # which always links) needs its download record pointed at the store; a --copy
-        # accession keeps its project folder exactly as it was, unlinked.
-        newly_linked = sorted(set(report.adopted) | set(report.deduplicated))
+        # Only an accession the project now links to needs its download record pointed at the
+        # store: one freshly adopted or deduplicated under --move (both replace the project's
+        # folder with a link). Under --copy, report.adopted is always empty and a dedup leaves
+        # the project's folder exactly as it was, real and unlinked, the same as a fresh --copy
+        # adoption (report.copied), so neither is recorded here.
+        newly_linked = sorted(set(report.adopted) | (set(report.deduplicated) if args.move else set()))
         if newly_linked:
             self._record_linked(args, paths, newly_linked)
         self._print_report(report)
@@ -588,18 +632,24 @@ class StoreAdoptCommand(BaseCommand):
         print(
             f"Adopted {len(report.adopted)}, copied {len(report.copied)}, "
             f"deduplicated {len(report.deduplicated)}, conflicts {len(report.conflicts)}, "
-            f"skipped {len(report.skipped)}"
+            f"skipped {len(report.skipped)}, empty {len(report.empty)}, failed {len(report.failed)}"
         )
         for label, accessions in (
             ("Resumed after an interrupted run", report.resumed),
             ("Left to their own project (no sidecar, not ours)", report.foreign),
             ("In progress elsewhere", report.in_progress),
             ("Refused for lack of free space", report.refused),
+            ("Empty folders, not adopted", report.empty),
+            ("Failed to stage, project copy kept", report.failed),
         ):
             if accessions:
                 print(f"{label}: {', '.join(sorted(accessions))}")
         if report.conflicts:
             self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
+        if report.failed:
+            self.logger.warning(
+                "Accessions that failed to stage, project copy kept: %s", ", ".join(sorted(report.failed))
+            )
 
 
 class StoreVerifyCommand(BaseCommand):
@@ -634,14 +684,20 @@ class StoreVerifyCommand(BaseCommand):
             action="store_true",
             help="Rewrite the sidecar state and catalogue entry when a check finds a mismatch",
         )
+        parser.add_argument(
+            "--rescan",
+            action="store_true",
+            help=(
+                "Rebuild each dataset's file list from the files on disk before checking "
+                "(use after files were added or removed by hand)"
+            ),
+        )
 
     @staticmethod
     def _accessions_to_check(args: argparse.Namespace, paths: StorePaths) -> List[str]:
         if args.accessions:
             return list(args.accessions)
-        if not paths.sra.is_dir():
-            return []
-        return sorted(p.name for p in paths.sra.iterdir() if p.is_dir())
+        return [p.name for p in visible_files(paths.sra, dirs=True)]
 
     @staticmethod
     def _check_bytes_and_md5(accession: str, store_dir: Path, sidecar: Sidecar, check_md5: bool):
@@ -677,30 +733,87 @@ class StoreVerifyCommand(BaseCommand):
                 detail = detail or f"{name}: {e}"
         return bytes_ok, md5_ok, detail
 
-    def _verify_one(self, accession: str, paths: StorePaths, check_md5: bool, check_spots: bool) -> Dict[str, Any]:
+    @staticmethod
+    def _missing_result(accession: str, detail: Optional[str] = None) -> Dict[str, Any]:
+        """The result shape for an accession this check cannot find anything usable for:
+        no sidecar at all, or (with ``--rescan``) a store folder with no FASTQ files left to
+        describe. ``sidecar`` is left None so ``_fix_state`` leaves whatever is on disk alone."""
+        return {
+            "accession": accession,
+            "state": "missing",
+            "bytes_ok": False,
+            "md5_ok": None,
+            "verdict": "missing",
+            "sidecar": None,
+            "spots_verdict": None,
+            "spots_ratio": None,
+            "mismatch_detail": detail,
+            "rescanned": False,
+            "ncbi_found": None,
+        }
+
+    def _find_ncbi_spots(self, accession: str, metadata_dirs: List[Path]) -> Optional[Dict[str, Any]]:
+        """The ``ncbi`` block read from the first ``<accession>_metadata.xml`` in
+        ``metadata_dirs`` that both exists and yields a spot count, else None."""
+        for metadata_dir in metadata_dirs:
+            xml_path = metadata_dir / f"{accession}_metadata.xml"
+            if not xml_path.is_file():
+                continue
+            found = ncbi_from_metadata_xml(xml_path)
+            if found.get("spots"):
+                self.logger.info("%s: spot count read from %s", accession, xml_path)
+                return found
+        return None
+
+    def _verify_one(
+        self,
+        accession: str,
+        paths: StorePaths,
+        check_md5: bool,
+        check_spots: bool,
+        metadata_dirs: Optional[List[Path]] = None,
+        rescan: bool = False,
+    ) -> Dict[str, Any]:
         store_dir = sra_dir(paths, accession)
         sc_path = sidecar_path(paths, accession)
         sidecar = read_sidecar(sc_path)
         if sidecar is None:
-            return {
-                "accession": accession,
-                "state": "missing",
-                "bytes_ok": False,
-                "md5_ok": None,
-                "verdict": "missing",
-                "sidecar": None,
-                "spots_verdict": None,
-                "spots_ratio": None,
-                "mismatch_detail": None,
-            }
+            return self._missing_result(accession)
+
+        rescanned = False
+        if rescan:
+            if not fastq_files(store_dir):
+                # The folder this sidecar describes has no FASTQ files left (deleted, moved,
+                # or never populated): rebuilding from it would silently overwrite a real
+                # file list with an empty one, so report the dataset missing instead and
+                # leave whatever is on disk untouched.
+                return self._missing_result(accession, f"{store_dir}: no FASTQ files found to rescan")
+            rebuilt = build_sidecar(
+                accession,
+                store_dir,
+                sidecar.ncbi,
+                sidecar.tool_version,
+                sidecar.compression,
+                tool=sidecar.tool,
+                downloaded=sidecar.downloaded,
+            )
+            rebuilt.stats, rebuilt.stats_computed = sidecar.stats, sidecar.stats_computed
+            sidecar = rebuilt
+            rescanned = True
 
         bytes_ok, md5_ok, detail = self._check_bytes_and_md5(accession, store_dir, sidecar, check_md5)
 
         spots_verdict = None
         spots_ratio = None
+        ncbi_found = None
         if check_spots:
+            expected_spots = sidecar.ncbi.get("spots")
+            if not expected_spots:
+                ncbi_found = self._find_ncbi_spots(accession, metadata_dirs or [])
+                if ncbi_found is not None:
+                    expected_spots = ncbi_found.get("spots")
             try:
-                verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
+                verify = verify_download(accession, store_dir, expected_spots)
                 spots_verdict = verify["verdict"]
                 spots_ratio = verify["ratio"]
             except (EOFError, OSError) as e:
@@ -728,46 +841,135 @@ class StoreVerifyCommand(BaseCommand):
             "spots_verdict": spots_verdict,
             "spots_ratio": spots_ratio,
             "mismatch_detail": detail,
+            "rescanned": rescanned,
+            "ncbi_found": ncbi_found,
         }
 
+    def _mark_failed(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar, error: str) -> None:
+        """Rewrite ``sidecar`` to ``state="failed"`` with ``error``, unless it already is.
+
+        The result is reported as ``corrupt`` either way, so the printed table and the exit
+        status agree with the state the sidecar is left in.
+        """
+        result["verdict"] = "corrupt"
+        result["state"] = "failed"
+        if sidecar.state == "failed" and sidecar.error == error:
+            return
+        sidecar.state = "failed"
+        sidecar.error = error
+        write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
+        with catalog_write(paths) as catalog:
+            catalog.upsert_dataset(sidecar)
+        result["state"] = "failed"
+
+    def _read_through_error(self, store_dir: Path, sidecar: Sidecar, skip: Collection[str] = ()) -> Optional[str]:
+        """Open and decompress every file ``sidecar.files`` records, except those named in
+        ``skip`` (already read by a spot comparison), returning the first one's error
+        (name-prefixed) when it cannot be read, else None.
+
+        A file that matches its recorded size (and md5, if checked) can still be a truncated
+        or corrupt gzip stream, since neither check opens it, and a spot comparison reads only
+        the mate 1 (or single-end) file and the unpaired-read file. ``--fix-state`` must not
+        promote a dataset to ``"complete"`` before every recorded file has been read through.
+        """
+        for entry in sidecar.files:
+            name = str(entry.get("name"))
+            if name in skip:
+                continue
+            try:
+                count_fastq_reads(store_dir / name)
+            except (EOFError, OSError) as e:
+                self.logger.warning("%s: could not read %s: %s", sidecar.accession, name, e)
+                return f"{name}: {e}"
+        return None
+
+    def _compare_known_spots(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar) -> Optional[str]:
+        """Compare the reads on disk against the spot count ``sidecar.ncbi`` already records,
+        for a run without ``--spots``; the outcome is written into ``result`` as a ``--spots``
+        check would have written it. Returns a read error (name-prefixed where possible) when
+        a file cannot be read, else None."""
+        accession = result["accession"]
+        store_dir = sra_dir(paths, accession)
+        try:
+            verify = verify_download(accession, store_dir, sidecar.ncbi.get("spots"))
+        except (EOFError, OSError) as e:
+            self.logger.warning("%s: could not verify read counts: %s", accession, e)
+            return self._read_through_error(store_dir, sidecar) or f"read count verification failed: {e}"
+        result["spots_verdict"] = verify["verdict"]
+        result["spots_ratio"] = verify["ratio"]
+        if verify["verdict"] == "truncated":
+            result["verdict"] = "truncated"
+        return None
+
+    def _unread_file_error(self, result: Dict[str, Any], paths: StorePaths, sidecar: Sidecar) -> Optional[str]:
+        """Read through every recorded file that no spot comparison has read in this run."""
+        store_dir = sra_dir(paths, result["accession"])
+        skip: set = set()
+        if result.get("spots_verdict") is not None:
+            skip = {p.name for p in (primary_fastq(store_dir), orphan_fastq(store_dir)) if p is not None}
+        return self._read_through_error(store_dir, sidecar, skip)
+
     def _fix_state(self, result: Dict[str, Any], paths: StorePaths) -> None:
-        """Rewrite the sidecar's state (and, for a spots-only mismatch, its completeness) to
-        match what this check found.
+        """Rewrite the sidecar's state (and completeness) to match what this check found.
 
         A bytes or md5 mismatch always wins: the file itself is wrong, so the dataset is
         ``"failed"`` with an error naming the first mismatch, regardless of what the spots
-        check says (a corrupt file can still happen to contain the right number of reads). Only
-        when bytes and md5 (if checked) both check out does the spots verdict decide
-        ``complete``/``partial``.
+        check says (a corrupt file can still happen to contain the right number of reads). A
+        sidecar recording no files at all is never promoted either, since there is nothing to
+        have verified. A spot count found in a metadata XML (``result["ncbi_found"]``, from
+        ``_verify_one``'s fallback search) is first written into the sidecar's ``ncbi`` block
+        so later runs read it straight from there. When ``--spots`` was not requested but the
+        sidecar records a spot count, the reads are compared against it here, exactly as
+        ``--spots`` would have. Every recorded file the spot comparison did not read (mate 2,
+        or every file when no comparison ran) is then read through; a read failure is recorded
+        as the new error, the same as a bytes/md5 mismatch. Once all of that checks out, a
+        spots verdict of ``complete``/``truncated`` decides ``complete``/``partial``; with no
+        spot count anywhere, the dataset is promoted to ``complete`` with an ``unverified``
+        completeness, clearing any stale error.
         """
         sidecar = result.get("sidecar")
         if sidecar is None:
             return
 
         if not result.get("bytes_ok") or result.get("md5_ok") is False:
-            error = result.get("mismatch_detail") or "verify: bytes or md5 mismatch"
-            if sidecar.state == "failed" and sidecar.error == error:
-                return
-            sidecar.state = "failed"
-            sidecar.error = error
-            write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
-            with catalog_write(paths) as catalog:
-                catalog.upsert_dataset(sidecar)
-            result["state"] = "failed"
+            self._mark_failed(result, paths, sidecar, result.get("mismatch_detail") or "verify: bytes or md5 mismatch")
+            return
+
+        if not sidecar.files:
+            self._mark_failed(result, paths, sidecar, "no files recorded")
+            return
+
+        if result.get("ncbi_found") and not sidecar.ncbi.get("spots"):
+            sidecar.ncbi = dict(result["ncbi_found"])
+        if result.get("spots_verdict") == "corrupt":
+            return
+        read_error = None
+        if result.get("spots_verdict") is None and sidecar.ncbi.get("spots"):
+            read_error = self._compare_known_spots(result, paths, sidecar)
+        read_error = read_error or self._unread_file_error(result, paths, sidecar)
+        if read_error is not None:
+            self._mark_failed(result, paths, sidecar, read_error)
             return
 
         spots_verdict = result.get("spots_verdict")
         state_for_verdict = {"complete": "complete", "truncated": "partial"}
-        if spots_verdict not in state_for_verdict:
-            # "unverified" (no recorded spot count) or "corrupt" (the files could not be read
-            # for the spots check specifically, bytes/md5 having passed): neither is a state
-            # this check can confidently rewrite.
-            return
-        new_state = state_for_verdict[spots_verdict]
-        if new_state == sidecar.state and sidecar.completeness.get("verdict") == spots_verdict:
+        if spots_verdict in state_for_verdict:
+            new_state = state_for_verdict[spots_verdict]
+            completeness = {"method": "spots", "ratio": result.get("spots_ratio"), "verdict": spots_verdict}
+        else:
+            new_state = "complete"
+            completeness = {"method": "unverified", "ratio": None, "verdict": "unverified"}
+        changed = (
+            result.get("rescanned")
+            or new_state != sidecar.state
+            or sidecar.completeness != completeness
+            or sidecar.error
+        )
+        if not changed:
             return
         sidecar.state = new_state
-        sidecar.completeness = {"method": "spots", "ratio": result.get("spots_ratio"), "verdict": spots_verdict}
+        sidecar.completeness = completeness
+        sidecar.error = None
         write_sidecar(sidecar_path(paths, result["accession"]), sidecar)
         with catalog_write(paths) as catalog:
             catalog.upsert_dataset(sidecar)
@@ -794,10 +996,15 @@ class StoreVerifyCommand(BaseCommand):
 
         try:
             paths = store_paths(root)
+            metadata_dirs = [paths.metadata]
+            if registry.path is not None and registry.path.is_file():
+                metadata_dirs.append(project_root(registry) / "metadata")
             accessions = self._accessions_to_check(args, paths)
             results = []
             for accession in accessions:
-                result = self._verify_one(accession, paths, args.md5, args.spots)
+                result = self._verify_one(
+                    accession, paths, args.md5, args.spots, metadata_dirs=metadata_dirs, rescan=args.rescan
+                )
                 if args.fix_state:
                     self._fix_state(result, paths)
                 results.append(result)
@@ -1291,7 +1498,47 @@ class StoreGcCommand(BaseCommand):
                 "machine; every project on another workstation of a shared store looks stale here"
             ),
         )
+        parser.add_argument(
+            "--accept-rebuilt",
+            dest="accept_rebuilt",
+            action="store_true",
+            default=False,
+            help=(
+                "Confirm that every project using this store has run store_init or store_link since "
+                "store_reindex rebuilt the catalogue without any project records; clears that "
+                "catalogue flag so store_gc can run"
+            ),
+        )
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
+
+    def _refuse_before_candidates(self, catalog: Catalog, rebuilt: Optional[str], accept_rebuilt: bool) -> bool:
+        """True (after logging why) when gc must not look for candidates at all: the catalogue
+        carries the flag ``store_reindex`` sets when it restored no project and the user has not
+        passed ``--accept-rebuilt``, or it records no project while it holds datasets (then
+        ``--accept-rebuilt`` is refused too, since no project has registered again yet). Reads
+        only; the flag is cleared by the caller once the report has been built."""
+        if rebuilt is not None and not accept_rebuilt:
+            self.logger.error(
+                "store_reindex rebuilt the catalogue on %s without any project records, so the datasets of "
+                "every project that has not registered again since would look unused. Run store_init (or "
+                "store_link) from every project that uses this store, then run store_gc --accept-rebuilt.",
+                rebuilt,
+            )
+            return True
+        project_count = catalog.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        if project_count == 0 and any(True for _ in catalog.conn.execute("SELECT 1 FROM datasets LIMIT 1")):
+            if rebuilt is not None:
+                self.logger.error(
+                    "--accept-rebuilt refused: the catalogue still records no project at all. Run store_init "
+                    "(or store_link) from every project that uses this store first."
+                )
+            else:
+                self.logger.error(
+                    "The catalogue records no project at all, so nothing can be told apart from unused data. "
+                    "Run store_reindex (which replays the journal) or store_init from each project first."
+                )
+            return True
+        return False
 
     # ------------------------------------------------------------- candidates
 
@@ -1403,8 +1650,8 @@ class StoreGcCommand(BaseCommand):
 
     @staticmethod
     def _accession_of_leftover(name: str) -> str:
-        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp``."""
-        for suffix in ("_temp", "_adopt", "_old"):
+        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp`` or ``SRR1_fqtmp``."""
+        for suffix in ("_temp", "_fqtmp", "_adopt", "_old"):
             if name.endswith(suffix):
                 return name[: -len(suffix)]
         return name
@@ -1413,9 +1660,9 @@ class StoreGcCommand(BaseCommand):
     def _leftover_candidates(cls, paths: StorePaths) -> List[Dict[str, Any]]:
         """Leftover build folders and cached archives, minus anything a live run is using.
 
-        A ``<ACC>_temp`` folder or a cached ``.sra`` archive whose accession lock is held is a
-        download in progress, not a leftover: removing it would pull the files out from under
-        a running fasterq-dump.
+        A ``<ACC>_temp`` build folder, an ``<ACC>_fqtmp`` fasterq-dump scratch folder or a cached
+        ``.sra`` archive whose accession lock is held is a download in progress, not a leftover:
+        removing it would pull the files out from under a running fasterq-dump.
         """
         candidates: List[Dict[str, Any]] = []
         tmp = paths.tmp
@@ -1426,6 +1673,8 @@ class StoreGcCommand(BaseCommand):
                         if lock_is_held(paths, cls._accession_of_leftover(sub.name)):
                             continue
                         candidates.append({"path": sub, "bytes": _path_bytes(sub), "reason": "leftover"})
+                    continue
+                if is_hidden_name(entry.name):
                     continue
                 if not entry.is_dir():
                     continue
@@ -1481,9 +1730,19 @@ class StoreGcCommand(BaseCommand):
         paths = store_paths(root)
         try:
             with Catalog(paths) as catalog:
+                rebuilt = catalog.get_meta(REBUILT_WITHOUT_PROJECTS)
+                if self._refuse_before_candidates(catalog, rebuilt, getattr(args, "accept_rebuilt", False)):
+                    return 1
                 stale = stale_projects(catalog)
                 buckets = self._dataset_candidates(
                     catalog, paths, stale, args.older_than, args.keep_partial, getattr(args, "include_stale", False)
+                )
+            if rebuilt is not None:
+                # Only now that at least one project is recorded and the report has been built.
+                with catalog_write(paths) as catalog:
+                    catalog.delete_meta(REBUILT_WITHOUT_PROJECTS)
+                self.logger.warning(
+                    "Cleared the flag set when the catalogue was rebuilt without projects on %s", rebuilt
                 )
         except DataAccessError as e:
             self.logger.error(str(e))

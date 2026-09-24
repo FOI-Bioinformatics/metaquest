@@ -1083,6 +1083,22 @@ class TestParseMetadataXml:
         with pytest.raises(ET.ParseError):
             parse_metadata_xml(xml_file)
 
+    def test_library_fields_under_design(self, tmp_path):
+        xml = (
+            '<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE><EXPERIMENT accession="SRX1"><DESIGN>'
+            "<LIBRARY_DESCRIPTOR><LIBRARY_NAME>lib</LIBRARY_NAME><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>"
+            "<LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE><LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION>"
+            "<LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>"
+            "<PLATFORM><ILLUMINA/></PLATFORM></EXPERIMENT>"
+            '<RUN_SET><RUN accession="SRR1" total_spots="5"/></RUN_SET></EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>'
+        )
+        path = tmp_path / "SRR1_metadata.xml"
+        path.write_text(xml)
+        fields = parse_metadata_xml(path)
+        assert fields["Experiment_Library_Strategy"] == "WGS"
+        assert fields["Experiment_Library_Source"] == "METAGENOMIC"
+        assert fields["Experiment_Library_Selection"] == "RANDOM"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

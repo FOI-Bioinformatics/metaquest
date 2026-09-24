@@ -15,6 +15,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from argparse import Namespace
 
+import pytest
+
 from metaquest.cli.commands.sra_intelligent import (
     SRAQualityProfileCommand,
     SRAInteractiveDashboardCommand,
@@ -787,6 +789,68 @@ class TestSRAInteractiveDashboardCommand:
 
         assert result == 0
 
+    def test_execute_full_dashboard_reuses_saved_quality_profiles_for_comparative(self, tmp_path):
+        """--quality-profiles alone (no --accessions-file) must reach the comparative
+        dashboard branch too, not just the quality branch: create_comparative_analysis is
+        called with profiles=<the loaded profiles>, not reprofiled from FASTQ. Covers the
+        profiles=profiles or None fix on the create_comparative_analysis call."""
+        cmd = SRAInteractiveDashboardCommand()
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        for acc in ("SRR001", "SRR002"):
+            profile = make_profile(acc)
+            (profiles_dir / f"{acc}_quality_profile.json").write_text(
+                json.dumps(
+                    {
+                        "accession": profile.accession,
+                        "total_reads": profile.total_reads,
+                        "total_bases": profile.total_bases,
+                        "avg_read_length": profile.avg_read_length,
+                        "read_length_distribution": profile.read_length_distribution,
+                        "gc_content": profile.gc_content,
+                        "gc_histogram": profile.gc_histogram,
+                        "quality_distribution": profile.quality_distribution,
+                        "n_content": profile.n_content,
+                        "contamination_indicators": profile.contamination_indicators,
+                        "complexity_score": profile.complexity_score,
+                        "duplication_rate": profile.duplication_rate,
+                        "technology_confidence": profile.technology_confidence,
+                        "quality_grade": profile.quality_grade,
+                        "recommendations": profile.recommendations,
+                    }
+                )
+            )
+
+        args = Namespace(
+            accessions_file=None,
+            quality_profiles=str(profiles_dir),
+            fastq_dir=str(tmp_path / "fastq"),  # never created: no FASTQ files exist on disk
+            output_dir=str(tmp_path / "dashboards"),
+            title="Full Dashboard",
+            dashboard_type="full",
+            no_open=True,
+        )
+
+        mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            mock_reporter = Mock()
+            mock_reporter.analyzer.find_fastq.return_value = None
+            mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
+            mock_reporter.create_comparative_analysis.return_value = mock_dashboard_path
+            mock_reporter_class.return_value = mock_reporter
+
+            result = cmd.execute(args)
+
+        assert result == 0
+
+        _, quality_kwargs = mock_reporter.generate_quality_dashboard.call_args
+        assert set(quality_kwargs["profiles"]) == {"SRR001", "SRR002"}
+
+        comparative_kwargs = mock_reporter.create_comparative_analysis.call_args.kwargs
+        assert set(comparative_kwargs["profiles"]) == {"SRR001", "SRR002"}
+
 
 # ============================================================================
 # TEST CLASS: SRAComparativeAnalysisCommand
@@ -1183,6 +1247,152 @@ class TestHonestExits:
             no_open=True,
         )
         assert SRAInteractiveDashboardCommand().execute(args) == 1
+
+
+# ============================================================================
+# TEST CLASS: --accessions-file optional; sra_compare JSON is numpy-safe
+# ============================================================================
+
+
+class TestAccessionsFileOptional:
+    def test_profile_quality_accepts_single_accession_without_file(self, tmp_path):
+        parser = argparse.ArgumentParser()
+        SRAQualityProfileCommand().configure_parser(parser)
+        args = parser.parse_args(["--accession", "SRR1"])
+        assert args.accession == "SRR1" and args.accessions_file is None
+
+    def test_dashboard_accepts_profiles_dir_without_file(self, tmp_path):
+        parser = argparse.ArgumentParser()
+        SRAInteractiveDashboardCommand().configure_parser(parser)
+        args = parser.parse_args(["--quality-profiles", str(tmp_path)])
+        assert args.accessions_file is None
+
+    def test_profile_quality_resolve_accessions_requires_file_or_accession(self):
+        """Neither --accession nor --accessions-file given is a clear validation error,
+        not a bare TypeError from open(None)."""
+        from metaquest.core.exceptions import ValidationError
+
+        cmd = SRAQualityProfileCommand()
+        args = Namespace(accession=None, accessions_file=None)
+        with pytest.raises(ValidationError):
+            cmd._resolve_accessions(args)
+
+    def test_save_comparison_results_serialises_numpy_bool(self, tmp_path):
+        """_save_comparison_results must not crash on the numpy bool 'significant' flag that
+        _perform_statistical_tests' real t-test/ANOVA comparison produces (the reported
+        "Object of type bool is not JSON serializable" failure)."""
+        import numpy as np
+
+        cmd = SRAComparativeAnalysisCommand()
+        groups = {"a": ["A1"], "b": ["B1"]}
+        comparison = ComparativeAnalysis(
+            dataset_groups=groups,
+            summary_statistics={},
+            statistical_tests={
+                "gc_content": {
+                    "test": "t-test",
+                    "statistic": np.float64(2.0),
+                    "p_value": np.float64(0.03),
+                    "significant": np.bool_(True),
+                }
+            },
+            outlier_datasets=[],
+            clustering_results=None,
+            batch_effects={},
+            recommendations=[],
+            visualization_data={},
+        )
+
+        results_file = cmd._save_comparison_results(tmp_path, groups, comparison)
+
+        saved = json.loads(results_file.read_text())
+        assert saved["statistical_tests"]["gc_content"]["significant"] is True
+        assert saved["significant_differences"] == ["gc_content"]
+
+    def test_dashboard_derives_accessions_from_quality_profiles_without_file(self, tmp_path):
+        """--quality-profiles alone (no --accessions-file) drives the accession list."""
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        for acc in ("SRR001", "SRR002"):
+            profile = make_profile(acc)
+            (profiles_dir / f"{acc}_quality_profile.json").write_text(
+                json.dumps(
+                    {
+                        "accession": profile.accession,
+                        "total_reads": profile.total_reads,
+                        "total_bases": profile.total_bases,
+                        "avg_read_length": profile.avg_read_length,
+                        "read_length_distribution": profile.read_length_distribution,
+                        "gc_content": profile.gc_content,
+                        "gc_histogram": profile.gc_histogram,
+                        "quality_distribution": profile.quality_distribution,
+                        "n_content": profile.n_content,
+                        "contamination_indicators": profile.contamination_indicators,
+                        "complexity_score": profile.complexity_score,
+                        "duplication_rate": profile.duplication_rate,
+                        "technology_confidence": profile.technology_confidence,
+                        "quality_grade": profile.quality_grade,
+                        "recommendations": profile.recommendations,
+                    }
+                )
+            )
+
+        args = Namespace(
+            accessions_file=None,
+            quality_profiles=str(profiles_dir),
+            fastq_dir=str(tmp_path / "fastq"),  # never created: no FASTQ files exist on disk
+            output_dir=str(tmp_path / "dashboards"),
+            title="Test Dashboard",
+            dashboard_type="quality",
+            no_open=True,
+        )
+
+        mock_dashboard_path = tmp_path / "dashboards" / "dashboard.html"
+
+        with patch("metaquest.cli.commands.sra_intelligent.SRAReportGenerator") as mock_reporter_class:
+            mock_reporter = Mock()
+            mock_reporter.analyzer.find_fastq.return_value = None
+            mock_reporter.generate_quality_dashboard.return_value = mock_dashboard_path
+            mock_reporter_class.return_value = mock_reporter
+
+            result = SRAInteractiveDashboardCommand().execute(args)
+
+        assert result == 0
+        _, kwargs = mock_reporter.generate_quality_dashboard.call_args
+        assert set(kwargs["profiles"]) == {"SRR001", "SRR002"}
+        (accessions_arg,) = mock_reporter.generate_quality_dashboard.call_args.args
+        assert accessions_arg == ["SRR001", "SRR002"]
+
+    def test_dashboard_warns_when_quality_profiles_not_a_directory(self, tmp_path, caplog):
+        """A --quality-profiles path that is not a directory is logged, not silently ignored."""
+        import logging
+
+        missing = tmp_path / "not-a-directory"
+        args = Namespace(
+            accessions_file=None,
+            quality_profiles=str(missing),
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "dashboards"),
+            title="Test Dashboard",
+            dashboard_type="quality",
+            no_open=True,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = SRAInteractiveDashboardCommand().execute(args)
+
+        assert result == 1
+        assert str(missing) in caplog.text
+
+    def test_dashboard_resolve_requires_file_or_profiles_directory(self, tmp_path):
+        """Neither --accessions-file nor a usable --quality-profiles directory is a clear
+        validation error."""
+        from metaquest.core.exceptions import ValidationError
+
+        cmd = SRAInteractiveDashboardCommand()
+        args = Namespace(accessions_file=None, quality_profiles=None)
+        with pytest.raises(ValidationError):
+            cmd._resolve_accessions(args, profiles={})
 
 
 # ============================================================================

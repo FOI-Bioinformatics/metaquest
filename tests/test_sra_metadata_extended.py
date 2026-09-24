@@ -30,11 +30,12 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.store.sidecar import Sidecar, write_sidecar
 from metaquest.store.stats import compute_dataset_stats
 
-# Mock XML responses for testing
+# Mock XML responses for testing (real efetch shape: RUN carries its own accession and
+# numbers as attributes, not a nested Statistics child)
 MOCK_SRA_XML = """<?xml version="1.0"?>
 <EXPERIMENT_PACKAGE_SET>
     <EXPERIMENT_PACKAGE>
-        <EXPERIMENT accession="SRR123456">
+        <EXPERIMENT accession="SRX123456">
             <TITLE>Test Experiment</TITLE>
             <PLATFORM>
                 <ILLUMINA>
@@ -58,11 +59,10 @@ MOCK_SRA_XML = """<?xml version="1.0"?>
         <STUDY>
             <EXTERNAL_ID namespace="BioProject">PRJNA123456</EXTERNAL_ID>
         </STUDY>
-        <SUBMISSION received="2023-01-01"/>
+        <SUBMISSION accession="SRA100" received="2023-01-01"/>
         <RUN_SET>
-            <RUN>
-                <Statistics nspots="1000000" nbases="150000000" size="100000000"/>
-            </RUN>
+            <RUN accession="SRR123456" total_spots="1000000" total_bases="150000000" size="100000000"
+                 published="2023-01-02"/>
         </RUN_SET>
         <SAMPLE_ATTRIBUTE>
             <TAG>biosample</TAG>
@@ -243,9 +243,10 @@ class TestSRAXMLParsing:
         root = ET.fromstring(MOCK_SRA_XML)
         package = root.find(".//EXPERIMENT_PACKAGE")
 
-        result = self.client._extract_dataset_info(package)
+        results = self.client._extract_dataset_info(package)
 
-        assert result is not None
+        assert len(results) == 1
+        result = results[0]
         assert result.accession == "SRR123456"
         assert result.platform == "ILLUMINA"
         assert result.instrument == "Illumina HiSeq 2500"
@@ -253,6 +254,9 @@ class TestSRAXMLParsing:
         assert result.organism == "Escherichia coli"
         assert result.bioproject == "PRJNA123456"
         assert result.biosample == "SAMN123456"
+        assert result.spots == 1000000
+        assert result.bases == 150000000
+        assert result.release_date == "2023-01-02"
 
     def test_extract_dataset_info_no_experiment(self):
         """Test extraction when EXPERIMENT is missing."""
@@ -263,13 +267,13 @@ class TestSRAXMLParsing:
 
         result = self.client._extract_dataset_info(package)
 
-        assert result is None
+        assert result == []
 
     def test_extract_dataset_info_single_layout(self):
         """Test extraction of SINGLE layout."""
         xml_single = """<?xml version="1.0"?>
         <EXPERIMENT_PACKAGE>
-            <EXPERIMENT accession="SRR999">
+            <EXPERIMENT accession="SRX999">
                 <TITLE>Single End</TITLE>
                 <PLATFORM>
                     <ILLUMINA>
@@ -288,9 +292,8 @@ class TestSRAXMLParsing:
                 </DESIGN>
             </EXPERIMENT>
             <RUN_SET>
-                <RUN>
-                    <Statistics nspots="500000" nbases="75000000" size="50000000"/>
-                </RUN>
+                <RUN accession="SRR999" total_spots="500000" total_bases="75000000" size="50000000"
+                     published="2023-02-01"/>
             </RUN_SET>
         </EXPERIMENT_PACKAGE>
         """
@@ -299,10 +302,13 @@ class TestSRAXMLParsing:
 
         package = ET.fromstring(xml_single)
 
-        result = self.client._extract_dataset_info(package)
+        results = self.client._extract_dataset_info(package)
 
-        assert result is not None
+        assert len(results) == 1
+        result = results[0]
+        assert result.accession == "SRR999"
         assert result.layout == "SINGLE"
+        assert result.spots == 500000
 
     # Note: Removed test_extract_dataset_info_exception_handling because
     # xml.etree.ElementTree.Element.find is immutable and cannot be patched
@@ -681,6 +687,22 @@ class TestGenerateStatisticsReport:
         assert sidecar.stats["reads_total"] == 2
         assert sidecar.stats_computed is not None
 
+    def test_generate_statistics_skips_hidden_accession_dirs(self, tmp_path):
+        """A hidden folder such as ``._SRR001`` is not reported as a dataset."""
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        for name in ("SRR001", "._SRR001"):
+            (fastq_folder / name).mkdir()
+            (fastq_folder / name / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
+
+        output_file = tmp_path / "statistics_report.csv"
+        generate_statistics_report(fastq_folder, output_file)
+
+        import pandas as pd
+
+        df = pd.read_csv(output_file)
+        assert len(df) == 1
+
     def test_generate_statistics_reports_the_exact_total_when_sampling(self, tmp_path):
         """A folder without a store reports every read, not just the sampled ones.
 
@@ -842,6 +864,38 @@ class TestEstimateDownloadTime:
         one = estimate_download_time(1.0, 100.0, 4)
         assert one == pytest.approx(1.0 * 1024 * 8 / (100.0 * 4 * 0.8) / 3600)
         assert estimate_download_time(2.0, 100.0, 4) == pytest.approx(2 * one)
+
+
+# ============================================================================
+# TEST CLASS: Real efetch XML shape (RUN attributes, not Statistics child)
+# ============================================================================
+
+REAL_EFETCH_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX100" alias="e"><TITLE>gut sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA100" received="2023-03-01"/>
+<STUDY accession="SRP1"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA1</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS1"><SAMPLE_NAME><SCIENTIFIC_NAME>gut metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR100" total_spots="4866463" total_bases="1459938900" size="482592813"
+published="2023-03-23"/>
+<RUN accession="SRR101" total_spots="10" total_bases="1500" size="1048576" published="2023-03-24"/></RUN_SET>
+</EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>"""
+
+
+def test_parse_real_efetch_shape_reports_runs():
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML)
+    assert set(results) == {"SRR100", "SRR101"}
+    run = results["SRR100"]
+    assert run.spots == 4866463 and run.bases == 1459938900
+    assert abs(run.size_mb - 482592813 / (1024 * 1024)) < 0.01
+    assert run.release_date == "2023-03-23"
+    assert run.strategy == "WGS" and run.layout == "PAIRED" and run.organism == "gut metagenome"
+    assert run.bioproject == "PRJNA1"
+    assert abs(run.avg_length - 300.0) < 0.01
 
 
 # ============================================================================
