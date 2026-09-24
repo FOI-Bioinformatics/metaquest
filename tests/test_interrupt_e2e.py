@@ -56,6 +56,11 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
     running_count = {"n": 0}
     count_lock = threading.Lock()
     captured_children: list = []
+    # Set in `finally` so the signaler thread never fires a real SIGINT once this test is
+    # done, even if it failed (or was interrupted) before reaching the point where it would
+    # normally join that thread: a daemon thread that still fires os.kill(SIGINT) 5-10s later
+    # hits whatever test happens to be running at that moment, not this one.
+    cancel = threading.Event()
 
     def worker(acc, *args, **kwargs):
         with dataset_lock(paths, acc, should_stop=sra_mod.STOP.is_set):
@@ -73,9 +78,13 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
         both_running.wait(timeout=5)
         deadline = time.monotonic() + 5
         while len(SecureSubprocess._children) < len(ACCESSIONS) and time.monotonic() < deadline:
+            if cancel.is_set():
+                return
             time.sleep(0.05)
         with SecureSubprocess._children_lock:
             captured_children.extend(SecureSubprocess._children)
+        if cancel.is_set():
+            return
         os.kill(os.getpid(), signal.SIGINT)
 
     signaler = threading.Thread(target=send_sigint_once_both_children_are_alive, daemon=True)
@@ -96,7 +105,6 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
                 downloader=worker,
             )
         elapsed = time.monotonic() - t0
-        signaler.join(timeout=5)
 
         assert elapsed < 5.0, f"KeyboardInterrupt took {elapsed:.1f}s to re-raise"
         assert len(captured_children) == len(ACCESSIONS), "expected one 'sleep' child per worker"
@@ -113,8 +121,13 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
         for proc in captured_children:
             assert proc.poll() is not None, "a 'sleep' child is still alive after the interrupt"
     finally:
-        # Cleanup that must run even if an assertion above failed partway through, so this
-        # test never leaves a 30s 'sleep' child or a lock file behind for later tests.
+        # Cleanup that must run even if an assertion above failed partway through (including
+        # `pytest.raises` itself failing, e.g. no KeyboardInterrupt ever arrived), so this test
+        # never leaves a 30s 'sleep' child, a lock file, or a live signaler thread behind for
+        # later tests. `cancel` is set, and the signaler joined, before `terminate_children`:
+        # once the signaler has stopped, no belated os.kill(SIGINT) can reach a later test.
+        cancel.set()
+        signaler.join(timeout=6)
         SecureSubprocess.terminate_children(grace=1.0)
         for lock_file in paths.locks.glob("*.lock"):
             lock_file.unlink(missing_ok=True)

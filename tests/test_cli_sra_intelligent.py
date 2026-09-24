@@ -1259,11 +1259,14 @@ class TestRealBackendInterface:
 
 
 class TestHonestExits:
-    def test_profile_quality_returns_1_without_accession_source(self, tmp_path):
+    def test_profile_quality_returns_1_without_accession_source(self, tmp_path, caplog):
         """Neither --accession nor --accessions-file given must fail cleanly at the execute()
         level (the ValidationError from _resolve_accessions caught by execute's own
         except-Exception, not raised through to the caller) rather than crashing on
-        open(None)."""
+        open(None). Asserts the logged reason too, so this cannot pass on some unrelated
+        exception that also happens to return 1."""
+        import logging
+
         args = Namespace(
             accession=None,
             accessions_file=None,
@@ -1275,11 +1278,16 @@ class TestHonestExits:
             registry=str(tmp_path / "metaquest_registry.json"),
             data_root=None,
         )
-        assert SRAQualityProfileCommand().execute(args) == 1
+        with caplog.at_level(logging.ERROR):
+            assert SRAQualityProfileCommand().execute(args) == 1
+        assert any("Give --accessions-file or --accession" in r.message for r in caplog.records)
 
-    def test_dashboard_returns_1_without_accession_source(self, tmp_path):
+    def test_dashboard_returns_1_without_accession_source(self, tmp_path, caplog):
         """Neither --accessions-file nor --quality-profiles given must fail cleanly at the
-        execute() level, same as the profile-quality command above."""
+        execute() level, same as the profile-quality command above. Asserts the logged reason
+        too, so this cannot pass on some unrelated exception that also happens to return 1."""
+        import logging
+
         args = argparse.Namespace(
             accessions_file=None,
             quality_profiles=None,
@@ -1289,7 +1297,9 @@ class TestHonestExits:
             dashboard_type="quality",
             no_open=True,
         )
-        assert SRAInteractiveDashboardCommand().execute(args) == 1
+        with caplog.at_level(logging.ERROR):
+            assert SRAInteractiveDashboardCommand().execute(args) == 1
+        assert any("Give --accessions-file or a --quality-profiles directory" in r.message for r in caplog.records)
 
     def test_compare_returns_1_without_fastq(self, tmp_path):
         from metaquest.cli.commands.sra_intelligent import SRAComparativeAnalysisCommand

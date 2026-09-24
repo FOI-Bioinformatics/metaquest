@@ -261,7 +261,11 @@ class TestExtractMetadataFromBranchwater:
         (source_dir / "bad.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
 
         errors: list = []
-        with caplog.at_level(logging.WARNING):
+        # Captured from INFO up, not just WARNING: a regression that logged the summary line
+        # at INFO would otherwise be filtered out of caplog entirely (both by caplog's own
+        # capture level and by the logger's effective level), so the assertion below would
+        # fail on an empty `summary_records` list rather than on the specific level mismatch.
+        with caplog.at_level(logging.INFO):
             result = extract_metadata_from_branchwater(source_dir, output_file, errors=errors)
 
         assert errors == ["bad.csv"]
@@ -584,7 +588,10 @@ class TestParseContainmentData:
         (matches_dir / "bad_genome.csv").write_bytes(b"\x00\x05\x16\x07\xb0")
 
         errors: list = []
-        with caplog.at_level(logging.WARNING):
+        # Captured from INFO up, not just WARNING: a regression that logged the summary line
+        # at INFO would otherwise be filtered out of caplog entirely, so the assertion below
+        # would fail on an empty `summary_records` list rather than on the level mismatch.
+        with caplog.at_level(logging.INFO):
             result = parse_containment_data(matches_dir, output_file, summary_file, errors=errors)
 
         assert errors == ["bad_genome.csv"]
