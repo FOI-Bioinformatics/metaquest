@@ -1299,6 +1299,46 @@ class TestExtractTargetReadsCommand:
         assert after is None
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_forced_assembly_failure_clears_a_record_whose_folder_is_gone(self, mock_run):
+        """The assembly folder was removed by hand after a successful run, so a forced redo has
+        nothing to remove on disk; the recorded assembly must still be cleared, so a failed
+        rerun never leaves a record describing a missing folder."""
+        import shutil
+
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            common = dict(
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                registry=str(registry_file),
+            )
+            assert cmd.execute(_args(tmp, **common)) == 0
+            before = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+            assert before is not None and before["contigs"] > 0
+            shutil.rmtree(root / "targeted" / "SRR1" / "GCF_1_assembly")
+
+            fake = _fake_tools(state)
+
+            def raise_on_megahit_assembly_run(executable, run_args, **kwargs):
+                if executable == "megahit" and "-o" in run_args:
+                    raise SecurityError("megahit failed")
+                return fake(executable, run_args, **kwargs)
+
+            mock_run.side_effect = raise_on_megahit_assembly_run
+            rc = cmd.execute(_args(tmp, force=True, **common))
+            after = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
+        assert rc == 1
+        assert after is None
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_forced_extraction_without_assemble_keeps_the_assembly_record(self, mock_run):
         """A --force redo that does not also pass --assemble leaves the assembly folder on
         disk untouched, so its registry record must survive too."""

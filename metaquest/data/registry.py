@@ -657,8 +657,8 @@ def record_assembly(
 def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
     """Remove one extraction's recorded assembly block, leaving the extraction itself alone.
 
-    Called when a forced ``--assemble`` redo removes the assembly folder from disk before
-    megahit reruns: if megahit then fails, the registry must not go on describing contigs
+    Called before every forced ``--assemble`` redo, whether or not the assembly folder is
+    still on disk: if megahit then fails, the registry must not go on describing contigs
     (and a ``dir``) that no longer exist. A no-op when there is no extraction record (or no
     assembly block) for this accession/genome.
     """
