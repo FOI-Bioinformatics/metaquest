@@ -115,6 +115,25 @@ def test_catalog_write_backfills_a_pre_journal_store_once(tmp_path):
     assert len((paths.journal / "usage.jsonl").read_text().splitlines()) == 1
 
 
+def test_backfill_keeps_the_catalogue_rows_hostname_and_time(tmp_path):
+    """Backfilled lines carry the host and time the catalogue row recorded, not the host and
+    time of the backfill, so a later replay restores the true values."""
+    paths = init_store(tmp_path / "store")
+    when = "2020-01-02T03:04:05+00:00"
+    with catalog_write(paths) as c:
+        c.journal_enabled = False  # simulate a store written before the journal existed
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json", hostname="other-host")
+        c.record_usage("SRR1", "pid1", "", "linked", "", at=when)
+
+    with catalog_write(paths):
+        pass  # backfill runs on entry
+
+    project = json.loads((paths.journal / "projects.jsonl").read_text().splitlines()[0])
+    usage = json.loads((paths.journal / "usage.jsonl").read_text().splitlines()[0])
+    assert project["hostname"] == "other-host"
+    assert usage["at"] == when
+
+
 def test_backfill_from_catalog_is_a_noop_on_an_empty_catalog(tmp_path):
     """No project rows yet (a freshly initialised store) means nothing to backfill."""
     paths = init_store(tmp_path / "store")

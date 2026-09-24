@@ -184,25 +184,37 @@ def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     a real write or from this backfill), this is a no-op. Writes projects before usage, since
     usage rows reference a project by id. Uses ``append_project``/``append_usage`` directly
     (not ``catalog.upsert_project``/``record_usage``), so nothing already in ``catalog.sqlite``
-    is written back to it and nothing is appended twice.
+    is written back to it and nothing is appended twice. Each line carries the catalogue row's
+    own ``hostname`` and ``first_used`` (else ``last_used``) time rather than the host and time
+    of the backfill, so a later replay restores the values the catalogue held; a row with no
+    recorded host falls back to this machine, as ``append_project`` does.
     """
     projects_path = paths.journal / PROJECTS_FILE
     if _has_records(projects_path):
         return 0, 0
 
     try:
-        project_rows = catalog.conn.execute("SELECT project_id, name, path, registry FROM projects").fetchall()
+        project_rows = catalog.conn.execute(
+            "SELECT project_id, name, path, registry, hostname FROM projects"
+        ).fetchall()
     except sqlite3.Error as e:
         raise DataAccessError(str(e)) from e
     if not project_rows:
         return 0, 0
 
     for row in project_rows:
-        append_project(paths, row["project_id"], row["name"] or "", row["path"] or "", row["registry"] or "")
+        append_project(
+            paths,
+            row["project_id"],
+            row["name"] or "",
+            row["path"] or "",
+            row["registry"] or "",
+            hostname=row["hostname"],
+        )
 
     try:
         usage_rows = catalog.conn.execute(
-            "SELECT accession, project_id, genome_id, stage, detail FROM usage"
+            "SELECT accession, project_id, genome_id, stage, detail, first_used, last_used FROM usage"
         ).fetchall()
     except sqlite3.Error as e:
         raise DataAccessError(str(e)) from e
@@ -214,6 +226,7 @@ def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
             row["genome_id"] or "",
             row["stage"] or "",
             row["detail"] or "",
+            at=row["first_used"] or row["last_used"],
         )
 
     return len(project_rows), len(usage_rows)
