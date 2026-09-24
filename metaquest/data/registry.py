@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import visible_files
-from metaquest.data.read_extraction import summarise_contigs
+from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
 
 if TYPE_CHECKING:
@@ -914,11 +914,26 @@ def _infer_extraction(registry: Registry, acc: str, genome_id: str, files: Seque
     """Record one (accession, genome) extraction found on disk, marked as inferred.
 
     Reads are counted in every file of the pair (both mates, singles and unpaired), so the
-    inferred count approximates the number of BAM records a real extraction records.
+    inferred count approximates the number of BAM records a real extraction records. When the
+    extraction's ``<genome>_coverage.tsv`` is on disk, breadth and mean depth are read from it;
+    otherwise (or when it cannot be read) they are None.
     """
     reads = sum(count_fastq_reads(f) for f in files)
-    record_extraction(registry, acc, genome_id, files, reads, False, {})
+    coverage = _infer_coverage(coverage_table_path(files[0].parent, genome_id)) if files else None
+    record_extraction(registry, acc, genome_id, files, reads, False, {}, coverage=coverage)
     registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+
+
+def _infer_coverage(tsv: Path) -> Optional[Dict[str, Any]]:
+    """Breadth, mean depth and path of an existing ``samtools coverage`` table, else None."""
+    if not tsv.is_file():
+        return None
+    try:
+        summary = summarise_coverage_table(tsv)
+    except (OSError, ValueError, KeyError) as e:
+        logger.warning("Cannot read coverage table %s (%s); recording no coverage for it", tsv, e)
+        return None
+    return {"breadth": summary["breadth"], "mean_depth": summary["mean_depth"], "coverage_tsv": tsv}
 
 
 def _infer_assembly(registry: Registry, acc: str, genome_id: str, asm_dir: Path) -> None:

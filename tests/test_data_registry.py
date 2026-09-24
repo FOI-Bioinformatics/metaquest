@@ -819,6 +819,44 @@ class TestScanners:
         assert resolved == (paths.fastq / "SRR1" / "SRR1_1.fastq").resolve()
         assert resolved.exists()
 
+    def test_bootstrap_fills_coverage_from_the_coverage_table_on_disk(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        paths = _project(tmp_path)
+        paths.genomes.mkdir()
+        (paths.genomes / "GCF_1.fna").write_text(">c\nACGT\n")
+        _fastq(paths.targeted / "SRR1" / "GCF_1_1.fastq.gz", gz=True)
+        (paths.targeted / "SRR1" / "GCF_1_coverage.tsv").write_text(
+            "#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeandepth\tmeanbaseq\tmeanmapq\n"
+            "chr\t1\t300\t10\t240\t80.0\t4.0\t30\t60\n"
+            "plasmid\t1\t100\t2\t10\t10.0\t1.0\t30\t60\n"
+        )
+        _fastq(paths.targeted / "SRR2" / "GCF_1_1.fastq.gz", gz=True)
+
+        r = reg.bootstrap_from_disk(paths)
+
+        ext = reg.extraction_record(r, "SRR1", "GCF_1")
+        assert ext["breadth"] == 0.625 and ext["mean_depth"] == 3.25
+        assert ext["coverage_tsv"] == "targeted/SRR1/GCF_1_coverage.tsv"
+        assert ext["inferred"] is True
+        without = reg.extraction_record(r, "SRR2", "GCF_1")
+        assert without["breadth"] is None and without["mean_depth"] is None and without["coverage_tsv"] is None
+
+    def test_bootstrap_with_an_unreadable_coverage_table_records_no_coverage(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.chdir(tmp_path)
+        paths = _project(tmp_path)
+        paths.genomes.mkdir()
+        (paths.genomes / "GCF_1.fna").write_text(">c\nACGT\n")
+        _fastq(paths.targeted / "SRR1" / "GCF_1_1.fastq.gz", gz=True)
+        (paths.targeted / "SRR1" / "GCF_1_coverage.tsv").write_text("not\ta coverage table\n")
+
+        with caplog.at_level("WARNING"):
+            r = reg.bootstrap_from_disk(paths)
+
+        ext = reg.extraction_record(r, "SRR1", "GCF_1")
+        assert ext["breadth"] is None and ext["mean_depth"] is None and ext["coverage_tsv"] is None
+        assert ext["mapped_reads"] == 2
+        assert "GCF_1_coverage.tsv" in caplog.text
+
     def test_bootstrap_from_disk_ignores_transient_temp_folder(self, tmp_path):
         """A <acc>_temp folder must never be recorded as a downloaded accession."""
         paths = _project(tmp_path)
