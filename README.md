@@ -459,7 +459,8 @@ Mapped reads always drop unmapped, secondary and supplementary alignments; `--mi
 discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
 20 is reasonable for a close relative of the target genome, but a divergent strain can genuinely map
 with a low MAPQ, so raising the threshold can discard real matches. For each sample with kept reads,
-`samtools coverage` on the filtered alignments writes `targeted/<ACC>/<genome>_coverage.tsv`, and the
+`samtools coverage` on the kept alignments (it also skips duplicate and QC-fail reads by default) writes
+`targeted/<ACC>/<genome>_coverage.tsv`, and the
 registry records the breadth of the reference covered at 1x or more and the length-weighted mean depth
 (a failure of this step is logged as a warning and leaves the extracted reads in place). `--assembly-preset` selects
 megahit's `--presets` value: `meta-sensitive` (the default, suited to these small targeted read sets),

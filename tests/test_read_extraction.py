@@ -1341,3 +1341,29 @@ class TestReferenceCoverage:
         sort_args = next(args for tool, args in state["calls"] if tool == "samtools" and args[0] == "sort")
         assert Path(sort_args[sort_args.index("-o") + 1]) == temp_folder / "GCF_1.mapped.sorted.bam"
         assert list(temp_folder.glob("*.sorted.bam")) == []
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_forced_rerun_with_zero_mapped_removes_an_earlier_table(self, mock_run, tmp_path):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        tsv = root / "targeted" / "SRR1" / "GCF_1_coverage.tsv"
+        self._extract(root, table, genome)
+        assert tsv.exists()
+        state.update(mapped=0, mapped_total=0)
+        results = self._extract(root, table, genome)
+        assert results["SRR1"].coverage is None
+        assert not tsv.exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_forced_rerun_with_zero_kept_removes_an_earlier_table(self, mock_run, tmp_path):
+        state = {}
+        mock_run.side_effect = _fake_tools(state)
+        root, table, genome = _make_tree(tmp_path, paired=True)
+        tsv = root / "targeted" / "SRR1" / "GCF_1_coverage.tsv"
+        self._extract(root, table, genome)
+        assert tsv.exists()
+        state.update(mapped=0, mapped_total=5)
+        results = self._extract(root, table, genome)
+        assert results["SRR1"].coverage is None
+        assert not tsv.exists()

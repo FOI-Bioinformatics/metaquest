@@ -453,6 +453,8 @@ def _map_and_extract(
         if not keep_sam:
             for sam_path in sam_paths:
                 sam_path.unlink(missing_ok=True)
+        # A forced rerun that now keeps nothing must not leave an earlier run's table behind.
+        coverage_table_path(out_dir, genome_id).unlink(missing_ok=True)
         return ExtractionResult([], 0, unequal, mapped_total=0)
 
     _filter_and_merge_bam(sam_paths, filter_args, threads, out_dir, genome_id, bam_path)
@@ -464,6 +466,7 @@ def _map_and_extract(
     if mapped == 0:
         logger.warning("No reads from %s mapped to %s; nothing written", accession, genome_id)
         bam_path.unlink(missing_ok=True)
+        coverage_table_path(out_dir, genome_id).unlink(missing_ok=True)
         return ExtractionResult([], 0, unequal, mapped_total=mapped_total)
     mapq_clause = f" and MAPQ below {min_mapq}" if min_mapq > 0 else ""
     logger.info(
@@ -482,13 +485,20 @@ def _map_and_extract(
     return ExtractionResult(written, mapped, unequal, mapped_total=mapped_total, coverage=coverage)
 
 
+def coverage_table_path(out_dir: Path, genome_id: str) -> Path:
+    """Where ``reference_coverage`` writes one sample's ``samtools coverage`` table."""
+    return out_dir / f"{genome_id}_coverage.tsv"
+
+
 def summarise_coverage_table(path: Union[str, Path]) -> Dict[str, Any]:
     """Aggregate a ``samtools coverage`` table over every reference sequence.
 
-    Breadth is the fraction of reference bases covered by at least one read (samtools
-    coverage has no minimum-depth option, so >= 1x is the only threshold available); mean
-    depth is each sequence's ``meandepth`` weighted by its length. Both are rounded to four
-    decimals and are None when the table holds no reference bases.
+    The table counts the kept alignments of the filtered BAM; ``samtools coverage`` also skips
+    duplicate and QC-fail reads by default (its ``--ff`` default). Breadth is the fraction of
+    reference bases covered by at least one read (samtools coverage has no minimum-depth
+    option, so >= 1x is the only threshold available); mean depth is each sequence's
+    ``meandepth`` weighted by its length. Both are rounded to four decimals and are None when
+    the table holds no reference bases.
 
     Returns:
         ``{"breadth", "mean_depth", "covered_bases", "reference_bp"}``.
@@ -524,6 +534,9 @@ def reference_coverage(
     The filtered BAM is coordinate-sorted to ``sam_root/<genome>.mapped.sorted.bam`` (beside
     the SAM files, so ``--temp-folder`` applies) and ``samtools coverage`` writes the
     per-sequence table to ``out_dir/<genome>_coverage.tsv``. The sorted BAM is always removed.
+    Only the kept alignments count (unmapped, secondary and supplementary records, and any
+    below ``--min-mapq``, were filtered out earlier), and ``samtools coverage`` additionally
+    skips duplicate and QC-fail reads by default.
 
     Coverage is supplementary to the extracted reads, so a tool or parsing failure is logged
     as a warning, any partial table is removed, and None is returned rather than failing the
@@ -534,7 +547,7 @@ def reference_coverage(
         None when the coverage could not be computed.
     """
     sorted_bam = sam_root / f"{genome_id}.mapped.sorted.bam"
-    tsv_path = out_dir / f"{genome_id}_coverage.tsv"
+    tsv_path = coverage_table_path(out_dir, genome_id)
     try:
         SecureSubprocess.run_secure("samtools", _samtools_sort_args(threads, sorted_bam, bam_path))
         SecureSubprocess.run_secure("samtools", _samtools_coverage_args(tsv_path, sorted_bam))

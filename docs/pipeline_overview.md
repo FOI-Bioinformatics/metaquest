@@ -159,11 +159,12 @@ default, `--threads` default 4) and the mapped reads are written with samtools t
 as `<genome>_*.fastq.gz`. The registry records the number of mapped reads, the genome FASTA, preset,
 threshold and the files written, including samples that mapped no reads. For samples with mapped reads it
 also records the breadth of the reference genome covered at 1x or more and the length-weighted mean depth,
-computed with `samtools coverage` and written per sequence to `targeted/<accession>/<genome>_coverage.tsv`. A rerun with the same genome,
-preset and threshold skips samples already recorded; `--dry-run` lists what would be extracted and what
-would be skipped without running any tool (and without requiring minimap2/samtools/megahit to be on
-PATH), printing one summary line for samples not yet downloaded rather than one warning per sample;
-`--force` redoes them.
+computed with `samtools coverage` over the kept alignments (duplicate and QC-fail reads are skipped by its
+defaults) and written per sequence to `targeted/<accession>/<genome>_coverage.tsv`.
+A rerun with the same genome, preset and threshold skips samples already recorded; `--dry-run` lists what
+would be extracted and what would be skipped without running any tool (and without requiring
+minimap2/samtools/megahit to be on PATH), printing one summary line for samples not yet downloaded rather
+than one warning per sample; `--force` redoes them.
 
 The genome is indexed once per preset under `<output-folder>/.index/` and the index is reused across
 samples rather than rebuilt each time. Unmapped, secondary and supplementary alignments are always
