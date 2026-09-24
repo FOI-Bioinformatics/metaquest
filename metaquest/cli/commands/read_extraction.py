@@ -2,6 +2,7 @@
 
 import argparse
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -37,6 +38,7 @@ from metaquest.data.registry import (
 from metaquest.data.sra import count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.store.layout import StorePaths
+from metaquest.store.link import dangling_links
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
@@ -160,6 +162,21 @@ class ExtractTargetReadsCommand(BaseCommand):
         Extraction reads the project's own ``fastq/`` folder either way, so a store that
         cannot be reached is a warning, not a reason to stop."""
         return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
+
+    def _warn_dangling_links(self, args: argparse.Namespace) -> None:
+        """Log one WARNING naming every ``fastq/<ACC>`` symlink whose target is missing.
+
+        A dangling link usually means the shared store is unmounted; the accession would
+        otherwise fail silently with "No FASTQ files found" later, with no hint why.
+        """
+        dangling = dangling_links(args.fastq_folder)
+        if dangling:
+            self.logger.warning(
+                "%d dangling fastq/<ACC> link(s) under %s (target missing; is the store mounted?): %s",
+                len(dangling),
+                args.fastq_folder,
+                ", ".join(dangling),
+            )
 
     @staticmethod
     def _mate_signature(reads: List[Path]) -> List[List[Any]]:
@@ -390,12 +407,19 @@ class ExtractTargetReadsCommand(BaseCommand):
         for accession, reads in with_reads.items():
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
             # megahit needs FIFOs for its scratch files, which some filesystems (e.g. ExFAT)
-            # do not provide; --temp-folder points it elsewhere when given, else a folder
-            # under the project's output root is used -- a sibling of every per-accession
-            # assembly directory, never inside one, since megahit refuses to run when its
-            # -o directory already exists -- and removed afterwards, even on failure.
+            # do not provide; --temp-folder points it elsewhere when given, else a fresh
+            # scratch directory is created for this run alone under the project's output
+            # root -- a sibling of every per-accession assembly directory, never inside one,
+            # since megahit refuses to run when its -o directory already exists -- and
+            # removed afterwards, even on failure. A directory unique to this run (rather
+            # than a fixed default name) keeps two concurrent runs sharing one output folder
+            # from removing each other's still-in-use scratch.
             uses_default_tmp_dir = not args.temp_folder
-            tmp_dir = Path(args.temp_folder) if args.temp_folder else Path(args.output_folder) / ".megahit-tmp"
+            if args.temp_folder:
+                tmp_dir = Path(args.temp_folder)
+            else:
+                Path(args.output_folder).mkdir(parents=True, exist_ok=True)
+                tmp_dir = Path(tempfile.mkdtemp(dir=args.output_folder, prefix=".megahit-tmp-"))
             try:
                 _, ran = assemble_extracted_reads(
                     reads,
@@ -465,6 +489,7 @@ class ExtractTargetReadsCommand(BaseCommand):
         try:
             if not self._check_required_tools(args):
                 return 1
+            self._warn_dangling_links(args)
             registry = load_registry(args.registry)
             store = self._resolve_store(args, registry)
             already_done = {
