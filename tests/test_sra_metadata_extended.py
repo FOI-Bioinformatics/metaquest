@@ -1119,6 +1119,29 @@ def test_parse_sra_xml_package_inspection_failure_is_isolated_per_package(caplog
     assert any("Failed to inspect dataset package" in r.message for r in caplog.records)
 
 
+def test_parse_sra_xml_inspection_failure_with_no_match_stays_empty(caplog):
+    """When a package's match check raises and no successfully-inspected package matches
+    either, the result must stay empty rather than falling back to "keep everything": that
+    fallback is only for a clean inspection that genuinely found no match, and applying it
+    here would resurrect the package that could not even be checked. The warning must name
+    the inspection failure, not claim the request "matched no package"."""
+    client = SRAMetadataClient(email="a@b.c")
+    real_matches = SRAMetadataClient._package_matches_requested
+
+    def flaky_matches(package, requested_upper):
+        if package.find(".//EXPERIMENT").get("accession") == "SRX100":
+            raise ValueError("boom")
+        return real_matches(package, requested_upper)
+
+    with patch.object(SRAMetadataClient, "_package_matches_requested", side_effect=flaky_matches):
+        with caplog.at_level("WARNING"):
+            results = client._parse_sra_xml(XML_TWO_PACKAGES, requested={"nomatch"})
+
+    assert results == {}
+    assert any("could not be inspected" in r.message for r in caplog.records)
+    assert not any("matched no package" in r.message for r in caplog.records)
+
+
 XML_PACKAGE_WITHOUT_RUN_SET = """<?xml version="1.0" encoding="UTF-8"?>
 <EXPERIMENT_PACKAGE_SET>
 <EXPERIMENT_PACKAGE>

@@ -196,15 +196,23 @@ class SRAMetadataClient:
             packages = root.findall(".//EXPERIMENT_PACKAGE")
 
             matched = []
+            uninspected = 0
             for package in packages:
                 try:
                     if requested_upper is None or self._package_matches_requested(package, requested_upper):
                         matched.append(package)
                 except Exception as e:
+                    uninspected += 1
                     logger.warning(f"Failed to inspect dataset package: {e}")
             if requested_upper is not None and packages and not matched:
-                logger.warning("requested accessions matched no package in the reply; listing every run returned")
-                matched = packages
+                if uninspected:
+                    # At least one package could not be checked at all: falling back to "keep
+                    # everything" here would resurrect a package that was never confirmed to
+                    # match, so only the (empty) set of cleanly-inspected matches is kept.
+                    logger.warning("%d package(s) could not be inspected for the requested accessions", uninspected)
+                else:
+                    logger.warning("requested accessions matched no package in the reply; listing every run returned")
+                    matched = packages
 
             for package in matched:
                 try:
