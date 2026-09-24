@@ -455,18 +455,16 @@ concurrent runs sharing one output folder keep separate scratch space. A macOS E
 stray `._*` AppleDouble sidecar files are ignored wherever MetaQuest lists a folder's contents, so they
 never look like real FASTQ or genome files.
 
-Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally
-discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
-20 is reasonable for a close relative of the target genome, but a divergent strain can genuinely map
-with a low MAPQ, so raising the threshold can discard real matches. For each sample with kept reads,
-`samtools coverage` on the kept alignments (it also skips duplicate and QC-fail reads by default) writes
-`targeted/<ACC>/<genome>_coverage.tsv`, and the
-registry records the breadth of the reference covered at 1x or more and the length-weighted mean depth
-(a failure of this step is logged as a warning and leaves the extracted reads in place). `--assembly-preset` selects
-megahit's `--presets` value: `meta-sensitive` (the default, suited to these small targeted read sets),
-`meta-large`, or `default` (no `--presets` flag). Unless `--no-coverage`, the extracted reads are mapped
-back onto the assembled contigs to report a mapping rate and estimated mean depth alongside the other
-assembly statistics.
+Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally discards records
+below a mapping-quality threshold (default 0, keep every mapped record). A value of 20 is reasonable for a close
+relative of the target genome, but a divergent strain can genuinely map with a low MAPQ, so raising the threshold can
+discard real matches. For each sample with kept reads, `samtools coverage` on the kept alignments (it also skips
+duplicate and QC-fail reads by default) writes `targeted/<ACC>/<genome>_coverage.tsv`, and the registry records the
+breadth of the reference covered at 1x or more and the length-weighted mean depth (a failure of this step is logged as
+a warning and leaves the extracted reads in place). `--assembly-preset` selects megahit's `--presets` value:
+`meta-sensitive` (the default, suited to these small targeted read sets), `meta-large`, or `default` (no `--presets`
+flag). Unless `--no-coverage`, the extracted reads are mapped back onto the assembled contigs to report a mapping rate
+and estimated mean depth alongside the other assembly statistics.
 
 A sample already extracted or assembled with the same genome FASTA, preset, and threshold is skipped
 on a rerun, including samples that mapped zero reads; an assembly folder with no contigs is reported
@@ -801,7 +799,7 @@ Significant improvements have been implemented across the codebase:
   - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy)
   - Integration test suite with end-to-end workflow tests
   - Performance benchmarks using pytest-benchmark
-  - All modules now thoroughly covered
+  - Critical modules now thoroughly covered
 - **Architecture Refinement**: Orphan code removal and clean separation of concerns between data layer and advanced SRA features
 - **Quality Assurance**: All linting violations resolved and formatting standards enforced
 - **Testing Best Practices**: Comprehensive mocking patterns, edge case coverage, and realistic test data established
@@ -837,6 +835,13 @@ make help
 - **Plugin System**: Extensible format handlers and visualizers  
 - **Command Registry**: Modular CLI command architecture
 - **Modern Packaging**: Uses `pyproject.toml` with backward compatibility
+
+## Releases
+
+Pushing a tag of the form `vX.Y.Z` (for example `v0.4.0`) triggers the release workflow
+(`.github/workflows/release.yml`), which builds the sdist and wheel, checks them with `twine` and
+`check-wheel-contents`, and publishes a GitHub release with the built packages attached. See
+[CHANGELOG.md](CHANGELOG.md) for the changes in each release.
 
 ## Contributing
 

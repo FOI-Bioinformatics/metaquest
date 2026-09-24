@@ -333,17 +333,17 @@ When working on MetaQuest, follow this priority order:
 ### File-Specific Guidance
 
 #### Well-Tested Files (Reference Implementations)
-- `metaquest/cli/commands/*.py` - 100% coverage, comprehensive CLI testing patterns
-- `metaquest/cli/commands/sra_intelligent.py` - 86% coverage, intelligent SRA commands
-- `metaquest/data/file_io.py` - 96% coverage, robust file operations
-- `metaquest/data/branchwater.py` - 98% coverage, format handling exemplar
-- `metaquest/data/metadata.py` - 93% coverage, external API integration
-- `metaquest/data/sra_metadata.py` - 93% coverage, XML parsing and NCBI API
-- `metaquest/data/taxonomy.py` - 97% coverage, taxonomy validation and NCBI integration
-- `metaquest/processing/statistics.py` - 99% coverage, statistical analysis
-- `metaquest/plugins/visualizers/bar.py` - 99% coverage, bar chart visualization
-- `metaquest/sra/reporting.py` - 95% coverage, interactive dashboard generation
-- `metaquest/sra/` - Comprehensive test coverage for advanced SRA features
+- `metaquest/cli/commands/*.py` - comprehensive CLI testing patterns
+- `metaquest/cli/commands/sra_intelligent.py` - intelligent SRA commands
+- `metaquest/data/file_io.py` - robust file operations
+- `metaquest/data/branchwater.py` - format handling exemplar
+- `metaquest/data/metadata.py` - external API integration
+- `metaquest/data/sra_metadata.py` - XML parsing and NCBI API
+- `metaquest/data/taxonomy.py` - taxonomy validation and NCBI integration
+- `metaquest/processing/statistics.py` - statistical analysis
+- `metaquest/plugins/visualizers/bar.py` - bar chart visualization
+- `metaquest/sra/reporting.py` - interactive dashboard generation
+- `metaquest/sra/` - comprehensive test coverage for advanced SRA features
 
 **Test Files**: Extensive test suites in `tests/test_*_extended.py`, `tests/test_integration_simple.py`, and `tests/test_performance_simple.py` provide patterns for comprehensive testing with mocking, fixtures, and edge cases.
 
