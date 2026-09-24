@@ -291,11 +291,16 @@ def record_screening(
 
 
 def record_genome(registry: Registry, genome_id: str, fasta: Union[str, Path], manifest: Union[str, Path]) -> None:
-    """Record where a target genome's FASTA lives, and the manifest it came from."""
+    """Record where a target genome's FASTA lives, and the manifest it came from.
+
+    ``manifest`` is empty (falsy) for a genome fetched directly (e.g. by ``genome_download``,
+    with no manifest CSV written); stored as "" rather than resolved, so it does not turn
+    into a meaningless path built from wherever the process happened to run.
+    """
     root = project_root(registry)
     registry.genomes[genome_id] = {
         "fasta": _project_relative(fasta, root),
-        "manifest": _project_relative(manifest, root),
+        "manifest": _project_relative(manifest, root) if manifest else "",
         "date": _now(),
     }
 

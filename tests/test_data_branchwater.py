@@ -246,6 +246,22 @@ class TestExtractMetadataFromBranchwater:
         assert "Run_ID" in result.columns
         assert output_file.exists()
 
+    def test_extract_metadata_api_shaped_csv_warns(self, tmp_path, caplog):
+        """A Branchwater-API CSV (acc/containment/cANI only) has no SRA metadata to extract;
+        warn and point at download_metadata rather than silently writing a near-empty table."""
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        output_file = tmp_path / "metadata.csv"
+
+        csv_content = "acc,containment,cANI\nERR123,0.95,0.98\nERR456,0.87,0.96\n"
+        (source_dir / "test.csv").write_text(csv_content)
+
+        with caplog.at_level("WARNING"):
+            result = extract_metadata_from_branchwater(source_dir, output_file)
+
+        assert set(result.columns) == {"Run_ID", "cANI"}
+        assert "download_metadata" in caplog.text
+
     def test_extract_metadata_no_csv_files(self, tmp_path):
         """Test with no CSV files."""
         source_dir = tmp_path / "source"
@@ -336,6 +352,29 @@ class TestFinalizeMetadataExtraction:
 
         assert output_file.exists()
         assert output_file.parent.exists()
+
+    def test_finalize_metadata_warns_when_only_run_id_and_cani_populated(self, tmp_path, caplog):
+        metadata_records = [
+            {"Run_ID": "ERR123", "cANI": 0.98},
+            {"Run_ID": "ERR456", "cANI": 0.96},
+        ]
+        output_file = tmp_path / "metadata.csv"
+
+        with caplog.at_level("WARNING"):
+            _finalize_metadata_extraction(metadata_records, output_file, 1, 0)
+
+        assert "download_metadata" in caplog.text
+
+    def test_finalize_metadata_no_warning_with_real_metadata(self, tmp_path, caplog):
+        metadata_records = [
+            {"Run_ID": "ERR123", "cANI": 0.98, "Sample_Scientific_Name": "E. coli"},
+        ]
+        output_file = tmp_path / "metadata.csv"
+
+        with caplog.at_level("WARNING"):
+            _finalize_metadata_extraction(metadata_records, output_file, 1, 0)
+
+        assert "download_metadata" not in caplog.text
 
 
 class TestProcessGenomeContainments:

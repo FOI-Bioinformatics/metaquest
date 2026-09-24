@@ -82,13 +82,16 @@ class BranchwaterSearchCommand(BaseCommand):
             write_branchwater_csv(matches, output)
 
             if matches:
+                # Break ties on containment by accession, so the reported "best" hit is
+                # deterministic across runs instead of depending on the server's row order.
+                best_accession, best_containment = min(matches, key=lambda match: (-match[1], match[0]))
                 self.logger.info(
                     "%d metagenome(s) contain %s at >= %.2f; best containment %.4f (%s)",
                     len(matches),
                     source.stem,
                     args.threshold,
-                    matches[0][1],
-                    matches[0][0],
+                    best_containment,
+                    best_accession,
                 )
             else:
                 self.logger.warning(

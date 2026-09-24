@@ -100,6 +100,21 @@ class TestUseBranchwaterCommand:
         args = argparse.Namespace(branchwater_folder=str(source), matches_folder=str(tmp_path / "m"))
         assert UseBranchwaterCommand().execute(args) == 1
 
+    @patch("metaquest.cli.commands.branchwater.process_branchwater_files")
+    def test_execute_logs_a_next_hint(self, mock_command, caplog):
+        """On success, point at the next pipeline step (parse_containment)."""
+        mock_command.return_value = {"file1": Path("test")}
+        command = UseBranchwaterCommand()
+        args = argparse.Namespace(branchwater_folder="test_folder", matches_folder="matches")
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "Next:" in caplog.text
+        assert "parse_containment" in caplog.text
+        assert "matches" in caplog.text
+
 
 class TestExtractBranchwaterMetadataCommand:
     """Test ExtractBranchwaterMetadataCommand."""
@@ -284,6 +299,33 @@ class TestParseContainmentCommand:
         assert result == 0
         assert custom_details.exists()
         assert not (tmp_path / "parsed_details.tsv").exists()
+
+    def test_execute_logs_a_next_hint(self, tmp_path, caplog):
+        """On success, point at plot_containment and select_datasets as the next steps."""
+        matches_folder = tmp_path / "matches"
+        matches_folder.mkdir()
+        (matches_folder / "GCF_A.csv").write_text("acc,containment\nSRR1,0.9\nSRR2,0.1\n")
+
+        command = ParseContainmentCommand()
+        parsed_file = tmp_path / "parsed.txt"
+        args = argparse.Namespace(
+            matches_folder=str(matches_folder),
+            parsed_containment_file=str(parsed_file),
+            summary_containment_file=str(tmp_path / "summary.txt"),
+            step_size=0.1,
+            details_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        )
+
+        with caplog.at_level("INFO"):
+            result = command.execute(args)
+
+        assert result == 0
+        assert "Next:" in caplog.text
+        assert "plot_containment" in caplog.text
+        assert "select_datasets" in caplog.text
+        assert "GCF_A" in caplog.text
 
 
 class TestDownloadMetadataCommand:

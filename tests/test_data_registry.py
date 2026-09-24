@@ -233,6 +233,14 @@ class TestProjectRelativePaths:
         assert reg.resolve_project_path(r, recorded) == fasta.resolve()
         assert r.genomes["GCF_1"]["manifest"] == "manifest.csv"
 
+    def test_record_genome_with_empty_manifest_stores_empty_string(self, tmp_path):
+        """A genome fetched without a manifest (e.g. genome_download) must not record a
+        meaningless path resolved from wherever the process happened to run."""
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        fasta = tmp_path / "GCF_1.fna"
+        reg.record_genome(r, "GCF_1", fasta, "")
+        assert r.genomes["GCF_1"]["manifest"] == ""
+
     def test_record_genome_keeps_an_absolute_path_outside_the_project_root(self, tmp_path):
         r = reg.load_registry(tmp_path / "project" / "metaquest_registry.json")
         outside_fasta = tmp_path / "shared_refs" / "GCF_1.fna"

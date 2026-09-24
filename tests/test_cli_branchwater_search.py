@@ -102,6 +102,20 @@ class TestBranchwaterSearchCommand:
             assert BranchwaterSearchCommand().execute(_args(signature="wmel.sig")) == 0
         assert "control genome" in caplog.text
 
+    @patch("metaquest.cli.commands.branchwater_search.write_branchwater_csv")
+    @patch("metaquest.cli.commands.branchwater_search.search_index")
+    @patch("metaquest.cli.commands.branchwater_search.load_signature")
+    def test_tied_top_hit_picks_alphabetically_first_accession(self, mock_load, mock_search, _write, tmp_path, caplog):
+        """A tie at the top containment must resolve the same way every run, not by list order."""
+        mock_load.return_value = {"signatures": []}
+        mock_search.return_value = [("SRR9", 0.9), ("SRR2", 0.9), ("SRR5", 0.9)]
+        with caplog.at_level("INFO"):
+            rc = BranchwaterSearchCommand().execute(
+                _args(tmp_path, signature="wmel.sig", output=str(tmp_path / "out.csv"))
+            )
+        assert rc == 0
+        assert "best containment 0.9000 (SRR2)" in caplog.text
+
     @patch("metaquest.cli.commands.branchwater_search.load_signature", side_effect=DataAccessError("bad sig"))
     def test_error_returns_1(self, _load):
         assert BranchwaterSearchCommand().execute(_args(signature="wmel.sig")) == 1

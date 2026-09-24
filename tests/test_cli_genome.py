@@ -183,6 +183,14 @@ class TestGenomeDownloadCommand:
         assert args.accessions == ["GCF_000006945.2"]
         assert args.output_dir == "genomes/"
         assert args.representative_only is True
+        assert args.registry is None
+
+    def test_configure_parser_has_registry(self):
+        cmd = GenomeDownloadCommand()
+        parser = argparse.ArgumentParser()
+        cmd.configure_parser(parser)
+        args = parser.parse_args(["--accessions", "GCF_000006945.2", "--registry", "r.json"])
+        assert args.registry == "r.json"
 
     def test_configure_parser_multiple_accessions(self):
         cmd = GenomeDownloadCommand()
@@ -224,6 +232,7 @@ class TestGenomeDownloadCommand:
                 assembly_level=None,
                 force=False,
                 dry_run=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -249,6 +258,7 @@ class TestGenomeDownloadCommand:
                 assembly_level=None,
                 force=False,
                 dry_run=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -272,6 +282,7 @@ class TestGenomeDownloadCommand:
                 assembly_level=None,
                 force=False,
                 dry_run=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -352,6 +363,7 @@ class TestGenomeDownloadCommand:
                 assembly_level=None,
                 force=True,
                 dry_run=False,
+                registry=str(Path(tmpdir) / "metaquest_registry.json"),
             )
             result = cmd.execute(args)
             assert result == 0
@@ -377,6 +389,38 @@ class TestGenomeDownloadCommand:
             result = cmd.execute(args)
             assert result == 0
             mock_download.assert_not_called()
+
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_execute_records_genomes_in_registry(self, mock_download, mock_extract, tmp_path):
+        """genome_download must record what it fetched, so later commands (e.g. status) find it."""
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {
+            "GCF_000006945.2": tmp_path / "GCF_000006945.2.fna",
+            "GCF_000007545.1": tmp_path / "GCF_000007545.1.fna",
+        }
+        cmd = GenomeDownloadCommand()
+        registry_file = tmp_path / "metaquest_registry.json"
+        args = argparse.Namespace(
+            accessions=["GCF_000006945.2", "GCF_000007545.1"],
+            accession_file=None,
+            species=None,
+            genus=None,
+            output_dir=str(tmp_path),
+            representative_only=True,
+            assembly_level=None,
+            force=False,
+            dry_run=False,
+            registry=str(registry_file),
+        )
+
+        result = cmd.execute(args)
+        assert result == 0
+
+        genomes = json.loads(registry_file.read_text())["genomes"]
+        assert set(genomes) == {"GCF_000006945.2", "GCF_000007545.1"}
+        assert genomes["GCF_000006945.2"]["fasta"] == "GCF_000006945.2.fna"
+        assert genomes["GCF_000006945.2"]["date"]
 
 
 class TestGenomePrepareCommand:
