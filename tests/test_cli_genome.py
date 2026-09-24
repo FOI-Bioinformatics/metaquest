@@ -422,7 +422,6 @@ class TestGenomeDownloadCommand:
         assert genomes["GCF_000006945.2"]["fasta"] == "GCF_000006945.2.fna"
         assert genomes["GCF_000006945.2"]["date"]
 
-
     @patch("metaquest.cli.commands.genome.extract_and_organize")
     @patch("metaquest.cli.commands.genome.download_genomes")
     def test_force_redownload_keeps_an_earlier_manifest(self, mock_download, mock_extract, tmp_path, monkeypatch):
