@@ -2102,6 +2102,34 @@ class TestDownloadSraStore:
         assert (fastq_folder / "SRR1").is_symlink()
         assert not (paths.tmp / "SRR1").exists()
 
+    def test_failed_in_store_is_redownloaded_and_clears_the_error(self, tmp_path):
+        """A dataset whose sidecar recorded a prior failure (state="failed", with an error
+        message from that failed attempt) is treated as incomplete just like "partial" and
+        redownloaded. build_sidecar always constructs a fresh Sidecar for the new attempt, so
+        a successful redownload must not carry the stale error forward: the published sidecar
+        must land on state="complete" with error=None."""
+        from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
+
+        paths = self._store(tmp_path)
+        acc_dir = self._store_dataset(paths, state="failed")
+        write_sidecar(
+            acc_dir / "SRR1.json",
+            Sidecar(accession="SRR1", state="failed", error="fasterq-dump exit 3"),
+        )
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        with patch("metaquest.data.sra.download_accession", side_effect=self._fake_download(calls)):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert len(calls) == 1
+        assert calls[0][1] == paths.tmp
+        assert stats["successful"] == 1
+        sidecar = read_sidecar(paths.sra / "SRR1" / "SRR1.json")
+        assert sidecar.state == "complete"
+        assert sidecar.error is None
+        assert (fastq_folder / "SRR1").is_symlink()
+
     def test_files_without_a_sidecar_are_redownloaded(self, tmp_path):
         paths = self._store(tmp_path)
         acc_dir = paths.sra / "SRR1"
