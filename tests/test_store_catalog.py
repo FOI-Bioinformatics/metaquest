@@ -132,13 +132,15 @@ def test_record_usage_with_explicit_at_keeps_earliest_first_used_latest_last_use
     """journal.replay feeds record_usage calls back in journal order, which need not be
     chronological (a journal can be replayed out of order, or rebuilt from a backfill that
     carries an explicit first/last pair). first_used must land on the earliest ``at`` seen
-    and last_used on the latest, regardless of which call happens first."""
+    and last_used on the latest, regardless of which call happens first. A replay/backfill
+    call (one that passes ``at``) whose own timestamp is older than what is already stored
+    must also leave the stored detail alone, since it is not the most recent real event."""
     with Catalog(paths, create=True) as catalog:
         catalog.migrate()
         catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
 
-        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", at="2026-09-02T00:00:00+00:00")
-        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", at="2026-09-01T00:00:00+00:00")
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", detail="newer", at="2026-09-02T00:00:00+00:00")
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", detail="older", at="2026-09-01T00:00:00+00:00")
 
         row = dict(
             catalog._conn.execute(
@@ -149,6 +151,33 @@ def test_record_usage_with_explicit_at_keeps_earliest_first_used_latest_last_use
 
     assert row["first_used"] == "2026-09-01T00:00:00+00:00"
     assert row["last_used"] == "2026-09-02T00:00:00+00:00"
+    assert row["detail"] == "newer"
+
+
+def test_record_usage_live_call_refreshes_detail_despite_lagging_clock(paths):
+    """A live call (neither ``at`` nor ``last_used`` passed) reports this host's own clock;
+    if an earlier call's ``at`` came from a host whose clock ran ahead, the stored last_used
+    can already sit in the future relative to a live call made afterwards. The live call is
+    still the most recent real event and must win on detail regardless, while last_used
+    keeps the later (future) timestamp already on the row. Only a replay/backfill call
+    (which passes ``at``) should defer to a stored, later timestamp instead."""
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+        catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
+        catalog.upsert_dataset(_sidecar())
+
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", detail="a", at="2099-01-01T00:00:00+00:00")
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", detail="b")
+
+        row = dict(
+            catalog._conn.execute(
+                "SELECT * FROM usage WHERE accession=? AND project_id=? AND genome_id=? AND stage=?",
+                ("SRR1", "proj1", "wMel", "downloaded"),
+            ).fetchone()
+        )
+
+    assert row["detail"] == "b"
+    assert row["last_used"] == "2099-01-01T00:00:00+00:00"
 
 
 def test_record_usage_updates_a_hand_edited_row_with_null_dates(paths):

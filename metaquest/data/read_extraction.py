@@ -82,7 +82,7 @@ def _count_records(path: Path, *filter_args: str) -> int:
     ``filter_args`` are extra ``samtools view`` flags (e.g. ``"-F", "4"``) applied before
     the count; with none, every record in the file is counted.
     """
-    result = SecureSubprocess.run_secure("samtools", ["view", "-c", *filter_args, str(path)])
+    result = SecureSubprocess.run_secure("samtools", _samtools_count_args(filter_args, path))
     text = (result.stdout or "").strip()
     return int(text) if text.isdigit() else 0
 
@@ -141,7 +141,7 @@ def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[st
 
     staged = index_path.with_suffix(f"{index_path.suffix}.tmp.{os.getpid()}")
     try:
-        SecureSubprocess.run_secure("minimap2", ["-x", preset, "-d", str(staged), str(genome_path)])
+        SecureSubprocess.run_secure("minimap2", _minimap2_index_args(preset, staged, genome_path))
         os.replace(staged, index_path)
     finally:
         staged.unlink(missing_ok=True)
@@ -166,8 +166,7 @@ def _run_minimap2(
     filesystem error. A ``KeyboardInterrupt`` or a programming error is not a reason to run
     minimap2 a second time, so it propagates.
     """
-    read_args = [str(r) for r in reads]
-    args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(reference), *read_args]
+    args = _minimap2_map_args(preset, threads, sam_path, reference, reads)
     try:
         return SecureSubprocess.run_secure("minimap2", args)
     except (subprocess.CalledProcessError, SecurityError, DataAccessError, OSError) as exc:
@@ -177,7 +176,7 @@ def _run_minimap2(
             reference,
             exc,
         )
-        fallback_args = ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(genome_fasta), *read_args]
+        fallback_args = _minimap2_map_args(preset, threads, sam_path, genome_fasta, reads)
         return SecureSubprocess.run_secure("minimap2", fallback_args)
 
 
@@ -348,16 +347,12 @@ def _filter_and_merge_bam(
     """Filter each SAM into a BAM (``-F 0x904 [-q min_mapq]``); merge with ``samtools cat``
     when there is more than one (the deliberate per-mate single-end fallback)."""
     if len(sam_paths) == 1:
-        SecureSubprocess.run_secure(
-            "samtools", ["view", "-b", *filter_args, "-@", str(threads), "-o", str(bam_path), str(sam_paths[0])]
-        )
+        SecureSubprocess.run_secure("samtools", _samtools_view_args(filter_args, threads, bam_path, sam_paths[0]))
         return
     part_bams = [out_dir / f"{genome_id}.mate{i}.bam" for i in range(1, len(sam_paths) + 1)]
     for sam_path, part_bam in zip(sam_paths, part_bams):
-        SecureSubprocess.run_secure(
-            "samtools", ["view", "-b", *filter_args, "-@", str(threads), "-o", str(part_bam), str(sam_path)]
-        )
-    SecureSubprocess.run_secure("samtools", ["cat", "-o", str(bam_path), *(str(p) for p in part_bams)])
+        SecureSubprocess.run_secure("samtools", _samtools_view_args(filter_args, threads, part_bam, sam_path))
+    SecureSubprocess.run_secure("samtools", _samtools_cat_args(bam_path, part_bams))
     for part_bam in part_bams:
         part_bam.unlink(missing_ok=True)
 
@@ -367,7 +362,7 @@ def _export_mapped_fastq(reads: List[Path], bam_path: Path, out_dir: Path, genom
     or the unequal-mates fallback) go to the ``-0`` file."""
     if len(reads) < 2:
         out0 = out_dir / f"{genome_id}.fastq.gz"
-        SecureSubprocess.run_secure("samtools", ["fastq", "-@", str(threads), "-0", str(out0), str(bam_path)])
+        SecureSubprocess.run_secure("samtools", _samtools_fastq_single_args(threads, out0, bam_path))
         return [] if _fastq_is_empty(out0) else [out0]
 
     out1 = out_dir / f"{genome_id}_1.fastq.gz"
@@ -375,21 +370,7 @@ def _export_mapped_fastq(reads: List[Path], bam_path: Path, out_dir: Path, genom
     singles = out_dir / f"{genome_id}_s.fastq.gz"
     orphans = out_dir / f"{genome_id}_0.fastq.gz"
     SecureSubprocess.run_secure(
-        "samtools",
-        [
-            "fastq",
-            "-@",
-            str(threads),
-            "-1",
-            str(out1),
-            "-2",
-            str(out2),
-            "-s",
-            str(singles),
-            "-0",
-            str(orphans),
-            str(bam_path),
-        ],
+        "samtools", _samtools_fastq_paired_args(threads, out1, out2, singles, orphans, bam_path)
     )
     for path in (out1, out2, singles, orphans):
         if _fastq_is_empty(path):
@@ -780,6 +761,65 @@ def resolve_assembly_threads(requested: Optional[int], fallback: int) -> int:
     return fallback
 
 
+def _minimap2_index_args(preset: str, index_path: Path, genome_path: Path) -> List[str]:
+    """Build the minimap2 index-build argument list used by ``build_index``."""
+    return ["-x", preset, "-d", str(index_path), str(genome_path)]
+
+
+def _minimap2_map_args(
+    preset: str, threads: int, sam_path: Path, reference: Union[str, Path], reads: Sequence[Union[str, Path]]
+) -> List[str]:
+    """Build the minimap2 mapping argument list shared by ``_run_minimap2`` (its prebuilt-
+    index call and the same-shaped FASTA-fallback retry) and ``assembly_coverage``."""
+    return ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(reference), *(str(r) for r in reads)]
+
+
+def _samtools_count_args(filter_args: Sequence[str], path: Path) -> List[str]:
+    """Build the ``samtools view -c`` argument list used by ``_count_records``."""
+    return ["view", "-c", *filter_args, str(path)]
+
+
+def _samtools_view_args(
+    filter_args: Sequence[str], threads: int, out_path: Path, in_path: Union[str, Path]
+) -> List[str]:
+    """Build the ``samtools view -b`` filter argument list shared by ``_filter_and_merge_bam``
+    (the single-SAM case and the per-mate loop) and ``assembly_coverage``."""
+    return ["view", "-b", *filter_args, "-@", str(threads), "-o", str(out_path), str(in_path)]
+
+
+def _samtools_cat_args(out_path: Path, part_paths: Sequence[Path]) -> List[str]:
+    """Build the ``samtools cat`` argument list ``_filter_and_merge_bam`` uses to merge the
+    per-mate BAMs of the unequal-mates single-end fallback."""
+    return ["cat", "-o", str(out_path), *(str(p) for p in part_paths)]
+
+
+def _samtools_fastq_single_args(threads: int, out_path: Path, bam_path: Path) -> List[str]:
+    """Build the ``samtools fastq`` argument list ``_export_mapped_fastq`` uses for single-
+    end (or already-collapsed) output."""
+    return ["fastq", "-@", str(threads), "-0", str(out_path), str(bam_path)]
+
+
+def _samtools_fastq_paired_args(
+    threads: int, out1: Path, out2: Path, singles: Path, orphans: Path, bam_path: Path
+) -> List[str]:
+    """Build the ``samtools fastq`` argument list ``_export_mapped_fastq`` uses for paired
+    output."""
+    return [
+        "fastq",
+        "-@",
+        str(threads),
+        "-1",
+        str(out1),
+        "-2",
+        str(out2),
+        "-s",
+        str(singles),
+        "-0",
+        str(orphans),
+        str(bam_path),
+    ]
+
+
 def _megahit_args(
     reads: List[Path],
     out_dir: Path,
@@ -1039,16 +1079,9 @@ def assembly_coverage(
     work_root = Path(work_dir)
     sam_path = work_root / "coverage.sam"
     bam_path = work_root / "coverage.bam"
-    read_args = [str(r) for r in reads]
     try:
-        SecureSubprocess.run_secure(
-            "minimap2",
-            ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(contigs), *read_args],
-        )
-        SecureSubprocess.run_secure(
-            "samtools",
-            ["view", "-b", "-F", FILTER_FLAGS, "-@", str(threads), "-o", str(bam_path), str(sam_path)],
-        )
+        SecureSubprocess.run_secure("minimap2", _minimap2_map_args(preset, threads, sam_path, contigs, reads))
+        SecureSubprocess.run_secure("samtools", _samtools_view_args(["-F", FILTER_FLAGS], threads, bam_path, sam_path))
         reads_mapped = _count_records(bam_path)
     finally:
         sam_path.unlink(missing_ok=True)

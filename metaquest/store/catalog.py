@@ -387,6 +387,18 @@ class Catalog:
         if known is None:
             raise DataAccessError(f"Unknown project_id: {project_id}")
 
+        # A live call (neither ``at`` nor ``last_used`` given) is this host's own clock
+        # reporting a real event happening now; it always wins on detail, even when the
+        # row already stored a later last_used from a host whose clock ran ahead. Only a
+        # replay/backfill call (one that passes ``at``) defers to a stored, later timestamp.
+        is_live_call = at is None and last_used is None
+        detail_clause = (
+            "detail=excluded.detail"
+            if is_live_call
+            else "detail=CASE WHEN last_used IS NULL OR excluded.last_used >= last_used "
+            "THEN excluded.detail ELSE detail END"
+        )
+
         now = at or _now()
         latest = last_used or now
         genome_id = genome_id or ""
@@ -396,14 +408,13 @@ class Catalog:
             (accession, "unknown", now),
         )
         self.conn.execute(
-            """
+            f"""
             INSERT INTO usage (accession, project_id, genome_id, stage, first_used, last_used, detail)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(accession, project_id, genome_id, stage) DO UPDATE SET
                 first_used=min(coalesce(first_used, excluded.first_used), excluded.first_used),
                 last_used=max(coalesce(last_used, excluded.last_used), excluded.last_used),
-                detail=CASE WHEN last_used IS NULL OR excluded.last_used >= last_used
-                       THEN excluded.detail ELSE detail END
+                {detail_clause}
             """,
             (accession, project_id, genome_id, stage, now, latest, detail),
         )
