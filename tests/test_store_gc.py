@@ -79,6 +79,19 @@ class TestStoreGcCommand:
         rc = StoreGcCommand().execute(_gc_args(registry=str(project_dir / "metaquest_registry.json")))
         assert rc == 1
 
+    def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
+        """No store, --json requested: the hint must be valid JSON on stdout, same shape as
+        the refusal in test_json_refusal_prints_an_error_object, not the plain-text hint."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreGcCommand().execute(_gc_args(json=True, registry=str(project_dir / "metaquest_registry.json")))
+        payload = json.loads(capsys.readouterr().out)
+
+        assert rc == 1
+        assert payload["error"].startswith("No store configured")
+
     def test_json_refusal_prints_an_error_object(self, tmp_path, capsys):
         """A refusal before --json can even build a report must still be visible on stdout as
         JSON, not only logged, so a script driving store_gc --json can parse it."""

@@ -53,6 +53,39 @@ def test_selection_is_recorded_in_registry(tmp_path, monkeypatch):
     assert "SRR2" not in data["datasets"] or not data["datasets"]["SRR2"]["selection"]["selected"]
 
 
+def test_selection_records_resolved_metadata_file(tmp_path, monkeypatch):
+    """The recorded criteria must carry the resolved --metadata-file path, so status --next
+    can reproduce it on a reselect (tests/test_cli_status.py's reselect suite)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    meta = tmp_path / "meta.txt"
+    meta.write_text("\tcountry\nSRR1\tSweden\nSRR2\tNorway\n")
+    rc = SelectDatasetsCommand().execute(
+        _args(
+            tmp_path,
+            genome_id="GCF_A",
+            threshold=0.5,
+            registry=None,
+            metadata_file=str(meta),
+            metadata_column="country",
+            metadata_value="Sweden",
+        )
+    )
+    assert rc == 0
+    data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    criteria = data["datasets"]["SRR1"]["selection"]["criteria"]
+    assert criteria["metadata_file"] == str(meta.resolve())
+
+
+def test_selection_without_metadata_file_records_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.1\t0.1\n")
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, genome_id="GCF_A", threshold=0.5, registry=None))
+    assert rc == 0
+    data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    assert data["datasets"]["SRR1"]["selection"]["criteria"]["metadata_file"] is None
+
+
 def test_no_record_leaves_registry_untouched(tmp_path, monkeypatch):
     """--no-record writes the output file but must not redefine the project's target list:
     a later, differently-thresholded --no-record run leaves the registry's selected set

@@ -582,6 +582,30 @@ class TestGenomePrepareCommand:
             result = cmd.execute(args)
             assert result == 0
 
+    def test_prepare_with_no_genomes_leaves_registry_untouched(self, tmp_path):
+        """With no genome files to manifest, no registry transaction should even open: an
+        empty run must not create (or touch) a registry file that never gets anything
+        written to it."""
+        registry_file = tmp_path / "metaquest_registry.json"
+        genomes_dir = tmp_path / "genomes"
+        genomes_dir.mkdir()
+        manifest = tmp_path / "manifest.csv"
+        args = argparse.Namespace(
+            species=None,
+            genus=None,
+            accession_file=None,
+            output_dir=str(genomes_dir),
+            representative_only=True,
+            manifest_file=str(manifest),
+            skip_download=True,
+            registry=str(registry_file),
+        )
+
+        result = GenomePrepareCommand().execute(args)
+
+        assert result == 0
+        assert not registry_file.exists()
+
     def test_manifest_lists_plain_fna_files(self):
         from metaquest.cli.commands.genome import GenomePrepareCommand
 

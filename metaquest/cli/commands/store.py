@@ -61,8 +61,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _no_store_hint() -> None:
-    print("No store configured; run: metaquest store_init --data-root PATH")
+def _no_store_hint(as_json: bool = False) -> None:
+    message = "No store configured; run: metaquest store_init --data-root PATH"
+    if as_json:
+        print(json.dumps({"error": message}))
+    else:
+        print(message)
 
 
 def _stale_project_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -356,7 +360,7 @@ class StoreStatusCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(getattr(args, "json", False))
             return 1
 
         try:
@@ -1387,7 +1391,7 @@ class StoreUsageCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(getattr(args, "json", False))
             return 1
 
         try:
@@ -1761,7 +1765,7 @@ class StoreGcCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(getattr(args, "json", False))
             return 1
 
         paths = store_paths(root)

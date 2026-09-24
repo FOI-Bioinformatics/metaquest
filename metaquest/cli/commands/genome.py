@@ -339,9 +339,10 @@ class GenomePrepareCommand(BaseCommand):
                 writer.writerow([name, str(gf), str(protein) if protein else ""])
                 rows.append((name, gf))
 
-        with registry_transaction(registry) as reg:
-            for name, gf in rows:
-                record_genome(reg, name, gf, manifest_path)
+        if rows:
+            with registry_transaction(registry) as reg:
+                for name, gf in rows:
+                    record_genome(reg, name, gf, manifest_path)
 
         self.logger.info("Created manifest with %d entries: %s", len(genome_files), manifest_path)
         return len(genome_files)

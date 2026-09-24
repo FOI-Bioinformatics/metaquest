@@ -218,8 +218,11 @@ class DownloadSraCommand(BaseCommand):
                 self.logger.info(f"  Limited to {args.max_downloads} downloads")
 
     def _report_failed_downloads(self, args: argparse.Namespace, stats: dict) -> None:
-        """Warn about failures and point at the retry file the data layer already wrote."""
-        self.logger.warning("Some downloads failed. Use --force to retry or --max-retries to enable automatic retry.")
+        """Point at the retry file the data layer already wrote.
+
+        The data layer (metaquest.data.sra's download_sra) already logs "Some downloads
+        failed..." itself; logging it again here would print it twice on a failed run.
+        """
         if not stats.get("failed_accessions"):
             return
         failed_file = Path(args.fastq_folder) / FAILED_ACCESSIONS_FILE

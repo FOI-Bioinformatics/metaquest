@@ -405,6 +405,53 @@ class TestStatusWithRegistry:
             "metaquest select_datasets --genome-ids GCF_A GCF_B --skip-excluded --output sel_noskip.txt"
         )
 
+    def test_reselect_command_warns_on_malformed_threshold(self, caplog):
+        """A recorded threshold that does not coerce to a float is dropped from the suggested
+        command (so select_datasets falls back to its own default on rerun) and now also logs
+        a warning naming the bad value, instead of failing silently."""
+        with caplog.at_level("WARNING"):
+            command = StatusCommand._reselect_command({"column": "GCF_A", "threshold": "abc"}, "out.txt")
+        assert "threshold" in caplog.text and "not a number" in caplog.text
+        assert "'abc'" in caplog.text or '"abc"' in caplog.text
+        assert "--threshold" not in command
+
+    def test_reselect_command_warns_on_unknown_require(self, caplog):
+        """A recorded require value outside any/all is dropped from the suggested command and
+        logs a warning naming the bad value, instead of failing silently."""
+        with caplog.at_level("WARNING"):
+            command = StatusCommand._reselect_command({"genome_ids": ["GCF_A", "GCF_B"], "require": "maybe"}, "out.txt")
+        assert "require" in caplog.text and "maybe" in caplog.text
+        assert "--require" not in command
+
+    def test_reselect_suggestion_includes_metadata_file(self, tmp_path, monkeypatch):
+        """A selection recorded with --metadata-file must reproduce that flag on rerun, next
+        to the metadata column/value it already reproduces, so the reselect actually rereads
+        the same metadata table rather than falling back to metadata table autodetection."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        meta_path = str(root / "meta.txt")
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "column": "GCF_A",
+                    "threshold": 0.5,
+                    "metadata_file": meta_path,
+                    "metadata_column": "country",
+                    "metadata_value": "Sweden",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+        assert f"--metadata-file {meta_path}" in reselect
+        assert "--metadata-column country --metadata-value Sweden" in reselect
+
     def test_reselect_suggestion_coerces_numeric_strings(self):
         command = StatusCommand._reselect_command(
             {"column": "GCF_A", "threshold": "0.25", "top_n": "7", "require": "any"}, "out.txt"
