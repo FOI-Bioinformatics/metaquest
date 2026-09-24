@@ -10,9 +10,11 @@
 - **Interactive Visualizations**: Create dynamic plots (PCA, heatmaps, diversity comparisons)
 - **Taxonomic Validation**: Validate species names against NCBI taxonomy database
 - **Plugin Architecture**: Extensible format handlers and visualization plugins
-- **Robust Implementation**: Type hints, comprehensive testing (1280 tests, 92% coverage), numerical stability
+- **Robust Implementation**: Type hints, comprehensive test coverage, numerical stability
 
 ## Installation
+
+Requires Python 3.12 or newer.
 
 ### Quick Start (Recommended)
 ```bash
@@ -27,6 +29,21 @@ make dev-install  # Installs with all development dependencies
 pip install -r requirements.txt
 pip install .
 ```
+
+### Development environment
+
+The conda environment pins Python 3.12, matching `requires-python` in `pyproject.toml`:
+
+```bash
+make env            # conda env create -f environment.yml (or update --prune if it exists)
+conda activate metaquest
+make env-dev        # pip install -e ".[dev]" into the active environment
+```
+
+The package should not stay installed (editable or otherwise) in another interpreter's
+site-packages at the same time; `pip uninstall metaquest` from any other environment
+before relying on the `metaquest` console script, so it resolves to the 3.12 environment's
+copy rather than a stale one.
 
 ### External tools
 
@@ -53,7 +70,7 @@ Map plots need the optional extra: `pip install 'metaquest[maps]'`.
 ### Development Commands
 ```bash
 make help           # Show all available commands
-make test          # Run tests with coverage (1280 tests passing, 92% coverage)
+make test          # Run tests with coverage
 make lint          # Run code quality checks
 make check         # Full quality validation
 make clean         # Clean build artifacts
@@ -783,7 +800,7 @@ make help
 ```
 
 ### Testing Structure
-- **Comprehensive Test Suite**: 1280 tests covering CLI, data processing, visualization, and advanced SRA features
+- **Comprehensive Test Suite**: covers CLI, data processing, visualization, and advanced SRA features
   - Unit tests: 170+ tests per critical module with extended test files
   - Integration tests: 12 end-to-end workflow tests (`tests/test_integration_simple.py`)
   - Performance tests: 25 benchmarked tests (`tests/test_performance_simple.py`)

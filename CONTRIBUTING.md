@@ -4,6 +4,8 @@ Thank you for your interest in contributing to MetaQuest! This document provides
 
 ## Development Setup
 
+Requires Python 3.12 or newer.
+
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/FOI-Bioinformatics/MetaQuest.git
@@ -14,6 +16,7 @@ Thank you for your interest in contributing to MetaQuest! This document provides
    ```bash
    pip install -e ".[dev]"
    ```
+   Or, using conda: `make env`, `conda activate metaquest`, `make env-dev`.
 
 3. **Run the test suite**:
    ```bash
@@ -38,7 +41,7 @@ Thank you for your interest in contributing to MetaQuest! This document provides
 
 3. **Run tests**:
    ```bash
-   make test        # Run comprehensive test suite (995 tests)
+   make test        # Run comprehensive test suite
    make pipeline    # Run full integration test
    ```
 
