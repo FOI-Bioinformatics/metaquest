@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 import requests
@@ -162,10 +162,20 @@ class SRAMetadataClient:
         }
 
         fetch_response = self._make_request(fetch_url, params)
-        return self._parse_sra_xml(fetch_response)
+        # Restrict the result to the runs this batch actually asked for: one matched
+        # EXPERIMENT can bundle other RUNs (e.g. other lanes/replicates of the same
+        # experiment) that the caller never requested.
+        return self._parse_sra_xml(fetch_response, requested=set(accessions))
 
-    def _parse_sra_xml(self, xml_content: str) -> Dict[str, SRADatasetInfo]:
-        """Parse SRA XML response to extract metadata, one entry per RUN accession."""
+    def _parse_sra_xml(self, xml_content: str, requested: Optional[Set[str]] = None) -> Dict[str, SRADatasetInfo]:
+        """Parse SRA XML response to extract metadata, one entry per RUN accession.
+
+        ``requested``, when given, is the set of accessions the caller actually asked for;
+        a RUN whose accession is not in it is dropped, since one matched EXPERIMENT_PACKAGE
+        can bundle other RUNs alongside the one requested. Called directly with no
+        ``requested`` set (a script, a REPL, or a test working with raw XML), every RUN in
+        the package is returned, matching the historical behaviour.
+        """
         try:
             import xml.etree.ElementTree as ET
 
@@ -175,6 +185,8 @@ class SRAMetadataClient:
             for package in root.findall(".//EXPERIMENT_PACKAGE"):
                 try:
                     for info in self._extract_dataset_info(package):
+                        if requested is not None and info.accession not in requested:
+                            continue
                         results[info.accession] = info
                 except Exception as e:
                     logger.warning(f"Failed to parse dataset package: {e}")
@@ -198,14 +210,30 @@ class SRAMetadataClient:
 
     @staticmethod
     def _run_numbers(run) -> Tuple[int, int, float, str]:
-        """spots, bases, size in MB and published date of one ``<RUN>`` element."""
+        """spots, bases, size in MB and published date of one ``<RUN>`` element.
 
-        def _int(name: str) -> int:
-            value = run.get(name)
+        Spots/bases are normally the RUN's own ``total_spots``/``total_bases`` attributes.
+        When those are missing (0), the RUN's nested ``<Statistics nspots="..."
+        nbases="...">`` child, where present, is used instead, rather than reporting a
+        dataset that has real reads as having none.
+        """
+
+        def _int_attr(element, name: str) -> int:
+            value = element.get(name) if element is not None else None
             return int(value) if value and value.isdigit() else 0
 
-        size_bytes = _int("size")
-        return _int("total_spots"), _int("total_bases"), size_bytes / (1024 * 1024), run.get("published", "") or ""
+        spots = _int_attr(run, "total_spots")
+        bases = _int_attr(run, "total_bases")
+        if spots == 0 or bases == 0:
+            statistics_elem = run.find("./Statistics")
+            if statistics_elem is not None:
+                if spots == 0:
+                    spots = _int_attr(statistics_elem, "nspots")
+                if bases == 0:
+                    bases = _int_attr(statistics_elem, "nbases")
+
+        size_bytes = _int_attr(run, "size")
+        return spots, bases, size_bytes / (1024 * 1024), run.get("published", "") or ""
 
     def _extract_biosample(self, package) -> str:
         """Return the BioSample accession from SAMPLE_ATTRIBUTE tags, or ''."""
@@ -669,7 +697,7 @@ def _print_statistics_summary(df: pd.DataFrame) -> None:
     # The read totals are exact counts; a sampled row's per-read metrics (and therefore its
     # base total) come from a subset of the records, which the reader should know about.
     sampled = " (read-level metrics from a sample)" if bool(df.get("sampled", pd.Series(dtype=bool)).any()) else ""
-    print(f"Total reads: {df['total_reads'].sum():,}{sampled}")
+    print(f"Total reads (mates counted): {df['total_reads'].sum():,}{sampled}")
     print(f"Total bases: {df['total_bases'].sum():,}")
     print(f"Average read length: {df['avg_read_length'].mean():.1f}")
     print(f"Average GC content: {df['gc_content'].mean():.1f}%")

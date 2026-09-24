@@ -304,6 +304,35 @@ class TestLoadQualityProfiles:
         assert "SRR_NEW" in profiles
         assert profiles["SRR_NEW"].gc_histogram == {"45-50": 2, "50-55": 1}
 
+    def test_prefers_complexity_score_key_when_both_present(self, tmp_path):
+        """complexity_score is the historical key; when a profile JSON carries both (as
+        _write_profile_json now writes), it takes priority so an old reader's expectations
+        still hold."""
+        import json
+
+        data = self._base_profile_json("SRR_BOTH")
+        data["complexity_score"] = 0.8
+        data["sequence_complexity"] = 0.5
+        (tmp_path / "SRR_BOTH_quality_profile.json").write_text(json.dumps(data))
+
+        profile = load_quality_profiles(tmp_path)["SRR_BOTH"]
+
+        assert profile.complexity_score == 0.8
+
+    def test_reads_sequence_complexity_key_when_complexity_score_absent(self, tmp_path):
+        """A profile JSON that only carries the newer sequence_complexity key (no
+        complexity_score at all) still loads a real score instead of the 0.0 default."""
+        import json
+
+        data = self._base_profile_json("SRR_ALIAS_ONLY")
+        del data["complexity_score"]
+        data["sequence_complexity"] = 0.63
+        (tmp_path / "SRR_ALIAS_ONLY_quality_profile.json").write_text(json.dumps(data))
+
+        profile = load_quality_profiles(tmp_path)["SRR_ALIAS_ONLY"]
+
+        assert profile.complexity_score == 0.63
+
 
 class TestSRADatasetAnalyzer:
     """Test main SRA dataset analyzer functionality."""
@@ -1057,6 +1086,38 @@ def test_statistical_tests_are_json_serialisable():
     payload = {"significant": np.bool_(True), "p": np.float64(0.01), "nan": float("nan"), "s": {1, 2}}
     text = json.dumps(json_safe(payload))
     assert json.loads(text) == {"significant": True, "p": 0.01, "nan": None, "s": [1, 2]}
+
+
+def test_json_safe_converts_a_pandas_series_to_a_dict():
+    """A pandas Series (e.g. a DataFrame column pulled out on its own) has no json.dumps
+    support; json_safe must convert it via to_dict() rather than leaving it as-is."""
+    import json
+
+    import pandas as pd
+
+    from metaquest.sra.analytics import json_safe
+
+    series = pd.Series([1, 2, 3], index=["a", "b", "c"])
+    safe = json_safe(series)
+    assert safe == {"a": 1, "b": 2, "c": 3}
+    json.dumps(safe)  # must not raise
+
+
+def test_json_safe_converts_a_pandas_dataframe_to_a_dict():
+    """A pandas DataFrame (e.g. comparison.summary_statistics built with pd.DataFrame) is
+    likewise converted via to_dict() rather than passed through unchanged."""
+    import json
+
+    import pandas as pd
+
+    from metaquest.sra.analytics import json_safe
+
+    df = pd.DataFrame({"gc_content": [0.4, 0.5]})
+    safe = json_safe(df)
+    # json_safe's dict branch stringifies every key it recurses through, including the row
+    # index DataFrame.to_dict() nests under each column.
+    assert safe == {"gc_content": {"0": 0.4, "1": 0.5}}
+    json.dumps(safe)  # must not raise
 
 
 def _profile_with_gc(accession: str, gc_content: float) -> QualityProfile:

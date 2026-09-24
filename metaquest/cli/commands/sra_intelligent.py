@@ -135,7 +135,7 @@ class SRAQualityProfileCommand(BaseCommand):
         """Print quality profile summary."""
         print(f"\nQuality Profile: {profile.accession}")
         print("=" * 50)
-        print(f"Total reads: {profile.total_reads:,} (sampled {profile.reads_sampled:,})")
+        print(f"Total reads (mates counted): {profile.total_reads:,} (sampled {profile.reads_sampled:,})")
         print(f"Total bases: {profile.total_bases:,}")
         print(f"Average read length: {profile.avg_read_length:.1f}")
         print(f"GC content: {profile.gc_content:.1%}")
@@ -200,6 +200,9 @@ class SRAQualityProfileCommand(BaseCommand):
                     "quality_grade": profile.quality_grade,
                     "quality_distribution": profile.quality_distribution,
                     "complexity_score": profile.complexity_score,
+                    # Same value under the clearer name; load_quality_profiles accepts either
+                    # key, so both an old reader and a new one find the score.
+                    "sequence_complexity": profile.complexity_score,
                     "n_content": profile.n_content,
                     "duplication_rate": profile.duplication_rate,
                     "technology_confidence": profile.technology_confidence,
@@ -299,7 +302,7 @@ class SRAQualityProfileCommand(BaseCommand):
         """Print aggregate statistics and quality-flag counts for a batch."""
         print(f"\nSummary Statistics ({len(profiles)} datasets):")
         print("=" * 50)
-        print(f"Total reads across all datasets: {stats['total_reads']:,}")
+        print(f"Total reads across all datasets (mates counted): {stats['total_reads']:,}")
         print(f"Total bases across all datasets: {stats['total_bases']:,}")
         print(f"Average GC content: {stats['avg_gc_content']:.1%}")
 
@@ -467,8 +470,11 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
             profiles: Dict[str, QualityProfile] = {}
             if args.quality_profiles:
-                if Path(args.quality_profiles).is_dir():
+                quality_profiles_path = Path(args.quality_profiles)
+                if quality_profiles_path.is_dir():
                     profiles = load_quality_profiles(args.quality_profiles)
+                elif quality_profiles_path.exists():
+                    logger.warning("Quality profiles path is not a directory: %s", args.quality_profiles)
                 else:
                     logger.warning("Quality profiles directory not found: %s", args.quality_profiles)
 
@@ -608,7 +614,7 @@ class SRAComparativeAnalysisCommand(BaseCommand):
                 print(f"  Avg read length: {length_stats['mean']:.1f}")
             reads_stats = col_stats.get("total_reads")
             if reads_stats:
-                print(f"  Mean total reads: {reads_stats['mean']:,.0f}")
+                print(f"  Mean reads in sample: {reads_stats['mean']:,.0f}")
 
     @staticmethod
     def _print_statistical_tests(comparison) -> None:

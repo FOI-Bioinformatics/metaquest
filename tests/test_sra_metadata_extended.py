@@ -737,7 +737,8 @@ class TestGenerateStatisticsReport:
         generate_statistics_report(fastq_folder, tmp_path / "report.csv", sample_size=2)
 
         out = capsys.readouterr().out
-        assert "Total reads: 5 (read-level metrics from a sample)" in out
+        # total_reads counts mates, not NCBI spots; sra_stats' summary says so.
+        assert "Total reads (mates counted): 5 (read-level metrics from a sample)" in out
 
     def test_generate_statistics_cache_survives_a_zero_byte_extra_file(self, tmp_path):
         """The signature written into the cache uses the same file list ``cached_stats``
@@ -896,6 +897,63 @@ def test_parse_real_efetch_shape_reports_runs():
     assert run.strategy == "WGS" and run.layout == "PAIRED" and run.organism == "gut metagenome"
     assert run.bioproject == "PRJNA1"
     assert abs(run.avg_length - 300.0) < 0.01
+
+
+def test_parse_sra_xml_requested_filters_to_only_those_runs():
+    """A caller that knows which accessions it asked for (e.g. _fetch_batch_metadata, which
+    passes its own batch) does not get back a run it never requested, even when NCBI's efetch
+    package for the matching experiment bundles other runs alongside it."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML, requested={"SRR100"})
+    assert set(results) == {"SRR100"}
+
+
+def test_parse_sra_xml_without_requested_keeps_every_run():
+    """Called directly with no request set (a script, a REPL, or a test that hands it XML on
+    its own), every RUN in the package is still returned; filtering only applies when a
+    caller names the accessions it actually asked for."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(REAL_EFETCH_XML)
+    assert set(results) == {"SRR100", "SRR101"}
+
+
+def test_fetch_batch_metadata_filters_to_the_requested_batch():
+    """sra_info's underlying batch fetch must not surface a RUN the caller never asked for,
+    even when NCBI's efetch response for a matched experiment bundles other runs alongside
+    the requested one."""
+    client = SRAMetadataClient(email="a@b.c")
+    mock_search_response = json.dumps({"esearchresult": {"idlist": ["100"]}})
+
+    with patch.object(client, "_make_request") as mock_request:
+        mock_request.side_effect = [mock_search_response, REAL_EFETCH_XML]
+        result = client._fetch_batch_metadata(["SRR100"])
+
+    assert set(result) == {"SRR100"}
+
+
+XML_RUN_MISSING_ATTRS_BUT_STATISTICS_CHILD = """<?xml version="1.0" encoding="UTF-8"?>
+<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE>
+<EXPERIMENT accession="SRX200" alias="e"><TITLE>soil sample</TITLE>
+<DESIGN><LIBRARY_DESCRIPTOR><LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY><LIBRARY_SOURCE>METAGENOMIC</LIBRARY_SOURCE>
+<LIBRARY_SELECTION>RANDOM</LIBRARY_SELECTION><LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT></LIBRARY_DESCRIPTOR></DESIGN>
+<PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina NovaSeq 6000</INSTRUMENT_MODEL></ILLUMINA></PLATFORM></EXPERIMENT>
+<SUBMISSION accession="SRA200" received="2023-04-01"/>
+<STUDY accession="SRP2"><IDENTIFIERS><EXTERNAL_ID namespace="BioProject">PRJNA2</EXTERNAL_ID></IDENTIFIERS></STUDY>
+<SAMPLE accession="SRS2"><SAMPLE_NAME><SCIENTIFIC_NAME>soil metagenome</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+<RUN_SET><RUN accession="SRR200" published="2023-04-02">
+<Statistics nspots="5000" nbases="750000"/>
+</RUN></RUN_SET>
+</EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>"""
+
+
+def test_parse_falls_back_to_statistics_child_when_run_attributes_missing():
+    """A RUN element without total_spots/total_bases attributes still reports real numbers,
+    read from its Statistics child, rather than the zeroed defaults."""
+    client = SRAMetadataClient(email="a@b.c")
+    results = client._parse_sra_xml(XML_RUN_MISSING_ATTRS_BUT_STATISTICS_CHILD)
+    run = results["SRR200"]
+    assert run.spots == 5000
+    assert run.bases == 750000
 
 
 # ============================================================================

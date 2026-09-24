@@ -40,6 +40,8 @@ def json_safe(value: Any) -> Any:
     not a Python ``bool``) and a bare ``set``, and turn a non-finite float (``nan``/``inf``)
     into invalid JSON tokens rather than raising. Call this on a payload before dumping it.
     """
+    if isinstance(value, (pd.Series, pd.DataFrame)):
+        return json_safe(value.to_dict())
     if isinstance(value, dict):
         return {str(k): json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
@@ -177,6 +179,10 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
     ``reads_sampled`` and ``sampled`` are likewise absent from a profile JSON written before
     those fields existed, where ``total_reads`` was the sample size; such a file loads with
     ``reads_sampled`` equal to ``total_reads`` and ``sampled`` True.
+
+    ``complexity_score`` is read in preference to the newer ``sequence_complexity`` alias
+    ``_write_profile_json`` now also writes; a profile carrying only ``sequence_complexity``
+    still loads its score rather than the ``0.0`` default.
     """
     profiles: Dict[str, QualityProfile] = {}
     directory = Path(profiles_dir)
@@ -201,7 +207,7 @@ def load_quality_profiles(profiles_dir: Union[str, Path]) -> Dict[str, "QualityP
             quality_distribution=data.get("quality_distribution", {}),
             n_content=data.get("n_content", 0.0),
             contamination_indicators=data.get("contamination_indicators", {}),
-            complexity_score=data.get("complexity_score", 0.0),
+            complexity_score=data.get("complexity_score", data.get("sequence_complexity", 0.0)),
             duplication_rate=data.get("duplication_rate"),
             technology_confidence=data.get("technology_confidence", 0.0),
             quality_grade=data.get("quality_grade", ""),

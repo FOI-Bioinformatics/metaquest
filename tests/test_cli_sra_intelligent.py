@@ -94,6 +94,8 @@ class TestSRAQualityProfileCommand:
         assert "High N content" in captured.out
         assert "High duplicate rate" in captured.out
         assert "Adapter contamination" in captured.out
+        # total_reads counts mates (both ends of a pair), not NCBI spots; the label says so.
+        assert "Total reads (mates counted):" in captured.out
 
     def test_execute_single_accession(self, tmp_path):
         """Test profiling single accession."""
@@ -263,13 +265,16 @@ class TestSRAQualityProfileCommand:
         args = self._linked_accession_args(tmp_path, store_acc_dir, sample_size=2, sampler="head")
         assert SRAQualityProfileCommand().execute(args) == 0
 
-        assert "Total reads: 1,724,338 (sampled 2)" in capsys.readouterr().out
+        assert "Total reads (mates counted): 1,724,338 (sampled 2)" in capsys.readouterr().out
 
         profile = json.loads((tmp_path / "output" / "SRR001_quality_profile.json").read_text())
         assert profile["total_reads"] == 1724338
         assert profile["total_bases"] == 258650700
         assert profile["reads_sampled"] == 2
         assert profile["sampled"] is False
+        # Both the historical key and the clearer alias are written, so an existing reader
+        # (e.g. load_quality_profiles on an old profile) and a new one both find the score.
+        assert profile["sequence_complexity"] == profile["complexity_score"]
 
         registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
         summary = registry["datasets"]["SRR001"]["analyses"]["quality"]["summary"]
@@ -311,6 +316,17 @@ class TestSRAQualityProfileCommand:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Could not cache" in r.message]
         assert len(warnings) == 1
         assert "SRR001" in caplog.text and "read-only store" in caplog.text
+
+    def test_print_summary_stats_labels_total_reads_as_mates_counted(self, capsys):
+        """The batch summary's total_reads counts mates, not NCBI spots; say so."""
+        cmd = SRAQualityProfileCommand()
+        profiles = [make_profile("SRR001"), make_profile("SRR002")]
+        stats = cmd._summary_stats(profiles)
+
+        cmd._print_summary_stats(profiles, stats)
+
+        out = capsys.readouterr().out
+        assert "Total reads across all datasets (mates counted):" in out
 
     def test_execute_without_a_store_writes_no_sidecar(self, tmp_path):
         """A plain project folder (no store link) is unaffected: no sidecar is created."""
@@ -915,6 +931,31 @@ class TestSRAComparativeAnalysisCommand:
         captured = capsys.readouterr()
         assert "Invalid JSON" in captured.out
 
+    def test_print_group_summaries_labels_reads_as_mean_reads_in_sample(self, capsys):
+        """total_reads here is the per-dataset sample size the comparison drew, not a
+        population mean of NCBI spot counts; the label says 'in sample' rather than
+        'Mean total reads' so it is not read as an exact per-dataset read count."""
+        cmd = SRAComparativeAnalysisCommand()
+        groups = {"Group_A": ["SRR001", "SRR002"]}
+        comparison = ComparativeAnalysis(
+            dataset_groups=groups,
+            summary_statistics={
+                "Group_A": {"total_reads": {"mean": 10000.0, "std": 0.0, "median": 10000.0, "min": 10000, "max": 10000}}
+            },
+            statistical_tests={},
+            outlier_datasets=[],
+            clustering_results=None,
+            batch_effects={},
+            recommendations=[],
+            visualization_data={},
+        )
+
+        cmd._print_group_summaries(groups, comparison)
+
+        out = capsys.readouterr().out
+        assert "Mean reads in sample:" in out
+        assert "Mean total reads:" not in out
+
     def test_execute_success(self, tmp_path):
         """Test successful comparative analysis."""
         cmd = SRAComparativeAnalysisCommand()
@@ -1383,6 +1424,34 @@ class TestAccessionsFileOptional:
 
         assert result == 1
         assert str(missing) in caplog.text
+        assert "not found" in caplog.text
+
+    def test_dashboard_warns_quality_profiles_path_is_a_file_not_a_directory(self, tmp_path, caplog):
+        """A --quality-profiles path that exists but is a file (not a directory) gets a
+        distinct message from a path that does not exist at all, so the reader is not told
+        a real path was 'not found' when it is simply the wrong kind of thing."""
+        import logging
+
+        not_a_dir = tmp_path / "quality_profiles_file"
+        not_a_dir.write_text("not a directory")
+
+        args = Namespace(
+            accessions_file=None,
+            quality_profiles=str(not_a_dir),
+            fastq_dir=str(tmp_path / "fastq"),
+            output_dir=str(tmp_path / "dashboards"),
+            title="Test Dashboard",
+            dashboard_type="quality",
+            no_open=True,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = SRAInteractiveDashboardCommand().execute(args)
+
+        assert result == 1
+        assert str(not_a_dir) in caplog.text
+        assert "is not a directory" in caplog.text
+        assert "not found" not in caplog.text
 
     def test_dashboard_resolve_requires_file_or_profiles_directory(self, tmp_path):
         """Neither --accessions-file nor a usable --quality-profiles directory is a clear
