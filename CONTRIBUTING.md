@@ -16,7 +16,8 @@ Requires Python 3.12 or newer.
    ```bash
    pip install -e ".[dev]"
    ```
-   Or, using conda: `make env`, `conda activate metaquest`, `make env-dev`.
+   Or, using conda: `make env`, `make env-dev` (installs into the `metaquest` environment
+   directly, no activation needed for this step), then `conda activate metaquest` for day-to-day use.
 
 3. **Run the test suite**:
    ```bash

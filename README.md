@@ -36,14 +36,17 @@ The conda environment pins Python 3.12, matching `requires-python` in `pyproject
 
 ```bash
 make env            # conda env create -f environment.yml (or update --prune if it exists)
+make env-dev        # pip install -e ".[dev]" into the "metaquest" conda environment
 conda activate metaquest
-make env-dev        # pip install -e ".[dev]" into the active environment
 ```
 
-The package should not stay installed (editable or otherwise) in another interpreter's
-site-packages at the same time; `pip uninstall metaquest` from any other environment
-before relying on the `metaquest` console script, so it resolves to the 3.12 environment's
-copy rather than a stale one.
+`make env-dev` runs `conda run -n metaquest pip install -e ".[dev]"`, so it always installs into
+the environment named `metaquest` regardless of what is currently active; `conda activate
+metaquest` is only needed afterward, to use the `metaquest` console script and the interpreter
+day to day. The package should not stay installed (editable or otherwise) in another
+interpreter's site-packages at the same time; `pip uninstall metaquest` from any other
+environment before relying on the `metaquest` console script, so it resolves to the 3.12
+environment's copy rather than a stale one.
 
 ### External tools
 
@@ -762,25 +765,25 @@ For comprehensive documentation including advanced features and technical detail
 MetaQuest follows modern Python development practices with comprehensive testing and quality assurance.
 
 ### Current Status
-- **Test Coverage**: 88%+ overall (from 53% baseline, 199 new tests added)
-- **CLI Commands**: 100% coverage, including intelligent SRA commands at 86%
-- **Data Layer**: 93-99% coverage for all core modules (sra_metadata, taxonomy)
-- **Core Processing**: 92-99% coverage with comprehensive edge case testing
-- **SRA Advanced Features**: 95% coverage for reporting, quality profiling, and analytics
-- **Visualization Plugins**: Bar chart plugin at 99% coverage
-- **Integration Tests**: 12 end-to-end workflow tests
-- **Performance Benchmarks**: 25 tests with pytest-benchmark for regression detection
+- **Test Coverage**: Comprehensive coverage across core functionality
+- **CLI Commands**: Fully covered, including the intelligent SRA commands
+- **Data Layer**: Thoroughly covered across core modules (sra_metadata, taxonomy)
+- **Core Processing**: Comprehensive coverage with edge case testing
+- **SRA Advanced Features**: Well covered for reporting, quality profiling, and analytics
+- **Visualization Plugins**: Bar chart plugin thoroughly covered
+- **Integration Tests**: End-to-end workflow tests
+- **Performance Benchmarks**: Benchmarked tests with pytest-benchmark for regression detection
 - **Code Quality**: All linting checks passing
 
-### Recent Enhancements (September-October 2025)
+### Recent Enhancements
 Significant improvements have been implemented across the codebase:
 
 - **Intelligent SRA Package**: Complete implementation of next-generation SRA capabilities including intelligent downloads with resume functionality, comprehensive quality profiling, and interactive dashboard generation
-- **Major Test Coverage Achievement**: Improved from 53% to 88%+ with 199 new comprehensive tests across 8 files
+- **Major Test Coverage Achievement**: Substantial coverage improvement with a large batch of comprehensive tests added across multiple files
   - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy)
-  - Integration test suite with 12 end-to-end workflow tests
-  - Performance benchmarks with 25 tests using pytest-benchmark
-  - All modules now at 86-99% coverage
+  - Integration test suite with end-to-end workflow tests
+  - Performance benchmarks using pytest-benchmark
+  - All modules now thoroughly covered
 - **Architecture Refinement**: Orphan code removal and clean separation of concerns between data layer and advanced SRA features
 - **Quality Assurance**: All linting violations resolved and formatting standards enforced
 - **Testing Best Practices**: Comprehensive mocking patterns, edge case coverage, and realistic test data established

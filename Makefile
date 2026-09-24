@@ -21,10 +21,10 @@ env-dev:
 	conda run -n metaquest pip install -e ".[dev]"
 
 dev-install:
-	pip install -e ".[dev]"
+	python -m pip install -e ".[dev]"
 
 install:
-	pip install -e .
+	python -m pip install -e .
 
 test:
 	python -m pytest tests/ --cov=metaquest
