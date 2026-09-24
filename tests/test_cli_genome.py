@@ -423,6 +423,42 @@ class TestGenomeDownloadCommand:
         assert genomes["GCF_000006945.2"]["date"]
 
 
+    @patch("metaquest.cli.commands.genome.extract_and_organize")
+    @patch("metaquest.cli.commands.genome.download_genomes")
+    def test_force_redownload_keeps_an_earlier_manifest(self, mock_download, mock_extract, tmp_path, monkeypatch):
+        """genome_download writes no manifest of its own; a --force redownload of a genome that
+        genome_prepare recorded with a manifest keeps that manifest rather than blanking it."""
+        from metaquest.data.registry import load_registry, record_genome, save_registry
+
+        monkeypatch.chdir(tmp_path)
+        registry_file = tmp_path / "metaquest_registry.json"
+        fasta = tmp_path / "GCF_000006945.2.fna"
+        fasta.write_text(">c\nACGT\n")
+        seeded = load_registry(registry_file)
+        record_genome(seeded, "GCF_000006945.2", fasta, tmp_path / "genome_manifest.csv")
+        save_registry(seeded)
+
+        mock_download.return_value = Path("genomes/download.zip")
+        mock_extract.return_value = {"GCF_000006945.2": fasta}
+        args = argparse.Namespace(
+            accessions=["GCF_000006945.2"],
+            accession_file=None,
+            species=None,
+            genus=None,
+            output_dir=str(tmp_path),
+            representative_only=True,
+            assembly_level=None,
+            force=True,
+            dry_run=False,
+            registry=str(registry_file),
+        )
+        assert GenomeDownloadCommand().execute(args) == 0
+
+        genome = json.loads(registry_file.read_text())["genomes"]["GCF_000006945.2"]
+        assert genome["manifest"] == "genome_manifest.csv"
+        assert genome["fasta"] == "GCF_000006945.2.fna"
+
+
 class TestGenomePrepareCommand:
     """Tests for GenomePrepareCommand."""
 

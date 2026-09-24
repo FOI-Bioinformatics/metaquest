@@ -15,7 +15,7 @@ from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
 )
-from metaquest.data.registry import record_genome, registry_transaction
+from metaquest.data.registry import record_genome, registry_transaction, resolve_project_path
 
 
 def _genome_name(filename: str) -> str:
@@ -232,7 +232,11 @@ class GenomeDownloadCommand(BaseCommand):
 
             with registry_transaction(args.registry) as reg:
                 for genome_id, path in genome_paths.items():
-                    record_genome(reg, genome_id, path, "")
+                    # genome_download writes no manifest; keep one an earlier genome_prepare
+                    # recorded for this genome rather than blanking it on a --force redownload.
+                    earlier = (reg.genomes.get(genome_id) or {}).get("manifest")
+                    manifest = resolve_project_path(reg, earlier) if earlier else ""
+                    record_genome(reg, genome_id, path, manifest)
 
             return 0
         except MetaQuestError as e:
