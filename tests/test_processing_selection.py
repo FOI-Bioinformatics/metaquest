@@ -280,23 +280,26 @@ def test_inactive_run_filters_do_not_require_a_metadata_file(run_tables):
     assert select_accessions(cont, threshold=0.5, run_filters=RunFilters()) == ["SRR1", "SRR2", "SRR4"]
 
 
-def test_missing_run_column_warns_and_leaves_ranking_unchanged(tables, caplog):
+@pytest.mark.parametrize(
+    "filters,flag,column",
+    [
+        ({"max_run_size": 1000}, "--max-run-size", "Run_Size"),
+        ({"min_spots": 5}, "--min-spots", "Run_Total_Spots"),
+        ({"max_spots": 10}, "--max-spots", "Run_Total_Spots"),
+        ({"platform": "ILLUMINA"}, "--platform", "Platform"),
+    ],
+)
+def test_missing_run_column_is_an_error(tables, filters, flag, column):
     from metaquest.processing.selection import RunFilters
 
     cont, meta = tables
-    with caplog.at_level("WARNING"):
-        result = select_accessions(
-            cont,
-            threshold=0.0,
-            metadata_file=meta,
-            run_filters=RunFilters(max_run_size=1000, min_spots=5, max_spots=10, platform="ILLUMINA"),
-        )
-    assert result == ["SRR1", "SRR2", "SRR3"]
-    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warnings) == 4
-    for flag in ("--max-run-size", "--min-spots", "--max-spots", "--platform"):
-        assert any(flag in w and "branchwater_metadata.txt" in w for w in warnings)
-    assert all("Branchwater-derived tables carry none" in w for w in warnings)
+    expected = (
+        f"{flag} needs a {column} column; branchwater_metadata.txt has none. Run download_metadata for the "
+        "candidate list, or use the NCBI metadata table"
+    )
+    with pytest.raises(ProcessingError) as excinfo:
+        select_accessions(cont, threshold=0.0, metadata_file=meta, run_filters=RunFilters(**filters))
+    assert str(excinfo.value) == expected
 
 
 def test_run_filters_apply_before_top_n(run_tables):

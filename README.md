@@ -504,8 +504,10 @@ on the `Run_Size`, `Run_Total_Spots` and `Platform` columns of the NCBI metadata
 from `parse_metadata`, found automatically, or `--metadata-file`). They apply after the threshold,
 exclusions and the metadata filter and before `--top-n`. A run absent from the table or without a value in
 the filtered column is dropped, since the bound cannot be checked for it, and the log counts such runs.
-Branchwater-derived tables carry none of these columns; the filter is then skipped with a warning. The
-log also reports the summed size of the selected runs.
+A requested filter whose column is missing from the table is an error: `select_datasets` exits with
+status 1 without writing its output or recording a selection. Branchwater-derived tables carry none of
+these columns, so run `download_metadata` and `parse_metadata` for the candidate list first. The log also
+reports the summed size of the selected runs.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see

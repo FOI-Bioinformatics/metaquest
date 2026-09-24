@@ -384,6 +384,21 @@ def test_run_filter_without_any_metadata_table_returns_1(tmp_path, monkeypatch):
     assert rc == 1
 
 
+def test_run_filter_on_a_table_without_the_column_returns_1_and_writes_nothing(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    meta = tmp_path / "branchwater_metadata.txt"
+    meta.write_text("Run_ID\tSample_Scientific_Name\nSRR1\tWolbachia\nSRR2\tmetagenome\nSRR3\tmetagenome\n")
+    with caplog.at_level("ERROR"):
+        rc = SelectDatasetsCommand().execute(
+            _args(tmp_path, registry=None, metadata_file=str(meta), max_run_size=500_000_000)
+        )
+    assert rc == 1
+    assert "--max-run-size needs a Run_Size column; branchwater_metadata.txt has none" in caplog.text
+    assert not (tmp_path / "accessions.txt").exists()
+    assert not (tmp_path / "metaquest_registry.json").exists()
+
+
 def test_argparse_parses_run_filter_flags():
     from metaquest.cli.main import create_parser, register_all_commands
 

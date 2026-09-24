@@ -132,18 +132,31 @@ def _filter_by_metadata(
     return filtered
 
 
-def _has_column(metadata: pd.DataFrame, column: str, flag: str, table_name: str) -> bool:
-    """True when ``column`` exists; otherwise log a warning that ``flag`` is not applied."""
+def _require_column(metadata: pd.DataFrame, column: str, flag: str, table_name: str) -> None:
+    """Raise ProcessingError when ``column``, which the requested ``flag`` reads, is missing.
+
+    A requested filter that cannot be applied is an error rather than a warning: skipping it
+    would write a selection that silently ignores a bound the user asked for.
+    """
     if column in metadata.columns:
-        return True
-    logger.warning(
-        "%s has no %s column, so %s is not applied (Branchwater-derived tables carry none; "
-        "run download_metadata and parse_metadata for the NCBI metadata table)",
-        table_name,
-        column,
-        flag,
+        return
+    raise ProcessingError(
+        f"{flag} needs a {column} column; {table_name} has none. Run download_metadata for the "
+        "candidate list, or use the NCBI metadata table"
     )
-    return False
+
+
+def _check_run_columns(metadata: pd.DataFrame, filters: RunFilters, table_name: str) -> None:
+    """Check every column the active run filters read, before any filter is applied."""
+    requested = [
+        (filters.max_run_size, RUN_SIZE_COLUMN, "--max-run-size"),
+        (filters.min_spots, SPOTS_COLUMN, "--min-spots"),
+        (filters.max_spots, SPOTS_COLUMN, "--max-spots"),
+        (filters.platform, PLATFORM_COLUMN, "--platform"),
+    ]
+    for value, column, flag in requested:
+        if value is not None:
+            _require_column(metadata, column, flag, table_name)
 
 
 def _apply_run_test(
@@ -174,21 +187,26 @@ def _apply_run_test(
 
 
 def _filter_by_run(ranked: List[Entry], metadata: pd.DataFrame, filters: RunFilters, table_name: str) -> List[Entry]:
-    """Apply the run size, spot count and platform filters, in that order."""
-    if filters.max_run_size is not None and _has_column(metadata, RUN_SIZE_COLUMN, "--max-run-size", table_name):
+    """Apply the run size, spot count and platform filters, in that order.
+
+    Raises:
+        ProcessingError: If a requested filter's column is missing from the metadata table.
+    """
+    _check_run_columns(metadata, filters, table_name)
+    if filters.max_run_size is not None:
         sizes = pd.to_numeric(metadata[RUN_SIZE_COLUMN], errors="coerce")
         ceiling = filters.max_run_size
         ranked = _apply_run_test(
             ranked, sizes, lambda v: v <= ceiling, RUN_SIZE_COLUMN, f"--max-run-size > {ceiling} bytes"
         )
     spots = pd.to_numeric(metadata[SPOTS_COLUMN], errors="coerce") if SPOTS_COLUMN in metadata.columns else None
-    if filters.min_spots is not None and _has_column(metadata, SPOTS_COLUMN, "--min-spots", table_name):
+    if filters.min_spots is not None:
         floor = filters.min_spots
         ranked = _apply_run_test(ranked, spots, lambda v: v >= floor, SPOTS_COLUMN, f"--min-spots < {floor}")
-    if filters.max_spots is not None and _has_column(metadata, SPOTS_COLUMN, "--max-spots", table_name):
+    if filters.max_spots is not None:
         cap = filters.max_spots
         ranked = _apply_run_test(ranked, spots, lambda v: v <= cap, SPOTS_COLUMN, f"--max-spots > {cap}")
-    if filters.platform is not None and _has_column(metadata, PLATFORM_COLUMN, "--platform", table_name):
+    if filters.platform is not None:
         wanted = filters.platform.strip().lower()
         platforms = metadata[PLATFORM_COLUMN].map(lambda v: v.strip().lower() if isinstance(v, str) else v)
         ranked = _apply_run_test(
@@ -264,13 +282,14 @@ def select_accessions_ranked(
             ``Run_Size``, ``Run_Total_Spots`` and ``Platform`` columns of ``metadata_file``.
             They apply after the metadata equality filter and before ``top_n``. A run absent
             from the table or without a value is dropped by an active filter on that column;
-            a column missing from the table logs a warning and that filter is skipped.
+            a column missing from the table is an error.
 
     Raises:
         DataAccessError: If a table is missing.
         ProcessingError: If a column is unknown, ``genome_id``/``genome_ids`` are both
             given, ``require`` is invalid, the metadata filter is incomplete, run filters are
-            given without a metadata file, or ``min_spots`` exceeds ``max_spots``.
+            given without a metadata file, ``min_spots`` exceeds ``max_spots``, or a
+            requested run filter's column is missing from the metadata table.
     """
     run_filters = run_filters or RunFilters()
     _validate_arguments(genome_id, genome_ids, require, top_n, run_filters)

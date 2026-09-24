@@ -92,8 +92,9 @@ name a scratch file.
 `--max-run-size BYTES` (suffixes K, M, G, T as powers of 10), `--min-spots N`, `--max-spots N` and
 `--platform NAME` filter on `Run_Size`, `Run_Total_Spots` and `Platform` in the NCBI metadata table,
 after the metadata filter and before `--top-n`. A run absent from the table or without a value is dropped
-and counted in the log; a table without the column (every Branchwater-derived table) skips that filter
-with a warning. The registry records these four values with the selection.
+and counted in the log. A table without the column a requested filter reads (every Branchwater-derived
+table) is an error: the command exits with status 1, writes no output and records nothing. The registry
+records these four values with the selection.
 
 ## 3. Download
 

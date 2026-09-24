@@ -64,7 +64,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 - `select_datasets` gained `--max-run-size`, `--min-spots`, and `--max-spots` (with a K/M/G/T
   suffix on run size) and `--platform` filters, and logs the excluded count and total volume of
-  what a filtered selection kept.
+  what a filtered selection kept. A requested filter whose column is missing from the metadata table
+  (as in a Branchwater-derived table) is an error, and nothing is written or recorded.
 - `select_datasets --no-record` skips writing the selection into the project registry, and
   `status --next` prints a runnable reselect command that reproduces the metadata filter, top-N,
   source table, and the new size/spot/platform filters, shell-quoted where needed.
