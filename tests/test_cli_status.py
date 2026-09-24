@@ -377,6 +377,42 @@ class TestStatusWithRegistry:
             "--threshold 0.3 --skip-excluded --output sel_noskip.txt"
         )
 
+    def test_reselect_suggestion_omits_malformed_numbers_and_require(self, tmp_path, monkeypatch):
+        """Values read back from a hand-edited registry are coerced (threshold to float, top-N
+        to a positive int, require to any/all); a value that does not coerce is omitted rather
+        than pasted into the command unquoted."""
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "genome_ids": ["GCF_A", "GCF_B"],
+                    "require": "all; touch pwned",
+                    "threshold": "0.5; touch pwned",
+                    "top_n": "3 && touch pwned",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        reselect = next(s["command"] for s in steps if s["command"].startswith("metaquest select_datasets"))
+        assert "pwned" not in reselect
+        assert reselect == (
+            "metaquest select_datasets --genome-ids GCF_A GCF_B --skip-excluded --output sel_noskip.txt"
+        )
+
+    def test_reselect_suggestion_coerces_numeric_strings(self):
+        command = StatusCommand._reselect_command(
+            {"column": "GCF_A", "threshold": "0.25", "top_n": "7", "require": "any"}, "out.txt"
+        )
+        assert command == (
+            "metaquest select_datasets --genome-id GCF_A --threshold 0.25 --skip-excluded --output out.txt --top-n 7"
+        )
+
     def test_reselect_suggestion_reproduces_metadata_filter_top_n_and_table(self, tmp_path, monkeypatch):
         """A selection made with a metadata filter, a top-N cap and a non-default containment
         table must reselect the same way: dropping any of those would reproduce a different,

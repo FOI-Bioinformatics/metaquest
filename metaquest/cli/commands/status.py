@@ -9,6 +9,7 @@ exists yet, the report is reconstructed in memory from what is on disk.
 
 import argparse
 import json
+import math
 import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,6 +42,26 @@ from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import read_sidecar
+
+
+def _as_float(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or None when it is not a number."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _as_positive_int(value: Any) -> Optional[int]:
+    """``value`` as a positive int, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 class StatusCommand(BaseCommand):
@@ -256,20 +277,25 @@ class StatusCommand(BaseCommand):
         that came from the registry rather than this method's own literal flag text is passed
         through ``shlex.quote``, so a value containing a space or shell metacharacter (a
         metadata value like "New York", say) still produces a command that is safe to paste
-        into a shell and run as-is; a threshold or top-N count needs no quoting, since both are
-        numbers.
+        into a shell and run as-is. The threshold is coerced with ``float``, the top-N count
+        with ``int`` (positive only) and ``require`` must be ``any`` or ``all``; a recorded value
+        that fails that check (a hand-edited registry, say) leaves its flag out rather than
+        being pasted into the command.
         """
-        threshold = criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD)
+        threshold = _as_float(criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD))
+        threshold_part = f" --threshold {threshold}" if threshold is not None else ""
         genome_ids = criteria.get("genome_ids")
         if genome_ids:
             require = criteria.get("require", "any")
             quoted_ids = " ".join(shlex.quote(str(g)) for g in genome_ids)
-            genome_part = f"--genome-ids {quoted_ids} --require {require}"
+            genome_part = f"--genome-ids {quoted_ids}"
+            if require in ("any", "all"):
+                genome_part += f" --require {require}"
         else:
             column = criteria.get("column") or "max_containment"
             genome_part = f"--genome-id {shlex.quote(str(column))}"
         command = (
-            f"metaquest select_datasets {genome_part} --threshold {threshold} "
+            f"metaquest select_datasets {genome_part}{threshold_part} "
             f"--skip-excluded --output {shlex.quote(str(output))}"
         )
 
@@ -280,7 +306,7 @@ class StatusCommand(BaseCommand):
                 f" --metadata-column {shlex.quote(str(metadata_column))}"
                 f" --metadata-value {shlex.quote(str(metadata_value))}"
             )
-        top_n = criteria.get("top_n")
+        top_n = _as_positive_int(criteria.get("top_n"))
         if top_n:
             command += f" --top-n {top_n}"
         table = criteria.get("table")
