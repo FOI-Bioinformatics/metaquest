@@ -328,7 +328,7 @@ def test_min_spots_greater_than_max_spots_raises(run_tables):
     from metaquest.processing.selection import RunFilters
 
     cont, meta = run_tables
-    with pytest.raises(ProcessingError, match="min_spots"):
+    with pytest.raises(ProcessingError, match=r"--min-spots \(10\) is greater than --max-spots \(5\)"):
         select_accessions(cont, metadata_file=meta, run_filters=RunFilters(min_spots=10, max_spots=5))
 
 
@@ -342,3 +342,27 @@ def test_selected_volume_is_logged_after_top_n(run_tables, caplog):
         )
     assert result == ["SRR1", "SRR4"]
     assert "Selected volume: 2.00 GB across 2 run(s) (1 with unknown size)" in caplog.text
+
+
+def test_repeated_run_id_rows_warn_and_use_the_first_row(tmp_path, caplog):
+    from metaquest.processing.selection import RunFilters
+
+    cont = tmp_path / "parsed_containment.txt"
+    cont.write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\n")
+    meta = tmp_path / "metadata_table.txt"
+    meta.write_text(
+        "Run_ID\tRun_Size\tPlatform\n"
+        "SRR1\t100\tILLUMINA\n"
+        "SRR1\t900\tPACBIO_SMRT\n"
+        " SRR2\t200\tILLUMINA\n"
+        "SRR2\t300\tILLUMINA\n"
+    )
+    with caplog.at_level("INFO"):
+        result = select_accessions(
+            cont, threshold=0.0, metadata_file=meta, run_filters=RunFilters(max_run_size=150, platform="ILLUMINA")
+        )
+    # The first SRR1 row (100 bytes, ILLUMINA) is used, not the second (900 bytes, PACBIO_SMRT).
+    assert result == ["SRR1"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == ["2 repeated Run_ID row(s) in metadata_table.txt; the first row of each is used"]
+    assert "Selected volume: 0.00 GB across 1 run(s) (0 with unknown size)" in caplog.text

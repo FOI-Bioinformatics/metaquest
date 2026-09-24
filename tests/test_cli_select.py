@@ -424,3 +424,25 @@ def test_argparse_rejects_bad_run_filter_values(argv):
     parser = create_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["select_datasets", *argv])
+
+
+def test_min_spots_above_max_spots_fails_before_looking_for_a_metadata_table(tmp_path, monkeypatch, caplog):
+    """No metadata table exists here, so the spot bound error must come first to be seen at all."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    with caplog.at_level("ERROR"):
+        rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=None, min_spots=10, max_spots=5))
+    assert rc == 1
+    assert "--min-spots (10) is greater than --max-spots (5)" in caplog.text
+    assert "No metadata table found" not in caplog.text
+    assert not (tmp_path / "accessions.txt").exists()
+
+
+@pytest.mark.parametrize("value", ["", " ", "\t"])
+def test_argparse_rejects_blank_platform(value):
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["select_datasets", "--platform", value])

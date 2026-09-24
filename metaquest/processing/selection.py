@@ -59,6 +59,11 @@ class RunFilters:
         """True when at least one filter is set."""
         return any(v is not None for v in (self.max_run_size, self.min_spots, self.max_spots, self.platform))
 
+    def validate(self) -> None:
+        """Raise ProcessingError when the spot bounds cannot both hold (the selection would be empty)."""
+        if self.min_spots is not None and self.max_spots is not None and self.min_spots > self.max_spots:
+            raise ProcessingError(f"--min-spots ({self.min_spots}) is greater than --max-spots ({self.max_spots})")
+
 
 def _check_columns_exist(containment: pd.DataFrame, columns: List[str], table_name: str) -> None:
     missing = [col for col in columns if col not in containment.columns]
@@ -92,14 +97,20 @@ def _load_metadata(metadata_file: Union[str, Path]) -> pd.DataFrame:
     """Read a metadata table keyed by Run_ID in its first column, all values as strings.
 
     Run IDs are stripped of surrounding whitespace and only the first row of a repeated Run ID
-    is kept, so every lookup returns a single value.
+    is kept, so every lookup returns a single value; the number of rows left out is logged as a
+    warning.
     """
     meta_path = Path(metadata_file)
     if not meta_path.exists():
         raise DataAccessError(f"Metadata table not found: {meta_path}")
     metadata = pd.read_csv(meta_path, sep="\t", index_col=0, dtype=str)
     metadata.index = pd.Index([str(idx).strip() for idx in metadata.index])
-    return metadata[~metadata.index.duplicated(keep="first")]
+    repeated = metadata.index.duplicated(keep="first")
+    if repeated.any():
+        logger.warning(
+            "%d repeated Run_ID row(s) in %s; the first row of each is used", int(repeated.sum()), meta_path.name
+        )
+    return metadata[~repeated]
 
 
 def _filter_by_metadata(
@@ -170,12 +181,11 @@ def _filter_by_run(ranked: List[Entry], metadata: pd.DataFrame, filters: RunFilt
         ranked = _apply_run_test(
             ranked, sizes, lambda v: v <= ceiling, RUN_SIZE_COLUMN, f"--max-run-size > {ceiling} bytes"
         )
+    spots = pd.to_numeric(metadata[SPOTS_COLUMN], errors="coerce") if SPOTS_COLUMN in metadata.columns else None
     if filters.min_spots is not None and _has_column(metadata, SPOTS_COLUMN, "--min-spots", table_name):
-        spots = pd.to_numeric(metadata[SPOTS_COLUMN], errors="coerce")
         floor = filters.min_spots
         ranked = _apply_run_test(ranked, spots, lambda v: v >= floor, SPOTS_COLUMN, f"--min-spots < {floor}")
     if filters.max_spots is not None and _has_column(metadata, SPOTS_COLUMN, "--max-spots", table_name):
-        spots = pd.to_numeric(metadata[SPOTS_COLUMN], errors="coerce")
         cap = filters.max_spots
         ranked = _apply_run_test(ranked, spots, lambda v: v <= cap, SPOTS_COLUMN, f"--max-spots > {cap}")
     if filters.platform is not None and _has_column(metadata, PLATFORM_COLUMN, "--platform", table_name):
@@ -216,9 +226,7 @@ def _validate_arguments(
         raise ProcessingError(f"Unknown require '{require}'. Choose one of: any, all")
     if top_n is not None and top_n < 1:
         raise ProcessingError("--top-n must be a positive integer")
-    min_spots, max_spots = run_filters.min_spots, run_filters.max_spots
-    if min_spots is not None and max_spots is not None and min_spots > max_spots:
-        raise ProcessingError(f"min_spots ({min_spots}) is greater than max_spots ({max_spots})")
+    run_filters.validate()
 
 
 def select_accessions_ranked(

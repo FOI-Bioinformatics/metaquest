@@ -41,6 +41,13 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
+def _non_blank(value: str) -> str:
+    """argparse type for --platform: rejects an empty or whitespace-only value, which would match no run."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError("--platform needs a platform name such as ILLUMINA, got a blank value")
+    return value
+
+
 def _recorded_selection_files(registry: Registry) -> set:
     """Resolved paths of every file a recorded selection names.
 
@@ -133,6 +140,7 @@ class SelectDatasetsCommand(BaseCommand):
         )
         parser.add_argument(
             "--platform",
+            type=_non_blank,
             default=None,
             metavar="NAME",
             help="Keep only runs from this sequencing platform, e.g. ILLUMINA (case-insensitive); "
@@ -168,6 +176,9 @@ class SelectDatasetsCommand(BaseCommand):
                 max_spots=args.max_spots,
                 platform=args.platform,
             )
+            # Checked before the metadata table is looked for, so a project without one still sees
+            # that the spot bounds cannot both hold rather than a missing-table error.
+            run_filters.validate()
             metadata_file = None
             if args.metadata_column or run_filters.active():
                 metadata_file = resolve_metadata_table(args.metadata_file)
