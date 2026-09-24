@@ -55,7 +55,9 @@ def ensure_project_identity(registry: Registry) -> Dict[str, Any]:
         return project
 
     cwd = Path.cwd()
+    # Keys this function does not own (e.g. "exports" from results_table) are kept.
     project = {
+        **project,
         "id": str(uuid.uuid4()),
         "name": project.get("name") or cwd.name,
         "path": project.get("path") or str(cwd.resolve()),

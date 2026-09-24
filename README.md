@@ -10,9 +10,11 @@
 - **Interactive Visualizations**: Create dynamic plots (PCA, heatmaps, diversity comparisons)
 - **Taxonomic Validation**: Validate species names against NCBI taxonomy database
 - **Plugin Architecture**: Extensible format handlers and visualization plugins
-- **Robust Implementation**: Type hints, comprehensive testing (1280 tests, 92% coverage), numerical stability
+- **Robust Implementation**: Type hints, comprehensive test coverage, numerical stability
 
 ## Installation
+
+Requires Python 3.12 or newer.
 
 ### Quick Start (Recommended)
 ```bash
@@ -27,6 +29,24 @@ make dev-install  # Installs with all development dependencies
 pip install -r requirements.txt
 pip install .
 ```
+
+### Development environment
+
+The conda environment pins Python 3.12, matching `requires-python` in `pyproject.toml`:
+
+```bash
+make env            # conda env create -f environment.yml (or update --prune if it exists)
+make env-dev        # pip install -e ".[dev]" into the "metaquest" conda environment
+conda activate metaquest
+```
+
+`make env-dev` runs `conda run -n metaquest pip install -e ".[dev]"`, so it always installs into
+the environment named `metaquest` regardless of what is currently active; `conda activate
+metaquest` is only needed afterward, to use the `metaquest` console script and the interpreter
+day to day. The package should not stay installed (editable or otherwise) in another
+interpreter's site-packages at the same time; `pip uninstall metaquest` from any other
+environment before relying on the `metaquest` console script, so it resolves to the 3.12
+environment's copy rather than a stale one.
 
 ### External tools
 
@@ -53,7 +73,7 @@ Map plots need the optional extra: `pip install 'metaquest[maps]'`.
 ### Development Commands
 ```bash
 make help           # Show all available commands
-make test          # Run tests with coverage (1280 tests passing, 92% coverage)
+make test          # Run tests with coverage
 make lint          # Run code quality checks
 make check         # Full quality validation
 make clean         # Clean build artifacts
@@ -269,7 +289,12 @@ metaquest status --next                      # which commands would advance the 
 metaquest status --reconcile                 # record files removed by hand, register untracked work
 metaquest status --export-tsv registry       # registry_datasets.tsv and registry_extractions.tsv
 metaquest blacklist --add SRR2517418 --reason "16S amplicon mislabelled as WGS"
+metaquest results_table --output results.tsv
 ```
+
+`results_table` writes one row per screened accession and genome, joining containment, selection,
+exclusion, download, run size, mapped reads, reference coverage and assembly statistics. It records the
+export in the project registry when one exists, and does not create a registry when there is none.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
 and threshold; pass `--force` to redo them.
@@ -283,7 +308,7 @@ match CSVs always keep every hit.
 `status --next` lists a runnable `download_sra` command for accessions ready to download; for
 accessions still selected under a `select_datasets --no-skip-excluded` run, it instead prints a
 `select_datasets ... --skip-excluded` command (reproducing that run's genome, threshold, metadata and
-top-N criteria) so rerunning it drops the excluded accessions from the selection file first.
+top-N and run filter criteria) so rerunning it drops the excluded accessions from the selection file first.
 
 Commit `metaquest_registry.json` with your project if you want the decisions to travel with the
 results.
@@ -431,14 +456,16 @@ concurrent runs sharing one output folder keep separate scratch space. A macOS E
 stray `._*` AppleDouble sidecar files are ignored wherever MetaQuest lists a folder's contents, so they
 never look like real FASTQ or genome files.
 
-Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally
-discards records below a mapping-quality threshold (default 0, keep every mapped record). A value of
-20 is reasonable for a close relative of the target genome, but a divergent strain can genuinely map
-with a low MAPQ, so raising the threshold can discard real matches. `--assembly-preset` selects
-megahit's `--presets` value: `meta-sensitive` (the default, suited to these small targeted read sets),
-`meta-large`, or `default` (no `--presets` flag). Unless `--no-coverage`, the extracted reads are mapped
-back onto the assembled contigs to report a mapping rate and estimated mean depth alongside the other
-assembly statistics.
+Mapped reads always drop unmapped, secondary and supplementary alignments; `--min-mapq` additionally discards records
+below a mapping-quality threshold (default 0, keep every mapped record). A value of 20 is reasonable for a close
+relative of the target genome, but a divergent strain can genuinely map with a low MAPQ, so raising the threshold can
+discard real matches. For each sample with kept reads, `samtools coverage` on the kept alignments (it also skips
+duplicate and QC-fail reads by default) writes `targeted/<ACC>/<genome>_coverage.tsv`, and the registry records the
+breadth of the reference covered at 1x or more and the length-weighted mean depth (a failure of this step is logged as
+a warning and leaves the extracted reads in place). `--assembly-preset` selects megahit's `--presets` value:
+`meta-sensitive` (the default, suited to these small targeted read sets), `meta-large`, or `default` (no `--presets`
+flag). Unless `--no-coverage`, the extracted reads are mapped back onto the assembled contigs to report a mapping rate
+and estimated mean depth alongside the other assembly statistics.
 
 A sample already extracted or assembled with the same genome FASTA, preset, and threshold is skipped
 on a rerun, including samples that mapped zero reads; an assembly folder with no contigs is reported
@@ -455,6 +482,8 @@ metaquest select_datasets --genome-id GCF_000008025.1 --threshold 0.5 \
 metaquest select_datasets --threshold 0.9 --top-n 20 --output accessions.txt
 metaquest select_datasets --genome-ids GCF_000008025.1 GCF_000006945.2 --require all --threshold 0.5 \
     --output accessions.txt
+metaquest select_datasets --threshold 0.5 --max-run-size 2G --min-spots 1000000 --platform ILLUMINA \
+    --output accessions.txt
 ```
 
 `--parsed-containment` names the input table (default `parsed_containment.txt`). `--genome-id` ranks on
@@ -463,13 +492,24 @@ together instead, with `--require any`/`all` deciding whether one or every liste
 threshold. `--top-n N` keeps only the N accessions with the highest containment after every other filter
 is applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
 is given), and `--skip-downloaded` additionally drops accessions the registry already records as
-downloaded, useful when re-running selection on an expanded search. `select_datasets` has no filter on
-dataset size; use `sra_info` beforehand (see "Downloading reads" below) to see sizes. `--no-record`
+downloaded, useful when re-running selection on an expanded search. `--no-record`
 still writes the output file and logs the counts, but does not record the selection in the registry, so
 `status` is left unchanged; use it for an exploratory run that should not redefine the target list.
 Because `status --next` points `download_sra` at the recorded selection's file, `--no-record` refuses to
 overwrite a file that a recorded selection names (including the default `accessions.txt`); give it an
 `--output` that names a scratch file instead.
+
+`--max-run-size BYTES` (a byte count; suffixes K, M, G and T are powers of 10, so `500M` is 500000000
+bytes), `--min-spots N`, `--max-spots N` and `--platform NAME` (case-insensitive, e.g. `ILLUMINA`) filter
+on the `Run_Size`, `Run_Total_Spots` and `Platform` columns of the NCBI metadata table (`metadata_table.txt`
+from `parse_metadata`, found automatically, or `--metadata-file`). They apply after the threshold,
+exclusions and the metadata filter and before `--top-n`. A run absent from the table or without a value in
+the filtered column is dropped, since the bound cannot be checked for it, and the log counts such runs.
+A requested filter whose column is missing from the table is an error: `select_datasets` exits with
+status 1 without writing its output or recording a selection. Branchwater-derived tables carry none of
+these columns, so run `download_metadata` and `parse_metadata` for the candidate list first. When the column
+exists but a filter drops every remaining candidate because none has a value, a warning gives the same
+hint. The log also reports the summed size of the selected runs.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see
@@ -745,25 +785,26 @@ For comprehensive documentation including advanced features and technical detail
 MetaQuest follows modern Python development practices with comprehensive testing and quality assurance.
 
 ### Current Status
-- **Test Coverage**: 88%+ overall (from 53% baseline, 199 new tests added)
-- **CLI Commands**: 100% coverage, including intelligent SRA commands at 86%
-- **Data Layer**: 93-99% coverage for all core modules (sra_metadata, taxonomy)
-- **Core Processing**: 92-99% coverage with comprehensive edge case testing
-- **SRA Advanced Features**: 95% coverage for reporting, quality profiling, and analytics
-- **Visualization Plugins**: Bar chart plugin at 99% coverage
-- **Integration Tests**: 12 end-to-end workflow tests
-- **Performance Benchmarks**: 25 tests with pytest-benchmark for regression detection
+- **Test Coverage**: Comprehensive coverage across core functionality
+- **CLI Commands**: Fully covered, including the intelligent SRA commands
+- **Data Layer**: Thoroughly covered across core modules (sra_metadata, taxonomy)
+- **Core Processing**: Comprehensive coverage with edge case testing
+- **SRA Advanced Features**: Well covered for reporting, quality profiling, and analytics
+- **Visualization Plugins**: Bar chart plugin thoroughly covered
+- **Integration Tests**: End-to-end workflow tests
+- **Performance Benchmarks**: Benchmarked tests with pytest-benchmark for regression detection
 - **Code Quality**: All linting checks passing
 
-### Recent Enhancements (September-October 2025)
+### Recent Enhancements
 Significant improvements have been implemented across the codebase:
 
 - **Intelligent SRA Package**: Complete implementation of next-generation SRA capabilities including intelligent downloads with resume functionality, comprehensive quality profiling, and interactive dashboard generation
-- **Major Test Coverage Achievement**: Improved from 53% to 88%+ with 199 new comprehensive tests across 8 files
+- **Major Test Coverage Achievement**: Substantial coverage improvement with a large batch of comprehensive
+  tests added across multiple files
   - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy)
-  - Integration test suite with 12 end-to-end workflow tests
-  - Performance benchmarks with 25 tests using pytest-benchmark
-  - All modules now at 86-99% coverage
+  - Integration test suite with end-to-end workflow tests
+  - Performance benchmarks using pytest-benchmark
+  - Critical modules now thoroughly covered
 - **Architecture Refinement**: Orphan code removal and clean separation of concerns between data layer and advanced SRA features
 - **Quality Assurance**: All linting violations resolved and formatting standards enforced
 - **Testing Best Practices**: Comprehensive mocking patterns, edge case coverage, and realistic test data established
@@ -783,7 +824,7 @@ make help
 ```
 
 ### Testing Structure
-- **Comprehensive Test Suite**: 1280 tests covering CLI, data processing, visualization, and advanced SRA features
+- **Comprehensive Test Suite**: covers CLI, data processing, visualization, and advanced SRA features
   - Unit tests: 170+ tests per critical module with extended test files
   - Integration tests: 12 end-to-end workflow tests (`tests/test_integration_simple.py`)
   - Performance tests: 25 benchmarked tests (`tests/test_performance_simple.py`)
@@ -799,6 +840,13 @@ make help
 - **Plugin System**: Extensible format handlers and visualizers  
 - **Command Registry**: Modular CLI command architecture
 - **Modern Packaging**: Uses `pyproject.toml` with backward compatibility
+
+## Releases
+
+Pushing a tag of the form `vX.Y.Z` (for example `v0.4.0`) triggers the release workflow
+(`.github/workflows/release.yml`), which builds the sdist and wheel, checks them with `twine` and
+`check-wheel-contents`, and publishes a GitHub release with the built packages attached. See
+[CHANGELOG.md](CHANGELOG.md) for the changes in each release.
 
 ## Contributing
 

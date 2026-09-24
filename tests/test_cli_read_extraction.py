@@ -1048,6 +1048,31 @@ class TestExtractTargetReadsCommand:
         assert data["datasets"]["SRR1"]["extractions"]["GCF_1"]["mapped_total"] == 100
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_records_reference_coverage(self, mock_run):
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            rc = cmd.execute(
+                _args(
+                    tmp,
+                    parsed_containment=str(table),
+                    genome_fasta=str(genome),
+                    fastq_folder=str(root / "fastq"),
+                    output_folder=str(root / "targeted"),
+                    threshold=0.5,
+                    registry=str(registry_file),
+                )
+            )
+            assert rc == 0
+            data = json.loads(registry_file.read_text())
+            entry = data["datasets"]["SRR1"]["extractions"]["GCF_1"]
+            assert entry["breadth"] == 0.875 and entry["mean_depth"] == 8.0
+            assert entry["coverage_tsv"] == "targeted/SRR1/GCF_1_coverage.tsv"
+            assert (root / entry["coverage_tsv"]).exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_assembly_preset_recorded_and_passed_to_megahit(self, mock_run):
         mock_run.side_effect = _fake_tools({})
         cmd = ExtractTargetReadsCommand()

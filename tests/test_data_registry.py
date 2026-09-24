@@ -414,6 +414,21 @@ class TestRecords:
         reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {})
         assert r.datasets["SRR1"]["extractions"]["GCF_1"]["mapped_total"] is None
 
+    def test_record_extraction_stores_reference_coverage(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        tsv = tmp_path / "targeted" / "SRR1" / "GCF_1_coverage.tsv"
+        coverage = {"breadth": 0.875, "mean_depth": 8.0, "covered_bases": 350, "reference_bp": 400, "coverage_tsv": tsv}
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {}, coverage=coverage)
+        entry = r.datasets["SRR1"]["extractions"]["GCF_1"]
+        assert entry["breadth"] == 0.875 and entry["mean_depth"] == 8.0
+        assert entry["coverage_tsv"] == "targeted/SRR1/GCF_1_coverage.tsv"
+
+    def test_record_extraction_coverage_defaults_to_none(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 80, False, {})
+        entry = r.datasets["SRR1"]["extractions"]["GCF_1"]
+        assert entry["breadth"] is None and entry["mean_depth"] is None and entry["coverage_tsv"] is None
+
     def test_record_assembly_passes_the_whole_stats_dict_through(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_extraction(r, "SRR1", "GCF_1", [], 100, False, {})
@@ -804,6 +819,44 @@ class TestScanners:
         assert resolved == (paths.fastq / "SRR1" / "SRR1_1.fastq").resolve()
         assert resolved.exists()
 
+    def test_bootstrap_fills_coverage_from_the_coverage_table_on_disk(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        paths = _project(tmp_path)
+        paths.genomes.mkdir()
+        (paths.genomes / "GCF_1.fna").write_text(">c\nACGT\n")
+        _fastq(paths.targeted / "SRR1" / "GCF_1_1.fastq.gz", gz=True)
+        (paths.targeted / "SRR1" / "GCF_1_coverage.tsv").write_text(
+            "#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeandepth\tmeanbaseq\tmeanmapq\n"
+            "chr\t1\t300\t10\t240\t80.0\t4.0\t30\t60\n"
+            "plasmid\t1\t100\t2\t10\t10.0\t1.0\t30\t60\n"
+        )
+        _fastq(paths.targeted / "SRR2" / "GCF_1_1.fastq.gz", gz=True)
+
+        r = reg.bootstrap_from_disk(paths)
+
+        ext = reg.extraction_record(r, "SRR1", "GCF_1")
+        assert ext["breadth"] == 0.625 and ext["mean_depth"] == 3.25
+        assert ext["coverage_tsv"] == "targeted/SRR1/GCF_1_coverage.tsv"
+        assert ext["inferred"] is True
+        without = reg.extraction_record(r, "SRR2", "GCF_1")
+        assert without["breadth"] is None and without["mean_depth"] is None and without["coverage_tsv"] is None
+
+    def test_bootstrap_with_an_unreadable_coverage_table_records_no_coverage(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.chdir(tmp_path)
+        paths = _project(tmp_path)
+        paths.genomes.mkdir()
+        (paths.genomes / "GCF_1.fna").write_text(">c\nACGT\n")
+        _fastq(paths.targeted / "SRR1" / "GCF_1_1.fastq.gz", gz=True)
+        (paths.targeted / "SRR1" / "GCF_1_coverage.tsv").write_text("not\ta coverage table\n")
+
+        with caplog.at_level("WARNING"):
+            r = reg.bootstrap_from_disk(paths)
+
+        ext = reg.extraction_record(r, "SRR1", "GCF_1")
+        assert ext["breadth"] is None and ext["mean_depth"] is None and ext["coverage_tsv"] is None
+        assert ext["mapped_reads"] == 2
+        assert "GCF_1_coverage.tsv" in caplog.text
+
     def test_bootstrap_from_disk_ignores_transient_temp_folder(self, tmp_path):
         """A <acc>_temp folder must never be recorded as a downloaded accession."""
         paths = _project(tmp_path)
@@ -822,6 +875,14 @@ class TestScanners:
         datasets, extractions = reg.to_dataframes(r)
         assert list(datasets.index) == ["SRR1"] and bool(datasets.loc["SRR1", "selected"]) is True
         assert extractions.loc[0, "genome_id"] == "GCF_1" and int(extractions.loc[0, "mapped_reads"]) == 7
+        assert "breadth" in extractions.columns and "mean_depth" in extractions.columns
+
+    def test_to_dataframes_carries_breadth_and_mean_depth(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        coverage = {"breadth": 0.5, "mean_depth": 3.25, "coverage_tsv": tmp_path / "c.tsv"}
+        reg.record_extraction(r, "SRR1", "GCF_1", [], 7, False, {}, coverage=coverage)
+        _, extractions = reg.to_dataframes(r)
+        assert extractions.loc[0, "breadth"] == 0.5 and extractions.loc[0, "mean_depth"] == 3.25
 
 
 class TestStoreLinksInTheRegistry:
@@ -985,3 +1046,22 @@ class TestScannersIgnoreHiddenEntries:
 
         assert "GCF_1" in ids
         assert not any(genome_id.startswith(".") for genome_id in ids)
+
+
+class TestRecordExport:
+    def test_record_export_under_project_exports(self, tmp_path):
+        path = tmp_path / "metaquest_registry.json"
+        r = reg.load_registry(path)
+        r.project = {"id": "p1", "name": "demo"}
+        reg.record_export(r, "results_table", tmp_path / "out" / "results.tsv", {"rows": 3})
+        reg.save_registry(r)
+        loaded = reg.load_registry(path)
+        export = loaded.project["exports"]["results_table"]
+        assert export["output"] == "out/results.tsv"
+        assert export["summary"] == {"rows": 3}
+        assert export["date"]
+        assert loaded.project["id"] == "p1"
+
+    def test_to_int_or_none_is_public(self):
+        assert reg.to_int_or_none("12") == 12
+        assert reg.to_int_or_none("1.2G") is None

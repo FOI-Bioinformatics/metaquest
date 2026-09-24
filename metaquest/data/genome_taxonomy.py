@@ -8,7 +8,7 @@ annotating containment data with taxonomy information.
 import csv
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
 import requests
@@ -110,7 +110,7 @@ def _lookup_genome_taxonomy_gtdb(accession: str) -> Optional[TaxonomyInfo]:
                 return info
 
         # Fallback: search endpoint
-        params = {"search": accession, "page": 1, "itemsPerPage": 1}
+        params: Dict[str, Union[str, int]] = {"search": accession, "page": 1, "itemsPerPage": 1}
         response = requests.get(search_url, params=params, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             rows = _extract_search_rows(response.json())

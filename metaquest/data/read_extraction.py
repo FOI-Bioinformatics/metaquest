@@ -57,6 +57,10 @@ class ExtractionResult:
     skipped: bool = False
     # Mapped records before the secondary/supplementary/MAPQ filter (0 for a skipped result).
     mapped_total: int = 0
+    # Coverage of the reference genome by the kept alignments (``breadth``, ``mean_depth``,
+    # ``covered_bases``, ``reference_bp``, ``coverage_tsv``); None when nothing mapped or
+    # ``samtools coverage`` could not be run.
+    coverage: Optional[Dict[str, Any]] = None
 
 
 def _notify_result(
@@ -406,9 +410,11 @@ def _map_and_extract(
     single-end, rather than relying on minimap2's own after-the-fact stderr warning.
 
     Returns the FASTQ files written (two for paired input, one otherwise, none when
-    nothing mapped) together with the mapped-record counts. The SAM alignment(s) live under
-    ``sam_dir`` (or ``out_dir`` when not given) and are removed once the filtered BAM exists,
-    unless ``keep_sam``; the BAM is always removed once the FASTQ export is written.
+    nothing mapped) together with the mapped-record counts and the reference coverage
+    (``reference_coverage``; its table is written beside the FASTQ). The SAM alignment(s) live
+    under ``sam_dir`` (or ``out_dir`` when not given) and are removed once the filtered BAM
+    exists, unless ``keep_sam``; the BAM is always removed once the FASTQ export and the
+    coverage table are written.
     """
     ensure_directory(out_dir)
     sam_root = ensure_directory(sam_dir) if sam_dir is not None else out_dir
@@ -447,6 +453,8 @@ def _map_and_extract(
         if not keep_sam:
             for sam_path in sam_paths:
                 sam_path.unlink(missing_ok=True)
+        # A forced rerun that now keeps nothing must not leave an earlier run's table behind.
+        coverage_table_path(out_dir, genome_id).unlink(missing_ok=True)
         return ExtractionResult([], 0, unequal, mapped_total=0)
 
     _filter_and_merge_bam(sam_paths, filter_args, threads, out_dir, genome_id, bam_path)
@@ -458,6 +466,7 @@ def _map_and_extract(
     if mapped == 0:
         logger.warning("No reads from %s mapped to %s; nothing written", accession, genome_id)
         bam_path.unlink(missing_ok=True)
+        coverage_table_path(out_dir, genome_id).unlink(missing_ok=True)
         return ExtractionResult([], 0, unequal, mapped_total=mapped_total)
     mapq_clause = f" and MAPQ below {min_mapq}" if min_mapq > 0 else ""
     logger.info(
@@ -470,9 +479,87 @@ def _map_and_extract(
     )
 
     written = _export_mapped_fastq(reads, bam_path, out_dir, genome_id, threads)
+    coverage = reference_coverage(accession, genome_id, bam_path, out_dir, sam_root, threads)
     bam_path.unlink(missing_ok=True)
 
-    return ExtractionResult(written, mapped, unequal, mapped_total=mapped_total)
+    return ExtractionResult(written, mapped, unequal, mapped_total=mapped_total, coverage=coverage)
+
+
+def coverage_table_path(out_dir: Path, genome_id: str) -> Path:
+    """Where ``reference_coverage`` writes one sample's ``samtools coverage`` table."""
+    return out_dir / f"{genome_id}_coverage.tsv"
+
+
+def summarise_coverage_table(path: Union[str, Path]) -> Dict[str, Any]:
+    """Aggregate a ``samtools coverage`` table over every reference sequence.
+
+    The table counts the kept alignments of the filtered BAM; ``samtools coverage`` also skips
+    duplicate and QC-fail reads by default (its ``--ff`` default). Breadth is the fraction of
+    reference bases covered by at least one read (samtools coverage has no minimum-depth
+    option, so >= 1x is the only threshold available); mean depth is each sequence's
+    ``meandepth`` weighted by its length. Both are rounded to four decimals and are None when
+    the table holds no reference bases.
+
+    Returns:
+        ``{"breadth", "mean_depth", "covered_bases", "reference_bp"}``.
+    """
+    table = pd.read_csv(path, sep="\t")
+    lengths = table["endpos"] - table["startpos"] + 1
+    reference_bp = int(lengths.sum())
+    covered_bases = int(table["covbases"].sum())
+    if reference_bp == 0:
+        breadth: Optional[float] = None
+        mean_depth: Optional[float] = None
+    else:
+        breadth = round(covered_bases / reference_bp, 4)
+        mean_depth = round(float((table["meandepth"] * lengths).sum()) / reference_bp, 4)
+    return {
+        "breadth": breadth,
+        "mean_depth": mean_depth,
+        "covered_bases": covered_bases,
+        "reference_bp": reference_bp,
+    }
+
+
+def reference_coverage(
+    accession: str,
+    genome_id: str,
+    bam_path: Path,
+    out_dir: Path,
+    sam_root: Path,
+    threads: int,
+) -> Optional[Dict[str, Any]]:
+    """Breadth and mean depth of the target genome covered by one sample's kept alignments.
+
+    The filtered BAM is coordinate-sorted to ``sam_root/<genome>.mapped.sorted.bam`` (beside
+    the SAM files, so ``--temp-folder`` applies) and ``samtools coverage`` writes the
+    per-sequence table to ``out_dir/<genome>_coverage.tsv``. The sorted BAM is always removed.
+    Only the kept alignments count (unmapped, secondary and supplementary records, and any
+    below ``--min-mapq``, were filtered out earlier), and ``samtools coverage`` additionally
+    skips duplicate and QC-fail reads by default.
+
+    Coverage is supplementary to the extracted reads, so a tool or parsing failure is logged
+    as a warning, any partial table is removed, and None is returned rather than failing the
+    sample.
+
+    Returns:
+        The ``summarise_coverage_table`` summary plus ``coverage_tsv`` (the table's path), or
+        None when the coverage could not be computed.
+    """
+    sorted_bam = sam_root / f"{genome_id}.mapped.sorted.bam"
+    tsv_path = coverage_table_path(out_dir, genome_id)
+    try:
+        SecureSubprocess.run_secure("samtools", _samtools_sort_args(threads, sorted_bam, bam_path))
+        SecureSubprocess.run_secure("samtools", _samtools_coverage_args(tsv_path, sorted_bam))
+        summary = summarise_coverage_table(tsv_path)
+    except (subprocess.CalledProcessError, SecurityError, DataAccessError, OSError, ValueError, KeyError) as exc:
+        logger.warning("%s: reference coverage skipped (%s)", accession, exc)
+        tsv_path.unlink(missing_ok=True)
+        return None
+    finally:
+        sorted_bam.unlink(missing_ok=True)
+    summary["coverage_tsv"] = tsv_path
+    return summary
 
 
 def _resolve_done_state(
@@ -791,6 +878,18 @@ def _samtools_cat_args(out_path: Path, part_paths: Sequence[Path]) -> List[str]:
     """Build the ``samtools cat`` argument list ``_filter_and_merge_bam`` uses to merge the
     per-mate BAMs of the unequal-mates single-end fallback."""
     return ["cat", "-o", str(out_path), *(str(p) for p in part_paths)]
+
+
+def _samtools_sort_args(threads: int, out_path: Path, in_path: Path) -> List[str]:
+    """Build the ``samtools sort`` argument list ``reference_coverage`` uses to coordinate-sort
+    the filtered BAM before ``samtools coverage``."""
+    return ["sort", "-@", str(threads), "-o", str(out_path), str(in_path)]
+
+
+def _samtools_coverage_args(out_path: Path, bam_path: Path) -> List[str]:
+    """Build the ``samtools coverage`` argument list ``reference_coverage`` uses to write the
+    per-sequence coverage table of the sorted BAM."""
+    return ["coverage", "-o", str(out_path), str(bam_path)]
 
 
 def _samtools_fastq_single_args(threads: int, out_path: Path, bam_path: Path) -> List[str]:

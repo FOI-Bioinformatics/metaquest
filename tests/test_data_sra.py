@@ -21,6 +21,7 @@ from metaquest.data.sra import (
     _check_existing_download,
     _cached_sra_archive,
     _handle_download_output,
+    _ignore_missing,
     _safe_rmtree,
     download_accession,
     _check_existing_downloads,
@@ -2524,6 +2525,12 @@ class TestSafeRmtreeIgnoresMissingFiles:
                 _safe_rmtree(target)
 
         assert any("Could not remove directory" in r.message for r in caplog.records)
+
+    def test_ignore_missing_reraises_a_permission_error_given_directly(self):
+        # shutil.rmtree's onexc callback (3.12+) passes the exception object itself, not a
+        # sys.exc_info() tuple; only FileNotFoundError is swallowed, anything else re-raises.
+        with pytest.raises(PermissionError):
+            _ignore_missing(os.unlink, "some/path", PermissionError(13, "Permission denied"))
 
 
 class TestDownloadInterrupt:

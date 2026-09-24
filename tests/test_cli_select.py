@@ -25,6 +25,10 @@ def _args(tmp_path, **kwargs):
         skip_excluded=True,
         skip_downloaded=False,
         no_record=False,
+        max_run_size=None,
+        min_spots=None,
+        max_spots=None,
+        platform=None,
     )
     base.update(kwargs)
     return argparse.Namespace(**base)
@@ -321,3 +325,139 @@ def test_registry_records_the_combined_column_for_genome_ids(tmp_path, monkeypat
     column = data["datasets"]["SRR1"]["selection"]["ranked"][0]["column"]
     assert data["datasets"]["SRR1"]["selection"]["criteria"]["column"] == column
     assert "GCF_A" in column and "GCF_B" in column
+
+
+# --- Run size, spot count and platform filters -------------------------------------------
+
+_RUN_CONTAINMENT = "\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\nSRR2\t0.8\t0.8\nSRR3\t0.7\t0.7\n"
+_RUN_METADATA = (
+    "Run_ID\tRun_Size\tRun_Total_Spots\tPlatform\n"
+    "SRR1\t2000000000\t10000000\tILLUMINA\n"
+    "SRR2\t400000000\t2000000\tPACBIO_SMRT\n"
+    "SRR3\t100000000\t500000\tILLUMINA\n"
+)
+
+
+def test_run_filters_autodetect_the_metadata_table_and_record_criteria(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    meta = tmp_path / "metadata_table.txt"
+    meta.write_text(_RUN_METADATA)
+    rc = SelectDatasetsCommand().execute(
+        _args(
+            tmp_path,
+            registry=None,
+            max_run_size=500_000_000,
+            min_spots=100_000,
+            max_spots=5_000_000,
+            platform="illumina",
+        )
+    )
+    assert rc == 0
+    assert (tmp_path / "accessions.txt").read_text() == "SRR3\n"
+    data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    criteria = data["datasets"]["SRR3"]["selection"]["criteria"]
+    assert criteria["metadata_file"] == str(meta.resolve())
+    assert criteria["max_run_size"] == 500_000_000
+    assert criteria["min_spots"] == 100_000
+    assert criteria["max_spots"] == 5_000_000
+    assert criteria["platform"] == "illumina"
+
+
+def test_criteria_record_absent_run_filters_as_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=None))
+    assert rc == 0
+    criteria = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]["SRR1"]["selection"][
+        "criteria"
+    ]
+    assert criteria["metadata_file"] is None
+    for key in ("max_run_size", "min_spots", "max_spots", "platform"):
+        assert criteria[key] is None
+
+
+def test_run_filter_without_any_metadata_table_returns_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=None, platform="ILLUMINA"))
+    assert rc == 1
+
+
+def test_run_filter_on_a_table_without_the_column_returns_1_and_writes_nothing(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    meta = tmp_path / "branchwater_metadata.txt"
+    meta.write_text("Run_ID\tSample_Scientific_Name\nSRR1\tWolbachia\nSRR2\tmetagenome\nSRR3\tmetagenome\n")
+    with caplog.at_level("ERROR"):
+        rc = SelectDatasetsCommand().execute(
+            _args(tmp_path, registry=None, metadata_file=str(meta), max_run_size=500_000_000)
+        )
+    assert rc == 1
+    assert "--max-run-size needs a Run_Size column; branchwater_metadata.txt has none" in caplog.text
+    assert not (tmp_path / "accessions.txt").exists()
+    assert not (tmp_path / "metaquest_registry.json").exists()
+
+
+def test_argparse_parses_run_filter_flags():
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    args = parser.parse_args(
+        [
+            "select_datasets",
+            "--max-run-size",
+            "500M",
+            "--min-spots",
+            "0",
+            "--max-spots",
+            "2000000",
+            "--platform",
+            "OXFORD_NANOPORE",
+        ]
+    )
+    assert args.max_run_size == 500_000_000
+    assert args.min_spots == 0
+    assert args.max_spots == 2_000_000
+    assert args.platform == "OXFORD_NANOPORE"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--max-run-size", "abc"],
+        ["--max-run-size", "0"],
+        ["--min-spots", "-1"],
+        ["--max-spots", "x"],
+    ],
+)
+def test_argparse_rejects_bad_run_filter_values(argv):
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["select_datasets", *argv])
+
+
+def test_min_spots_above_max_spots_fails_before_looking_for_a_metadata_table(tmp_path, monkeypatch, caplog):
+    """No metadata table exists here, so the spot bound error must come first to be seen at all."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text(_RUN_CONTAINMENT)
+    with caplog.at_level("ERROR"):
+        rc = SelectDatasetsCommand().execute(_args(tmp_path, registry=None, min_spots=10, max_spots=5))
+    assert rc == 1
+    assert "--min-spots (10) is greater than --max-spots (5)" in caplog.text
+    assert "No metadata table found" not in caplog.text
+    assert not (tmp_path / "accessions.txt").exists()
+
+
+@pytest.mark.parametrize("value", ["", " ", "\t"])
+def test_argparse_rejects_blank_platform(value):
+    from metaquest.cli.main import create_parser, register_all_commands
+
+    register_all_commands()
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["select_datasets", "--platform", value])

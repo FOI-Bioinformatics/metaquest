@@ -5,7 +5,7 @@ MetaQuest helps users search through SRA datasets to find containment of specifi
 genomes and analyze associated metadata.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 __author__ = "Andreas Sjödin"
 __email__ = "andreas.sjodin@gmail.com"
 

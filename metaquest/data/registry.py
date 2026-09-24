@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import visible_files
-from metaquest.data.read_extraction import summarise_contigs
+from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
 
 if TYPE_CHECKING:
@@ -554,6 +554,10 @@ def _to_int_or_none(value: Any) -> Optional[int]:
         return None
 
 
+# Public name for callers outside this module (e.g. the results table).
+to_int_or_none = _to_int_or_none
+
+
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
     record: Dict[str, Any] = {"xml": _project_relative(xml_path, project_root(registry)), "date": _now()}
     for key in (
@@ -582,6 +586,19 @@ def record_analysis(
     }
 
 
+def record_export(registry: Registry, name: str, output: Union[str, Path], summary: Dict[str, Any]) -> None:
+    """Record a project-level export (e.g. the results table) under ``project["exports"][name]``.
+
+    Only the latest run of each export is kept: its date, the project-relative output path
+    and a summary of what it contained.
+    """
+    registry.project.setdefault("exports", {})[name] = {
+        "date": _now(),
+        "output": _project_relative(output, project_root(registry)),
+        "summary": dict(summary),
+    }
+
+
 def record_extraction(
     registry: Registry,
     accession: str,
@@ -591,11 +608,20 @@ def record_extraction(
     unequal_mates: bool,
     params: Dict[str, Any],
     mapped_total: Optional[int] = None,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """Record one sample's extraction against one genome.
+
+    ``coverage`` is ``ExtractionResult.coverage``: its ``breadth`` and ``mean_depth`` are
+    recorded as given and its ``coverage_tsv`` project-relative; all three are None when
+    ``coverage`` is None (nothing mapped, or the coverage step failed).
+    """
     root = project_root(registry)
     extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
     previous = extractions.get(genome_id, {})
     genome_fasta = params.get("genome_fasta")
+    coverage = coverage or {}
+    coverage_tsv = coverage.get("coverage_tsv")
     extractions[genome_id] = {
         "date": _now(),
         "genome_fasta": _project_relative(genome_fasta, root) if genome_fasta is not None else None,
@@ -608,6 +634,9 @@ def record_extraction(
         "mapped_total": int(mapped_total) if mapped_total is not None else None,
         "unequal_mates": bool(unequal_mates),
         "files": [_project_relative(p, root) for p in files],
+        "breadth": coverage.get("breadth"),
+        "mean_depth": coverage.get("mean_depth"),
+        "coverage_tsv": _project_relative(coverage_tsv, root) if coverage_tsv is not None else None,
         "assembly": previous.get("assembly"),
     }
     registry.genomes.setdefault(genome_id, {})
@@ -885,11 +914,26 @@ def _infer_extraction(registry: Registry, acc: str, genome_id: str, files: Seque
     """Record one (accession, genome) extraction found on disk, marked as inferred.
 
     Reads are counted in every file of the pair (both mates, singles and unpaired), so the
-    inferred count approximates the number of BAM records a real extraction records.
+    inferred count approximates the number of BAM records a real extraction records. When the
+    extraction's ``<genome>_coverage.tsv`` is on disk, breadth and mean depth are read from it;
+    otherwise (or when it cannot be read) they are None.
     """
     reads = sum(count_fastq_reads(f) for f in files)
-    record_extraction(registry, acc, genome_id, files, reads, False, {})
+    coverage = _infer_coverage(coverage_table_path(files[0].parent, genome_id)) if files else None
+    record_extraction(registry, acc, genome_id, files, reads, False, {}, coverage=coverage)
     registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+
+
+def _infer_coverage(tsv: Path) -> Optional[Dict[str, Any]]:
+    """Breadth, mean depth and path of an existing ``samtools coverage`` table, else None."""
+    if not tsv.is_file():
+        return None
+    try:
+        summary = summarise_coverage_table(tsv)
+    except (OSError, ValueError, KeyError) as e:
+        logger.warning("Cannot read coverage table %s (%s); recording no coverage for it", tsv, e)
+        return None
+    return {"breadth": summary["breadth"], "mean_depth": summary["mean_depth"], "coverage_tsv": tsv}
 
 
 def _infer_assembly(registry: Registry, acc: str, genome_id: str, asm_dir: Path) -> None:
@@ -1060,6 +1104,8 @@ def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
                     "accession": acc,
                     "genome_id": genome_id,
                     "mapped_reads": ext.get("mapped_reads"),
+                    "breadth": ext.get("breadth"),
+                    "mean_depth": ext.get("mean_depth"),
                     "extraction_date": ext.get("date"),
                     "contigs": asm.get("contigs"),
                     "total_bp": asm.get("total_bp"),

@@ -7,6 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:  # Allows manual triggering
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Code Quality
@@ -36,16 +40,17 @@ jobs:
           # Check for PEP8 style issues, complexity, and line length
           flake8 metaquest --count --max-complexity=15 --max-line-length=120 --statistics --extend-ignore=E203,W503
 
-      #- name: Type check with mypy
-      #  run: #mypy --ignore-missing-imports metaquest
+      - name: Type check with mypy
+        run: python -m mypy metaquest
 
   test:
-    name: Test Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4

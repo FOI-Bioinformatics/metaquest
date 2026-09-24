@@ -334,10 +334,13 @@ class ExtractTargetReadsCommand(BaseCommand):
                     "index": str(resolve_index_path(args.genome_fasta, args.preset, index_dir)),
                 },
                 mapped_total=outcome.mapped_total,
+                coverage=outcome.coverage,
             )
-            record_usage_safe(
-                store, reg, accession, args.genome_id, "extracted", detail=f"{outcome.mapped_records} mapped reads"
-            )
+            detail = f"{outcome.mapped_records} mapped reads"
+            breadth = (outcome.coverage or {}).get("breadth")
+            if breadth is not None:
+                detail += f", breadth {breadth:.3f}"
+            record_usage_safe(store, reg, accession, args.genome_id, "extracted", detail=detail)
 
     @staticmethod
     def _resolved_extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:

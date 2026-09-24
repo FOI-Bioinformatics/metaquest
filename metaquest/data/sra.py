@@ -11,7 +11,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -151,29 +150,25 @@ def transient_bytes(folder: Union[str, Path]) -> int:
     return total
 
 
-def _safe_rmtree(path: Path) -> None:
-    """Remove a directory tree if present, logging on failure instead of raising.
+def _ignore_missing(func, target, exc: BaseException) -> None:
+    """``onexc`` callback for ``shutil.rmtree``: swallow a missing-file race, re-raise anything else.
 
-    A missing file during removal is ignored rather than logged: on a volume that stores each
-    file's AppleDouble sidecar (``._<name>``) next to it, macOS can delete ``._X`` together with
-    ``X``, so ``rmtree`` reaching ``._X`` afterwards finds it already gone. That race is not a
-    real failure to remove the directory. ``onexc`` (Python 3.12+) hands the callback the
-    exception object directly; the older ``onerror`` (kept here for 3.11) hands it a
-    ``sys.exc_info()`` tuple instead, so the callback accepts either shape.
+    On a volume that stores each file's AppleDouble sidecar (``._<name>``) next to it, macOS can
+    delete ``._X`` together with ``X``, so ``rmtree`` reaching ``._X`` afterwards finds it already
+    gone. That race is not a real failure to remove the directory, so a ``FileNotFoundError`` is
+    ignored; ``shutil.rmtree``'s ``onexc`` (Python 3.12+) hands this callback the exception object
+    directly, unlike the older ``onerror`` callback's ``sys.exc_info()`` tuple.
     """
+    if isinstance(exc, FileNotFoundError):
+        return
+    raise exc
 
-    def _ignore_missing(func, target, exc_info):
-        exc = exc_info[1] if isinstance(exc_info, tuple) else exc_info
-        if isinstance(exc, FileNotFoundError):
-            return
-        raise exc
 
+def _safe_rmtree(path: Path) -> None:
+    """Remove a directory tree if present, logging on failure instead of raising."""
     try:
         if path.exists():
-            if sys.version_info >= (3, 12):
-                shutil.rmtree(path, onexc=_ignore_missing)
-            else:
-                shutil.rmtree(path, onerror=_ignore_missing)
+            shutil.rmtree(path, onexc=_ignore_missing)
     except Exception as e:
         logger.warning(f"Could not remove directory {path}: {e}")
 

@@ -25,7 +25,7 @@ from metaquest.cli.commands.store import (
     StoreVerifyCommand,
 )
 from metaquest.core.constants import STORE_ENV
-from metaquest.data.registry import load_registry
+from metaquest.data.registry import load_registry, save_registry
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
@@ -235,6 +235,26 @@ class TestStoreInitCommand:
 
         registry = load_registry(project_dir / "metaquest_registry.json")
         assert registry.project["name"] == "my-project"
+
+    def test_execute_keeps_recorded_exports(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry = load_registry(project_dir / "metaquest_registry.json")
+        registry.project = {
+            "exports": {"results_table": {"output": "results.tsv", "summary": {"rows": 1}}},
+            "note": "kept",
+        }
+        save_registry(registry)
+
+        rc = StoreInitCommand().execute(_init_args(root, project_dir))
+        assert rc == 0
+
+        registry = load_registry(project_dir / "metaquest_registry.json")
+        assert registry.project["exports"]["results_table"]["output"] == "results.tsv"
+        assert registry.project["note"] == "kept"
+        assert registry.project["id"]
 
     def test_execute_keeps_project_id_on_second_run(self, tmp_path, monkeypatch):
         root = tmp_path / "store"
@@ -1640,6 +1660,49 @@ class TestLinkersAlwaysHaveAProjectIdentity:
         assert registry.project["id"]
         with Catalog(paths) as catalog:
             assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
+
+    def test_store_link_keeps_recorded_exports_and_other_project_keys(self, tmp_path, monkeypatch):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        with gzip.open(acc_dir / "SRR1.fastq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+        write_sidecar(sidecar_path(paths, "SRR1"), Sidecar(accession="SRR1", state="complete"))
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+        registry = load_registry(registry_path)
+        registry.project = {
+            "exports": {"results_table": {"output": "results.tsv", "summary": {"rows": 1}}},
+            "note": "kept",
+        }
+        save_registry(registry)
+
+        assert StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root))) == 0
+
+        registry = load_registry(registry_path)
+        assert registry.project["id"]
+        assert registry.project["exports"]["results_table"]["output"] == "results.tsv"
+        assert registry.project["note"] == "kept"
+
+
+class TestEnsureProjectIdentity:
+    def test_minting_an_identity_keeps_unknown_project_keys(self, tmp_path, monkeypatch):
+        from metaquest.store.usage import ensure_project_identity
+
+        monkeypatch.chdir(tmp_path)
+        registry = load_registry(tmp_path / "metaquest_registry.json")
+        registry.project = {"exports": {"results_table": {"output": "results.tsv"}}, "note": "kept"}
+
+        project = ensure_project_identity(registry)
+
+        assert project["id"]
+        assert registry.project["exports"] == {"results_table": {"output": "results.tsv"}}
+        assert registry.project["note"] == "kept"
+        assert registry.project["name"] == tmp_path.name
 
 
 class TestStoreCommandsWithoutAMarker:

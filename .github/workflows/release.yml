@@ -1,0 +1,67 @@
+name: MetaQuest Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, verify and publish GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine check-wheel-contents
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check wheel contents
+        run: check-wheel-contents dist/*.whl
+
+      - name: Check distribution with twine
+        run: twine check dist/*
+
+      - name: Extract changelog section for this tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            # The dots in the version are matched literally ("[.]"), so 0.4.0 cannot match 0x4y0.
+            BEGIN { found = 0; pat = ver; gsub(/\./, "[.]", pat) }
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "\\[" pat "\\]") { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "No CHANGELOG.md section found for version $VERSION." > release_notes.md
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body_path: release_notes.md
+
+      # Publishing to PyPI is a separate decision: it needs either a PyPI trusted-publisher
+      # setup for this repository or a PYPI_API_TOKEN secret. Uncomment once one of those is
+      # in place.
+      # - name: Publish to PyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     password: ${{ secrets.PYPI_API_TOKEN }}

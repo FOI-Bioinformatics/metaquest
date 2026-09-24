@@ -67,9 +67,75 @@ def _as_positive_int(value: Any) -> Optional[int]:
     return number if number > 0 else None
 
 
+def _as_non_negative_int(value: Any) -> Optional[int]:
+    """``value`` as an int of zero or more, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
 def _warn_malformed(name: str, value: Any, reason: str) -> None:
     """Warn that a recorded criteria value could not be used to build a reselect command."""
     logger.warning("Recorded %s %r %s", name, value, reason)
+
+
+def _run_filter_flags(criteria: Dict[str, Any]) -> str:
+    """The --max-run-size, --min-spots, --max-spots and --platform flags a selection recorded.
+
+    The run size is a byte count above zero and the spot bounds are zero or more; a recorded value
+    that fails that check is left out with a warning rather than pasted into the command. The
+    platform is shell-quoted.
+    """
+    part = ""
+    numeric = [
+        ("max_run_size", "--max-run-size", _as_positive_int),
+        ("min_spots", "--min-spots", _as_non_negative_int),
+        ("max_spots", "--max-spots", _as_non_negative_int),
+    ]
+    for key, flag, coerce in numeric:
+        raw = criteria.get(key)
+        if raw is None:
+            continue
+        number = coerce(raw)
+        if number is None:
+            _warn_malformed(key, raw, f"is not a valid count; the suggested command omits {flag}")
+        else:
+            part += f" {flag} {number}"
+    platform = criteria.get("platform")
+    if platform is not None:
+        part += f" --platform {shlex.quote(str(platform))}"
+    return part
+
+
+def _format_bytes(count: int) -> str:
+    """A byte count in decimal units, as the run size flags read them (e.g. 600 MB, 1.5 GB)."""
+    for factor, unit in ((10**12, "TB"), (10**9, "GB"), (10**6, "MB"), (10**3, "KB")):
+        if count >= factor:
+            return f"{count / factor:g} {unit}"
+    return f"{count} bytes"
+
+
+def _run_filter_detail(criteria: Dict[str, Any]) -> List[str]:
+    """The run filters a selection recorded, for the selected stage row.
+
+    A malformed value is left out; ``status --next`` warns about it when it builds the
+    reselect command.
+    """
+    parts = []
+    size = _as_positive_int(criteria.get("max_run_size"))
+    if size is not None:
+        parts.append(f"max size {_format_bytes(size)}")
+    for key, symbol in (("min_spots", ">="), ("max_spots", "<=")):
+        spots = _as_non_negative_int(criteria.get(key))
+        if spots is not None:
+            parts.append(f"spots {symbol} {spots}")
+    if criteria.get("platform") is not None:
+        parts.append(f"platform {criteria['platform']}")
+    return parts
 
 
 class StatusCommand(BaseCommand):
@@ -277,17 +343,17 @@ class StatusCommand(BaseCommand):
     def _reselect_command(criteria: Dict[str, Any], output: str) -> str:
         """A runnable ``select_datasets`` command that redoes a selection with ``--skip-excluded``.
 
-        Built from the criteria the original ``--no-skip-excluded`` run recorded, targeting the
-        same ``--output`` so rerunning it corrects that selection's file in place. Reproduces
-        every criterion ``record_selection`` stores that changes which accessions are chosen
-        (metadata filter, top-N cap, source table), not just the genome column and threshold, so
-        the suggested command redoes the same selection rather than a looser one. Every value
-        that came from the registry rather than this method's own literal flag text is passed
-        through ``shlex.quote``, so a value containing a space or shell metacharacter (a
-        metadata value like "New York", say) still produces a command that is safe to paste
-        into a shell and run as-is. The threshold is coerced with ``float``, the top-N count
-        with ``int`` (positive only) and ``require`` must be ``any`` or ``all``; a recorded value
-        that fails that check (a hand-edited registry, say) leaves its flag out rather than
+        Built from the criteria the original ``--no-skip-excluded`` run recorded, targeting the same
+        ``--output`` so rerunning it corrects that selection's file in place. Reproduces every
+        criterion ``record_selection`` stores that changes which accessions are chosen (metadata
+        filter, top-N cap, run size, spot and platform filters, source table), not just the genome
+        column and threshold, so the suggested command redoes the same selection rather than a
+        looser one. Every value that came from the registry rather than this method's own literal
+        flag text is passed through ``shlex.quote``, so a value containing a space or shell
+        metacharacter (a metadata value like "New York", say) still produces a command that is safe
+        to paste into a shell and run as-is. The threshold is coerced with ``float``, the top-N
+        count with ``int`` (positive only) and ``require`` must be ``any`` or ``all``; a recorded
+        value that fails that check (a hand-edited registry, say) leaves its flag out rather than
         being pasted into the command.
         """
         raw_threshold = criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD)
@@ -328,6 +394,7 @@ class StatusCommand(BaseCommand):
             command += f" --top-n {top_n}"
         elif raw_top_n is not None:
             _warn_malformed("top_n", raw_top_n, "is not a number; the suggested command uses the default")
+        command += _run_filter_flags(criteria)
         table = criteria.get("table")
         if table and str(table) != DEFAULT_PARSED_CONTAINMENT_FILE:
             command += f" --parsed-containment {shlex.quote(str(table))}"
@@ -518,6 +585,7 @@ class StatusCommand(BaseCommand):
             parts.append(f"threshold {criteria['threshold']}")
         if criteria.get("metadata_column"):
             parts.append(f"{criteria['metadata_column']} = {criteria.get('metadata_value')}")
+        parts.extend(_run_filter_detail(criteria))
         parts.append(str(latest.get("date", "")))
         return ", ".join(p for p in parts if p)
 
