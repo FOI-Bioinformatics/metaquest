@@ -128,6 +128,29 @@ def test_record_usage_keeps_first_used_updates_last_used(paths):
     assert second["detail"] == "second"
 
 
+def test_record_usage_with_explicit_at_keeps_earliest_first_used_latest_last_used(paths):
+    """journal.replay feeds record_usage calls back in journal order, which need not be
+    chronological (a journal can be replayed out of order, or rebuilt from a backfill that
+    carries an explicit first/last pair). first_used must land on the earliest ``at`` seen
+    and last_used on the latest, regardless of which call happens first."""
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+        catalog.upsert_project("proj1", "Wolbachia", "/projects/wolbachia", "metaquest_registry.json")
+
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", at="2026-09-02T00:00:00+00:00")
+        catalog.record_usage("SRR1", "proj1", "wMel", "downloaded", at="2026-09-01T00:00:00+00:00")
+
+        row = dict(
+            catalog._conn.execute(
+                "SELECT * FROM usage WHERE accession=? AND project_id=? AND genome_id=? AND stage=?",
+                ("SRR1", "proj1", "wMel", "downloaded"),
+            ).fetchone()
+        )
+
+    assert row["first_used"] == "2026-09-01T00:00:00+00:00"
+    assert row["last_used"] == "2026-09-02T00:00:00+00:00"
+
+
 def test_record_usage_inserts_placeholder_dataset_when_missing(paths):
     with Catalog(paths, create=True) as catalog:
         catalog.migrate()

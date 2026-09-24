@@ -358,20 +358,27 @@ class Catalog:
         stage: str,
         detail: str = "",
         at: Optional[str] = None,
+        last_used: Optional[str] = None,
     ) -> None:
         """Record that ``project_id`` used ``accession`` (for ``genome_id``, at ``stage``).
 
-        ``first_used`` is set once and kept on every later call for the same
-        (accession, project_id, genome_id, stage) key; ``last_used`` and ``detail``
-        are refreshed each time. If ``accession`` is not yet in ``datasets`` (usage
-        can be recorded before a dataset is catalogued, e.g. a link recorded ahead
-        of the next reindex), a minimal placeholder row with ``state="unknown"`` is
-        inserted first so the foreign key from ``usage`` to ``datasets`` is
-        satisfied; a later ``upsert_dataset`` or ``reindex`` fills it in properly.
+        ``first_used`` is set once and kept at the earliest timestamp seen for the same
+        (accession, project_id, genome_id, stage) key; ``last_used`` and ``detail`` advance to
+        the latest. Calls can arrive out of chronological order (``journal.replay`` feeds lines
+        back in file order, not time order), so both bounds are computed with SQL ``min``/``max``
+        across the existing row and the incoming call rather than blindly overwritten. If
+        ``accession`` is not yet in ``datasets`` (usage can be recorded before a dataset is
+        catalogued, e.g. a link recorded ahead of the next reindex), a minimal placeholder row
+        with ``state="unknown"`` is inserted first so the foreign key from ``usage`` to
+        ``datasets`` is satisfied; a later ``upsert_dataset`` or ``reindex`` fills it in properly.
 
-        ``at`` sets ``first_used``/``last_used`` to a specific timestamp instead of now;
+        ``at`` sets this call's own timestamp (``first_used`` candidate) instead of now;
         ``journal.replay`` passes the journal line's own ``at`` so a rebuilt catalogue keeps
-        the date usage actually happened rather than the date it was replayed.
+        the date usage actually happened rather than the date it was replayed. ``last_used``
+        additionally sets this call's ``last_used`` candidate when the caller already knows a
+        later timestamp than ``at`` (a backfilled or replayed line that itself spans a
+        first/last pair); it defaults to ``at`` (or now) when not given, which is what an
+        ordinary, non-replayed call wants.
 
         Raises ``DataAccessError`` if ``project_id`` is not a known project (from
         ``upsert_project``); usage is never recorded against a fabricated project.
@@ -381,6 +388,7 @@ class Catalog:
             raise DataAccessError(f"Unknown project_id: {project_id}")
 
         now = at or _now()
+        latest = last_used or now
         genome_id = genome_id or ""
 
         self.conn.execute(
@@ -392,15 +400,25 @@ class Catalog:
             INSERT INTO usage (accession, project_id, genome_id, stage, first_used, last_used, detail)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(accession, project_id, genome_id, stage) DO UPDATE SET
-                last_used=excluded.last_used,
-                detail=excluded.detail
+                first_used=min(first_used, excluded.first_used),
+                last_used=max(last_used, excluded.last_used),
+                detail=CASE WHEN excluded.last_used >= last_used THEN excluded.detail ELSE detail END
             """,
-            (accession, project_id, genome_id, stage, now, now, detail),
+            (accession, project_id, genome_id, stage, now, latest, detail),
         )
         if self.journal_enabled:
             from metaquest.store import journal
 
-            journal.append_usage(self.paths, accession, project_id, genome_id, stage, detail, at=now)
+            journal.append_usage(
+                self.paths,
+                accession,
+                project_id,
+                genome_id,
+                stage,
+                detail,
+                at=now,
+                last_used=latest if last_used is not None else None,
+            )
 
     # ----------------------------------------------------------------- queries
 
