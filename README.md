@@ -293,7 +293,8 @@ metaquest results_table --output results.tsv
 ```
 
 `results_table` writes one row per screened accession and genome, joining containment, selection,
-exclusion, download, run size, mapped reads, reference coverage and assembly statistics.
+exclusion, download, run size, mapped reads, reference coverage and assembly statistics. It records the
+export in the project registry when one exists, and does not create a registry when there is none.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
 and threshold; pass `--force` to redo them.

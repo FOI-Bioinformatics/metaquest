@@ -87,6 +87,9 @@ class ResultsTableCommand(BaseCommand):
 
             if args.no_record:
                 self.logger.info("Not recording this export in the registry (--no-record)")
+            elif registry.path is None or not registry.path.exists():
+                # A reporting command does not create a project registry of its own.
+                self.logger.info("no project registry at %s; export not recorded", registry.path)
             else:
                 summary = {
                     "rows": len(rows),

@@ -97,6 +97,13 @@ def test_mapping_rate_none_without_spots(tmp_path):
     assert row["mapping_rate_to_reference"] is None
 
 
+def test_mapping_rate_is_rounded_to_four_decimals(tmp_path):
+    r = reg.load_registry(tmp_path / "metaquest_registry.json")
+    reg.record_metadata(r, "SRR3", tmp_path / "SRR3.xml", {"run_total_spots": 3})
+    reg.record_extraction(r, "SRR3", "GCF_A", [], 1, False, {})
+    assert results_rows(r)[0]["mapping_rate_to_reference"] == 0.3333
+
+
 def test_mapping_rate_none_with_zero_mapped(tmp_path):
     r = reg.load_registry(tmp_path / "metaquest_registry.json")
     reg.record_metadata(r, "SRR3", tmp_path / "SRR3.xml", {"run_total_spots": 100})
@@ -131,6 +138,18 @@ def test_parsed_table_adds_pairs_the_registry_capped(tmp_path):
     rows = _by_pair(results_rows(r, parsed_table=table))
     assert rows[("SRR6", "GCF_A")]["containment"] == 0.3
     assert rows[("SRR1", "GCF_A")]["containment"] == 0.91234
+
+
+@pytest.mark.parametrize("cell", [0.0, float("nan")])
+def test_parsed_table_zero_or_nan_keeps_the_registry_containment(tmp_path, cell):
+    r = _registry(tmp_path)
+    table = pd.DataFrame(
+        {"GCF_A": [cell, 0.95], "max_containment": [cell, 0.95], "max_containment_annotation": ["", "GCF_A"]},
+        index=["SRR2", "SRR1"],
+    )
+    pairs = screened_pairs(r, table)
+    assert pairs[("SRR2", "GCF_A")] == 0.5
+    assert _by_pair(results_rows(r, parsed_table=table))[("SRR2", "GCF_A")]["containment"] == 0.5
 
 
 def test_extraction_without_screening_appears_with_empty_containment(tmp_path):

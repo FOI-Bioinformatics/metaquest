@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from metaquest.core.utils import _KNOWN_METADATA_COLUMNS
 from metaquest.data.registry import Registry, to_int_or_none
 
 RESULTS_COLUMNS = [
@@ -32,8 +33,6 @@ RESULTS_COLUMNS = [
     "genome_fraction_estimate",
     "assembly_mapping_rate",
 ]
-
-_SUMMARY_COLUMNS = ("max_containment", "max_containment_annotation")
 
 Pair = Tuple[str, str]
 
@@ -63,7 +62,7 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
             value = (entry or {}).get("containment")
             pairs[(accession, genome_id)] = float(value) if value is not None else None
     if parsed_table is not None:
-        genome_columns = [c for c in parsed_table.columns if c not in _SUMMARY_COLUMNS]
+        genome_columns = [c for c in parsed_table.columns if c not in _KNOWN_METADATA_COLUMNS]
         for accession, row in parsed_table.iterrows():
             for genome_id in genome_columns:
                 value = _positive_float(row[genome_id])
@@ -81,11 +80,12 @@ def _mapping_rate(mapped_reads: Optional[int], spots: Optional[int]) -> Optional
 
     ``mapped_reads`` counts BAM records that passed the extraction filters, while a spot is one
     read or one read pair, so paired-end data can give a value above 1. The ratio is reported
-    as is, without halving, since whether both mates mapped is not known here.
+    as is, without halving, since whether both mates mapped is not known here. It is rounded
+    to four decimals, like the other ratios the registry records.
     """
     if not mapped_reads or not spots or mapped_reads <= 0 or spots <= 0:
         return None
-    return mapped_reads / spots
+    return round(mapped_reads / spots, 4)
 
 
 def _row(registry: Registry, accession: str, genome_id: str, containment: Optional[float]) -> Dict[str, Any]:

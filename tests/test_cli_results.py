@@ -84,6 +84,45 @@ def test_zero_rows_warns_and_writes_header_only(tmp_path, monkeypatch, caplog):
     assert any(r.levelno == logging.WARNING and "0 row(s)" in r.message for r in caplog.records)
 
 
+def test_no_registry_is_not_created_and_the_table_is_still_written(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.95\t0.95\n")
+    registry_path = tmp_path / "metaquest_registry.json"
+    assert not registry_path.exists()
+    with caplog.at_level(logging.INFO):
+        rc = ResultsTableCommand().execute(_args(tmp_path))
+    assert rc == 0
+    assert not registry_path.exists()
+    assert not (tmp_path / "metaquest_registry.json.lock").exists()
+    assert (tmp_path / "results.tsv").read_text().splitlines()[1].startswith("SRR1\tGCF_A\t0.95\t")
+    assert f"no project registry at {registry_path}; export not recorded" in caplog.text
+
+
+def test_min_containment_limits_rows_and_is_recorded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    registry_path = _seed(tmp_path)
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\tmax_containment\nSRR1\t0.95\t0.95\nSRR2\t0.4\t0.4\n")
+    rc = ResultsTableCommand().execute(_args(tmp_path, min_containment=0.5))
+    assert rc == 0
+    lines = (tmp_path / "results.tsv").read_text().splitlines()
+    assert [line.split("\t")[:2] for line in lines[1:]] == [["SRR1", "GCF_A"]]
+    summary = json.loads(registry_path.read_text())["project"]["exports"]["results_table"]["summary"]
+    assert summary["min_containment"] == 0.5 and summary["rows"] == 1
+
+
+def test_unparseable_parsed_table_returns_1(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    registry_path = _seed(tmp_path)
+    before = registry_path.read_text()
+    (tmp_path / "parsed_containment.txt").write_text("\tGCF_A\nSRR1\t0.9\nSRR2\t0.1\t0.2\t0.3\t0.4\n")
+    with caplog.at_level(logging.ERROR):
+        rc = ResultsTableCommand().execute(_args(tmp_path))
+    assert rc == 1
+    assert "Error writing the results table" in caplog.text
+    assert not (tmp_path / "results.tsv").exists()
+    assert registry_path.read_text() == before
+
+
 def test_command_is_registered():
     from metaquest.cli.main import create_parser, register_all_commands
 
