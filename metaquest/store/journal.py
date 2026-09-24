@@ -14,7 +14,7 @@ import socket
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Set, Tuple
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.store.layout import StorePaths
@@ -127,6 +127,11 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     The catalogue calls back into ``append_*`` when it writes, so replay runs with journaling
     suspended (``catalog.journal_enabled = False``) to avoid duplicating the file.
 
+    The project count is the number of *distinct* ``project_id`` values upserted, not the
+    number of journal lines replayed: ``upsert_project`` appends one line per call, including
+    a call that only refreshes an existing project's ``last_seen``/``hostname``, so a project
+    touched more than once would otherwise be over-counted.
+
     A usage line whose ``project_id`` was never restored (its project's line is missing,
     corrupt, or absent from the journal entirely) is skipped rather than raised: without this,
     one such line would make ``record_usage`` raise ``DataAccessError("Unknown project_id")``,
@@ -135,7 +140,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
     A journal line missing ``project_id`` (for projects) or ``accession``/``project_id`` (for
     usage) is skipped the same way, since it cannot be replayed either.
     """
-    projects = 0
+    project_ids: Set[str] = set()
     usage = 0
     skipped_usage = 0
     previous = getattr(catalog, "journal_enabled", True)
@@ -152,7 +157,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
                 record.get("registry", ""),
                 hostname=record.get("hostname"),
             )
-            projects += 1
+            project_ids.add(record["project_id"])
         for record in _lines(paths.journal / USAGE_FILE):
             if "accession" not in record or "project_id" not in record:
                 logger.warning("Skipping usage journal line without accession/project_id: %r", record)
@@ -178,7 +183,7 @@ def replay(paths: StorePaths, catalog: Any) -> Tuple[int, int]:
             )
     finally:
         catalog.journal_enabled = previous
-    return projects, usage
+    return len(project_ids), usage
 
 
 def backfill_from_catalog(paths: StorePaths, catalog: Any) -> Tuple[int, int]:

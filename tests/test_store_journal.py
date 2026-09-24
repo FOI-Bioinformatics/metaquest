@@ -134,6 +134,24 @@ def test_replay_restores_an_explicit_last_used_from_a_single_line(tmp_path):
     assert row["last_used"] == "2026-09-03T00:00:00+00:00"
 
 
+def test_replay_counts_distinct_projects_not_journal_lines(tmp_path):
+    """``upsert_project`` appends one journal line per call, even when it is the same project
+    updated again (e.g. a ``store_link`` run touching the same project's ``last_seen``
+    repeatedly). Replay's project count must reflect distinct projects restored, not the
+    number of lines replayed, or ``store_reindex`` misreports how many projects came back."""
+    paths = init_store(tmp_path / "store")
+    with catalog_write(paths) as c:
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+        c.upsert_project("pid1", "proj", str(tmp_path / "proj"), "r.json")
+    (paths.root / "catalog.sqlite").unlink()
+
+    with catalog_write(paths) as c:
+        projects, _usage = journal.replay(paths, c)
+
+    assert projects == 1
+
+
 def test_catalog_write_backfills_a_pre_journal_store_once(tmp_path):
     """A pre-journal store's ``projects``/``usage`` rows are copied into the journal the first
     time ``catalog_write`` opens it afterwards (``catalog_write`` calls ``backfill_from_catalog``
