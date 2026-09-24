@@ -80,6 +80,13 @@ class SelectDatasetsCommand(BaseCommand):
             action="store_true",
             help="Drop accessions already marked downloaded in the registry",
         )
+        parser.add_argument(
+            "--no-record",
+            dest="no_record",
+            action="store_true",
+            help="Write the output file and log the counts, but do not record the selection in "
+            "the registry (for an exploratory run that should not redefine the target list)",
+        )
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -120,6 +127,10 @@ class SelectDatasetsCommand(BaseCommand):
                 excluded_count,
                 len(accessions),
             )
+
+            if args.no_record:
+                self.logger.info("Not recording this selection in the registry (--no-record)")
+                return 0
 
             ranked_records = [
                 {"accession": accession, "rank": i + 1, "column": column, "value": value}
