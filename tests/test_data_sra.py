@@ -2498,7 +2498,12 @@ class TestSafeRmtreeIgnoresMissingFiles:
         def _flaky_unlink(path, *args, **kwargs):
             # `os.unlink` is called with just the entry name (plus `dir_fd`) on a platform
             # using shutil's fd-based rmtree, not the full path, so the match is by basename.
+            # The race being simulated is "the sidecar is already gone when rmtree reaches
+            # it": remove the file for real, then report it missing. Leaving it on disk would
+            # make the final rmdir fail with "directory not empty" on every platform whose
+            # rmtree removes entries in scandir order (Linux CI), which is not the race.
             if os.path.basename(str(path)) == missing_name:
+                real_unlink(path, *args, **kwargs)
                 raise FileNotFoundError(2, "No such file or directory", str(path))
             return real_unlink(path, *args, **kwargs)
 
