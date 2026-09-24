@@ -447,6 +447,28 @@ def _file_entries(paths: Iterable[Path], root: Path) -> List[Dict[str, Any]]:
     return entries
 
 
+# Read counts in a completeness block that a new block with the same verdict may inherit.
+# ``ratio`` and ``expected_spots`` are deliberately absent: they always come from the new block.
+_CARRIED_COUNT_KEYS = ("reads_r1",)
+
+
+def _merge_verdict(previous: Any, new: Dict[str, Any]) -> Dict[str, Any]:
+    """The completeness block to record when ``new`` replaces ``previous``.
+
+    A count ``new`` leaves as ``None`` inherits the previous count only when both blocks carry
+    the same verdict (a complete-to-complete relink describes the same reads). Across a verdict
+    change the previous count describes other files, e.g. a truncated project copy relinked to
+    a complete store copy, so it stays ``None``; ``store_verify --rescan`` can fill in a real
+    count. Nothing else is carried, so the result never mixes two downloads' verdict blocks.
+    """
+    merged = dict(new)
+    if isinstance(previous, dict) and previous.get("verdict") == merged.get("verdict"):
+        for key in _CARRIED_COUNT_KEYS:
+            if merged.get(key) is None and previous.get(key) is not None:
+                merged[key] = previous[key]
+    return merged
+
+
 def record_download(
     registry: Registry,
     accession: str,
@@ -464,10 +486,9 @@ def record_download(
     state without an actual download attempt (e.g. a file found already present on disk).
     ``complete`` is the completeness verdict from ``metaquest.data.sra.verify_download``
     (via ``parse_verdict_message``); when omitted, any verdict already on file is left as is.
-    A key ``complete`` carries as ``None`` (e.g. a store sidecar with no read count of its
-    own) does not blank out that key's previous value either: only keys with a real value
-    overwrite the block already on file, so a relink to a store copy can update the verdict
-    without erasing a read count a prior download already recorded.
+    When given, it replaces the block on file, except that a read count it carries as ``None``
+    (e.g. a store sidecar with no read count of its own) keeps the previous count if, and only
+    if, the previous verdict equals the new one; see ``_merge_verdict``.
     ``source`` says where the reads came from (``"store"`` for a dataset the shared store
     holds and the project only links to) and ``store_name`` is the dataset's name inside
     that store. Both describe this outcome, so a call that names neither clears whatever
@@ -489,13 +510,7 @@ def record_download(
         }
     )
     if complete is not None:
-        merged_complete = dict(complete)
-        previous_complete = download.get("complete")
-        if isinstance(previous_complete, dict):
-            for key, previous_value in previous_complete.items():
-                if merged_complete.get(key) is None and previous_value is not None:
-                    merged_complete[key] = previous_value
-        download["complete"] = merged_complete
+        download["complete"] = _merge_verdict(download.get("complete"), complete)
     if source is None:
         download.pop("source", None)
         download.pop("store_name", None)

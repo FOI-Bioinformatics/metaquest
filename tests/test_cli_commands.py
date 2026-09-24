@@ -1874,12 +1874,43 @@ class TestDownloadSraCommand:
         assert download["attempts"] == attempts
         assert written["store"]["linked"] == ["SRR1"]
 
+    @pytest.mark.parametrize(
+        "previous, sidecar_verdict, sidecar_ratio, expected",
+        [
+            # complete -> complete: the recorded read count is kept (audit deferred S7-7).
+            (
+                {"verdict": "complete", "reads_r1": 48000000, "expected_spots": 48000000, "ratio": 1.0},
+                "complete",
+                1.0,
+                {"verdict": "complete", "reads_r1": 48000000, "expected_spots": None, "ratio": 1.0},
+            ),
+            # truncated project copy relinked to a complete store copy: the truncated count
+            # describes other files, so nothing is carried; ratio comes from the new block only.
+            (
+                {"verdict": "truncated", "reads_r1": 5, "expected_spots": 48000000, "ratio": 0.0001},
+                "complete",
+                1.0,
+                {"verdict": "complete", "reads_r1": None, "expected_spots": None, "ratio": 1.0},
+            ),
+            # complete -> truncated: nothing carried either.
+            (
+                {"verdict": "complete", "reads_r1": 48000000, "expected_spots": 48000000, "ratio": 1.0},
+                "truncated",
+                None,
+                {"verdict": "truncated", "reads_r1": None, "expected_spots": None, "ratio": None},
+            ),
+        ],
+        ids=["complete-to-complete", "truncated-to-complete", "complete-to-truncated"],
+    )
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_relink_keeps_previous_read_count(self, mock_download, _which, tmp_path):
-        """A relink to a store copy takes its verdict from the sidecar, but a sidecar with no
-        read count of its own must not blank out the read count the registry already had
-        (audit deferred S7-7)."""
+    def test_relink_carries_read_count_only_between_equal_verdicts(
+        self, mock_download, _which, tmp_path, previous, sidecar_verdict, sidecar_ratio, expected
+    ):
+        """A relink to a store copy takes its verdict from the sidecar. A sidecar with no read
+        count of its own keeps the registry's previous count only when the previous verdict
+        equals the new one; ratio and expected_spots are never carried over, so a relink never
+        mixes two downloads' verdict blocks."""
         from metaquest.store.layout import init_store, sidecar_path
         from metaquest.store.sidecar import Sidecar, write_sidecar
 
@@ -1894,7 +1925,7 @@ class TestDownloadSraCommand:
                 accession="SRR1",
                 state="complete",
                 reads_per_mate=None,
-                completeness={"method": "spots", "ratio": 1.0, "verdict": "complete"},
+                completeness={"method": "spots", "ratio": sidecar_ratio, "verdict": sidecar_verdict},
             ),
         )
 
@@ -1905,12 +1936,7 @@ class TestDownloadSraCommand:
         registry_file = tmp_path / "metaquest_registry.json"
         seeded = load_registry(registry_file)
         record_download(seeded, "SRR1", "downloaded", fastq_folder)
-        seeded.datasets["SRR1"]["download"]["complete"] = {
-            "verdict": "truncated",
-            "reads_r1": 5,
-            "expected_spots": 48000000,
-            "ratio": 0.0001,
-        }
+        seeded.datasets["SRR1"]["download"]["complete"] = dict(previous)
         save_registry(seeded)
 
         message = "linked from store, 1 files"
@@ -1950,9 +1976,7 @@ class TestDownloadSraCommand:
 
         written = json.loads(registry_file.read_text())
         complete = written["datasets"]["SRR1"]["download"]["complete"]
-        assert complete["reads_r1"] == 5
-        assert complete["expected_spots"] == 48000000
-        assert complete["verdict"] == "complete"
+        assert {key: complete.get(key) for key in expected} == expected
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
