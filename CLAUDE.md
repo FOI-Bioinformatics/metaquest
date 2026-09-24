@@ -85,10 +85,13 @@ registered under the "Store" group in `cli/main.py`:
 - `store_status` - dataset and byte counts, stale projects (`--verbose` also lists every dataset)
 - `store_reindex` - rebuild the SQLite catalogue from the sidecar files on disk, replaying the
   append-only journal under `<data-root>/journal/` to restore project and usage records that sidecars
-  alone do not carry
+  alone do not carry; if that replay restores no project while the rebuilt catalogue still holds
+  datasets, it sets a `rebuilt_without_projects` catalogue flag (cleared once a project is restored,
+  by this or a later `store_reindex`)
 - `store_adopt` - fold an existing project `fastq/` folder into the store (`--move` links the project
-  folder to the store's copy; `--copy` leaves the project folder as it was, including on a duplicate;
-  an empty accession folder is refused either way)
+  folder to the store's copy; `--copy` leaves the project folder as it was, including on a duplicate,
+  and still records the copying project as a user of the dataset; an empty accession folder is refused
+  either way)
 - `store_verify` - check a dataset's files against its recorded size, md5 (`--md5`), or NCBI spot
   count (`--spots`, which also falls back to `<data-root>/metadata/` and the calling project's
   `metadata/` folder for an XML `download_metadata` wrote after the fact); `--fix-state` only promotes
@@ -98,7 +101,9 @@ registered under the "Store" group in `cli/main.py`:
 - `store_usage` - which projects and genomes used a given accession, or which datasets are unused
   (`--project`, `--organism`, `--unused`)
 - `store_gc` - report (or, with `--yes`, remove) datasets nothing references any more; refuses to run
-  when the catalogue holds datasets but no project records at all (run `store_reindex` first)
+  when the catalogue holds datasets but no project records at all (run `store_reindex` first), and
+  also refuses on a `rebuilt_without_projects` catalogue flag until every project has re-registered
+  and `--accept-rebuilt` is given; `--json` prints the report (or a refusal) as one JSON object
 
 Store discovery rules for agents:
 1. **Store required before linking**: `download_sra` only links a dataset and `store_adopt` only
@@ -120,9 +125,16 @@ Store discovery rules for agents:
 4. **Journal replay for usage records**: sidecars record a dataset's own state but nothing about which
    projects used it; that lives only in the SQLite catalogue's `projects`/`usage` tables. `store_reindex`
    rebuilds the catalogue from sidecars and then replays `<data-root>/journal/*.jsonl` (append-only,
-   written by every `upsert_project`/`record_usage` call) to restore those tables. Code that adds a new
-   way to record project or usage data should append to the journal the same way, or `store_reindex`
-   will silently lose it.
+   written by every `upsert_project`/`record_usage` call, each line stamped with the hostname that wrote
+   it and the time it was appended) to restore those tables. Code that adds a new way to record project
+   or usage data should append to the journal the same way, or `store_reindex` will silently lose it.
+5. **`rebuilt_without_projects` blocks `store_gc`**: when a `store_reindex` replay restores no project
+   at all but the rebuilt catalogue still holds datasets, every dataset would look unused to `store_gc`
+   until each project re-registers, so `store_reindex` sets this catalogue flag and `store_gc` refuses
+   to run on it. The flag clears itself once a project is restored (by that `store_reindex` or a later
+   one); if none ever is, `store_gc --accept-rebuilt` is the only way to unblock it, and only after every
+   project using the store has run `store_init` or `store_link` again. Do not treat `--accept-rebuilt`
+   as a substitute for that re-registration step.
 
 ### Plugin Development
 - Format plugins inherit from base Plugin class in `plugins/base.py`
