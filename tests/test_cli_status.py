@@ -395,6 +395,49 @@ class TestStatusWithRegistry:
             "metaquest select_datasets --genome-id GCF_A --threshold 0.5 --skip-excluded --output sel_noskip.txt"
         )
 
+    def test_reselect_suggestion_quotes_values_with_spaces(self, tmp_path, monkeypatch):
+        """A metadata value containing a space must be shell-quoted, so the suggested command
+        is actually safe to paste and run rather than breaking the shell's argument split."""
+        import shlex
+
+        root = tmp_path
+        _project_tree(root)
+        monkeypatch.chdir(root)
+        StatusCommand().execute(_status_args(root, init=True))
+        with registry_transaction(str(root / "metaquest_registry.json")) as reg:
+            record_selection(
+                reg,
+                ["SRR1", "SRR2", "SRR3"],
+                {
+                    "skip_excluded": False,
+                    "column": "GCF_A",
+                    "threshold": 0.5,
+                    "metadata_column": "city",
+                    "metadata_value": "New York",
+                },
+                "sel_noskip.txt",
+            )
+        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        commands = [s["command"] for s in steps]
+        reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
+
+        assert "--metadata-value 'New York'" in reselect
+        assert shlex.split(reselect) == [
+            "metaquest",
+            "select_datasets",
+            "--genome-id",
+            "GCF_A",
+            "--threshold",
+            "0.5",
+            "--skip-excluded",
+            "--output",
+            "sel_noskip.txt",
+            "--metadata-column",
+            "city",
+            "--metadata-value",
+            "New York",
+        ]
+
     def test_next_extraction_command_is_runnable(self, tmp_path, capsys):
         """The extract suggestion carries the table it was selected from and a FASTA that exists."""
         _project_tree(tmp_path)

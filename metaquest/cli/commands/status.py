@@ -9,6 +9,7 @@ exists yet, the report is reconstructed in memory from what is on disk.
 
 import argparse
 import json
+import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -251,28 +252,40 @@ class StatusCommand(BaseCommand):
         same ``--output`` so rerunning it corrects that selection's file in place. Reproduces
         every criterion ``record_selection`` stores that changes which accessions are chosen
         (metadata filter, top-N cap, source table), not just the genome column and threshold, so
-        the suggested command redoes the same selection rather than a looser one.
+        the suggested command redoes the same selection rather than a looser one. Every value
+        that came from the registry rather than this method's own literal flag text is passed
+        through ``shlex.quote``, so a value containing a space or shell metacharacter (a
+        metadata value like "New York", say) still produces a command that is safe to paste
+        into a shell and run as-is; a threshold or top-N count needs no quoting, since both are
+        numbers.
         """
         threshold = criteria.get("threshold", DEFAULT_CONTAINMENT_THRESHOLD)
         genome_ids = criteria.get("genome_ids")
         if genome_ids:
             require = criteria.get("require", "any")
-            genome_part = "--genome-ids " + " ".join(genome_ids) + f" --require {require}"
+            quoted_ids = " ".join(shlex.quote(str(g)) for g in genome_ids)
+            genome_part = f"--genome-ids {quoted_ids} --require {require}"
         else:
             column = criteria.get("column") or "max_containment"
-            genome_part = f"--genome-id {column}"
-        command = f"metaquest select_datasets {genome_part} --threshold {threshold} --skip-excluded --output {output}"
+            genome_part = f"--genome-id {shlex.quote(str(column))}"
+        command = (
+            f"metaquest select_datasets {genome_part} --threshold {threshold} "
+            f"--skip-excluded --output {shlex.quote(str(output))}"
+        )
 
         metadata_column = criteria.get("metadata_column")
         metadata_value = criteria.get("metadata_value")
         if metadata_column and metadata_value is not None:
-            command += f" --metadata-column {metadata_column} --metadata-value {metadata_value}"
+            command += (
+                f" --metadata-column {shlex.quote(str(metadata_column))}"
+                f" --metadata-value {shlex.quote(str(metadata_value))}"
+            )
         top_n = criteria.get("top_n")
         if top_n:
             command += f" --top-n {top_n}"
         table = criteria.get("table")
         if table and str(table) != DEFAULT_PARSED_CONTAINMENT_FILE:
-            command += f" --parsed-containment {table}"
+            command += f" --parsed-containment {shlex.quote(str(table))}"
         return command
 
     @staticmethod
