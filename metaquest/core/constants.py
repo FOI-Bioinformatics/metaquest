@@ -108,6 +108,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "--no-mercy",
             "--bubble-level",
             "--presets",
+            "--tmp-dir",
             "--version",
         },
         "description": "Illumina assembly tool",
