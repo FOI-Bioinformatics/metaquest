@@ -259,7 +259,13 @@ def search_index(
         # encoding unset, and iter_lines then yields bytes, which csv.reader rejects with an
         # error that is not a MetaQuestError. The server sends UTF-8 CSV either way.
         response.encoding = response.encoding or "utf-8"
-        lines = list(response.iter_lines(decode_unicode=True))
+        # decode_unicode=True yields str given the encoding set above, but iter_lines is typed
+        # to allow bytes when encoding cannot be determined; decode defensively so "\n".join
+        # below and _parse_search_rows always see str.
+        lines: List[str] = [
+            line if isinstance(line, str) else line.decode(response.encoding or "utf-8")
+            for line in response.iter_lines(decode_unicode=True)
+        ]
         matches = _parse_search_rows(lines)
         text = "\n".join(lines)
         fetched_now = True
