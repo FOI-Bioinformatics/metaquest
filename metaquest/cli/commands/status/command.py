@@ -1,0 +1,174 @@
+"""
+The `status` command: local inventory and registry stages.
+
+Reports what MetaQuest has already downloaded locally (SRA reads, NCBI metadata,
+genome assemblies) so a user can see what is available without re-downloading,
+and reports where every accession sits in the registry (screened, selected,
+excluded, downloaded, analysed, extracted, assembled). When no registry file
+exists yet, the report is reconstructed in memory from what is on disk.
+
+The report is built by `metaquest.processing.status_report`, the suggested next steps by
+`suggest` and the text output by `render_text`.
+"""
+
+import argparse
+from pathlib import Path
+from typing import Any, Dict
+
+from metaquest.cli.base import BaseCommand
+from metaquest.cli.commands.status.render_text import _print_report
+from metaquest.cli.commands.status.suggest import _next_steps
+from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.file_io import write_csv
+from metaquest.data.registry import (
+    ProjectPaths,
+    Registry,
+    STAGES,
+    bootstrap_from_disk,
+    load_registry,
+    reconcile,
+    registry_path,
+    save_registry,
+    to_dataframes,
+)
+from metaquest.processing.status_report import build_report
+
+
+class StatusCommand(BaseCommand):
+    """Command to report locally available data and the registry's per-accession stages."""
+
+    @property
+    def name(self) -> str:
+        """Return the command name."""
+        return "status"
+
+    @property
+    def help(self) -> str:
+        """Return the command's help text."""
+        return "Report which SRA reads, metadata, and genomes are already available locally"
+
+    @property
+    def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
+        return "Reads"
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
+        parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
+        parser.add_argument("--metadata-folder", default="metadata", help="Folder holding NCBI metadata XML")
+        parser.add_argument("--genomes-folder", default="genomes", help="Folder holding genome FASTA files")
+        parser.add_argument(
+            "--targeted-folder", default="targeted", help="Root folder of extracted reads and assemblies"
+        )
+        parser.add_argument("--matches-folder", default="matches", help="Folder of Branchwater match CSVs")
+        parser.add_argument(
+            "--accessions-file",
+            help="Optional file of SRA accessions (one per line) to reconcile against local FASTQ/metadata",
+        )
+        parser.add_argument(
+            "--parsed-containment",
+            help="Optional parsed containment table; its sample accessions are the wanted list",
+        )
+        parser.add_argument(
+            "--registry",
+            default=None,
+            help="Registry file (default: metaquest_registry.json found upwards from here)",
+        )
+        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument("--stage", choices=list(STAGES), default=None, help="List the accessions in one stage")
+        parser.add_argument(
+            "--genome",
+            action="append",
+            default=None,
+            help="Restrict extraction and assembly stages to a genome id (repeatable)",
+        )
+        parser.add_argument("--init", action="store_true", help="Create the registry from what is on disk")
+        parser.add_argument(
+            "--reconcile",
+            action="store_true",
+            help="Compare the registry with the disk and record missing downloads",
+        )
+        parser.add_argument(
+            "--export-tsv", default=None, help="Write <PREFIX>_datasets.tsv and <PREFIX>_extractions.tsv"
+        )
+        parser.add_argument("--next", action="store_true", help="Suggest the commands that advance the most accessions")
+        parser.add_argument("--list-missing", action="store_true", help="Also print the accessions that are missing")
+        parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
+
+    def _export_tsv(self, registry: Registry, prefix: str) -> None:
+        datasets_df, extractions_df = to_dataframes(registry)
+        datasets_path = f"{prefix}_datasets.tsv"
+        extractions_path = f"{prefix}_extractions.tsv"
+        write_csv(datasets_df, datasets_path, sep="\t")
+        write_csv(extractions_df, extractions_path, sep="\t", index=False)
+        self.logger.info("Wrote %s and %s", datasets_path, extractions_path)
+
+    def _emit(self, args: argparse.Namespace, report: Dict[str, Any], registry: Registry) -> None:
+        if args.json:
+            self.emit_json(report)
+        else:
+            _print_report(args, report, registry, self.emit)
+
+    def execute(self, args: argparse.Namespace) -> int:
+        """Build and emit the status report; return 0 on success or 1 on a handled error.
+
+        Loads the registry (or bootstraps and, with ``--init``, writes one from what is on disk),
+        optionally reconciles it against the filesystem with ``--reconcile``, and assembles a
+        report of registry stages, downloads, genomes, store usage, and drift, emitted as JSON or
+        as text depending on ``args.json``. Returns 1 rather than raising when ``--init`` is asked
+        for an already-existing registry, when ``--reconcile`` is asked with no registry yet, or
+        when report assembly raises a :class:`~metaquest.core.exceptions.MetaQuestError` (logged
+        and swallowed here so the CLI exits cleanly instead of printing a traceback).
+        """
+        try:
+            paths = ProjectPaths(
+                Path(args.fastq_folder),
+                Path(args.metadata_folder),
+                Path(args.genomes_folder),
+                Path(args.targeted_folder),
+                Path(args.matches_folder),
+            )
+            registry_file = registry_path(args.registry)
+            existed = registry_file.exists()
+            if existed and args.init:
+                self.logger.error(
+                    "Registry already exists at %s; run status --reconcile to update it from disk, "
+                    "or remove the file to rebuild it",
+                    registry_file,
+                )
+                return 1
+            if args.reconcile and not existed:
+                self.logger.error(
+                    "No registry at %s to reconcile; create one first with: metaquest status --init",
+                    registry_file,
+                )
+                return 1
+            if existed:
+                registry = load_registry(registry_file)
+            else:
+                registry = bootstrap_from_disk(paths, args.accessions_file, args.parsed_containment, registry_file)
+                if args.init:
+                    save_registry(registry)
+                    self.logger.info("Registry written to %s", registry_file)
+
+            drift = None
+            if args.reconcile:
+                drift = reconcile(registry, paths)
+                save_registry(registry)
+
+            report = build_report(registry, args, paths, registry_file, existed, drift)
+            if args.next:
+                report["next"] = _next_steps(registry, paths)
+            if args.export_tsv:
+                self._export_tsv(registry, args.export_tsv)
+
+            if not existed and not args.init:
+                self.logger.info(
+                    "No registry yet; the stages above were reconstructed from disk. Run: metaquest status --init"
+                )
+
+            self._emit(args, report, registry)
+            return 0
+        except MetaQuestError as e:
+            self.logger.error("Error building status report: %s", e)
+            return 1

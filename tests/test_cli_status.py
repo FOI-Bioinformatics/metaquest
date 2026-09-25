@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from metaquest.cli.commands.status import StatusCommand
+from metaquest.cli.commands.status.render_text import _selection_detail
+from metaquest.cli.commands.status.suggest import _download_next_steps, _reselect_command
 from metaquest.data.registry import (
     Registry,
     SCHEMA_VERSION,
@@ -22,6 +24,7 @@ from metaquest.data.registry import (
     save_registry,
     upsert_dataset,
 )
+from metaquest.processing.status_report import _inventory_report
 
 
 def _args(registry, **kwargs):
@@ -207,7 +210,7 @@ def test_inventory_ignores_appledouble(tmp_path):
     hidden_acc = root / "fastq" / "._SRR1"
     hidden_acc.mkdir()
     (hidden_acc / "reads.fastq.gz").write_bytes(b"x" * 10)
-    report = StatusCommand()._inventory_report(_status_args(root), Registry())
+    report = _inventory_report(_status_args(root), Registry())
     assert report["on_disk"]["metadata_xml"] == 1
     assert report["on_disk"]["genome_fasta"] == 1
     assert report["on_disk"]["fastq_accessions"] == 1
@@ -294,7 +297,7 @@ class TestStatusWithRegistry:
                 {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5},
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         download_commands = [c for c in commands if c.startswith("metaquest download_sra")]
         # sel_noskip.txt is never downloaded directly; it is only the --output of the
@@ -326,7 +329,7 @@ class TestStatusWithRegistry:
                 "criteria": {"skip_excluded": False, "column": "GCF_B", "threshold": 0.3},
                 "output": "sel_noskip.txt",
             }
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
 
         download_commands = [c for c in commands if c.startswith("metaquest download_sra")]
@@ -352,7 +355,7 @@ class TestStatusWithRegistry:
                 {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5},
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
         assert reselect == (
@@ -372,7 +375,7 @@ class TestStatusWithRegistry:
                 {"skip_excluded": False, "genome_ids": ["GCF_A", "GCF_B"], "require": "all", "threshold": 0.3},
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
         assert reselect == (
@@ -401,7 +404,7 @@ class TestStatusWithRegistry:
                 },
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         reselect = next(s["command"] for s in steps if s["command"].startswith("metaquest select_datasets"))
         assert "pwned" not in reselect
         assert reselect == (
@@ -413,7 +416,7 @@ class TestStatusWithRegistry:
         command (so select_datasets falls back to its own default on rerun) and now also logs
         a warning naming the bad value, instead of failing silently."""
         with caplog.at_level("WARNING"):
-            command = StatusCommand._reselect_command({"column": "GCF_A", "threshold": "abc"}, "out.txt")
+            command = _reselect_command({"column": "GCF_A", "threshold": "abc"}, "out.txt")
         assert "threshold" in caplog.text and "not a number" in caplog.text
         assert "'abc'" in caplog.text or '"abc"' in caplog.text
         assert "--threshold" not in command
@@ -423,7 +426,7 @@ class TestStatusWithRegistry:
         logs a warning with its own wording (not "is not a number", which does not describe an
         enum value), naming the bad value, instead of failing silently."""
         with caplog.at_level("WARNING"):
-            command = StatusCommand._reselect_command({"genome_ids": ["GCF_A", "GCF_B"], "require": "maybe"}, "out.txt")
+            command = _reselect_command({"genome_ids": ["GCF_A", "GCF_B"], "require": "maybe"}, "out.txt")
         assert "Recorded require 'maybe' is not 'any' or 'all'; the suggested command omits --require" in caplog.text
         assert "--require" not in command
 
@@ -452,16 +455,14 @@ class TestStatusWithRegistry:
                 },
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
         assert f"--metadata-file {shlex.quote(meta_path)}" in reselect
         assert "--metadata-column country --metadata-value Sweden" in reselect
 
     def test_reselect_suggestion_coerces_numeric_strings(self):
-        command = StatusCommand._reselect_command(
-            {"column": "GCF_A", "threshold": "0.25", "top_n": "7", "require": "any"}, "out.txt"
-        )
+        command = _reselect_command({"column": "GCF_A", "threshold": "0.25", "top_n": "7", "require": "any"}, "out.txt")
         assert command == (
             "metaquest select_datasets --genome-id GCF_A --threshold 0.25 --skip-excluded --output out.txt --top-n 7"
         )
@@ -469,7 +470,7 @@ class TestStatusWithRegistry:
     def test_reselect_suggestion_reproduces_run_filters(self):
         """A selection recorded with the run size, spot count and platform filters reselects with
         the same four flags: the size as an integer byte count, the platform shell-quoted."""
-        command = StatusCommand._reselect_command(
+        command = _reselect_command(
             {
                 "column": "GCF_A",
                 "threshold": 0.5,
@@ -488,12 +489,12 @@ class TestStatusWithRegistry:
 
     def test_reselect_suggestion_keeps_min_spots_zero(self):
         """--min-spots 0 is a valid flag (it drops runs with no spot count), so it is reproduced."""
-        command = StatusCommand._reselect_command({"column": "GCF_A", "min_spots": 0}, "out.txt")
+        command = _reselect_command({"column": "GCF_A", "min_spots": 0}, "out.txt")
         assert command.endswith(" --min-spots 0")
 
     def test_reselect_command_warns_on_malformed_max_run_size(self, caplog):
         with caplog.at_level("WARNING"):
-            command = StatusCommand._reselect_command(
+            command = _reselect_command(
                 {"column": "GCF_A", "max_run_size": "big; rm -rf ~", "max_spots": -3}, "out.txt"
             )
         assert "Recorded max_run_size 'big; rm -rf ~'" in caplog.text
@@ -523,7 +524,7 @@ class TestStatusWithRegistry:
                 },
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
         assert reselect == (
@@ -546,7 +547,7 @@ class TestStatusWithRegistry:
                 {"skip_excluded": False, "column": "GCF_A", "threshold": 0.5, "table": "parsed_containment.txt"},
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
         assert reselect == (
@@ -573,7 +574,7 @@ class TestStatusWithRegistry:
                 },
                 "sel_noskip.txt",
             )
-        steps = StatusCommand._download_next_steps(load_registry(str(root / "metaquest_registry.json")))
+        steps = _download_next_steps(load_registry(str(root / "metaquest_registry.json")))
         commands = [s["command"] for s in steps]
         reselect = next(c for c in commands if c.startswith("metaquest select_datasets"))
 
@@ -771,14 +772,14 @@ class TestStatusWithRegistry:
     def test_selection_detail_formats_the_run_size(self, tmp_path, size, text):
         registry = load_registry(tmp_path / "metaquest_registry.json")
         record_selection(registry, ["SRR1"], {"column": "GCF_1", "max_run_size": size}, tmp_path / "a.txt")
-        assert text in StatusCommand._selection_detail(registry)
+        assert text in _selection_detail(registry)
 
     def test_selection_detail_leaves_out_a_malformed_run_filter(self, tmp_path):
         registry = load_registry(tmp_path / "metaquest_registry.json")
         record_selection(
             registry, ["SRR1"], {"column": "GCF_1", "max_run_size": "lots", "min_spots": -3}, tmp_path / "a.txt"
         )
-        detail = StatusCommand._selection_detail(registry)
+        detail = _selection_detail(registry)
         assert "max size" not in detail and "spots" not in detail
 
     def test_export_tsv(self, tmp_path, capsys, caplog):
