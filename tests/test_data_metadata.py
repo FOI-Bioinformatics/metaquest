@@ -119,7 +119,7 @@ class TestGetUniqueAccessions:
         # Create malformed CSV
         (matches_dir / "malformed.csv").write_text("invalid,csv\ncontent")
 
-        with patch("pandas.read_csv", side_effect=Exception("Read error")):
+        with patch("pandas.read_csv", side_effect=pd.errors.ParserError("Read error")):
             with patch("metaquest.data.metadata.logger") as mock_logger:
                 result = _get_unique_accessions(matches_dir, threshold=0.0)
 
@@ -1103,3 +1103,41 @@ class TestParseMetadataXml:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# --- Narrow exception handling (tech debt): a programming error must not be swallowed ---
+
+
+def test_data_access_error_from_download_metadata_chains_the_cause(tmp_path):
+    """Kind (c): the wrapped error keeps its cause."""
+    with pytest.raises(DataAccessError) as exc:
+        download_metadata(
+            email="a@b.c",
+            matches_folder=tmp_path,
+            metadata_folder=tmp_path / "metadata",
+            accessions_file=tmp_path / "missing.txt",
+        )
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+def test_unexpected_error_while_parsing_one_metadata_file_propagates(tmp_path):
+    """Kind (a): a bug in field extraction is no longer logged and skipped."""
+    (tmp_path / "SRR1_metadata.xml").write_text("<EXPERIMENT_PACKAGE_SET/>")
+    with patch("metaquest.data.metadata._extract_metadata_fields", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            parse_metadata(tmp_path, tmp_path / "out.tsv")
+
+
+def test_malformed_metadata_file_is_still_skipped(tmp_path):
+    """Kind (a): an XML syntax error skips that file only."""
+    (tmp_path / "SRR1_metadata.xml").write_text("<not xml")
+    assert parse_metadata(tmp_path, tmp_path / "out.tsv").empty
+
+
+def test_unique_sample_attributes_default_on_os_error_and_propagate_a_bug(tmp_path):
+    """Kind (b): a listing failure yields the default; a TypeError propagates."""
+    with patch("metaquest.data.metadata.list_files", side_effect=PermissionError("denied")):
+        assert get_unique_sample_attributes(tmp_path) == []
+    with patch("metaquest.data.metadata.list_files", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            get_unique_sample_attributes(tmp_path)

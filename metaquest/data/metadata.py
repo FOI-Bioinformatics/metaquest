@@ -17,7 +17,7 @@ from Bio import Entrez
 from lxml import etree
 from urllib.error import HTTPError, URLError
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import ensure_directory, list_files, write_csv
 
@@ -145,7 +145,9 @@ def _get_unique_accessions(matches_folder, threshold):
             # Add accessions to set
             unique_accessions.update(df[accession_col].tolist())
 
-        except Exception as e:
+        # pandas' ParserError and EmptyDataError are ValueErrors; KeyError is a missing
+        # containment column; TypeError is a containment column holding text.
+        except (OSError, ValueError, KeyError, TypeError) as e:
             logger.warning(f"Error reading {csv_file}: {e}")
 
     return unique_accessions
@@ -275,8 +277,8 @@ def download_metadata(
             accessions_to_download, metadata_path, email, to_download_count, api_key=api_key, batch_size=batch_size
         )
 
-    except Exception as e:
-        raise DataAccessError(f"Error downloading metadata: {e}")
+    except (OSError, ValueError, MetaQuestError) as e:
+        raise DataAccessError(f"Error downloading metadata: {e}") from e
 
 
 def _download_accessions_individually(
@@ -544,7 +546,7 @@ def _extract_metadata_fields(tree, xml_file):
 
         return metadata_dict
 
-    except Exception as e:
+    except ValueError as e:
         logger.error(f"Error extracting fields from {xml_file}: {e}")
         return {}
 
@@ -648,7 +650,7 @@ def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Pa
                 if processed_count % 100 == 0:
                     logger.info(f"Processed {processed_count} metadata files")
 
-            except Exception as e:
+            except (OSError, etree.XMLSyntaxError, ValueError) as e:
                 error_count += 1
                 logger.error(f"Error parsing {xml_file}: {e}")
 
@@ -665,8 +667,8 @@ def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Pa
 
         return metadata_df
 
-    except Exception as e:
-        raise DataAccessError(f"Error parsing metadata: {e}")
+    except (OSError, ValueError, MetaQuestError) as e:
+        raise DataAccessError(f"Error parsing metadata: {e}") from e
 
 
 def get_unique_sample_attributes(metadata_folder: Union[str, Path]) -> List[str]:
@@ -693,12 +695,12 @@ def get_unique_sample_attributes(metadata_folder: Union[str, Path]) -> List[str]
                 for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"):
                     unique_attributes.add(attribute.text)
 
-            except Exception as e:
+            except (OSError, etree.XMLSyntaxError) as e:
                 logger.warning(f"Error reading attributes from {xml_file}: {e}")
 
         return sorted(list(unique_attributes))
 
-    except Exception as e:
+    except (OSError, MetaQuestError) as e:
         logger.warning(f"Error getting unique sample attributes: {e}")
         return []
 
@@ -739,5 +741,6 @@ def check_metadata_attributes(file_path: Union[str, Path], output_file: Union[st
         logger.info(f"Saved attribute counts to {output_file}")
         return sorted_counts
 
-    except Exception as e:
-        raise DataAccessError(f"Error checking metadata attributes: {e}")
+    # pandas' ParserError and EmptyDataError are ValueErrors.
+    except (OSError, ValueError) as e:
+        raise DataAccessError(f"Error checking metadata attributes: {e}") from e
