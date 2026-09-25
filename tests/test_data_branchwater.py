@@ -334,7 +334,7 @@ class TestExtractMetadataFromBranchwater:
         csv_content = "acc,containment\ninvalid_content_here"
         (source_dir / "error.csv").write_text(csv_content)
 
-        with patch("pandas.read_csv", side_effect=Exception("Parse error")):
+        with patch("pandas.read_csv", side_effect=pd.errors.ParserError("Parse error")):
             result = extract_metadata_from_branchwater(source_dir, output_file)
 
         # Should handle error gracefully
@@ -557,7 +557,7 @@ class TestParseContainmentData:
         (matches_dir / "genome2.csv").write_text("data")
 
         with patch("metaquest.data.branchwater._process_genome_containments") as mock_process:
-            mock_process.side_effect = Exception("Processing error")
+            mock_process.side_effect = DataAccessError("Processing error")
 
             result = parse_containment_data(matches_dir, output_file, summary_file)
 
@@ -883,3 +883,36 @@ def test_summary_counts_samples_at_exactly_one(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# --- Narrow exception handling (tech debt): a programming error must not be swallowed ---
+
+
+def test_unexpected_error_while_parsing_one_containment_file_propagates(tmp_path):
+    """Kind (a): a bug is no longer counted as an unreadable file."""
+    (tmp_path / "genome1.csv").write_text("acc,containment\nSRR1,0.5\n")
+    with patch("metaquest.data.branchwater._process_genome_containments", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            parse_containment_data(tmp_path, tmp_path / "out.tsv", tmp_path / "summary.tsv")
+
+
+def test_unreadable_containment_file_is_still_skipped(tmp_path):
+    """Kind (a): a file that cannot be read is recorded in ``errors`` and skipped."""
+    (tmp_path / "genome1.csv").write_text("wrong,header\nx,y\n")
+    errors: list = []
+    parse_containment_data(tmp_path, tmp_path / "out.tsv", tmp_path / "summary.tsv", errors=errors)
+    assert errors == ["genome1.csv"]
+
+
+def test_data_access_error_from_genome_containments_chains_the_cause(tmp_path):
+    """Kind (c): the wrapped error keeps its cause."""
+    with pytest.raises(DataAccessError) as exc:
+        _process_genome_containments(tmp_path / "missing.csv", "g1", defaultdict(dict))
+    assert exc.value.__cause__ is not None
+
+
+def test_data_access_error_from_metadata_extraction_chains_the_cause(tmp_path):
+    """Kind (c): the wrapped error keeps its cause."""
+    with pytest.raises(DataAccessError) as exc:
+        extract_metadata_from_branchwater(tmp_path / "missing", tmp_path / "out.tsv")
+    assert isinstance(exc.value.__cause__, DataAccessError)

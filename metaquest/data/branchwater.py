@@ -11,7 +11,7 @@ from typing import Any, DefaultDict, Dict, List, Optional, Union
 
 import pandas as pd
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.core.models import ContainmentSummary
 from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import (
@@ -140,7 +140,7 @@ def process_branchwater_files(
             result_files[genome_id] = result_file
             processed_count += 1
 
-        except Exception as e:
+        except (OSError, MetaQuestError) as e:
             error_count += 1
             logger.error(f"Error processing {csv_file}: {e}")
             if errors is not None:
@@ -260,7 +260,8 @@ def extract_metadata_from_branchwater(
                 processed_count += 1
                 logger.info(f"Extracted metadata from {csv_file}")
 
-            except Exception as e:
+            # pandas' ParserError and EmptyDataError, and UnicodeDecodeError, are ValueErrors.
+            except (OSError, ValueError) as e:
                 error_count += 1
                 logger.error(f"Error extracting metadata from {csv_file}: {e}")
                 if errors is not None:
@@ -268,8 +269,8 @@ def extract_metadata_from_branchwater(
 
         return _finalize_metadata_extraction(metadata_records, output_file, processed_count, error_count)
 
-    except Exception as e:
-        raise DataAccessError(f"Error extracting metadata from Branchwater files: {e}")
+    except (OSError, ValueError, MetaQuestError) as e:
+        raise DataAccessError(f"Error extracting metadata from Branchwater files: {e}") from e
 
 
 def _finalize_metadata_extraction(metadata_records, output_file, processed_count, error_count):
@@ -363,8 +364,8 @@ def _process_genome_containments(csv_file, genome_id, containment_data, details_
                     _containment_details_row(containment.accession, genome_id, containment.value, containment)
                 )
 
-    except Exception as e:
-        raise DataAccessError(f"Error processing {csv_file}: {e}")
+    except (OSError, ValueError, MetaQuestError) as e:
+        raise DataAccessError(f"Error processing {csv_file}: {e}") from e
 
 
 def _generate_containment_summary(containment_data, output_file, summary_file, step_size):
@@ -449,8 +450,8 @@ def _generate_containment_summary(containment_data, output_file, summary_file, s
 
         return summary
 
-    except Exception as e:
-        raise DataAccessError(f"Error generating containment summary: {e}")
+    except (OSError, ValueError, MetaQuestError) as e:
+        raise DataAccessError(f"Error generating containment summary: {e}") from e
 
 
 def parse_containment_data(
@@ -505,7 +506,7 @@ def parse_containment_data(
         try:
             _process_genome_containments(csv_file, genome_id, containment_data, details_rows=details_rows)
             processed_count += 1
-        except Exception as e:
+        except MetaQuestError as e:
             error_count += 1
             logger.error(f"Error parsing containment from {csv_file}: {e}")
             if errors is not None:
