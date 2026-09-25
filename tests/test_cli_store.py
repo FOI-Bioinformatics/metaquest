@@ -24,9 +24,8 @@ from metaquest.cli.commands.store import (
     StoreUsageCommand,
     StoreVerifyCommand,
 )
-from metaquest.cli.commands.store._shared import update_linked
 from metaquest.core.constants import STORE_ENV
-from metaquest.data.registry import Registry, load_registry, save_registry
+from metaquest.data.registry import load_registry, save_registry
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
@@ -1917,26 +1916,3 @@ def test_reindex_and_verify_ignore_hidden_entries(tmp_path, monkeypatch):
     assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
     rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root)))
     assert rc == 0
-
-
-class TestUpdateLinked:
-    """``update_linked`` is the one place the registry's ``store["linked"]`` list is changed."""
-
-    def test_add_keeps_the_list_sorted_and_free_of_duplicates(self):
-        registry = Registry()
-        update_linked(registry, "SRR2", add=True)
-        update_linked(registry, "SRR1", add=True)
-        update_linked(registry, "SRR2", add=True)
-        assert registry.store["linked"] == ["SRR1", "SRR2"]
-
-    def test_remove_drops_the_accession_and_is_idempotent(self):
-        registry = Registry()
-        registry.store["linked"] = ["SRR1", "SRR2"]
-        update_linked(registry, "SRR1", add=False)
-        update_linked(registry, "SRR1", add=False)
-        assert registry.store["linked"] == ["SRR2"]
-
-    def test_remove_from_an_absent_list_leaves_an_empty_list(self):
-        registry = Registry()
-        update_linked(registry, "SRR1", add=False)
-        assert registry.store["linked"] == []

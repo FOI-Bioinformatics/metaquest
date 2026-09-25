@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any, List
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_completeness, _gitignore_guard, update_linked
+from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_completeness, _gitignore_guard
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
-from metaquest.data.registry import load_registry, record_download, registry_transaction
+from metaquest.data.registry import load_registry, record_download, registry_transaction, update_linked
 from metaquest.store.adopt import adopt
 from metaquest.store.layout import StorePaths, store_paths
 from metaquest.store.resolve import resolve_store_root

@@ -534,6 +534,23 @@ def set_download_verdict(registry: Registry, accession: str, verdict: Dict[str, 
     rb.set_download_block(registry, accession, download)
 
 
+def update_linked(registry: Registry, accession: str, add: bool) -> None:
+    """Add ``accession`` to, or remove it from, the registry's list of datasets this project links
+    from the store (``registry.store["linked"]``).
+
+    The list is kept sorted and free of duplicates, so calling this twice with the same arguments
+    leaves the registry as one call did.
+    """
+    store = rb.store_block(registry)
+    linked = set(store.linked or [])
+    if add:
+        linked.add(accession)
+    else:
+        linked.discard(accession)
+    store.linked = sorted(linked)
+    rb.set_store_block(registry, store)
+
+
 def nan_to_none(value: Any) -> Any:
     """Return ``None`` for a pandas NaN/NA value, else ``value`` unchanged."""
     import pandas as pd

@@ -9,7 +9,6 @@ import shutil
 from typing import Callable, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands.store._shared import update_linked
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
@@ -22,6 +21,7 @@ from metaquest.data.registry import (
     query,
     record_download,
     registry_transaction,
+    update_linked,
 )
 from metaquest.data.sra import (
     STORE_LINKED_PREFIX,

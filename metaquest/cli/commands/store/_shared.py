@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from metaquest.cli.base import emit_error_json
-from metaquest.data.registry import Registry
-from metaquest.data.registry_blocks import set_store_block, store_block
 from metaquest.store.layout import StorePaths, sidecar_path
 from metaquest.store.sidecar import sidecar_completeness
 
@@ -80,20 +78,3 @@ def _gitignore_guard(cwd: Path, log: logging.Logger) -> None:
 
     if result.stdout.strip():
         log.warning("fastq/ is tracked by git; remove it from version control, for example: git rm -r --cached fastq")
-
-
-def update_linked(registry: Registry, accession: str, add: bool) -> None:
-    """Add ``accession`` to, or remove it from, the registry's list of datasets this project links
-    from the store (``registry.store["linked"]``).
-
-    The list is kept sorted and free of duplicates, so calling this twice with the same arguments
-    leaves the registry as one call did.
-    """
-    store = store_block(registry)
-    linked = set(store.linked or [])
-    if add:
-        linked.add(accession)
-    else:
-        linked.discard(accession)
-    store.linked = sorted(linked)
-    set_store_block(registry, store)

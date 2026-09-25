@@ -1066,3 +1066,26 @@ class TestRecordExport:
     def test_to_int_or_none_is_public(self):
         assert reg.to_int_or_none("12") == 12
         assert reg.to_int_or_none("1.2G") is None
+
+
+class TestUpdateLinked:
+    """``update_linked`` is the one place the registry's ``store["linked"]`` list is changed."""
+
+    def test_add_keeps_the_list_sorted_and_free_of_duplicates(self):
+        registry = reg.Registry()
+        reg.update_linked(registry, "SRR2", add=True)
+        reg.update_linked(registry, "SRR1", add=True)
+        reg.update_linked(registry, "SRR2", add=True)
+        assert registry.store["linked"] == ["SRR1", "SRR2"]
+
+    def test_remove_drops_the_accession_and_is_idempotent(self):
+        registry = reg.Registry()
+        registry.store["linked"] = ["SRR1", "SRR2"]
+        reg.update_linked(registry, "SRR1", add=False)
+        reg.update_linked(registry, "SRR1", add=False)
+        assert registry.store["linked"] == ["SRR2"]
+
+    def test_remove_from_an_absent_list_leaves_an_empty_list(self):
+        registry = reg.Registry()
+        reg.update_linked(registry, "SRR1", add=False)
+        assert registry.store["linked"] == []
