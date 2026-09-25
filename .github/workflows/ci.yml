@@ -35,7 +35,9 @@ jobs:
           # Audit the project path (not the installed environment) so pip-audit resolves
           # dependencies from pyproject.toml instead of trying to look up the local,
           # unpublished "metaquest" package itself on PyPI.
-          pip-audit --strict --desc .
+          # --desc takes an optional value, so a bare "--desc ." would swallow the "."
+          # path argument as an (invalid) choice for --desc; --desc=auto avoids that.
+          pip-audit --strict --desc=auto .
 
       - name: Check code formatting with Black
         run: black --check --diff metaquest
