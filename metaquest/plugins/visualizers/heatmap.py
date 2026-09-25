@@ -39,8 +39,16 @@ def _draw_matrix(
     mask: Optional[np.ndarray] = None,
     linewidths: float = 0,
 ) -> None:
-    """Draw ``df`` as an image with labelled axes and a colour bar; masked cells are left blank."""
-    values = np.ma.masked_array(df.to_numpy(dtype=float), mask=mask if mask is not None else False)
+    """Draw ``df`` as an image with labelled axes and a colour bar; masked cells are left blank.
+
+    Non-finite cells (for example the correlations of a constant column) are masked as well, so
+    they are drawn blank and carry no "nan" annotation.
+    """
+    raw = df.to_numpy(dtype=float)
+    hidden = ~np.isfinite(raw)
+    if mask is not None:
+        hidden |= np.asarray(mask, dtype=bool)
+    values = np.ma.masked_array(raw, mask=hidden)
     image = ax.imshow(values, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto", interpolation="nearest")
     fig.colorbar(image, ax=ax)
 

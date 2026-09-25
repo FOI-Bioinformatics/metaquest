@@ -12,6 +12,7 @@ This module provides comprehensive testing for the plugin system including:
 import os
 import sys
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import pytest
 import tempfile
@@ -511,6 +512,22 @@ class TestHeatmapPlugin:
             n = self.test_data.shape[1]
             assert len(ax.texts) == n * (n - 1) // 2
             assert ax.get_title() == "Correlation Heatmap"
+        finally:
+            plt.close(result)
+
+    def test_correlation_heatmap_blanks_the_undefined_cells_of_a_constant_column(self):
+        """A constant column has no defined correlation: its cells are masked and carry no "nan" label."""
+        data = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [2.0, 1.0, 4.0, 3.0], "flat": [5.0, 5.0, 5.0, 5.0]})
+        result = HeatmapPlugin.create_correlation_heatmap(data=data, mask_upper=False)
+        try:
+            ax = result.axes[0]
+            labels = [text.get_text() for text in ax.texts]
+            assert "nan" not in labels
+            # Only the four a/b cells have a defined correlation.
+            assert len(labels) == 4
+            hidden = np.ma.getmaskarray(ax.images[0].get_array())
+            assert hidden[2, :].all() and hidden[:, 2].all()
+            assert not hidden[:2, :2].any()
         finally:
             plt.close(result)
 
