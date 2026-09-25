@@ -7,7 +7,6 @@ This module provides the foundation for a modular command architecture.
 import argparse
 import json
 import logging
-import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
@@ -27,7 +26,7 @@ def emit_error_json(message: str) -> None:
     For module-level helpers that have no command instance at hand. The message should also
     be logged by the caller when a human reader needs it; the log goes to stderr.
     """
-    print(json.dumps({"error": message}, indent=2), file=sys.stdout)
+    print(json.dumps({"error": message}, indent=2))
 
 
 class BaseCommand(ABC):
@@ -75,11 +74,11 @@ class BaseCommand(ABC):
 
     def emit(self, text: str = "") -> None:
         """Write one newline-terminated line of the command's result to stdout."""
-        print(text, file=sys.stdout)
+        print(text)
 
     def emit_json(self, payload: Any) -> None:
         """Write ``payload`` to stdout as exactly one JSON document (indent 2, trailing newline)."""
-        print(json.dumps(payload, indent=2), file=sys.stdout)
+        print(json.dumps(payload, indent=2))
 
 
 class CommandRegistry:

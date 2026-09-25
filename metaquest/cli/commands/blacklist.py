@@ -65,7 +65,7 @@ class BlacklistCommand(BaseCommand):
             entries = read_blacklist_file(blacklist_path)
             if args.list:
                 for acc in query(registry, "excluded"):
-                    print(f"{acc}\t{registry.datasets[acc]['exclusion'].get('reason', '')}")
+                    self.emit(f"{acc}\t{registry.datasets[acc]['exclusion'].get('reason', '')}")
                 return 0
             if args.remove:
                 for acc in args.remove:

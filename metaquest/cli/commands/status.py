@@ -8,7 +8,6 @@ exists yet, the report is reconstructed in memory from what is on disk.
 """
 
 import argparse
-import json
 import logging
 import math
 import shlex
@@ -530,42 +529,40 @@ class StatusCommand(BaseCommand):
 
     # ---------------------------------------------------------------- printing
 
-    @staticmethod
-    def _print_store(store: Dict[str, Any]) -> None:
-        print("\nStore")
-        print("=====")
-        print(f"  Root : {store['root']}")
+    def _print_store(self, store: Dict[str, Any]) -> None:
+        self.emit("\nStore")
+        self.emit("=====")
+        self.emit(f"  Root : {store['root']}")
         if not store.get("available", True):
-            print("  Unavailable: the store could not be read from here")
+            self.emit("  Unavailable: the store could not be read from here")
             return
         for state, count in sorted(store["datasets"].items()):
-            print(f"  {state:<10s}: {count}")
+            self.emit(f"  {state:<10s}: {count}")
 
-    @staticmethod
-    def _print_inventory(report: Dict[str, Any], list_missing: bool) -> None:
+    def _print_inventory(self, report: Dict[str, Any], list_missing: bool) -> None:
         od = report["on_disk"]
-        print("Local inventory")
-        print("===============")
-        print(f"  FASTQ accessions on disk : {od['fastq_accessions']}")
-        print(f"  Metadata XML on disk     : {od['metadata_xml']}")
-        print(f"  Genome FASTA on disk     : {od['genome_fasta']}")
+        self.emit("Local inventory")
+        self.emit("===============")
+        self.emit(f"  FASTQ accessions on disk : {od['fastq_accessions']}")
+        self.emit(f"  Metadata XML on disk     : {od['metadata_xml']}")
+        self.emit(f"  Genome FASTA on disk     : {od['genome_fasta']}")
 
         w = report.get("wanted")
         if w:
             incomplete_links = w.get("fastq_incomplete_store_links") or []
-            print(f"\nReconciled against {w['total']} wanted accession(s)")
+            self.emit(f"\nReconciled against {w['total']} wanted accession(s)")
             fastq_line = f"  FASTQ    : {w['fastq_present']} present, {len(w['fastq_missing'])} missing"
             if incomplete_links:
                 fastq_line += f", {len(incomplete_links)} linked to a store dataset that is not complete"
-            print(fastq_line)
-            print(f"  Metadata : {w['metadata_present']} present, {len(w['metadata_missing'])} missing")
+            self.emit(fastq_line)
+            self.emit(f"  Metadata : {w['metadata_present']} present, {len(w['metadata_missing'])} missing")
             if list_missing:
                 if w["fastq_missing"]:
-                    print("  Missing FASTQ    : " + ", ".join(w["fastq_missing"]))
+                    self.emit("  Missing FASTQ    : " + ", ".join(w["fastq_missing"]))
                 if incomplete_links:
-                    print("  Incomplete store links : " + ", ".join(incomplete_links))
+                    self.emit("  Incomplete store links : " + ", ".join(incomplete_links))
                 if w["metadata_missing"]:
-                    print("  Missing metadata : " + ", ".join(w["metadata_missing"]))
+                    self.emit("  Missing metadata : " + ", ".join(w["metadata_missing"]))
 
     @staticmethod
     def _selection_detail(registry: Registry) -> str:
@@ -613,10 +610,9 @@ class StatusCommand(BaseCommand):
                 unverified.append(acc)
         return {"truncated": sorted(truncated), "unverified": sorted(unverified)}
 
-    @staticmethod
-    def _print_stages(stages: Dict[str, Any], registry: Registry) -> None:
-        print("\nStages")
-        print("======")
+    def _print_stages(self, stages: Dict[str, Any], registry: Registry) -> None:
+        self.emit("\nStages")
+        self.emit("======")
         details = {
             "selected": StatusCommand._selection_detail(registry),
             "excluded": StatusCommand._exclusion_detail(registry),
@@ -624,79 +620,74 @@ class StatusCommand(BaseCommand):
         for stage in STAGES:
             info = stages[stage]
             detail = details.get(stage)
-            print(f"  {stage:<10s} : {info['count']}" + (f"   {detail}" if detail else ""))
+            self.emit(f"  {stage:<10s} : {info['count']}" + (f"   {detail}" if detail else ""))
         truncated = StatusCommand._download_verdicts(registry)["truncated"]
         if truncated:
-            print(f"  truncated downloads: {len(truncated)} (" + ", ".join(truncated) + ")")
+            self.emit(f"  truncated downloads: {len(truncated)} (" + ", ".join(truncated) + ")")
 
-    @staticmethod
-    def _print_genomes(genomes: Dict[str, Any]) -> None:
+    def _print_genomes(self, genomes: Dict[str, Any]) -> None:
         if not genomes:
             return
-        print("\nGenomes")
-        print("=======")
+        self.emit("\nGenomes")
+        self.emit("=======")
         for genome_id, info in genomes.items():
             zero_mapped = len(info["zero_mapped"])
             empty_dirs = len(info["empty_assembly_dirs"])
-            print(
+            self.emit(
                 f"  {genome_id}: extracted {info['extracted']} ({zero_mapped} with 0 mapped reads), "
                 f"assembled {info['assembled']}, {empty_dirs} empty assembly dir(s)"
             )
 
-    @staticmethod
-    def _print_stage_filter(registry: Registry, stage: Optional[str], genomes: Optional[List[str]]) -> None:
+    def _print_stage_filter(self, registry: Registry, stage: Optional[str], genomes: Optional[List[str]]) -> None:
         if not stage:
             return
         accs = StatusCommand._stage_filter_accessions(registry, stage, genomes)
         detail = f" (genome {', '.join(genomes)})" if genomes else ""
-        print(f"\nStage '{stage}'{detail}: " + (", ".join(accs) if accs else "(none)"))
+        self.emit(f"\nStage '{stage}'{detail}: " + (", ".join(accs) if accs else "(none)"))
 
-    @staticmethod
-    def _print_gaps(registry: Registry) -> None:
+    def _print_gaps(self, registry: Registry) -> None:
         selected = set(query(registry, "selected"))
         excluded = set(query(registry, "excluded"))
         downloaded_set = set(query(registry, "downloaded"))
         not_downloaded = sorted(selected - excluded - downloaded_set)
-        print("\nGaps")
-        print("====")
-        print("  Selected but not downloaded : " + (", ".join(not_downloaded) if not_downloaded else "(none)"))
+        self.emit("\nGaps")
+        self.emit("====")
+        self.emit("  Selected but not downloaded : " + (", ".join(not_downloaded) if not_downloaded else "(none)"))
         for genome_id in sorted(known_genome_ids(registry)):
             gap = sorted(downloaded_set - set(query(registry, "extracted", genome_id)))
             if gap:
-                print(f"  Downloaded but not extracted for {genome_id} : " + ", ".join(gap))
+                self.emit(f"  Downloaded but not extracted for {genome_id} : " + ", ".join(gap))
 
-    @staticmethod
-    def _print_drift(drift: Dict[str, Any]) -> None:
+    def _print_drift(self, drift: Dict[str, Any]) -> None:
         if not drift:
             return
-        print("\nDrift against disk")
-        print("===================")
-        print(
+        self.emit("\nDrift against disk")
+        self.emit("===================")
+        self.emit(
             "  Recorded downloaded but missing on disk : "
             + (", ".join(drift["recorded_missing"]) if drift["recorded_missing"] else "(none)")
         )
-        print(
+        self.emit(
             "  On disk but not tracked as downloaded   : "
             + (", ".join(drift["untracked_fastq"]) if drift["untracked_fastq"] else "(none)")
         )
         if drift["untracked_extractions"]:
             pairs = ", ".join(f"{acc}/{genome_id}" for acc, genome_id in drift["untracked_extractions"])
-            print(f"  Untracked extractions                   : {pairs}")
+            self.emit(f"  Untracked extractions                   : {pairs}")
         if drift["empty_assembly_dirs"]:
             pairs = ", ".join(f"{acc}/{genome_id}" for acc, genome_id in drift["empty_assembly_dirs"])
-            print(f"  Empty assembly directories               : {pairs}")
+            self.emit(f"  Empty assembly directories               : {pairs}")
         if drift.get("dangling_links"):
-            print("  Store links with a missing target       : " + ", ".join(drift["dangling_links"]))
+            self.emit("  Store links with a missing target       : " + ", ".join(drift["dangling_links"]))
 
-    @staticmethod
-    def _print_next(steps: List[Dict[str, Any]]) -> None:
+    def _print_next(self, steps: List[Dict[str, Any]]) -> None:
         if not steps:
             return
-        print("\nSuggested next steps")
-        print("=====================")
+        self.emit("\nSuggested next steps")
+        self.emit("=====================")
         for step in steps:
-            print(f"  {step['command']}")
-            print("    accessions: " + ", ".join(step["accessions"]))
+            self.emit(f"  {step['command']}")
+            self.emit("    accessions: " + ", ".join(step["accessions"]))
 
     def _print_report(self, args: argparse.Namespace, report: Dict[str, Any], registry: Registry) -> None:
         self._print_inventory(report, args.list_missing)
@@ -713,7 +704,7 @@ class StatusCommand(BaseCommand):
 
     def _emit(self, args: argparse.Namespace, report: Dict[str, Any], registry: Registry) -> None:
         if args.json:
-            print(json.dumps(report, indent=2))
+            self.emit_json(report)
         else:
             self._print_report(args, report, registry)
 

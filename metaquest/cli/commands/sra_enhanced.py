@@ -103,19 +103,18 @@ class SRAInfoCommand(BaseCommand):
             help="Estimated bandwidth in Mbps for download time estimation",
         )
 
-    @staticmethod
-    def _print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, bandwidth_mbps):
+    def _print_analysis_summary(self, accessions, metadata, tech_counts, total_size_gb, bandwidth_mbps):
         """Print the SRA dataset analysis summary (counts, distributions, size, ETA)."""
-        print("\nSRA Dataset Analysis:")
-        print("===================")
-        print(f"Total accessions: {len(accessions)}")
-        print(f"Metadata fetched: {len(metadata)}")
-        print(f"Total estimated size: {total_size_gb:.2f} GB")
+        self.emit("\nSRA Dataset Analysis:")
+        self.emit("===================")
+        self.emit(f"Total accessions: {len(accessions)}")
+        self.emit(f"Metadata fetched: {len(metadata)}")
+        self.emit(f"Total estimated size: {total_size_gb:.2f} GB")
 
         if tech_counts:
-            print("\nTechnology distribution:")
+            self.emit("\nTechnology distribution:")
             for tech, count in tech_counts.items():
-                print(f"  {tech}: {count} datasets")
+                self.emit(f"  {tech}: {count} datasets")
 
         platforms: dict = {}
         layouts: dict = {}
@@ -124,26 +123,26 @@ class SRAInfoCommand(BaseCommand):
             layouts[info.layout] = layouts.get(info.layout, 0) + 1
 
         if platforms:
-            print("\nPlatform distribution:")
+            self.emit("\nPlatform distribution:")
             for platform, count in platforms.items():
-                print(f"  {platform}: {count}")
+                self.emit(f"  {platform}: {count}")
         if layouts:
-            print("\nLayout distribution:")
+            self.emit("\nLayout distribution:")
             for layout, count in layouts.items():
-                print(f"  {layout}: {count}")
+                self.emit(f"  {layout}: {count}")
 
         sizes = [info.size_mb / 1024 for info in metadata.values()]  # Convert to GB
         if sizes:
-            print("\nSize statistics:")
-            print(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
-            print(f"  Largest dataset: {max(sizes):.2f} GB")
-            print(f"  Smallest dataset: {min(sizes):.2f} GB")
+            self.emit("\nSize statistics:")
+            self.emit(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
+            self.emit(f"  Largest dataset: {max(sizes):.2f} GB")
+            self.emit(f"  Smallest dataset: {min(sizes):.2f} GB")
 
         estimated_hours = estimate_download_time(total_size_gb, bandwidth_mbps, 4)
         if estimated_hours < 1:
-            print(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
+            self.emit(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
         else:
-            print(f"  Estimated download time: {estimated_hours:.1f} hours")
+            self.emit(f"  Estimated download time: {estimated_hours:.1f} hours")
 
     def execute(self, args):
         try:
@@ -151,22 +150,22 @@ class SRAInfoCommand(BaseCommand):
                 accessions = [line.strip() for line in f if line.strip()]
 
             if not accessions:
-                print("No accessions found in file")
+                self.emit("No accessions found in file")
                 return 1
 
-            print(f"Analyzing {len(accessions)} SRA accessions...")
+            self.emit(f"Analyzing {len(accessions)} SRA accessions...")
 
             client = SRAMetadataClient(args.email, args.api_key)
             metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
 
             if not metadata:
-                print("Could not fetch metadata for any accessions")
+                self.emit("Could not fetch metadata for any accessions")
                 return 1
 
             self._print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, args.bandwidth_mbps)
 
             save_metadata_report(metadata, args.output_report)
-            print(f"\nDetailed report saved to: {args.output_report}")
+            self.emit(f"\nDetailed report saved to: {args.output_report}")
 
             return 0
 
@@ -257,19 +256,19 @@ class SRAStatsCommand(BaseCommand):
             fastq_folder = Path(args.fastq_folder)
 
             if not fastq_folder.exists():
-                print(f"FASTQ folder {fastq_folder} does not exist")
+                self.emit(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
 
-            print("Calculating comprehensive statistics for downloaded datasets...")
+            self.emit("Calculating comprehensive statistics for downloaded datasets...")
 
             # Generate statistics report
             summary = generate_statistics_report(
                 fastq_folder, args.output_report, sample_size=getattr(args, "sample_size", DEFAULT_SAMPLE_SIZE)
             )
             for line in summary:
-                print(line)
+                self.emit(line)
 
-            print(f"\nStatistics report saved to: {args.output_report}")
+            self.emit(f"\nStatistics report saved to: {args.output_report}")
 
             self._record_statistics(args, Path(args.output_report))
 
@@ -469,7 +468,7 @@ class SRAValidateCommand(BaseCommand):
         check_md5: bool = False,
     ):
         """Validate a single accession directory."""
-        print(f"Validating {acc_dir.name}...")
+        self.emit(f"Validating {acc_dir.name}...")
 
         raw_files = visible_files(acc_dir, "*.fastq*")
         if not raw_files:
@@ -511,20 +510,20 @@ class SRAValidateCommand(BaseCommand):
 
     def _print_validation_results(self, validation_results):
         """Print validation results summary."""
-        print("\nValidation Results:")
-        print("=================")
+        self.emit("\nValidation Results:")
+        self.emit("=================")
 
         passed = [r for r in validation_results if r["status"] == "PASSED"]
         failed = [r for r in validation_results if r["status"] == "FAILED"]
 
-        print(f"Total validated: {len(validation_results)}")
-        print(f"Passed: {len(passed)}")
-        print(f"Failed: {len(failed)}")
+        self.emit(f"Total validated: {len(validation_results)}")
+        self.emit(f"Passed: {len(passed)}")
+        self.emit(f"Failed: {len(failed)}")
 
         if failed:
-            print("\nFailed validations:")
+            self.emit("\nFailed validations:")
             for result in failed:
-                print(f"  {result['accession']}: {result['issues']}")
+                self.emit(f"  {result['accession']}: {result['issues']}")
 
         return len(failed) == 0
 
@@ -532,14 +531,14 @@ class SRAValidateCommand(BaseCommand):
         try:
             fastq_folder = Path(args.fastq_folder)
             if not fastq_folder.exists():
-                print(f"FASTQ folder {fastq_folder} does not exist")
+                self.emit(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
 
-            print("Validating downloaded SRA datasets...")
+            self.emit("Validating downloaded SRA datasets...")
 
             accession_dirs = self._find_accession_dirs(fastq_folder, args.accessions)
             if not accession_dirs:
-                print("No accession directories found")
+                self.emit("No accession directories found")
                 return 1
 
             registry = load_registry(args.registry)

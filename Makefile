@@ -7,7 +7,7 @@ help:
 	@echo "  test        - Run tests with coverage"
 	@echo "  lint        - Run flake8 linting"
 	@echo "  format      - Format code with black"
-	@echo "  check       - Run all quality checks (format, lint, type check)"
+	@echo "  check       - Run all quality checks (format, lint, type check, no print outside cli/base.py)"
 	@echo "  build       - Build distribution packages"
 	@echo "  clean       - Clean build artifacts and cache"
 	@echo "  pipeline    - Run full integration test pipeline"
@@ -46,6 +46,8 @@ check:
 	python -m flake8 metaquest tests
 	@echo "Running type check..."
 	python -m mypy metaquest
+	@echo "Checking that nothing prints outside metaquest/cli/base.py (commands use self.emit)..."
+	bash scripts/check_no_print.sh
 	@echo "Guarding against the frozen plotly-latest CDN alias..."
 	@if grep -rn "cdn.plot.ly/plotly-latest" metaquest --include='*.py'; then \
 		echo "ERROR: use metaquest.utils.html.plotly_cdn_script() instead of the plotly-latest alias"; \

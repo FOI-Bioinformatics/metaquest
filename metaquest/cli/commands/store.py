@@ -15,16 +15,15 @@ without ever running `store_init` has its identity minted on the spot
 """
 
 import argparse
-import json
 import logging
 import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Collection, Dict, List, Optional, Tuple
+from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
 
-from metaquest.cli.base import BaseCommand
+from metaquest.cli.base import BaseCommand, emit_error_json
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import load_registry, project_root, record_download, registry_transaction
@@ -61,12 +60,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _no_store_hint(as_json: bool = False) -> None:
+def _no_store_hint(emit: Callable[[str], None], as_json: bool = False) -> None:
+    """Tell the user no store is configured: a JSON error document with ``--json``, else one line
+    through the calling command's ``emit``."""
     message = "No store configured; run: metaquest store_init --data-root PATH"
     if as_json:
-        print(json.dumps({"error": message}))
+        emit_error_json(message)
     else:
-        print(message)
+        emit(message)
 
 
 def _stale_project_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -330,25 +331,24 @@ class StoreStatusCommand(BaseCommand):
                 report["datasets_list"] = self._datasets_list(catalog)
         return report
 
-    @staticmethod
-    def _print_report(report: Dict[str, Any], verbose: bool) -> None:
-        print("Store")
-        print("=====")
-        print(f"  Root         : {report['root']}")
-        print(f"  Id           : {report['id']}")
-        print(f"  Bytes total  : {report['bytes_total']}")
-        print(f"  Projects     : {report['projects']}")
+    def _print_report(self, report: Dict[str, Any], verbose: bool) -> None:
+        self.emit("Store")
+        self.emit("=====")
+        self.emit(f"  Root         : {report['root']}")
+        self.emit(f"  Id           : {report['id']}")
+        self.emit(f"  Bytes total  : {report['bytes_total']}")
+        self.emit(f"  Projects     : {report['projects']}")
         for state, count in sorted(report["datasets"].items()):
-            print(f"  {state:<12s}: {count}")
+            self.emit(f"  {state:<12s}: {count}")
         if report["stale_projects"]:
-            print("  Stale projects:")
+            self.emit("  Stale projects:")
             for entry in report["stale_projects"]:
-                print(f"    {entry['name']} on {entry['hostname']} ({entry['reason']}: {entry['registry']})")
+                self.emit(f"    {entry['name']} on {entry['hostname']} ({entry['reason']}: {entry['registry']})")
         if verbose:
-            print("\nDatasets")
-            print("========")
+            self.emit("\nDatasets")
+            self.emit("========")
             for entry in report.get("datasets_list", []):
-                print(
+                self.emit(
                     f"  {entry['accession']:<15s} {entry['state']:<10s} "
                     f"{entry['bytes']:>12} bytes  {entry['projects']} project(s)"
                 )
@@ -362,7 +362,7 @@ class StoreStatusCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(getattr(args, "json", False))
+            _no_store_hint(self.emit, getattr(args, "json", False))
             return 1
 
         try:
@@ -372,7 +372,7 @@ class StoreStatusCommand(BaseCommand):
             return 1
 
         if args.json:
-            print(json.dumps(report, indent=2))
+            self.emit_json(report)
         else:
             self._print_report(report, args.verbose)
         return 0
@@ -431,7 +431,7 @@ class StoreReindexCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(self.emit)
             return 1
 
         try:
@@ -467,7 +467,7 @@ class StoreReindexCommand(BaseCommand):
             self.logger.error(str(e))
             return 1
 
-        print(f"Reindexed {count} dataset(s); restored {projects} project(s) and {usage} usage record(s)")
+        self.emit(f"Reindexed {count} dataset(s); restored {projects} project(s) and {usage} usage record(s)")
         return 0
 
     def _warn_no_projects_restored(self, paths: StorePaths, flagged: bool) -> None:
@@ -572,7 +572,7 @@ class StoreAdoptCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(self.emit)
             return 1
 
         try:
@@ -591,17 +591,17 @@ class StoreAdoptCommand(BaseCommand):
             return 1
 
         if args.dry_run:
-            print(f"Would adopt {len(report.planned)} dataset(s)")
+            self.emit(f"Would adopt {len(report.planned)} dataset(s)")
             if report.planned:
-                print("  " + ", ".join(sorted(report.planned)))
+                self.emit("  " + ", ".join(sorted(report.planned)))
             if report.conflicts:
-                print(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
+                self.emit(f"Conflicts (left in place): {', '.join(sorted(report.conflicts))}")
             for label, accessions in (
                 ("Empty folders, not adopted", report.empty),
                 ("Failed (store copy not verified), project copy kept", report.failed),
             ):
                 if accessions:
-                    print(f"{label}: {', '.join(sorted(accessions))}")
+                    self.emit(f"{label}: {', '.join(sorted(accessions))}")
             return 0
 
         # Only an accession the project now links to needs its download record pointed at the
@@ -665,7 +665,7 @@ class StoreAdoptCommand(BaseCommand):
         record_usage_many(paths, usage_registry, [(acc, "", "copied", "store_adopt --copy") for acc in copied])
 
     def _print_report(self, report: Any) -> None:
-        print(
+        self.emit(
             f"Adopted {len(report.adopted)}, copied {len(report.copied)}, "
             f"deduplicated {len(report.deduplicated)}, conflicts {len(report.conflicts)}, "
             f"skipped {len(report.skipped)}, empty {len(report.empty)}, failed {len(report.failed)}"
@@ -679,7 +679,7 @@ class StoreAdoptCommand(BaseCommand):
             ("Failed to stage, project copy kept", report.failed),
         ):
             if accessions:
-                print(f"{label}: {', '.join(sorted(accessions))}")
+                self.emit(f"{label}: {', '.join(sorted(accessions))}")
         if report.conflicts:
             self.logger.warning("Conflicting accessions left in place: %s", ", ".join(sorted(report.conflicts)))
         if report.failed:
@@ -1011,12 +1011,11 @@ class StoreVerifyCommand(BaseCommand):
             catalog.upsert_dataset(sidecar)
         result["state"] = new_state
 
-    @staticmethod
-    def _print_table(results: List[Dict[str, Any]]) -> None:
-        print(f"{'accession':<15s} {'state':<10s} {'bytes_ok':<9s} {'md5_ok':<7s} verdict")
+    def _print_table(self, results: List[Dict[str, Any]]) -> None:
+        self.emit(f"{'accession':<15s} {'state':<10s} {'bytes_ok':<9s} {'md5_ok':<7s} verdict")
         for r in results:
             md5_col = "-" if r["md5_ok"] is None else str(r["md5_ok"])
-            print(f"{r['accession']:<15s} {r['state']:<10s} {str(r['bytes_ok']):<9s} {md5_col:<7s} {r['verdict']}")
+            self.emit(f"{r['accession']:<15s} {r['state']:<10s} {str(r['bytes_ok']):<9s} {md5_col:<7s} {r['verdict']}")
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -1027,7 +1026,7 @@ class StoreVerifyCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(self.emit)
             return 1
 
         try:
@@ -1130,7 +1129,7 @@ class StoreLinkCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(self.emit)
             return 1
 
         paths = store_paths(root)
@@ -1170,7 +1169,7 @@ class StoreLinkCommand(BaseCommand):
             # Outside the transaction: see the note in store_adopt.
             record_usage_many(paths, usage_registry, [(acc, "", "linked", "store_link") for acc in linked])
 
-        print(f"Linked {len(linked)} of {len(args.accessions)} accession(s)")
+        self.emit(f"Linked {len(linked)} of {len(args.accessions)} accession(s)")
         return 1 if failed else 0
 
 
@@ -1224,7 +1223,7 @@ class StoreUnlinkCommand(BaseCommand):
                 reg_linked.difference_update(removed)
                 reg.store["linked"] = sorted(reg_linked)
 
-        print(f"Unlinked {len(removed)} of {len(args.accessions)} accession(s)")
+        self.emit(f"Unlinked {len(removed)} of {len(args.accessions)} accession(s)")
         return 1 if refused else 0
 
 
@@ -1375,12 +1374,11 @@ class StoreUsageCommand(BaseCommand):
 
     # ---------------------------------------------------------------- print
 
-    @classmethod
-    def _print_rows(cls, selector: str, rows: List[Dict[str, Any]]) -> None:
-        columns = cls._COLUMNS[selector]
-        print("  ".join(f"{label:<15s}" for _, label in columns))
+    def _print_rows(self, selector: str, rows: List[Dict[str, Any]]) -> None:
+        columns = self._COLUMNS[selector]
+        self.emit("  ".join(f"{label:<15s}" for _, label in columns))
         for row in rows:
-            print("  ".join(f"{str(row.get(key, '')):<15s}" for key, _ in columns))
+            self.emit("  ".join(f"{str(row.get(key, '')):<15s}" for key, _ in columns))
 
     # --------------------------------------------------------------- execute
 
@@ -1393,7 +1391,7 @@ class StoreUsageCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(getattr(args, "json", False))
+            _no_store_hint(self.emit, getattr(args, "json", False))
             return 1
 
         try:
@@ -1425,7 +1423,7 @@ class StoreUsageCommand(BaseCommand):
             return 1
 
         if args.json:
-            print(json.dumps({"selector": selector, "rows": rows}, indent=2))
+            self.emit_json({"selector": selector, "rows": rows})
         else:
             self._print_rows(selector, rows)
         return 0
@@ -1733,24 +1731,23 @@ class StoreGcCommand(BaseCommand):
 
     # ----------------------------------------------------------------- print
 
-    @staticmethod
-    def _print_report(report: Dict[str, Any], performed: bool) -> None:
+    def _print_report(self, report: Dict[str, Any], performed: bool) -> None:
         verb = "Removed" if performed else "Would remove"
-        print(
+        self.emit(
             f"{verb} {len(report['datasets'])} dataset(s), {len(report['leftovers'])} leftover(s), "
             f"{report['total_bytes']} bytes total"
         )
         for entry in report["datasets"]:
-            print(f"  dataset   {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
+            self.emit(f"  dataset   {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
         for entry in report["leftovers"]:
-            print(f"  leftover  {entry['path']:<40s} {entry['bytes']:>12} bytes  {entry['reason']}")
+            self.emit(f"  leftover  {entry['path']:<40s} {entry['bytes']:>12} bytes  {entry['reason']}")
         for key in ("still_linked", "in_use", "kept_stale"):
             for entry in report.get(key, []):
-                print(f"  kept      {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
+                self.emit(f"  kept      {entry['accession']:<15s} {entry['bytes']:>12} bytes  {entry['reason']}")
         if report["stale_projects"]:
-            print("Stale projects:")
+            self.emit("Stale projects:")
             for entry in report["stale_projects"]:
-                print(f"  {entry['name']} on {entry['hostname']} ({entry['reason']}: {entry['registry']})")
+                self.emit(f"  {entry['name']} on {entry['hostname']} ({entry['reason']}: {entry['registry']})")
 
     # --------------------------------------------------------------- execute
 
@@ -1767,7 +1764,7 @@ class StoreGcCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(getattr(args, "json", False))
+            _no_store_hint(self.emit, getattr(args, "json", False))
             return 1
 
         paths = store_paths(root)
@@ -1777,7 +1774,7 @@ class StoreGcCommand(BaseCommand):
                 refusal = self._refuse_before_candidates(catalog, rebuilt, getattr(args, "accept_rebuilt", False))
                 if refusal is not None:
                     if args.json:
-                        print(json.dumps({"error": refusal}))
+                        emit_error_json(refusal)
                     return 1
                 stale = stale_projects(catalog)
                 buckets = self._dataset_candidates(
@@ -1823,7 +1820,7 @@ class StoreGcCommand(BaseCommand):
             return 1
 
         if args.json:
-            print(json.dumps(report, indent=2))
+            self.emit_json(report)
         else:
             self._print_report(report, args.yes)
         return 0

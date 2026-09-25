@@ -239,3 +239,24 @@ def test_no_library_module_prints():
         cwd=REPO_ROOT,
     )
     assert hits.stdout.strip() == ""
+
+
+def test_print_gate_script_passes_on_the_tree():
+    result = subprocess.run(["bash", "scripts/check_no_print.sh"], capture_output=True, text=True, cwd=REPO_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_print_gate_script_fails_on_a_print_outside_base(tmp_path):
+    (tmp_path / "metaquest" / "cli").mkdir(parents=True)
+    (tmp_path / "metaquest" / "cli" / "base.py").write_text('print("allowed")\n')
+    (tmp_path / "metaquest" / "library.py").write_text('def f():\n    print("not allowed")\n')
+    (tmp_path / "metaquest" / "other.py").write_text("import pprint\npprint.pprint(1)\nself._print_table(1)\n")
+
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "check_no_print.sh"), str(tmp_path)], capture_output=True, text=True
+    )
+
+    assert result.returncode == 1
+    assert "metaquest/library.py:2:" in result.stdout
+    assert "metaquest/cli/base.py:1:" not in result.stdout
+    assert "metaquest/other.py:" not in result.stdout

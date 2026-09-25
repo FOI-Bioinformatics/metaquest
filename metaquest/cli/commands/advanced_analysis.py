@@ -303,19 +303,19 @@ class TaxonomyValidationCommand(BaseCommand):
             valid_count = results_df["is_valid"].sum()
             total_count = len(results_df)
 
-            print("\nTaxonomy Validation Summary:")
-            print("============================")
-            print(f"Total species: {total_count}")
-            print(f"Valid species: {valid_count} " f"({valid_count / total_count * 100:.1f}%)")
-            print(
+            self.emit("\nTaxonomy Validation Summary:")
+            self.emit("============================")
+            self.emit(f"Total species: {total_count}")
+            self.emit(f"Valid species: {valid_count} " f"({valid_count / total_count * 100:.1f}%)")
+            self.emit(
                 f"Invalid species: {total_count - valid_count} ({(total_count - valid_count) / total_count * 100:.1f}%)"  # noqa: E501
             )
 
             # Show confidence distribution
             confidence_counts = results_df["confidence"].value_counts()
-            print("\nConfidence distribution:")
+            self.emit("\nConfidence distribution:")
             for conf, count in confidence_counts.items():
-                print(f"  {conf}: {count}")
+                self.emit(f"  {conf}: {count}")
 
             logger.info("Taxonomy validation completed successfully!")
             return 0
@@ -388,12 +388,12 @@ class TaxonomicSummaryCommand(BaseCommand):
             )
 
             # Print summary statistics
-            print("\nTaxonomic Summary Results:")
-            print("==========================")
+            self.emit("\nTaxonomic Summary Results:")
+            self.emit("==========================")
             for level, summary_df in summaries.items():
                 n_taxa = summary_df.shape[1]
                 n_samples = summary_df.shape[0]
-                print(f"{level.title()}: {n_taxa} taxa across {n_samples} samples")
+                self.emit(f"{level.title()}: {n_taxa} taxa across {n_samples} samples")
 
             logger.info("Taxonomic summaries created successfully!")
             return 0
