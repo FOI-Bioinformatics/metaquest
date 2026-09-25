@@ -1524,7 +1524,7 @@ class TestRetryFailedDownloads:
 
         with patch("metaquest.data.sra.download_accession") as mock_download:
             with patch("metaquest.data.sra.time.sleep") as mock_sleep:
-                mock_download.side_effect = [(True, "Retry success"), (False, "Retry failed")]
+                mock_download.side_effect = [(True, "Retry success"), (False, "Retry failed"), OSError("still failing")]
 
                 retried_successful, updated_failed, abort_reason = _retry_failed_downloads(
                     failed_accessions,
@@ -1535,7 +1535,7 @@ class TestRetryFailedDownloads:
                     download_results=download_results,
                 )
 
-        assert download_results == {"SRR123": "Retry 1: Retry success", "SRR456": "Retry 2 error: "}
+        assert download_results == {"SRR123": "Retry 1: Retry success", "SRR456": "Retry 2 error: still failing"}
         assert updated_failed == ["SRR456"]
         assert retried_successful == 1
         assert abort_reason is None
@@ -2289,7 +2289,7 @@ class TestDownloadSraStore:
             scratch = Path(kwargs["temp_folder"])
             scratch.mkdir(parents=True, exist_ok=True)
             (scratch / "marker").write_text("fasterq-dump scratch")
-            raise RuntimeError("fasterq-dump exploded")
+            raise OSError("fasterq-dump exploded")
 
         return _download
 
@@ -2677,3 +2677,68 @@ class TestDownloadInterrupt:
         )
         assert (retried, failed, abort) == (0, ["SRR1"], None)
         worker.assert_not_called()
+
+
+# --- Narrow exception handling (tech debt): a programming error must not be swallowed ---
+
+
+def test_unexpected_error_in_retry_downloader_propagates(tmp_path):
+    """Kind (a): a downloader bug is no longer counted as a failed accession."""
+
+    def buggy_downloader(*args, **kwargs):
+        raise TypeError("bug")
+
+    with pytest.raises(TypeError):
+        _retry_failed_downloads(["SRR1"], 1, tmp_path, 1, None, {}, downloader=buggy_downloader)
+
+
+def test_retry_downloader_os_error_still_marks_the_accession_failed(tmp_path):
+    """Kind (a): an expected error still marks the item failed and continues."""
+
+    def failing_downloader(*args, **kwargs):
+        raise OSError("disk full")
+
+    download_results = {}
+    result = _retry_failed_downloads(["SRR1"], 1, tmp_path, 1, None, download_results, downloader=failing_downloader)
+    assert "SRR1" in result[1]
+    assert "disk full" in download_results["SRR1"]
+
+
+def test_fasterq_dump_version_is_empty_on_a_tool_error_and_propagates_a_bug():
+    """Kind (b): the narrow error yields the default; a TypeError propagates."""
+    from metaquest.data.sra import fasterq_dump_version
+
+    with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=SecurityError("not found")):
+        assert fasterq_dump_version() == ""
+    with patch("metaquest.data.sra.SecureSubprocess.run_secure", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            fasterq_dump_version()
+
+
+def test_accession_has_fastq_ignores_a_sidecar_that_is_not_an_object(tmp_path):
+    """Kind (b): a JSON sidecar holding a list is treated as carrying no state."""
+    acc = tmp_path / "SRR1"
+    acc.mkdir()
+    (acc / "SRR1.fastq").write_text("@r\nA\n+\nI\n")
+    (acc / "SRR1.json").write_text("[1, 2]")
+    assert accession_has_fastq(acc) is True
+
+
+def test_data_access_error_from_download_sra_chains_the_cause(tmp_path):
+    """Kind (c): the wrapped error keeps its cause."""
+    with pytest.raises(DataAccessError) as exc:
+        download_sra(tmp_path / "fastq", tmp_path / "missing.txt")
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+def test_safe_rmtree_logs_an_os_error_and_propagates_a_bug(tmp_path, caplog):
+    """Kind (e): a filesystem error is logged; a TypeError propagates."""
+    target = tmp_path / "d"
+    target.mkdir()
+    with patch("metaquest.data.sra.shutil.rmtree", side_effect=PermissionError("denied")):
+        with caplog.at_level(logging.WARNING):
+            _safe_rmtree(target)
+    assert "Could not remove directory" in caplog.text
+    with patch("metaquest.data.sra.shutil.rmtree", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            _safe_rmtree(target)

@@ -13,12 +13,12 @@ import shutil
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_MAX_WORKERS, FAILED_ACCESSIONS_FILE, FASTQ_GLOBS, MAX_CONCURRENT_DOWNLOADS
-from metaquest.core.exceptions import DataAccessError, SecurityError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError, SecurityError
 from metaquest.data.file_io import ensure_directory, visible_files
 from metaquest.utils.security import SecureSubprocess
 
@@ -26,6 +26,16 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle: metaquest.store imports th
     from metaquest.store.layout import StorePaths
 
 logger = logging.getLogger(__name__)
+
+# What SecureSubprocess.run_secure raises for a tool that fails, times out, is refused or
+# cannot be started.
+_TOOL_ERRORS = (subprocess.CalledProcessError, subprocess.TimeoutExpired, SecurityError, OSError)
+
+# What a download worker (download_accession, or the store downloader) raises for a dataset
+# that could not be fetched: store and catalogue failures arrive as DataAccessError, file and
+# FASTQ reading failures as OSError, EOFError or ValueError. Anything else is a programming
+# error and propagates.
+_DOWNLOAD_ERRORS = (MetaQuestError, OSError, EOFError, ValueError, subprocess.SubprocessError)
 
 # Ratio of downloaded reads to NCBI's recorded run_total_spots at or above which a download
 # counts as complete rather than truncated.
@@ -169,7 +179,7 @@ def _safe_rmtree(path: Path) -> None:
     try:
         if path.exists():
             shutil.rmtree(path, onexc=_ignore_missing)
-    except Exception as e:
+    except OSError as e:
         logger.warning(f"Could not remove directory {path}: {e}")
 
 
@@ -185,7 +195,9 @@ def _notify_result(
         return
     try:
         on_result(accession, success, message)
-    except Exception as e:
+    # The callback is supplied by the caller and may raise anything (a registry lock timeout,
+    # a JSON error); none of it may be mistaken for the download failing.
+    except Exception as e:  # noqa: B902 - callback of unknown type, see the docstring
         logger.warning(f"Recording the result for {accession} failed: {e}")
 
 
@@ -265,9 +277,11 @@ def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
     sidecar = acc_path / f"{acc_path.name}.json"
     if sidecar.exists():
         try:
-            state = json.loads(sidecar.read_text()).get("state")
-        except Exception:
-            state = None
+            data = json.loads(sidecar.read_text())
+        except (OSError, ValueError):
+            data = None
+        # A sidecar that is unreadable, not JSON, or not a JSON object carries no state.
+        state = data.get("state") if isinstance(data, dict) else None
         if state in ("partial", "failed", "downloading"):
             return False
 
@@ -420,7 +434,7 @@ def _read_blacklist_files(blacklist_files):
                         file_accessions.add(accession)
                         blacklisted_accessions.add(accession)
             logger.info(f"Read {len(file_accessions)} blacklisted accessions from {blacklist_file}")
-        except Exception as e:
+        except (OSError, UnicodeDecodeError) as e:
             logger.warning(f"Error reading blacklist file {blacklist_file}: {e}")
 
     return blacklisted_accessions
@@ -444,7 +458,7 @@ def _prepare_temp_folder(temp_folder):
             temp_dir = tempfile.mkdtemp()
             logger.info(f"Created temporary folder: {temp_dir}")
             return Path(temp_dir)
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"Could not create temporary folder: {e}")
             return None
 
@@ -459,7 +473,7 @@ def _prepare_temp_folder(temp_folder):
             logger.info(f"Using temp folder: {temp_path_obj.absolute()}")
             SecureSubprocess.add_allowed_root(temp_path_obj)
             return temp_path_obj
-    except Exception as e:
+    except (OSError, SecurityError) as e:
         logger.warning(f"Could not create or access temp folder {temp_folder}: {e}, " "using default temp location")
         return None
 
@@ -475,7 +489,7 @@ def _remove_stale_entry(output_path: Path) -> None:
             output_path.unlink()
         else:
             shutil.rmtree(output_path)
-    except Exception as e:
+    except OSError as e:
         logger.warning(f"Could not remove {output_path}: {e}")
 
 
@@ -496,7 +510,7 @@ def _check_existing_download(output_path, force):
     if output_path.is_symlink() and not output_path.exists():
         try:
             output_path.unlink()
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"Could not remove dangling symlink {output_path}: {e}")
         return False
 
@@ -517,7 +531,7 @@ def _check_existing_download(output_path, force):
                 output_path.unlink()
             else:
                 output_path.rmdir()
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"Could not remove empty directory {output_path}: {e}")
 
     return False
@@ -544,7 +558,7 @@ def compress_fastq(path: Path, threads: int) -> Path:
     if shutil.which("pigz"):
         try:
             SecureSubprocess.run_secure("pigz", ["-p", str(threads), "-f", str(path)])
-        except Exception:
+        except _TOOL_ERRORS:
             if target.exists():
                 try:
                     target.unlink()
@@ -617,7 +631,7 @@ def _handle_download_output(
     # Remove the temporary directory
     try:
         shutil.rmtree(temp_path)
-    except Exception as e:
+    except OSError as e:
         logger.warning(f"Could not remove temp directory {temp_path}: {e}")
 
     logger.info(f"Successfully downloaded: {len(found)} files")
@@ -638,7 +652,7 @@ def _handle_download_output(
                 break
             try:
                 compress_fastq(file, num_threads)
-            except Exception as e:
+            except _TOOL_ERRORS as e:
                 logger.warning(f"Could not compress {file}: {e}")
                 compression_failures.append(file.name)
 
@@ -847,7 +861,7 @@ def download_accession(
         message = f"Security error: {e}"
         return False, f"{classify_download_error(message)}: {message}"
 
-    except Exception as e:
+    except (OSError, EOFError, ValueError, subprocess.TimeoutExpired, DataAccessError) as e:
         logger.error(f"Error downloading {accession}: {e}")
         # <acc>_temp is kept for inspection; a new attempt starts clean.
         message = f"Download failed: {str(e)}"
@@ -870,7 +884,7 @@ def fasterq_dump_version() -> str:
         result = SecureSubprocess.run_secure("fasterq-dump", ["--version"])
         lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
         return lines[-1] if lines else ""
-    except Exception as e:
+    except _TOOL_ERRORS as e:
         logger.debug(f"Could not read the fasterq-dump version: {e}")
         return ""
 
@@ -1199,7 +1213,8 @@ def _process_download_results(futures_results, accessions_to_download, download_
                 failed_accessions.append(accession)
                 logger.warning(f"Failed to download {accession}: {message}")
 
-        except Exception as e:
+        # A worker that raised leaves None here (see _run_download_pool), which does not unpack.
+        except (TypeError, ValueError) as e:
             failed_count += 1
             failed_accessions.append(accession)
             logger.error(f"Error processing download result for {accession}: {e}")
@@ -1302,7 +1317,7 @@ def _retry_failed_downloads(
                     keep_sra=keep_sra,
                     compress=compress,
                 )
-            except Exception as e:
+            except _DOWNLOAD_ERRORS as e:
                 failed_accessions.append(accession)
                 logger.error(f"Error retrying download for {accession}: {e}")
                 download_results[accession] = f"Retry {retry + 1} error: {str(e)}"
@@ -1418,7 +1433,7 @@ def _execute_parallel_downloads(
                 acc = futures[future]
                 try:
                     result = future.result()
-                except Exception as e:
+                except (*_DOWNLOAD_ERRORS, CancelledError) as e:
                     logger.error(f"Download failed for {acc}: {e}")
                     futures_results.append((acc, None))
                     _notify_result(on_result, acc, False, str(e))
@@ -1747,5 +1762,5 @@ def download_sra(
 
         return download_stats
 
-    except Exception as e:
-        raise DataAccessError(f"Downloading SRA data: {e}")
+    except (OSError, ValueError, MetaQuestError) as e:
+        raise DataAccessError(f"Downloading SRA data: {e}") from e
