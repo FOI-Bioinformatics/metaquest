@@ -807,18 +807,25 @@ class TestGenerateStatisticsReport:
         # Bases are scaled from the sampled mean read length times the exact read count.
         assert df.loc[0, "total_bases"] == 60
 
-    def test_generate_statistics_prints_that_metrics_are_sampled(self, tmp_path, capsys):
+    def test_generate_statistics_summary_says_that_metrics_are_sampled(self, tmp_path, capsys):
         fastq_folder = tmp_path / "fastq"
         fastq_folder.mkdir()
         acc_dir = fastq_folder / "SRR001"
         acc_dir.mkdir()
         (acc_dir / "SRR001.fastq").write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
 
-        generate_statistics_report(fastq_folder, tmp_path / "report.csv", sample_size=2)
+        lines = generate_statistics_report(fastq_folder, tmp_path / "report.csv", sample_size=2)
 
-        out = capsys.readouterr().out
         # total_reads counts mates, not NCBI spots; sra_stats' summary says so.
-        assert "Total reads (mates counted): 5 (read-level metrics from a sample)" in out
+        assert "Total reads (mates counted): 5 (read-level metrics from a sample)" in lines
+        # A library function returns the summary; it does not write to stdout itself.
+        assert capsys.readouterr().out == ""
+
+    def test_generate_statistics_returns_no_lines_without_datasets(self, tmp_path):
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+
+        assert generate_statistics_report(fastq_folder, tmp_path / "report.csv") == []
 
     def test_generate_statistics_cache_survives_a_zero_byte_extra_file(self, tmp_path):
         """The signature written into the cache uses the same file list ``cached_stats``

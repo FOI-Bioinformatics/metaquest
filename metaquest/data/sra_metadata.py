@@ -745,29 +745,33 @@ def _dataset_stats_row(acc_dir: Path, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
     }
 
 
-def _print_statistics_summary(df: pd.DataFrame) -> None:
-    """Print the aggregate statistics and layout distribution for a report DataFrame."""
-    print("\nDataset Statistics Summary:")
-    print("==========================")
-    print(f"Total datasets: {len(df)}")
+def format_statistics_summary(df: pd.DataFrame) -> List[str]:
+    """The aggregate statistics and layout distribution for a report DataFrame, as text lines.
+
+    The caller decides where the lines go (``sra_stats`` writes them to stdout).
+    """
     # The read totals are exact counts; a sampled row's per-read metrics (and therefore its
     # base total) come from a subset of the records, which the reader should know about.
     sampled = " (read-level metrics from a sample)" if bool(df.get("sampled", pd.Series(dtype=bool)).any()) else ""
-    print(f"Total reads (mates counted): {df['total_reads'].sum():,}{sampled}")
-    print(f"Total bases: {df['total_bases'].sum():,}")
-    print(f"Average read length: {df['avg_read_length'].mean():.1f}")
-    print(f"Average GC content: {df['gc_content'].mean():.1f}%")
-
-    print("\nLayout distribution:")
-    for layout, count in df["layout"].value_counts().items():
-        print(f"  {layout}: {count}")
+    lines = [
+        "\nDataset Statistics Summary:",
+        "==========================",
+        f"Total datasets: {len(df)}",
+        f"Total reads (mates counted): {df['total_reads'].sum():,}{sampled}",
+        f"Total bases: {df['total_bases'].sum():,}",
+        f"Average read length: {df['avg_read_length'].mean():.1f}",
+        f"Average GC content: {df['gc_content'].mean():.1f}%",
+        "\nLayout distribution:",
+    ]
+    lines.extend(f"  {layout}: {count}" for layout, count in df["layout"].value_counts().items())
+    return lines
 
 
 def generate_statistics_report(
     fastq_folder: Union[str, Path],
     output_file: Union[str, Path],
     sample_size: int = DEFAULT_SAMPLE_SIZE,
-) -> None:
+) -> List[str]:
     """
     Generate comprehensive statistics report for downloaded datasets.
 
@@ -776,6 +780,10 @@ def generate_statistics_report(
         output_file: Output report file path
         sample_size: Records sampled per dataset for the per-read metrics (GC, quality,
             read length); read totals stay exact regardless of this value
+
+    Returns:
+        The summary lines from ``format_statistics_summary`` for the caller to show, or an
+        empty list when no report was written.
     """
     fastq_path = Path(fastq_folder)
     if not fastq_path.exists():
@@ -786,18 +794,18 @@ def generate_statistics_report(
     accession_dirs = visible_files(fastq_path, dirs=True)
     if not accession_dirs:
         logger.warning("No accession directories found")
-        return
+        return []
 
     report_data = [row for acc_dir in accession_dirs if (row := _dataset_stats_row(acc_dir, sample_size)) is not None]
 
     if not report_data:
         logger.error("No statistics could be calculated")
-        return
+        return []
 
     df = pd.DataFrame(report_data)
     df.to_csv(output_file, index=False)
     logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
-    _print_statistics_summary(df)
+    return format_statistics_summary(df)
 
 
 def estimate_download_time(total_size_gb: float, bandwidth_mbps: float = 100, num_parallel: int = 4) -> float:

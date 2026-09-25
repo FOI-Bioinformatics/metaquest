@@ -5,9 +5,11 @@ This module provides the foundation for a modular command architecture.
 """
 
 import argparse
+import json
 import logging
+import sys
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -17,6 +19,15 @@ class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         if action.default is None or action.default is argparse.SUPPRESS:
             return action.help or ""
         return super()._get_help_string(action) or ""
+
+
+def emit_error_json(message: str) -> None:
+    """Write ``{"error": message}`` to stdout as one JSON document.
+
+    For module-level helpers that have no command instance at hand. The message should also
+    be logged by the caller when a human reader needs it; the log goes to stderr.
+    """
+    print(json.dumps({"error": message}, indent=2), file=sys.stdout)
 
 
 class BaseCommand(ABC):
@@ -57,6 +68,18 @@ class BaseCommand(ABC):
     def execute(self, args: argparse.Namespace) -> int:
         """Execute the command with parsed arguments."""
         pass
+
+    # Output. stdout carries the command's result (tables, JSON); stderr carries logging.
+    # These two methods and ``emit_error_json`` are the only places in the package that
+    # print (``scripts/check_no_print.sh`` enforces this).
+
+    def emit(self, text: str = "") -> None:
+        """Write one newline-terminated line of the command's result to stdout."""
+        print(text, file=sys.stdout)
+
+    def emit_json(self, payload: Any) -> None:
+        """Write ``payload`` to stdout as exactly one JSON document (indent 2, trailing newline)."""
+        print(json.dumps(payload, indent=2), file=sys.stdout)
 
 
 class CommandRegistry:

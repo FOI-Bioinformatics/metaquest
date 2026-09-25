@@ -304,7 +304,7 @@ class MetaquestTaxonomyPlugin(CommandLinePlugin):
 
             valid_count = results_df["is_valid"].sum()
             total_count = len(results_df)
-            print(f"\nValid: {valid_count}/{total_count} " f"({valid_count / total_count * 100:.1f}%)")
+            logger.info(f"Valid: {valid_count}/{total_count} ({valid_count / total_count * 100:.1f}%)")
 
         except Exception as e:
             logger.error(f"Taxonomy validation failed: {e}")

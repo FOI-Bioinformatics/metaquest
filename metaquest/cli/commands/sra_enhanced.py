@@ -263,9 +263,11 @@ class SRAStatsCommand(BaseCommand):
             print("Calculating comprehensive statistics for downloaded datasets...")
 
             # Generate statistics report
-            generate_statistics_report(
+            summary = generate_statistics_report(
                 fastq_folder, args.output_report, sample_size=getattr(args, "sample_size", DEFAULT_SAMPLE_SIZE)
             )
+            for line in summary:
+                print(line)
 
             print(f"\nStatistics report saved to: {args.output_report}")
 

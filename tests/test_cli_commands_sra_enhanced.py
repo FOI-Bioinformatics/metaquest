@@ -251,6 +251,27 @@ class TestSRAStatsCommand:
         assert result == 0
         mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv", sample_size=10000)
 
+    def test_execute_writes_the_summary_lines_to_stdout(self, tmp_path, capsys):
+        """The library returns the summary; the command is what writes it to stdout."""
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            output_report=str(tmp_path / "stats.csv"),
+            accessions=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+        with patch(
+            "metaquest.cli.commands.sra_enhanced.generate_statistics_report",
+            return_value=["Total datasets: 2", "  PAIRED: 2"],
+        ):
+            assert SRAStatsCommand().execute(args) == 0
+
+        out = capsys.readouterr().out
+        assert "Total datasets: 2\n  PAIRED: 2\n" in out
+
     @patch("builtins.print")
     def test_execute_records_analyses_in_registry(self, mock_print, tmp_path):
         """Each accession in the (mocked) statistics report is recorded as an sra_stats analysis."""
@@ -268,6 +289,7 @@ class TestSRAStatsCommand:
                     {"accession": "SRR2", "total_reads": 2000, "gc_content": 50.0, "avg_read_length": 151.0},
                 ]
             ).to_csv(output_report, index=False)
+            return []
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
@@ -313,6 +335,7 @@ class TestSRAStatsCommand:
             pd_module.DataFrame(
                 [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
             ).to_csv(output_report, index=False)
+            return []
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
@@ -355,6 +378,7 @@ class TestSRAStatsCommand:
             pd_module.DataFrame(
                 [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
             ).to_csv(output_report, index=False)
+            return []
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
@@ -1194,6 +1218,7 @@ class TestAnalysisWithoutAReachableStore:
             pd_module.DataFrame(
                 [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
             ).to_csv(output_report, index=False)
+            return []
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
