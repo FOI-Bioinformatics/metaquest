@@ -59,6 +59,7 @@ dev = [
     "black>=24.0",
     "mypy>=1.8",
     "radon>=6.0",
+    "pip-audit>=2.7",
 ]
 all = [
     "metaquest[maps,sourmash]",

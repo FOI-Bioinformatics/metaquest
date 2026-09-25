@@ -52,8 +52,49 @@ jobs:
       
       - name: Verify outputs
         run: |
-          # Check if files were created
-          test -f test_data/processed/example.csv && echo "✓ Branchwater file processed successfully" || echo "✗ Branchwater file processing failed"
-          test -f test_data/metadata/branchwater_metadata.txt && echo "✓ Metadata extracted successfully" || echo "✗ Metadata extraction failed"
-          test -f test_data/parsed_containment.txt && echo "✓ Containment parsed successfully" || echo "✗ Containment parsing failed"
-          test -f test_data/summary_containment.txt && echo "✓ Summary created successfully" || echo "✗ Summary creation failed"
+          # The fixture files above are synthetic and always identical (2 accessions,
+          # a fixed column set), so the checks below assert on the exact shape the
+          # pipeline is expected to produce, not just that a file exists. Any assertion
+          # failure raises and fails this step, unlike the previous echo-only check.
+          python -c "
+          import csv
+          from pathlib import Path
+
+          def read_rows(path, delimiter=','):
+              with open(path, newline='') as fh:
+                  return list(csv.reader(fh, delimiter=delimiter))
+
+          processed = Path('test_data/processed/example.csv')
+          assert processed.is_file(), f'missing {processed}'
+          rows = read_rows(processed)
+          expected_columns = [
+              'acc', 'containment', 'cANI', 'biosample', 'bioproject', 'assay_type',
+              'collection_date_sam', 'geo_loc_name_country_calc', 'organism', 'lat_lon',
+          ]
+          assert rows[0] == expected_columns, f'unexpected columns in {processed}: {rows[0]}'
+          assert len(rows) - 1 == 2, f'expected 2 data rows in {processed}, got {len(rows) - 1}'
+          print(f'processed CSV OK: {len(rows) - 1} rows, {len(rows[0])} columns')
+
+          metadata = Path('test_data/metadata/branchwater_metadata.txt')
+          assert metadata.is_file(), f'missing {metadata}'
+          meta_rows = read_rows(metadata, delimiter='\t')
+          assert 'Run_ID' in meta_rows[0], f'Run_ID missing from metadata header: {meta_rows[0]}'
+          assert len(meta_rows) - 1 == 2, f'expected 2 metadata rows, got {len(meta_rows) - 1}'
+          print(f'metadata OK: {len(meta_rows) - 1} rows')
+
+          parsed = Path('test_data/parsed_containment.txt')
+          assert parsed.is_file(), f'missing {parsed}'
+          parsed_rows = read_rows(parsed, delimiter='\t')
+          header = parsed_rows[0]
+          for column in ('max_containment', 'max_containment_annotation'):
+              assert column in header, f'{column} missing from parsed containment header: {header}'
+          assert len(parsed_rows) - 1 == 2, f'expected 2 parsed containment rows, got {len(parsed_rows) - 1}'
+          print(f'parsed containment OK: {len(parsed_rows) - 1} rows')
+
+          summary = Path('test_data/summary_containment.txt')
+          assert summary.is_file(), f'missing {summary}'
+          summary_rows = read_rows(summary, delimiter='\t')
+          assert summary_rows[0] == ['Threshold', 'Count'], f'unexpected summary header: {summary_rows[0]}'
+          assert len(summary_rows) - 1 > 0, 'no rows in summary containment file'
+          print(f'summary containment OK: {len(summary_rows) - 1} rows')
+          "
