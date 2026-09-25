@@ -8,7 +8,9 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from metaquest.plugins.sourmash_plugin import (
+pytest.importorskip("sourmash")
+
+from metaquest.plugins.sourmash_plugin import (  # noqa: E402
     MetaquestParsePlugin,
     MetaquestPlotPlugin,
     MetaquestDiversityPlugin,

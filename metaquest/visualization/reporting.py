@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from metaquest.core.exceptions import MetaQuestError, VisualizationError
+from metaquest.core.optional import require
 from metaquest.core.utils import get_genome_columns as _get_genome_columns
 from metaquest.visualization.plots import (
     plot_containment,
@@ -23,17 +24,6 @@ from metaquest.visualization.plots import (
 
 logger = logging.getLogger(__name__)
 
-
-# Check if jinja2 is available for HTML reports
-try:
-    import jinja2
-
-    JINJA2_AVAILABLE = True
-    _TEMPLATE_ERRORS: tuple = (jinja2.TemplateError,)
-except ImportError:
-    JINJA2_AVAILABLE = False
-    _TEMPLATE_ERRORS = ()
-    logger.warning("jinja2 not available. HTML report generation will be limited.")
 
 # What drawing or saving one optional figure raises: the plot helpers raise VisualizationError,
 # the genome-column helper ProcessingError, savefig OSError or ValueError, and pandas ValueError or
@@ -56,15 +46,13 @@ def generate_report(
     include_plots: bool = True,
     include_tables: bool = True,
 ) -> Union[str, Path]:
+    # An HTML report needs jinja2 (interactive extra); check before reading or writing anything.
+    if format == "html":
+        require("jinja2", "interactive", "An HTML report")
     try:
         # Check format
         if format not in ("pdf", "html"):
             raise VisualizationError(f"Unsupported report format: {format}")
-
-        if format == "html" and not JINJA2_AVAILABLE:
-            raise VisualizationError(
-                "HTML report generation requires jinja2. " "Please install with 'pip install jinja2'"
-            )
 
         # Load data files
         summary_data = pd.read_csv(summary_file, sep="\t", index_col=0)
@@ -107,7 +95,7 @@ def generate_report(
     except VisualizationError:
         raise
     # pandas' ParserError and EmptyDataError are ValueErrors.
-    except (OSError, ValueError, KeyError, MetaQuestError, *_TEMPLATE_ERRORS) as e:
+    except (OSError, ValueError, KeyError, MetaQuestError) as e:
         raise VisualizationError(f"Error generating report: {e}") from e
 
 
@@ -775,8 +763,7 @@ def _generate_html_report(
     Returns:
         Path to the generated HTML report
     """
-    if not JINJA2_AVAILABLE:
-        raise VisualizationError("HTML report generation requires jinja2. " "Please install with 'pip install jinja2'")
+    jinja2 = require("jinja2", "interactive", "An HTML report")
 
     # Create output directory
     output_path = Path(output_file)
@@ -812,11 +799,12 @@ def _generate_html_report(
     template_loader = jinja2.FileSystemLoader(searchpath=str(Path(__file__).parent))
     template_env = jinja2.Environment(loader=template_loader)
 
-    # Get template
-    template = template_env.get_template("templates/report_template.html")
-
-    # Render template
-    output_html = template.render(**template_data)
+    # Get and render the template
+    try:
+        template = template_env.get_template("templates/report_template.html")
+        output_html = template.render(**template_data)
+    except jinja2.TemplateError as e:
+        raise VisualizationError(f"Error rendering HTML report template: {e}") from e
 
     # Write to file
     with open(output_path, "w") as f:

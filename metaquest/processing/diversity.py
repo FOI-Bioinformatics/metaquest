@@ -8,10 +8,10 @@ essential for microbiome and metagenomic analysis.
 import logging
 import numpy as np
 import pandas as pd
-from sklearn.metrics import pairwise_distances
 from typing import Any, Dict, List, Tuple, Union
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.core.optional import require
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,10 @@ def calculate_beta_diversity(
     Raises:
         ProcessingError: If calculation fails
     """
+    # Bray-Curtis and Jaccard are computed here; every other metric comes from scikit-learn.
+    sklearn_metrics = None
+    if metric not in ("bray_curtis", "jaccard"):
+        sklearn_metrics = require("sklearn.metrics", "analysis", f"The {metric} beta diversity metric")
     try:
         if isinstance(abundance_matrix, pd.DataFrame):
             data = abundance_matrix.values
@@ -106,15 +110,9 @@ def calculate_beta_diversity(
             distances = _calculate_bray_curtis_distance(data)
         elif metric == "jaccard":
             distances = _calculate_jaccard_distance(data)
-        elif metric == "euclidean":
-            distances = pairwise_distances(data, metric="euclidean")
-        elif metric == "manhattan":
-            distances = pairwise_distances(data, metric="manhattan")
-        elif metric == "cosine":
-            distances = pairwise_distances(data, metric="cosine")
         else:
-            # Use sklearn's pairwise_distances for other metrics
-            distances = pairwise_distances(data, metric=metric)
+            assert sklearn_metrics is not None
+            distances = sklearn_metrics.pairwise_distances(data, metric=metric)
 
         if return_dataframe:
             distance_df = pd.DataFrame(distances, index=sample_names, columns=sample_names)

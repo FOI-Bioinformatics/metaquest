@@ -5,12 +5,19 @@ This file provides foundational tests for the SRA reporting module.
 Run: pytest tests/test_sra_reporting_starter.py -v
 """
 
+import sys
+import importlib.util
 import pytest
 from datetime import datetime
 from unittest.mock import patch
 from dataclasses import dataclass
 
+from metaquest.core.exceptions import ConfigurationError
 from metaquest.sra.reporting import SRAReportGenerator
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
+)
 
 
 # Mock data classes since we're testing reporting, not the underlying data structures
@@ -110,19 +117,19 @@ class TestHelperMethods:
 class TestPlotlyIntegration:
     """Test Plotly integration for interactive plots."""
 
-    def test_create_quality_plots_without_plotly(self, tmp_output_dir):
-        """Test quality plot creation without Plotly."""
+    def test_create_quality_plots_without_plotly(self, tmp_output_dir, monkeypatch):
+        """Without plotly the plots are an error naming the interactive extra."""
         generator = SRAReportGenerator(tmp_output_dir)
+        monkeypatch.setitem(sys.modules, "plotly", None)
 
-        with patch("metaquest.sra.reporting.PLOTLY_AVAILABLE", False):
-            plots = generator._create_quality_plots({})
-
-        assert plots == {}
+        with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
+            generator._create_quality_plots({})
 
 
 class TestErrorHandling:
     """Test error handling in various scenarios."""
 
+    @requires_interactive
     def test_generate_quality_dashboard_no_profiles(self, tmp_output_dir):
         """Test quality dashboard generation with no valid profiles."""
         generator = SRAReportGenerator(tmp_output_dir)
@@ -133,40 +140,50 @@ class TestErrorHandling:
                 generator.generate_quality_dashboard(["SRR001", "SRR002"])
 
 
+@requires_interactive
 class TestHTMLGeneration:
     """Test HTML generation methods."""
 
-    def test_generate_simple_quality_html(self, tmp_output_dir):
-        """Test simple quality HTML generation."""
+    def test_generate_quality_html(self, tmp_output_dir):
+        """The quality dashboard renders its title and summary through the jinja2 template."""
         generator = SRAReportGenerator(tmp_output_dir)
 
         dashboard_data = {
             "title": "Test Quality Dashboard",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_datasets": 5,
-            "summary_stats": {"total_reads": 5000000, "average_gc_content": 0.45, "high_contamination_count": 2},
+            "summary_stats": {
+                "total_reads": 5000000,
+                "average_gc_content": 0.45,
+                "high_contamination_count": 2,
+                "quality_grade_distribution": {"good": 3},
+            },
+            "anomaly_report": {"anomalous_datasets": [], "explanations": {}},
+            "plots": {},
         }
 
-        html = generator._generate_simple_quality_html(dashboard_data)
+        with patch("metaquest.sra.reporting.plotly_js_script", return_value=""):
+            html = generator._generate_quality_html(dashboard_data)
 
-        # Verify HTML structure
         assert "<html" in html
         assert "Test Quality Dashboard" in html
-        assert "5000000" in html or "5,000,000" in html
+        assert "5,000,000" in html
 
-    def test_generate_simple_comparative_html(self, tmp_output_dir):
-        """Test simple comparative HTML generation."""
+    def test_generate_comparative_html(self, tmp_output_dir):
+        """The comparative report renders each group's dataset count."""
         generator = SRAReportGenerator(tmp_output_dir)
 
         report_data = {
             "title": "Comparative Analysis",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "group_counts": {"Group A": 10, "Group B": 15},
+            "comparison": {"statistical_tests": {}, "recommendations": []},
+            "plots": {},
         }
 
-        html = generator._generate_simple_comparative_html(report_data)
+        with patch("metaquest.sra.reporting.plotly_js_script", return_value=""):
+            html = generator._generate_comparative_html(report_data)
 
-        # Verify HTML structure
         assert "<html" in html
         assert "Comparative Analysis" in html
         assert "Group A" in html

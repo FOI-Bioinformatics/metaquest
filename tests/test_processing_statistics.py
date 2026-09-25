@@ -7,6 +7,7 @@ Tests for statistical analysis functions including enrichment and distance calcu
 from unittest.mock import patch
 import numpy as np
 import pandas as pd
+import importlib.util
 import pytest
 
 from metaquest.processing.statistics import (
@@ -21,7 +22,12 @@ from metaquest.processing.statistics import (
 )
 from metaquest.core.exceptions import ProcessingError
 
+requires_analysis = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("sklearn", "scipy")), reason="needs metaquest[analysis]"
+)
 
+
+@requires_analysis
 class TestCalculateEnrichment:
     """Test calculate_enrichment function."""
 
@@ -313,6 +319,7 @@ class TestCalculateDistanceMatrix:
             calculate_distance_matrix("nonexistent_file.txt")
 
 
+@requires_analysis
 class TestPerformHypergeometricTest:
     """Test perform_hypergeometric_test function."""
 
@@ -399,6 +406,7 @@ class TestPerformHypergeometricTest:
 class TestStatisticsIntegration:
     """Integration tests for statistics module."""
 
+    @requires_analysis
     def test_full_enrichment_workflow(self):
         """Test complete enrichment analysis workflow."""
         # Simulate realistic data
@@ -447,6 +455,7 @@ class TestStatisticsIntegration:
 class TestEdgeCasesAndErrorHandling:
     """Test edge cases and error handling not covered elsewhere."""
 
+    @requires_analysis
     def test_calculate_enrichment_both_zero_counts(self):
         """Test enrichment when both observed and expected are zero."""
         observed = {"gene_A": 0}
@@ -457,6 +466,7 @@ class TestEdgeCasesAndErrorHandling:
         assert len(result) == 1
         assert result.iloc[0]["fold_enrichment"] == 1.0
 
+    @requires_analysis
     def test_calculate_enrichment_large_numbers(self):
         """Test enrichment with very large numbers."""
         observed = {"gene_A": 1000000}
@@ -467,8 +477,9 @@ class TestEdgeCasesAndErrorHandling:
         assert len(result) == 1
         assert result.iloc[0]["fold_enrichment"] == 2.0
 
-    @patch("metaquest.processing.statistics.stats.fisher_exact")
-    @patch("metaquest.processing.statistics.stats.false_discovery_control")
+    @requires_analysis
+    @patch("scipy.stats.fisher_exact")
+    @patch("scipy.stats.false_discovery_control")
     def test_calculate_enrichment_statistical_functions(self, mock_fdr, mock_fisher):
         """Test that statistical functions are called correctly."""
         mock_fisher.return_value = (2.0, 0.05)
@@ -614,6 +625,7 @@ class TestEdgeCasesAndErrorHandling:
         logged_message = mock_logger.info.call_args[0][0]
         assert "jaccard distances for 2 samples" in logged_message
 
+    @requires_analysis
     def test_perform_hypergeometric_test_boundary_values(self):
         """Test hypergeometric test with boundary values."""
         # Test with minimum valid inputs
@@ -630,6 +642,7 @@ class TestEdgeCasesAndErrorHandling:
         fold_enrichment, p_value = perform_hypergeometric_test(5, 100, 1000, 1000000)
         assert fold_enrichment == 50.0
 
+    @requires_analysis
     def test_perform_hypergeometric_test_negative_inputs(self):
         """Test hypergeometric test with negative inputs."""
         # Test negative sample size
@@ -640,7 +653,8 @@ class TestEdgeCasesAndErrorHandling:
         with pytest.raises(ProcessingError, match="Sample and population sizes must be positive"):
             perform_hypergeometric_test(5, 100, 10, -1000)
 
-    @patch("metaquest.processing.statistics.stats.hypergeom.sf")
+    @requires_analysis
+    @patch("scipy.stats.hypergeom.sf")
     def test_perform_hypergeometric_test_scipy_exception(self, mock_sf):
         """Test handling of scipy exceptions."""
         mock_sf.side_effect = ValueError("Invalid parameters")
@@ -680,6 +694,7 @@ class TestEdgeCasesAndErrorHandling:
 class TestNumericPrecision:
     """Test numeric precision and floating point edge cases."""
 
+    @requires_analysis
     def test_enrichment_very_small_numbers(self):
         """Test enrichment with very small floating point numbers."""
         observed = {"gene_A": 1e-10}
@@ -703,6 +718,7 @@ class TestNumericPrecision:
         distance = _calculate_jaccard_distance(vec1_binary, vec2_binary)
         assert distance == 0.0  # Should be identical after thresholding
 
+    @requires_analysis
     def test_hypergeometric_test_precision_with_large_numbers(self):
         """Test hypergeometric test precision with large numbers."""
         # Test with large numbers that might cause precision issues
@@ -718,3 +734,36 @@ class TestNumericPrecision:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+class TestCompareGroupMeans:
+    """Tests for the t-test / ANOVA choice used when comparing dataset groups."""
+
+    @requires_analysis
+    def test_two_groups_use_a_t_test(self):
+        from metaquest.processing.statistics import compare_group_means
+
+        name, statistic, p_value = compare_group_means([np.array([1.0, 2.0, 3.0]), np.array([7.0, 8.0, 9.0])])
+        assert name == "t-test"
+        assert statistic < 0
+        assert p_value < 0.05
+
+    @requires_analysis
+    def test_three_groups_use_anova(self):
+        from metaquest.processing.statistics import compare_group_means
+
+        groups = [np.array([1.0, 2.0, 3.0]), np.array([1.5, 2.5, 3.5]), np.array([9.0, 10.0, 11.0])]
+        name, statistic, p_value = compare_group_means(groups)
+        assert name == "ANOVA"
+        assert statistic > 0
+        assert p_value < 0.05
+
+    def test_missing_scipy_names_the_analysis_extra(self, monkeypatch):
+        import sys
+
+        from metaquest.core.exceptions import ConfigurationError
+        from metaquest.processing.statistics import compare_group_means
+
+        monkeypatch.setitem(sys.modules, "scipy", None)
+        with pytest.raises(ConfigurationError, match=r"metaquest\[analysis\]"):
+            compare_group_means([np.array([1.0, 2.0]), np.array([3.0, 4.0])])

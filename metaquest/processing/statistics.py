@@ -7,11 +7,11 @@ This module provides functions for statistical analysis of genomic data.
 import logging
 import numpy as np
 import pandas as pd
-from scipy import stats
 from pathlib import Path
-from typing import Dict, Tuple, Union
+from typing import Dict, Sequence, Tuple, Union
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.core.optional import require
 from metaquest.core.utils import get_genome_columns
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,9 @@ def calculate_enrichment(
 
     Raises:
         ProcessingError: If the calculation fails
+        ConfigurationError: If scipy is not installed
     """
+    stats = require("scipy.stats", "analysis", "An enrichment test")
     try:
         # Prepare counts for common keys
         common_keys = set(observed_counts.keys()) & set(expected_counts.keys())
@@ -292,7 +294,9 @@ def perform_hypergeometric_test(
 
     Raises:
         ProcessingError: If the calculation fails
+        ConfigurationError: If scipy is not installed
     """
+    stats = require("scipy.stats", "analysis", "A hypergeometric test")
     try:
         # Validate inputs
         if sample_size <= 0 or population_size <= 0:
@@ -328,3 +332,24 @@ def perform_hypergeometric_test(
         if isinstance(e, ProcessingError):
             raise
         raise ProcessingError(f"Error performing hypergeometric test: {e}")
+
+
+def compare_group_means(groups: Sequence[np.ndarray]) -> Tuple[str, float, float]:
+    """
+    Compare the means of two or more groups: Student's t-test for two groups, one-way ANOVA for more.
+
+    Args:
+        groups: One array of observations per group (at least two)
+
+    Returns:
+        Tuple of (test name, statistic, p-value), the test name being "t-test" or "ANOVA"
+
+    Raises:
+        ConfigurationError: If scipy is not installed
+    """
+    stats = require("scipy.stats", "analysis", "Comparing dataset groups")
+    if len(groups) == 2:
+        statistic, p_value = stats.ttest_ind(groups[0], groups[1])
+        return "t-test", statistic, p_value
+    statistic, p_value = stats.f_oneway(*groups)
+    return "ANOVA", statistic, p_value

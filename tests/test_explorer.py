@@ -9,8 +9,11 @@ Run: pytest tests/test_explorer.py -v
 import pytest
 import pandas as pd
 
-from metaquest.core.models import TaxonomyInfo
-from metaquest.visualization.explorer import (
+for _module in ("plotly", "jinja2"):
+    pytest.importorskip(_module)
+
+from metaquest.core.models import TaxonomyInfo  # noqa: E402
+from metaquest.visualization.explorer import (  # noqa: E402
     generate_containment_explorer,
     _build_long_dataframe,
     _build_summary_data,

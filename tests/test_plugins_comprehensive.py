@@ -10,13 +10,15 @@ This module provides comprehensive testing for the plugin system including:
 """
 
 import os
+import sys
+import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 import tempfile
 from unittest.mock import Mock, patch
 from typing import List
 
-from metaquest.core.exceptions import PluginError, ValidationError, VisualizationError
+from metaquest.core.exceptions import ConfigurationError, PluginError, ValidationError, VisualizationError
 from metaquest.core.models import Containment, SRAMetadata
 from metaquest.plugins.base import (
     Plugin,
@@ -456,87 +458,69 @@ class TestHeatmapPlugin:
         assert "Heatmap" in HeatmapPlugin.description
         assert HeatmapPlugin.version == "0.1.0"
 
-    @patch("seaborn.clustermap")
-    def test_create_plot_with_clustering(self, mock_clustermap):
-        """Test heatmap creation with clustering."""
-        mock_grid = Mock()
-        mock_grid.fig = Mock()
-        mock_clustermap.return_value = mock_grid
-
+    def test_create_plot_with_clustering(self):
+        """Clustering reorders rows and columns and draws one image with a colour bar."""
+        pytest.importorskip("scipy")
         result = HeatmapPlugin.create_plot(data=self.test_data, title="Test Heatmap", cluster=True)
+        try:
+            ax = result.axes[0]
+            assert ax.get_title() == "Test Heatmap"
+            assert len(ax.images) == 1
+            assert len(result.axes) == 2  # heatmap and colour bar
+            labels = sorted(t.get_text() for t in ax.get_yticklabels())
+            assert labels == sorted(self.test_data.index)
+        finally:
+            plt.close(result)
 
-        assert result == mock_grid.fig
-        mock_clustermap.assert_called_once()
+    def test_create_plot_no_clustering(self):
+        """Without clustering the rows keep their input order."""
+        result = HeatmapPlugin.create_plot(data=self.test_data, cluster=False, title="Test Heatmap", annot=True)
+        try:
+            ax = result.axes[0]
+            assert [t.get_text() for t in ax.get_yticklabels()] == list(self.test_data.index)
+            assert len(ax.texts) == self.test_data.size
+        finally:
+            plt.close(result)
 
-    @patch("seaborn.heatmap")
-    @patch("matplotlib.pyplot.subplots")
-    @patch("matplotlib.pyplot.tight_layout")
-    def test_create_plot_no_clustering(self, mock_tight_layout, mock_subplots, mock_heatmap):
-        """Test heatmap creation without clustering."""
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
+    def test_create_plot_clustering_without_scipy_names_the_extra(self, monkeypatch):
+        """Clustering needs scipy; without it the error names the analysis extra."""
+        import sys
 
-        result = HeatmapPlugin.create_plot(data=self.test_data, cluster=False, title="Test Heatmap")
+        from metaquest.core.exceptions import ConfigurationError
 
-        assert result == mock_fig
-        mock_heatmap.assert_called_once()
-        mock_tight_layout.assert_called_once()
+        monkeypatch.setitem(sys.modules, "scipy", None)
+        with pytest.raises(ConfigurationError, match=r"metaquest\[analysis\]"):
+            HeatmapPlugin.create_plot(data=self.test_data, cluster=True)
 
-    @patch("seaborn.clustermap")
-    def test_create_plot_save_file_clustered(self, mock_clustermap):
-        """Test heatmap creation with file saving (clustered)."""
-        mock_grid = Mock()
-        mock_fig = Mock()
-        mock_grid.fig = mock_fig
-        mock_clustermap.return_value = mock_grid
+    def test_create_plot_save_file(self, tmp_path):
+        """The heatmap is written to the requested file."""
+        out = tmp_path / "heatmap.png"
+        fig = HeatmapPlugin.create_plot(data=self.test_data, output_file=out, cluster=False)
+        plt.close(fig)
+        assert out.stat().st_size > 0
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-            try:
-                HeatmapPlugin.create_plot(data=self.test_data, output_file=temp_file.name, cluster=True)
-
-                mock_fig.savefig.assert_called_once()
-            finally:
-                os.unlink(temp_file.name)
-
-    @patch("seaborn.heatmap")
-    @patch("matplotlib.pyplot.subplots")
-    def test_create_plot_save_file_unclustered(self, mock_subplots, mock_heatmap):
-        """Test heatmap creation with file saving (unclustered)."""
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-            try:
-                HeatmapPlugin.create_plot(data=self.test_data, output_file=temp_file.name, cluster=False)
-
-                mock_fig.savefig.assert_called_once()
-            finally:
-                os.unlink(temp_file.name)
-
-    @patch("seaborn.heatmap")
-    @patch("matplotlib.pyplot.subplots")
-    def test_create_correlation_heatmap(self, mock_subplots, mock_heatmap):
-        """Test correlation heatmap creation."""
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-
+    def test_create_correlation_heatmap(self):
+        """The correlation heatmap spans -1..1, blanks the upper triangle and annotates the rest."""
         result = HeatmapPlugin.create_correlation_heatmap(
             data=self.test_data, method="pearson", title="Correlation Heatmap"
         )
+        try:
+            ax = result.axes[0]
+            image = ax.images[0]
+            assert image.get_clim() == (-1.0, 1.0)
+            n = self.test_data.shape[1]
+            assert len(ax.texts) == n * (n - 1) // 2
+            assert ax.get_title() == "Correlation Heatmap"
+        finally:
+            plt.close(result)
 
-        assert result == mock_fig
-        mock_heatmap.assert_called_once()
-
-    @patch("seaborn.clustermap")
-    def test_create_plot_error_handling(self, mock_clustermap):
+    @patch("matplotlib.pyplot.subplots")
+    def test_create_plot_error_handling(self, mock_subplots):
         """Test heatmap creation error handling."""
-        mock_clustermap.side_effect = Exception("Test error")
+        mock_subplots.side_effect = Exception("Test error")
 
         with pytest.raises(VisualizationError, match="Error creating heatmap"):
-            HeatmapPlugin.create_plot(data=self.test_data)
+            HeatmapPlugin.create_plot(data=self.test_data, cluster=False)
 
 
 class TestMapVisualizerPlugin:
@@ -558,12 +542,14 @@ class TestMapVisualizerPlugin:
         assert "map" in MapVisualizerPlugin.description.lower()
         assert MapVisualizerPlugin.version == "0.1.0"
 
-    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("metaquest.plugins.visualizers.map._require_cartopy")
     @patch("metaquest.plugins.visualizers.map._plot_points")
     @patch("metaquest.plugins.visualizers.map._add_map_features")
     @patch("metaquest.plugins.visualizers.map._create_map_figure")
     @patch("metaquest.plugins.visualizers.map._extract_coordinates")
-    def test_create_plot_basic(self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points):
+    def test_create_plot_basic(
+        self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points, _mock_require
+    ):
         """Test basic map creation."""
         mock_fig = Mock()
         mock_ax = Mock()
@@ -580,16 +566,18 @@ class TestMapVisualizerPlugin:
 
     def test_cartopy_unavailable_error(self):
         """Test error when cartopy is unavailable."""
-        with patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="Cartopy is required"):
+        with patch.dict(sys.modules, {"cartopy": None}):
+            with pytest.raises(ConfigurationError, match="Map visualization needs the 'cartopy' package"):
                 MapVisualizerPlugin.create_plot(data=self.test_data, lat_lon_column="lat_lon")
 
-    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("metaquest.plugins.visualizers.map._require_cartopy")
     @patch("metaquest.plugins.visualizers.map._plot_points")
     @patch("metaquest.plugins.visualizers.map._add_map_features")
     @patch("metaquest.plugins.visualizers.map._create_map_figure")
     @patch("metaquest.plugins.visualizers.map._extract_coordinates")
-    def test_create_plot_with_save(self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points):
+    def test_create_plot_with_save(
+        self, mock_extract_coords, mock_create_figure, mock_add_features, mock_plot_points, _mock_require
+    ):
         """Test map creation with file saving."""
         mock_fig = Mock()
         mock_ax = Mock()
@@ -631,9 +619,9 @@ class TestMapVisualizerPlugin:
         assert lat is None
         assert lon is None
 
-    @patch("metaquest.plugins.visualizers.map.CARTOPY_AVAILABLE", True)
+    @patch("metaquest.plugins.visualizers.map._require_cartopy")
     @patch("matplotlib.pyplot.figure")
-    def test_create_plot_error_handling(self, mock_figure):
+    def test_create_plot_error_handling(self, mock_figure, _mock_require):
         """Test map creation error handling."""
         mock_figure.side_effect = Exception("Test error")
 
@@ -743,6 +731,6 @@ SRR789012,0.85,Salmonella enterica
 def test_missing_cartopy_message_names_the_extra():
     from metaquest.plugins.visualizers import map as map_module
 
-    with patch.object(map_module, "CARTOPY_AVAILABLE", False):
-        with pytest.raises(VisualizationError, match=r"pip install 'metaquest\[maps\]'"):
-            map_module._validate_cartopy_availability()
+    with patch.dict(sys.modules, {"cartopy": None}):
+        with pytest.raises(ConfigurationError, match=r"-m pip install 'metaquest\[maps\]'"):
+            map_module._require_cartopy()

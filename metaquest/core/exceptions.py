@@ -33,3 +33,7 @@ class PluginError(MetaQuestError):
 
 class SecurityError(MetaQuestError):
     """Exception raised for security-related errors."""
+
+
+class ConfigurationError(MetaQuestError):
+    """Exception raised when the environment lacks something a command needs, such as an optional package."""

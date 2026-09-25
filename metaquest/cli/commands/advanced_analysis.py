@@ -9,19 +9,9 @@ import logging
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
-from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.exceptions import ConfigurationError, MetaQuestError
+from metaquest.core.optional import require
 from metaquest.data.defaults import read_matrix, read_records, read_table
-from metaquest.processing.diversity import (
-    calculate_alpha_diversity,
-    calculate_beta_diversity,
-    perform_permanova,
-)
-from metaquest.visualization.interactive import (
-    create_interactive_pca,
-    create_interactive_tsne,
-    create_interactive_heatmap,
-    create_diversity_comparison_plot,
-)
 from metaquest.data.taxonomy import (
     validate_taxonomic_assignments,
     analyze_taxonomic_composition,
@@ -72,6 +62,14 @@ class DiversityAnalysisCommand(BaseCommand):
         parser.add_argument("--permanova-formula", help="PERMANOVA formula (e.g., 'treatment + site')")
 
     def execute(self, args):
+        # Diversity analysis belongs to the analysis extra; check before any output is written.
+        require("sklearn", "analysis", "Diversity analysis")
+        from metaquest.processing.diversity import (
+            calculate_alpha_diversity,
+            calculate_beta_diversity,
+            perform_permanova,
+        )
+
         try:
             import pandas as pd
 
@@ -125,6 +123,8 @@ class DiversityAnalysisCommand(BaseCommand):
             logger.info("Diversity analysis completed successfully!")
             return 0
 
+        except ConfigurationError:
+            raise
         except Exception as e:
             logger.error(f"Diversity analysis failed: {e}")
             return 1
@@ -161,6 +161,17 @@ class InteractivePlotCommand(BaseCommand):
         parser.add_argument("--no-show", action="store_true", help="Don't display plot in browser")
 
     def execute(self, args):
+        require("plotly", "interactive", "An interactive plot")
+        if args.plot_type in ("pca", "tsne", "heatmap"):
+            require("sklearn" if args.plot_type != "heatmap" else "scipy", "analysis", f"A {args.plot_type} plot")
+        from metaquest.processing.diversity import calculate_alpha_diversity
+        from metaquest.visualization.interactive import (
+            create_diversity_comparison_plot,
+            create_interactive_heatmap,
+            create_interactive_pca,
+            create_interactive_tsne,
+        )
+
         try:
             # Load data
             logger.info("Loading data...")
@@ -227,6 +238,8 @@ class InteractivePlotCommand(BaseCommand):
             logger.info("Interactive plot created successfully!")
             return 0
 
+        except ConfigurationError:
+            raise
         except Exception as e:
             logger.error(f"Interactive plot creation failed: {e}")
             return 1

@@ -9,7 +9,10 @@ from unittest.mock import patch
 from pathlib import Path
 import tempfile
 
-from metaquest.visualization.interactive import (
+for _module in ("plotly", "sklearn", "scipy"):
+    pytest.importorskip(_module)
+
+from metaquest.visualization.interactive import (  # noqa: E402
     create_interactive_pca,
     create_interactive_heatmap,
     create_diversity_comparison_plot,
@@ -42,7 +45,7 @@ class TestInteractivePlots:
             index=self.data_matrix.index,
         )
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_interactive_pca_basic(self, mock_show):
         """Test basic PCA plot creation."""
         fig = create_interactive_pca(self.data_matrix, metadata=self.metadata, color_by="group", show_plot=False)
@@ -52,7 +55,7 @@ class TestInteractivePlots:
         assert hasattr(fig, "data")
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_interactive_pca_3d(self, mock_show):
         """Test 3D PCA plot creation."""
         fig = create_interactive_pca(
@@ -68,7 +71,7 @@ class TestInteractivePlots:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_interactive_pca_numpy_input(self, mock_show):
         """Test PCA with numpy array input."""
         fig = create_interactive_pca(self.data_matrix.values, show_plot=False)
@@ -76,18 +79,18 @@ class TestInteractivePlots:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_interactive_pca_save_file(self, mock_show):
         """Test PCA plot saving to file."""
         with tempfile.TemporaryDirectory() as temp_dir:
             output_file = Path(temp_dir) / "test_pca.html"
 
-            with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
+            with patch("plotly.graph_objects.Figure.write_html") as mock_write:
                 create_interactive_pca(self.data_matrix, output_file=output_file, show_plot=False)
 
                 mock_write.assert_called_once_with(str(output_file))
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_interactive_heatmap_basic(self, mock_show):
         """Test basic heatmap creation."""
         fig = create_interactive_heatmap(self.data_matrix, cluster_samples=True, cluster_features=True, show_plot=False)
@@ -95,7 +98,7 @@ class TestInteractivePlots:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_interactive_heatmap_no_clustering(self, mock_show):
         """Test heatmap without clustering."""
         fig = create_interactive_heatmap(
@@ -105,7 +108,7 @@ class TestInteractivePlots:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_diversity_comparison_plot(self, mock_show):
         """Test diversity comparison plot."""
         fig = create_diversity_comparison_plot(
@@ -120,7 +123,7 @@ class TestInteractivePlots:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_diversity_comparison_violin_plot(self, mock_show):
         """Test diversity comparison with violin plot."""
         fig = create_diversity_comparison_plot(
@@ -147,7 +150,7 @@ class TestInteractivePlots:
                 show_plot=False,
             )
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_pca_missing_metadata_column(self, mock_show):
         """Test PCA with missing metadata column."""
         # Should not crash, just issue warning and proceed without coloring
@@ -176,7 +179,7 @@ class TestInteractivePlotsEdgeCases:
         with pytest.raises(Exception):  # PCA needs at least 2 samples
             create_interactive_pca(single_sample, show_plot=False)
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_small_dataset_pca(self, mock_show):
         """Test PCA with small dataset."""
         small_data = pd.DataFrame([[1, 2], [3, 4], [5, 6]], columns=["A", "B"])

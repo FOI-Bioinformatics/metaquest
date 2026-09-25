@@ -12,6 +12,7 @@ Tests cover:
 
 from pathlib import Path
 from unittest.mock import Mock, patch, mock_open
+import importlib.util
 import pytest
 import pandas as pd
 
@@ -35,6 +36,10 @@ from metaquest.sra.analytics import (
 )
 
 from metaquest.core.exceptions import DataAccessError
+
+requires_analysis = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("sklearn", "scipy")), reason="needs metaquest[analysis]"
+)
 
 
 class TestSequenceQualityAnalyzer:
@@ -536,6 +541,7 @@ class TestSRADatasetAnalyzer:
         assert profile.total_bases == 150000
         assert profile.sampled is False
 
+    @requires_analysis
     def test_compare_datasets(self):
         """Test dataset comparison functionality."""
         groups = {"group1": ["SRR123456", "SRR123457"], "group2": ["SRR789012", "SRR789013"]}
@@ -701,6 +707,7 @@ class TestSRADatasetAnalyzer:
         assert "SRR789012" in anomaly_report.severity_scores
         assert anomaly_report.severity_scores["SRR789012"] > 0.2
 
+    @requires_analysis
     def test_compare_datasets_with_profiles_does_not_call_profile_dataset_quality(self):
         """Supplying profiles reuses them; profile_dataset_quality must not be called."""
         groups = {"group1": ["SRR1"], "group2": ["SRR2"]}
@@ -918,6 +925,7 @@ class TestStatisticalAnalysis:
         """Set up test fixtures."""
         self.analyzer = SRADatasetAnalyzer()
 
+    @requires_analysis
     def test_perform_statistical_tests(self):
         """Test statistical test performance."""
         # Create test comparison data
@@ -1144,6 +1152,7 @@ def _profile_with_gc(accession: str, gc_content: float) -> QualityProfile:
     )
 
 
+@requires_analysis
 def test_compare_datasets_result_dumps(tmp_path):
     """compare_datasets' real statistical_tests output (numpy bool included) must be
     JSON-serialisable once passed through json_safe, matching what _save_comparison_results

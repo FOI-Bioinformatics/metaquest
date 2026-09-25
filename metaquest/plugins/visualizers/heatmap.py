@@ -1,19 +1,67 @@
 """
 Heatmap visualization plugin for MetaQuest.
+
+Heatmaps are drawn with matplotlib's ``imshow`` and a colour bar. Clustering the rows and
+columns of a plain heatmap uses scipy, from the ``analysis`` extra.
 """
 
 import logging
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import ConfigurationError, VisualizationError
+from metaquest.core.optional import require
 from metaquest.plugins.base import Plugin
 
 logger = logging.getLogger(__name__)
+
+
+def _cluster_order(matrix: np.ndarray) -> np.ndarray:
+    """Leaf order of an average-linkage clustering of the rows of ``matrix``."""
+    hierarchy = require("scipy.cluster.hierarchy", "analysis", "Clustering a heatmap")
+    if matrix.shape[0] < 2:
+        return np.arange(matrix.shape[0])
+    return hierarchy.leaves_list(hierarchy.linkage(matrix, method="average", metric="euclidean"))
+
+
+def _draw_matrix(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    df: pd.DataFrame,
+    cmap: str,
+    annot: bool,
+    fmt: str = ".2f",
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    mask: Optional[np.ndarray] = None,
+    linewidths: float = 0,
+) -> None:
+    """Draw ``df`` as an image with labelled axes and a colour bar; masked cells are left blank."""
+    values = np.ma.masked_array(df.to_numpy(dtype=float), mask=mask if mask is not None else False)
+    image = ax.imshow(values, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto", interpolation="nearest")
+    fig.colorbar(image, ax=ax)
+
+    ax.set_xticks(range(df.shape[1]))
+    ax.set_xticklabels([str(c) for c in df.columns], rotation=90)
+    ax.set_yticks(range(df.shape[0]))
+    ax.set_yticklabels([str(i) for i in df.index])
+
+    if linewidths > 0:
+        ax.set_xticks(np.arange(-0.5, df.shape[1], 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, df.shape[0], 1), minor=True)
+        ax.grid(which="minor", color="white", linewidth=linewidths)
+        ax.tick_params(which="minor", length=0)
+
+    if annot:
+        hidden = np.ma.getmaskarray(values)
+        for row in range(df.shape[0]):
+            for col in range(df.shape[1]):
+                if hidden[row, col]:
+                    continue
+                ax.text(col, row, format(values.data[row, col], fmt), ha="center", va="center", fontsize=8)
 
 
 class HeatmapPlugin(Plugin):
@@ -45,55 +93,43 @@ class HeatmapPlugin(Plugin):
             title: Title for the plot
             cmap: Colormap to use
             figsize: Figure size (width, height) in inches
-            cluster: If True, cluster rows and columns
+            cluster: If True, order rows and columns by hierarchical clustering (needs scipy)
             annot: If True, annotate cells with values
             linewidths: Width of lines separating cells
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
-            **kwargs: Additional arguments to pass to plotting function
+            **kwargs: Accepted for compatibility with other visualizer plugins and ignored
 
         Returns:
             Matplotlib Figure object
 
         Raises:
+            ConfigurationError: If clustering is requested and scipy is not installed
             VisualizationError: If the plot cannot be created
         """
         try:
-            # Prepare data
             df = data.copy()
 
-            # Create figure
-            fig, ax = plt.subplots(figsize=figsize)
-
-            # Create plot
             if cluster:
-                clustergrid = sns.clustermap(df, cmap=cmap, linewidths=linewidths, annot=annot, **kwargs)
+                matrix = df.to_numpy(dtype=float)
+                df = df.iloc[_cluster_order(matrix), _cluster_order(matrix.T)]
 
-                # Add title if specified
-                if title:
-                    clustergrid.fig.suptitle(title, y=1.02)
+            fig, ax = plt.subplots(figsize=figsize)
+            _draw_matrix(fig, ax, df, cmap=cmap, annot=annot, linewidths=linewidths)
 
-                # Get figure from clustergrid
-                fig = clustergrid.fig
+            if title:
+                ax.set_title(title)
 
-            else:
-                # Create regular heatmap
-                sns.heatmap(df, cmap=cmap, linewidths=linewidths, annot=annot, ax=ax, **kwargs)
+            plt.tight_layout()
 
-                # Add title if specified
-                if title:
-                    ax.set_title(title)
-
-                # Adjust layout
-                plt.tight_layout()
-
-            # Save plot if output_file specified
             if output_file:
                 fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved heatmap to {output_file}")
 
             return fig
 
+        except ConfigurationError:
+            raise
         except Exception as e:
             raise VisualizationError(f"Error creating heatmap: {e}")
 
@@ -120,11 +156,11 @@ class HeatmapPlugin(Plugin):
             title: Title for the plot
             cmap: Colormap to use
             figsize: Figure size (width, height) in inches
-            mask_upper: If True, mask the upper triangle
+            mask_upper: If True, leave the upper triangle (and diagonal) blank
             annot: If True, annotate cells with values
             output_file: Path to save the plot
             output_format: Format to save the plot (png, jpg, pdf, svg)
-            **kwargs: Additional arguments to pass to plotting function
+            **kwargs: Accepted for compatibility with other visualizer plugins and ignored
 
         Returns:
             Matplotlib Figure object
@@ -133,42 +169,18 @@ class HeatmapPlugin(Plugin):
             VisualizationError: If the plot cannot be created
         """
         try:
-            # Calculate correlation matrix
             corr_matrix = data.corr(method=method)
+            mask = np.triu(np.ones(corr_matrix.shape, dtype=bool)) if mask_upper else None
 
-            # Create mask for upper triangle if requested
-            if mask_upper:
-                mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
-            else:
-                mask = None
-
-            # Create figure
             fig, ax = plt.subplots(figsize=figsize)
+            _draw_matrix(fig, ax, corr_matrix, cmap=cmap, annot=annot, vmin=-1.0, vmax=1.0, mask=mask, linewidths=0.5)
+            ax.set_aspect("equal")
 
-            # Create plot
-            sns.heatmap(
-                corr_matrix,
-                mask=mask,
-                cmap=cmap,
-                vmax=1.0,
-                vmin=-1.0,
-                center=0,
-                annot=annot,
-                fmt=".2f",
-                square=True,
-                linewidths=0.5,
-                ax=ax,
-                **kwargs,
-            )
-
-            # Add title if specified
             if title:
                 ax.set_title(title)
 
-            # Adjust layout
             plt.tight_layout()
 
-            # Save plot if output_file specified
             if output_file:
                 fig.savefig(output_file, format=output_format, dpi=300, bbox_inches="tight")
                 logger.info(f"Saved correlation heatmap to {output_file}")

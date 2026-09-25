@@ -5,6 +5,8 @@ This file extends the starter tests with HTML generation and helper function tes
 Run: pytest tests/test_visualization_reporting_extended.py -v
 """
 
+import sys
+import importlib.util
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
@@ -15,7 +17,11 @@ from metaquest.visualization.reporting import (
     _prepare_template_data,
     _generate_plots_for_html,
 )
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import ConfigurationError, VisualizationError
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
+)
 
 
 @pytest.fixture
@@ -69,6 +75,7 @@ def sample_counts_data(tmp_path):
 class TestHTMLReportGeneration:
     """Test HTML report generation with proper mocking."""
 
+    @requires_interactive
     def test_generate_html_report_minimal(self, sample_summary_data, tmp_path):
         """Test minimal HTML generation with full mocking."""
         output_file = tmp_path / "report.html"
@@ -80,22 +87,21 @@ class TestHTMLReportGeneration:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2.FileSystemLoader"):
-                with patch("metaquest.visualization.reporting.jinja2.Environment", return_value=mock_env):
-                    with patch("metaquest.visualization.reporting._create_default_template"):
-                        with patch("metaquest.visualization.plots.plot_containment", return_value=Mock()):
-                            with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=Mock()):
-                                with patch("matplotlib.pyplot.close"):
-                                    result = generate_report(
-                                        title="Test HTML Report",
-                                        summary_file=str(sample_summary_data),
-                                        output_file=str(output_file),
-                                        format="html",
-                                        threshold=0.1,
-                                        include_plots=True,
-                                        include_tables=True,
-                                    )
+        with patch("jinja2.FileSystemLoader"):
+            with patch("jinja2.Environment", return_value=mock_env):
+                with patch("metaquest.visualization.reporting._create_default_template"):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=Mock()):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=Mock()):
+                            with patch("matplotlib.pyplot.close"):
+                                result = generate_report(
+                                    title="Test HTML Report",
+                                    summary_file=str(sample_summary_data),
+                                    output_file=str(output_file),
+                                    format="html",
+                                    threshold=0.1,
+                                    include_plots=True,
+                                    include_tables=True,
+                                )
 
         # Verify result
         assert result == output_file
@@ -104,6 +110,7 @@ class TestHTMLReportGeneration:
         # Verify template was rendered
         mock_template.render.assert_called_once()
 
+    @requires_interactive
     def test_generate_html_without_plots(self, sample_summary_data, tmp_path):
         """Test HTML generation with plots disabled."""
         output_file = tmp_path / "report.html"
@@ -114,19 +121,18 @@ class TestHTMLReportGeneration:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2.FileSystemLoader"):
-                with patch("metaquest.visualization.reporting.jinja2.Environment", return_value=mock_env):
-                    with patch("metaquest.visualization.reporting._create_default_template"):
-                        with patch("metaquest.visualization.plots.plot_containment") as mock_plot:
-                            result = generate_report(
-                                title="Test HTML Report",
-                                summary_file=str(sample_summary_data),
-                                output_file=str(output_file),
-                                format="html",
-                                include_plots=False,
-                                include_tables=True,
-                            )
+        with patch("jinja2.FileSystemLoader"):
+            with patch("jinja2.Environment", return_value=mock_env):
+                with patch("metaquest.visualization.reporting._create_default_template"):
+                    with patch("metaquest.visualization.plots.plot_containment") as mock_plot:
+                        result = generate_report(
+                            title="Test HTML Report",
+                            summary_file=str(sample_summary_data),
+                            output_file=str(output_file),
+                            format="html",
+                            include_plots=False,
+                            include_tables=True,
+                        )
 
         assert result == output_file
         # Verify plotting was NOT called when include_plots=False
@@ -241,8 +247,8 @@ class TestErrorHandling:
         """Test HTML generation fails gracefully when jinja2 unavailable."""
         output_file = tmp_path / "report.html"
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="requires jinja2"):
+        with patch.dict(sys.modules, {"jinja2": None}):
+            with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
                 generate_report(
                     title="Test", summary_file=str(sample_summary_data), output_file=str(output_file), format="html"
                 )

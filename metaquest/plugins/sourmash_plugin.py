@@ -8,28 +8,18 @@ available as `sourmash scripts metaquest_*` subcommands.
 
 import logging
 import sys
+from typing import TYPE_CHECKING
+
+from metaquest.core.optional import require
 
 logger = logging.getLogger(__name__)
 
-# Conditional import for sourmash plugin base class
-try:
+# sourmash loads this module through its plugin entry points, so sourmash is present whenever
+# the plugin is used; importing it elsewhere without sourmash is an error naming the extra.
+if TYPE_CHECKING:
     from sourmash.plugins import CommandLinePlugin
-
-    SOURMASH_AVAILABLE = True
-except ImportError:
-    SOURMASH_AVAILABLE = False
-
-    class CommandLinePlugin:  # type: ignore[no-redef]
-        """Stub when sourmash is not installed."""
-
-        command = None
-        description = None
-
-        def __init__(self, parser):
-            pass
-
-        def main(self, args):
-            pass
+else:
+    CommandLinePlugin = require("sourmash.plugins", "sourmash", "The metaquest sourmash plugin").CommandLinePlugin
 
 
 class MetaquestParsePlugin(CommandLinePlugin):

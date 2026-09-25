@@ -5,16 +5,22 @@ Generates a self-contained HTML file with interactive Plotly charts
 for exploring containment results grouped by taxonomy. The explorer
 provides summary statistics, a taxonomy sunburst, sample-by-taxon
 heatmap, filterable results table, and distribution plots.
+
+Plotly and jinja2 come from the ``interactive`` extra and are imported when the
+explorer is generated, so a missing package is an error naming that extra rather
+than a page without charts.
 """
 
 import logging
 from html import escape as html_escape
 from pathlib import Path
-from typing import Dict, Optional, Union
+from types import ModuleType
+from typing import Dict, Optional, Tuple, Union
 
 import pandas as pd
 
 from metaquest.core.models import TaxonomyInfo
+from metaquest.core.optional import require
 from metaquest.core.utils import get_genome_columns
 from metaquest.utils.html import (
     CONTAINMENT_SCALE,
@@ -24,21 +30,14 @@ from metaquest.utils.html import (
     plotly_layout,
 )
 
-try:
-    import plotly.express as px
-
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-
-try:
-    from jinja2 import Environment, BaseLoader
-
-    JINJA2_AVAILABLE = True
-except ImportError:
-    JINJA2_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
+
+_PURPOSE = "The containment explorer"
+
+
+def require_explorer_packages() -> Tuple[ModuleType, ModuleType]:
+    """Return (plotly.express, jinja2), or raise a ConfigurationError naming the interactive extra."""
+    return require("plotly.express", "interactive", _PURPOSE), require("jinja2", "interactive", _PURPOSE)
 
 
 def generate_containment_explorer(
@@ -64,7 +63,11 @@ def generate_containment_explorer(
 
     Returns:
         Path to generated HTML file.
+
+    Raises:
+        ConfigurationError: If plotly or jinja2 is not installed.
     """
+    require_explorer_packages()
     output_path = Path(output_file)
 
     long_df = _build_long_dataframe(containment_df, taxonomy, metadata, min_containment)
@@ -75,7 +78,7 @@ def generate_containment_explorer(
     box_html = ""
     bar_html = ""
 
-    if PLOTLY_AVAILABLE and not long_df.empty:
+    if not long_df.empty:
         sunburst_html = _build_sunburst(long_df)
         heatmap_html = _build_heatmap(long_df)
         box_html, bar_html = _build_distributions(long_df)
@@ -162,6 +165,7 @@ def _build_summary_data(
 
 def _build_sunburst(long_df: pd.DataFrame) -> str:
     """Build taxonomy sunburst chart. Returns Plotly HTML fragment."""
+    px = require("plotly.express", "interactive", _PURPOSE)
     sunburst_df = (
         long_df.groupby(["family", "genus", "species"])
         .agg(sample_count=("sample", "nunique"), mean_containment=("containment", "mean"))
@@ -181,6 +185,7 @@ def _build_sunburst(long_df: pd.DataFrame) -> str:
 
 def _build_heatmap(long_df: pd.DataFrame) -> str:
     """Build sample-by-taxon heatmap. Returns Plotly HTML fragment."""
+    px = require("plotly.express", "interactive", _PURPOSE)
     pivot = long_df.pivot_table(index="sample", columns="family", values="containment", aggfunc="max", fill_value=0)
     if pivot.empty:
         return ""
@@ -197,6 +202,7 @@ def _build_heatmap(long_df: pd.DataFrame) -> str:
 
 def _build_distributions(long_df: pd.DataFrame) -> tuple:
     """Build distribution plots. Returns (box_html, bar_html)."""
+    px = require("plotly.express", "interactive", _PURPOSE)
     box_fig = px.box(
         long_df,
         x="family",
@@ -352,95 +358,18 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 
 def _assemble_html(title, summary, sunburst_html, heatmap_html, table_rows, box_html, bar_html):
     """Assemble the final HTML from components."""
-    if JINJA2_AVAILABLE:
-        template = Environment(loader=BaseLoader(), autoescape=False).from_string(_HTML_TEMPLATE)
-        return template.render(
-            title=html_escape(title),
-            summary=summary,
-            sunburst_html=sunburst_html,
-            heatmap_html=heatmap_html,
-            table_rows=table_rows,
-            box_html=box_html,
-            bar_html=bar_html,
-            plotly_js=plotly_js_script(),
-            report_css=REPORT_CSS,
-            table_script=TABLE_SCRIPT,
-            headers=_TABLE_HEADERS,
-        )
-    return _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_html, box_html, bar_html)
-
-
-def _assemble_html_simple(title, summary, table_rows, sunburst_html, heatmap_html, box_html, bar_html):
-    """Fallback HTML assembly without Jinja2 (same design system as the Jinja path)."""
-    safe_title = html_escape(title)
-
-    top_fam_html = ""
-    if summary.get("top_families"):
-        top_fam_str = " &middot; ".join(f"{f['name']} ({f['count']})" for f in summary["top_families"])
-        top_fam_html = (
-            '<div class="mq-stat wide"><p class="k">Top families by sample count</p>'
-            f'<div class="sub">{top_fam_str}</div></div>'
-        )
-
-    def _panels(*fragments):
-        return "".join(f'<div class="mq-panel">{h}</div>' for h in fragments if h)
-
-    charts_section = ""
-    if sunburst_html or heatmap_html:
-        charts_section = (
-            '<section class="mq-section"><h2>Taxonomy overview</h2>'
-            f'<div class="mq-grid">{_panels(sunburst_html, heatmap_html)}</div></section>'
-        )
-
-    dist_section = ""
-    if box_html or bar_html:
-        dist_section = (
-            '<section class="mq-section"><h2>Distributions</h2>'
-            f'<div class="mq-grid">{_panels(box_html, bar_html)}</div></section>'
-        )
-
-    c_min = f"{summary['containment_min']:.3f}"
-    c_max = f"{summary['containment_max']:.3f}"
-
-    ths = "".join(
-        f'<th tabindex="0" role="button" onclick="sortTable({i})" ' f'onkeydown="sortKey(event,{i})">{label}</th>'
-        for i, label in enumerate(_TABLE_HEADERS)
+    jinja2 = require("jinja2", "interactive", _PURPOSE)
+    template = jinja2.Environment(loader=jinja2.BaseLoader(), autoescape=False).from_string(_HTML_TEMPLATE)
+    return template.render(
+        title=html_escape(title),
+        summary=summary,
+        sunburst_html=sunburst_html,
+        heatmap_html=heatmap_html,
+        table_rows=table_rows,
+        box_html=box_html,
+        bar_html=bar_html,
+        plotly_js=plotly_js_script(),
+        report_css=REPORT_CSS,
+        table_script=TABLE_SCRIPT,
+        headers=_TABLE_HEADERS,
     )
-
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{safe_title}</title>
-{plotly_js_script()}
-<style>{REPORT_CSS}</style></head><body>
-<a class="mq-skip" href="#results">Skip to results</a>
-<header class="mq-header"><div class="mq-wrap">
-<p class="mq-eyebrow">MetaQuest &middot; containment report</p>
-<h1 class="mq-title">{safe_title}</h1>
-<p class="mq-readout"><span><b>{summary['total_samples']}</b> samples</span>
-<span><b>{summary['total_genomes']}</b> genomes</span>
-<span><b>{summary['num_families']}</b> families</span>
-<span><b>{summary['num_genera']}</b> genera</span>
-<span>containment <b>{c_min}</b>&ndash;<b>{c_max}</b></span></p>
-</div></header>
-<main class="mq-wrap">
-<section class="mq-stats" aria-label="Run summary">
-<div class="mq-stat"><p class="k">Samples</p><div class="v">{summary['total_samples']}</div></div>
-<div class="mq-stat"><p class="k">Genomes</p><div class="v">{summary['total_genomes']}</div></div>
-<div class="mq-stat"><p class="k">Families</p><div class="v">{summary['num_families']}</div></div>
-<div class="mq-stat"><p class="k">Genera</p><div class="v">{summary['num_genera']}</div></div>
-{top_fam_html}
-</section>
-{charts_section}
-<section class="mq-section" id="results"><h2>Results</h2>
-<div class="mq-toolbar">
-<input type="text" id="searchInput" onkeyup="filterTable()" aria-label="Filter results"
-    placeholder="Filter across all columns&hellip;">
-<button class="mq-btn" onclick="exportCSV()">Export CSV</button></div>
-<div class="mq-table-wrap"><table class="mq-table" id="resultsTable">
-<thead><tr>{ths}</tr></thead><tbody>{table_rows}</tbody></table></div></section>
-{dist_section}
-<footer class="mq-footer">Generated by MetaQuest</footer>
-</main>
-{TABLE_SCRIPT}
-</body></html>"""

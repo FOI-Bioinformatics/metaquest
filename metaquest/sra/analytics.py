@@ -21,12 +21,12 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 import numpy as np
 import pandas as pd
 from Bio import SeqIO
-from scipy import stats
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import visible_files
 from metaquest.data.sra import iter_fastq_records
 from metaquest.data.sra_metadata import SRADatasetInfo
+from metaquest.processing.statistics import compare_group_means
 
 logger = logging.getLogger(__name__)
 
@@ -1026,13 +1026,7 @@ class SRADatasetAnalyzer:
                 else:
                     # Perform t-test if 2 groups, ANOVA if more
                     try:
-                        if len(group_data) == 2:
-                            statistic, p_value = stats.ttest_ind(group_data[0], group_data[1])
-                            tests[col]["test"] = "t-test"
-                        else:
-                            statistic, p_value = stats.f_oneway(*group_data)
-                            tests[col]["test"] = "ANOVA"
-
+                        tests[col]["test"], statistic, p_value = compare_group_means(group_data)
                         tests[col]["statistic"] = float(statistic)
                         tests[col]["p_value"] = float(p_value)
                         tests[col]["significant"] = bool(p_value < 0.05)

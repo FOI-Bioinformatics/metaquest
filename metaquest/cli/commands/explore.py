@@ -133,7 +133,10 @@ class ExploreContainmentCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
-            from metaquest.visualization.explorer import generate_containment_explorer
+            from metaquest.visualization.explorer import generate_containment_explorer, require_explorer_packages
+
+            # Check before the taxonomy lookup, which may call NCBI.
+            require_explorer_packages()
 
             containment_path = Path(args.parsed_containment)
             if not containment_path.exists():

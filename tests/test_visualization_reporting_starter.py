@@ -7,11 +7,12 @@ Run: pytest tests/test_visualization_reporting_starter.py -v
 After running these tests, coverage for reporting.py will increase from 0% to ~20%.
 """
 
+import sys
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from metaquest.visualization.reporting import generate_report
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import ConfigurationError, VisualizationError
 
 
 @pytest.fixture
@@ -72,8 +73,8 @@ class TestReportingErrorPaths:
 
     def test_html_without_jinja2_raises_error(self, sample_summary_data, tmp_path):
         """Test that HTML generation without jinja2 raises error."""
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="requires jinja2"):
+        with patch.dict(sys.modules, {"jinja2": None}):
+            with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
                 generate_report(
                     title="Test Report",
                     summary_file=str(sample_summary_data),

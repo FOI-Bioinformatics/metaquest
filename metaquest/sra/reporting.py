@@ -5,38 +5,26 @@ This module provides comprehensive reporting capabilities including:
 - Interactive HTML dashboards with Plotly visualizations
 - Quality control reports with recommendations
 - Comparative analysis reports across datasets
+
+Plotly and jinja2 come from the ``interactive`` extra. Each report checks for both before it
+profiles anything or writes a file, so a missing package is an error naming the extra rather
+than a report without charts.
 """
 
 import logging
 from datetime import datetime
-from html import escape as html_escape
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Any
 
 import pandas as pd
 import numpy as np
 
-# Conditional imports for enhanced features
-try:
-    import plotly.graph_objects as go
-    import plotly.offline as pyo
-
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-
-try:
-    from jinja2 import Environment, BaseLoader
-
-    JINJA2_AVAILABLE = True
-except ImportError:
-    JINJA2_AVAILABLE = False
-
 from metaquest.sra.analytics import (
     QualityProfile,
     ComparativeAnalysis,
     SRADatasetAnalyzer,
 )
+from metaquest.core.optional import require
 from metaquest.utils.html import CATEGORICAL_COLORS, REPORT_CSS, plotly_js_script, plotly_layout
 
 # Quality-grade colours drawn from the validated categorical palette (ordinal:
@@ -44,6 +32,28 @@ from metaquest.utils.html import CATEGORICAL_COLORS, REPORT_CSS, plotly_js_scrip
 _GRADE_COLORS = {"excellent": "#008300", "good": "#2a78d6", "fair": "#eda100", "poor": "#e34948"}
 
 logger = logging.getLogger(__name__)
+
+_PURPOSE = "An SRA HTML report"
+
+
+def _require_report_packages() -> None:
+    """Raise a ConfigurationError naming the interactive extra unless plotly and jinja2 import."""
+    require("plotly.graph_objects", "interactive", _PURPOSE)
+    require("jinja2", "interactive", _PURPOSE)
+
+
+def _plotly() -> tuple:
+    """Return (plotly.graph_objects, plotly.offline)."""
+    return (
+        require("plotly.graph_objects", "interactive", _PURPOSE),
+        require("plotly.offline", "interactive", _PURPOSE),
+    )
+
+
+def _jinja_template(template_str: str) -> Any:
+    """Compile an autoescaping jinja2 template."""
+    jinja2 = require("jinja2", "interactive", _PURPOSE)
+    return jinja2.Environment(loader=jinja2.BaseLoader(), autoescape=True).from_string(template_str)
 
 
 class SRAReportGenerator:
@@ -71,7 +81,11 @@ class SRAReportGenerator:
 
         Returns:
             Path to generated HTML dashboard
+
+        Raises:
+            ConfigurationError: If plotly or jinja2 is not installed
         """
+        _require_report_packages()
         logger.info(f"Generating quality dashboard for {len(accessions)} datasets")
 
         # Profile all datasets, reusing any profile already supplied
@@ -107,9 +121,7 @@ class SRAReportGenerator:
         dashboard_data["anomaly_report"] = anomaly_report
 
         # Create visualizations
-        if PLOTLY_AVAILABLE:
-            plots = self._create_quality_plots(profiles)
-            dashboard_data["plots"] = plots
+        dashboard_data["plots"] = self._create_quality_plots(profiles)
 
         # Generate HTML dashboard
         html_content = self._generate_quality_html(dashboard_data)
@@ -140,7 +152,11 @@ class SRAReportGenerator:
 
         Returns:
             Path to generated HTML report
+
+        Raises:
+            ConfigurationError: If plotly or jinja2 is not installed
         """
+        _require_report_packages()
         logger.info(f"Creating comparative analysis for {len(groups)} groups")
 
         # Perform comparative analysis
@@ -154,9 +170,7 @@ class SRAReportGenerator:
         }
 
         # Create comparative visualizations
-        if PLOTLY_AVAILABLE:
-            plots = self._create_comparative_plots(comparison)
-            report_data["plots"] = plots
+        report_data["plots"] = self._create_comparative_plots(comparison)
 
         # Generate HTML report
         html_content = self._generate_comparative_html(report_data)
@@ -171,9 +185,7 @@ class SRAReportGenerator:
     def _create_quality_plots(self, profiles: Dict[str, QualityProfile]) -> Dict[str, str]:
         """Create interactive plots for quality dashboard."""
         plots: dict = {}
-
-        if not PLOTLY_AVAILABLE:
-            return plots
+        go, pyo = _plotly()
 
         # Quality grade distribution
         grades = [p.quality_grade for p in profiles.values()]
@@ -228,9 +240,9 @@ class SRAReportGenerator:
     def _create_comparative_plots(self, comparison: ComparativeAnalysis) -> Dict[str, str]:
         """Create interactive plots for comparative analysis."""
         plots: dict = {}
-
-        if not PLOTLY_AVAILABLE or not comparison.visualization_data:
+        if not comparison.visualization_data:
             return plots
+        go, pyo = _plotly()
 
         # Box plots for numeric variables
         boxplot_data = comparison.visualization_data.get("boxplot_data", [])
@@ -288,9 +300,6 @@ class SRAReportGenerator:
 
     def _generate_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
         """Generate HTML content for quality dashboard."""
-        if not JINJA2_AVAILABLE:
-            return self._generate_simple_quality_html(dashboard_data)
-
         template_str = """
 <!DOCTYPE html>
 <html>
@@ -352,14 +361,11 @@ class SRAReportGenerator:
 </html>
         """
 
-        template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
+        template = _jinja_template(template_str)
         return template.render(plotly_js=plotly_js_script(), report_css=REPORT_CSS, **dashboard_data)
 
     def _generate_comparative_html(self, report_data: Dict[str, Any]) -> str:
         """Generate HTML content for comparative analysis report."""
-        if not JINJA2_AVAILABLE:
-            return self._generate_simple_comparative_html(report_data)
-
         template_str = """
 <!DOCTYPE html>
 <html>
@@ -423,52 +429,5 @@ class SRAReportGenerator:
 </html>
         """
 
-        template = Environment(loader=BaseLoader(), autoescape=True).from_string(template_str)
+        template = _jinja_template(template_str)
         return template.render(plotly_js=plotly_js_script(), report_css=REPORT_CSS, **report_data)
-
-    @staticmethod
-    def _simple_shell(eyebrow: str, title: str, readout: str, body: str) -> str:
-        """Wrap fallback (no-Jinja) content in the shared report shell."""
-        return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title><style>{REPORT_CSS}</style></head><body>
-<header class="mq-header"><div class="mq-wrap">
-<p class="mq-eyebrow">{eyebrow}</p>
-<h1 class="mq-title">{title}</h1>
-<p class="mq-readout">{readout}</p></div></header>
-<main class="mq-wrap">{body}
-<footer class="mq-footer">Generated by MetaQuest</footer>
-</main></body></html>"""
-
-    def _generate_simple_quality_html(self, dashboard_data: Dict[str, Any]) -> str:
-        """Generate simple quality HTML without Jinja2."""
-        title = html_escape(str(dashboard_data["title"]))
-        timestamp = html_escape(str(dashboard_data["timestamp"]))
-        s = dashboard_data["summary_stats"]
-
-        body = f"""
-<section class="mq-stats" aria-label="Quality summary">
-<div class="mq-stat"><p class="k">Total reads</p><div class="v">{s['total_reads']:,}</div></div>
-<div class="mq-stat"><p class="k">Average GC content</p>
-<div class="v">{s['average_gc_content'] * 100:.1f}%</div></div>
-<div class="mq-stat"><p class="k">High contamination</p><div class="v">{s['high_contamination_count']}</div></div>
-</section>"""
-
-        readout = (
-            f"<span>generated <b>{timestamp}</b></span> <span><b>{dashboard_data['total_datasets']}</b> datasets</span>"
-        )
-        return self._simple_shell("MetaQuest &middot; SRA quality", title, readout, body)
-
-    def _generate_simple_comparative_html(self, report_data: Dict[str, Any]) -> str:
-        """Generate simple comparative HTML without Jinja2."""
-        title = html_escape(str(report_data["title"]))
-        timestamp = html_escape(str(report_data["timestamp"]))
-        cards = "".join(
-            f'<div class="mq-stat"><p class="k">{html_escape(str(name))}</p>'
-            f'<div class="v">{count}<span style="font-size:0.9rem"> datasets</span></div></div>'
-            for name, count in report_data["group_counts"].items()
-        )
-        body = f'<section class="mq-stats" aria-label="Group summary">{cards}</section>'
-        readout = f"<span>generated <b>{timestamp}</b></span>"
-        return self._simple_shell("MetaQuest &middot; SRA comparison", title, readout, body)
