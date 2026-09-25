@@ -5,12 +5,13 @@
 import argparse
 import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Optional
 
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.store._shared import _now, _gitignore_guard
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.registry import registry_transaction
+from metaquest.data.registry_blocks import StoreBlock, project_block, set_project_block, set_store_block, store_block
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import init_store, read_marker
 from metaquest.store.resolve import write_config_data_root
@@ -78,14 +79,13 @@ class StoreInitCommand(BaseCommand):
 
     # --------------------------------------------------------------- execute
 
-    def _warn_on_rebinding(self, registry_store: Dict[str, Any], root: Path) -> None:
+    def _warn_on_rebinding(self, previous: Optional[str], root: Path) -> None:
         """Say so when this project was already bound to a different store root.
 
         Rebinding leaves the datasets the project links from the old store exactly where they
         are; the links now point outside the store this project records, which is worth one
         line rather than silence.
         """
-        previous = (registry_store or {}).get("root")
         if previous and previous != str(root):
             self.logger.warning(
                 "This project was bound to the store at %s and is now bound to %s; "
@@ -107,28 +107,23 @@ class StoreInitCommand(BaseCommand):
 
             cwd = Path.cwd()
             with registry_transaction(args.registry) as registry:
-                existing_project = dict(registry.project) if registry.project else {}
-                project_id = existing_project.get("id") or str(uuid.uuid4())
-                created = existing_project.get("created") or _now()
-                name = args.project_name or cwd.name
-
                 # Keys store_init does not own (e.g. "exports" from results_table) are kept.
-                registry.project = {
-                    **existing_project,
-                    "id": project_id,
-                    "name": name,
-                    "path": str(cwd.resolve()),
-                    "created": created,
-                }
-                self._warn_on_rebinding(registry.store, root.resolve())
-                registry.store = {
-                    "root": str(root.resolve()),
-                    "mode": "symlink",
-                    # Preserved: store_init cannot rebuild the list of datasets this project
-                    # links, and resetting it would lose that record silently.
-                    "linked": sorted(registry.store.get("linked") or []),
-                }
-                project_snapshot = dict(registry.project)
+                project = project_block(registry)
+                project.id = project.id or str(uuid.uuid4())
+                project.created = project.created or _now()
+                project.name = args.project_name or cwd.name
+                project.path = str(cwd.resolve())
+                set_project_block(registry, project)
+                previous_store = store_block(registry)
+                self._warn_on_rebinding(previous_store.root, root.resolve())
+                # The linked list is preserved: store_init cannot rebuild the list of datasets
+                # this project links, and resetting it would lose that record silently. Keys
+                # this version does not know about are kept as well.
+                store = StoreBlock(
+                    root=str(root.resolve()), linked=sorted(previous_store.linked or []), extra=previous_store.extra
+                )
+                set_store_block(registry, store)
+                project_snapshot = project.to_dict()
                 registry_path_str = str(registry.path)
 
             with catalog_write(paths) as catalog:

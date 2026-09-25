@@ -9,8 +9,9 @@ conversion is faithful in both directions:
 - A key the block does not declare is kept in ``extra`` and written back unchanged, so a key
   added by a newer version, or by hand, is never lost by a rewrite.
 - A block loaded with ``from_dict`` writes back exactly the keys it was loaded with, plus any
-  field assigned since (``discard`` removes one again). A block that some writer only ever
-  wrote in part, e.g. a download record holding nothing but a verdict, keeps that shape.
+  field assigned or changed in place since (``discard`` removes one again). A block that some
+  writer only ever wrote in part, e.g. a download record holding nothing but a verdict, keeps
+  that shape.
 - A block constructed directly writes every field, except the optional ones (``ranked``,
   ``inferred``, a download's ``source``, ...) while they hold their default, which matches
   what the writers wrote before these classes existed.
@@ -106,10 +107,9 @@ class RegistryBlock:
         out: Dict[str, Any] = {}
         for f in _block_fields(type(self)):
             value = getattr(self, f.name)
-            if self._keys is not None:
-                if f.name not in self._keys:
-                    continue
-            elif f.metadata.get(_OMIT) and value == _default_of(f):
+            if self._keys is not None and f.name not in self._keys and value == _default_of(f):
+                continue
+            if self._keys is None and f.metadata.get(_OMIT) and value == _default_of(f):
                 continue
             dump: Optional[Callable[[Any], Any]] = f.metadata.get(_DUMP)
             out[f.name] = dump(value) if dump is not None and value is not None else _copy(value)
@@ -218,6 +218,21 @@ class Verdict(RegistryBlock):
     verdict: Optional[str] = _optional()
     expected_spots: Optional[int] = _optional()
     reads_r1: Optional[int] = _optional()
+
+    def carrying_counts_from(self, previous: Optional[Verdict]) -> Verdict:
+        """This verdict, about to replace ``previous``, with the read counts it may inherit filled in.
+
+        A count this verdict leaves as ``None`` inherits the previous count only when both carry
+        the same verdict (a complete-to-complete relink describes the same reads). Across a
+        verdict change the previous count describes other files, e.g. a truncated project copy
+        relinked to a complete store copy, so it stays ``None``; ``store_verify --rescan`` can
+        fill in a real count. Only ``reads_r1`` is carried: ``ratio`` and ``expected_spots``
+        always come from the new verdict, so the result never mixes two downloads' verdicts.
+        """
+        if previous is not None and previous.verdict == self.verdict:
+            if self.reads_r1 is None and previous.reads_r1 is not None:
+                self.reads_r1 = previous.reads_r1
+        return self
 
 
 @dataclass
@@ -380,6 +395,19 @@ def download_block(registry: Registry, accession: str) -> Optional[DownloadBlock
     return _dataset_block(registry, accession, "download", DownloadBlock)
 
 
+def download_block_for_write(registry: Registry, accession: str) -> DownloadBlock:
+    """``accession``'s download block, or the ``{"attempts": 0}`` block a first write starts from."""
+    return download_block(registry, accession) or DownloadBlock.from_dict({"attempts": 0})
+
+
+def set_mate_reads(registry: Registry, accession: str, mate_reads: List[int], signature: List[List[Any]]) -> None:
+    """Cache ``accession``'s mate read counts, with the ``[name, size, mtime]`` signature of the files counted."""
+    download = download_block_for_write(registry, accession)
+    download.mate_reads = mate_reads
+    download.mate_reads_signature = signature
+    set_download_block(registry, accession, download)
+
+
 def metadata_block(registry: Registry, accession: str) -> Optional[MetadataBlock]:
     """``accession``'s NCBI metadata block, or None when none was recorded."""
     return _dataset_block(registry, accession, "metadata", MetadataBlock)
@@ -445,3 +473,33 @@ def set_project_block(registry: Registry, block: ProjectBlock) -> None:
 def set_store_block(registry: Registry, block: StoreBlock) -> None:
     """Store ``block`` as this project's store binding."""
     registry.store = block.to_dict()
+
+
+# The dataset blocks bootstrap and reconcile can mark as reconstructed from disk.
+_INFERABLE: Dict[str, Type[RegistryBlock]] = {
+    "screening": ScreeningBlock,
+    "selection": SelectionBlock,
+    "download": DownloadBlock,
+    "metadata": MetadataBlock,
+    "extractions": ExtractionBlock,
+}
+
+
+def mark_inferred(registry: Registry, accession: str, key: str, genome_id: Optional[str] = None, **values: Any) -> None:
+    """Flag a block just recorded for ``accession`` as reconstructed from disk, and set ``values`` on it.
+
+    ``key`` names the dataset block (``"screening"``, ``"selection"``, ``"download"``,
+    ``"metadata"``), or ``"extractions"`` together with ``genome_id`` for one extraction. A block
+    that was never recorded is left alone.
+    """
+    container = registry.datasets.get(accession, {})
+    name = key
+    if genome_id is not None:
+        container, name = container.get(key) or {}, genome_id
+    raw = container.get(name)
+    if not isinstance(raw, dict):
+        return
+    block = _INFERABLE[key].from_dict(raw)
+    for field_name, value in {"inferred": True, **values}.items():
+        setattr(block, field_name, value)
+    container[name] = block.to_dict()

@@ -1556,6 +1556,27 @@ class TestStoreInitRebinding:
         assert registry.store["linked"] == ["SRR1", "SRR2"]
         assert any("was bound to" in record.message for record in caplog.records)
 
+    def test_rerun_keeps_keys_it_does_not_know(self, tmp_path, monkeypatch):
+        from metaquest.data.registry import save_registry
+
+        root = tmp_path / "store"
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+        assert StoreInitCommand().execute(_init_args(root, project_dir)) == 0
+        registry = load_registry(registry_path)
+        registry.store["comment"] = "written by a newer version"
+        registry.project["notes"] = "also kept"
+        save_registry(registry, registry_path)
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir)) == 0
+
+        registry = load_registry(registry_path)
+        assert registry.store["comment"] == "written by a newer version"
+        assert registry.project["notes"] == "also kept"
+        assert set(registry.store) == {"root", "mode", "linked", "comment"}
+
     def test_refuses_a_non_empty_folder_that_is_not_a_store(self, tmp_path, monkeypatch):
         home_like = tmp_path / "documents"
         home_like.mkdir()

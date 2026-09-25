@@ -5,7 +5,9 @@ they stood before the blocks existed. Every block must come back out of ``from_d
 exactly as it went in, including keys no writer knows about.
 """
 
+import gzip
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -113,6 +115,9 @@ def test_assignment_after_load_writes_the_key():
     assert block.to_dict() == {"attempts": 0, "message": ""}
     block.discard("message")
     assert block.to_dict() == {"attempts": 0}
+    project = ProjectBlock.from_dict({"id": "p"})
+    project.exports["t"] = ExportEntry(date="d", output="o", summary={})
+    assert project.to_dict() == {"id": "p", "exports": {"t": {"date": "d", "output": "o", "summary": {}}}}
 
 
 def test_fresh_blocks_omit_optional_keys_left_at_their_default():
@@ -120,6 +125,138 @@ def test_fresh_blocks_omit_optional_keys_left_at_their_default():
     assert selection.to_dict() == {"selected": True, "date": "d", "criteria": {}, "output": "o"}
     store = StoreBlock(root="/r", linked=["A"])
     assert store.to_dict() == {"root": "/r", "mode": "symlink", "linked": ["A"]}
+
+
+def test_set_mate_reads_starts_a_download_block_when_there_is_none():
+    registry = R.Registry()
+    B.set_mate_reads(registry, "SRR1", [3, 3], [["SRR1_1.fastq.gz", 1, 1.0]])
+    assert registry.datasets["SRR1"]["download"] == {
+        "attempts": 0,
+        "mate_reads": [3, 3],
+        "mate_reads_signature": [["SRR1_1.fastq.gz", 1, 1.0]],
+    }
+    B.set_mate_reads(registry, "SRR1", [4, 4], [])
+    assert registry.datasets["SRR1"]["download"]["mate_reads"] == [4, 4]
+
+
+def test_mark_inferred_leaves_an_unrecorded_block_alone():
+    registry = R.Registry()
+    B.mark_inferred(registry, "SRR1", "download")
+    B.mark_inferred(registry, "SRR1", "extractions", genome_id="G1")
+    assert registry.datasets == {}
+
+
+def _mask(value):
+    """Timestamps and compressed file sizes differ between runs; everything else must not."""
+    if isinstance(value, dict):
+        return {k: "<masked>" if k in ("bytes", "bytes_total") else _mask(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask(v) for v in value]
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d", value):
+        return "<stamp>"
+    return value
+
+
+def test_writers_reproduce_the_fixture(tmp_path, monkeypatch, fixture_data):
+    """The record_* writers, going through the typed blocks, write exactly the fixture's shapes and values."""
+    monkeypatch.chdir(tmp_path)
+    fastq = tmp_path / "fastq"
+    for acc, mates in (("SRR0000001", ("_1", "_2")), ("SRR0000002", ("",)), ("SRR0000005", ("",))):
+        (fastq / acc).mkdir(parents=True)
+        for mate in mates:
+            with gzip.open(fastq / acc / f"{acc}{mate}.fastq.gz", "wt") as handle:
+                handle.write("@r1\nACGT\n+\nIIII\n@r2\nACGT\n+\nIIII\n")
+    registry = R.Registry(path=tmp_path / R.REGISTRY_FILENAME)
+    R.record_genome(registry, "GCF_000001", "genomes/GCF_000001.fna", "genomes/manifest.csv")
+    R.record_genome(registry, "GCF_000002", "genomes/GCF_000002.fna", "")
+
+    R.record_screening(
+        registry, "SRR0000001", "GCF_000001", 0.912345, 0.98765, "branchwater", 0.1, "matches/GCF_000001.csv"
+    )
+    R.record_screening(registry, "SRR0000001", "GCF_000002", 0.25, None, "matches", 0.0, None)
+    R.record_screening(registry, "SRR0000002", "GCF_000001", 0.5, None, "matches", 0.0, "matches/GCF_000001.csv")
+    B.mark_inferred(registry, "SRR0000002", "screening")
+    R.record_selection(registry, ["SRR0000001", "SRR0000002"], {"min_containment": 0.2}, "selected.txt")
+    ranked = [{"accession": "SRR0000001", "rank": 1, "column": "GCF_000001", "value": 0.9123}]
+    R.record_selection(registry, ["SRR0000001"], {"min_containment": 0.3, "top": 1}, "selected.txt", ranked=ranked)
+    R.record_download(
+        registry,
+        "SRR0000001",
+        "downloaded",
+        fastq,
+        message="downloaded, complete (2 reads, 2 expected)",
+        complete={"verdict": "complete", "reads_r1": 2, "expected_spots": 2, "ratio": 1.0},
+        source="store",
+        store_name="SRR0000001",
+    )
+    signature = [["SRR0000001_1.fastq.gz", 60, 1758780000.5], ["SRR0000001_2.fastq.gz", 60, 1758780000.5]]
+    B.set_mate_reads(registry, "SRR0000001", [2, 2], signature)
+    fields = {
+        "run_size": "1234",
+        "run_md5": "abc",
+        "assay_type": "WGS",
+        "organism": "vaginal metagenome",
+        "collection_date": "2020-01-01",
+        "library_layout": "PAIRED",
+        "platform": "ILLUMINA",
+        "library_strategy": "WGS",
+        "run_total_spots": "2",
+        "run_total_bases": 16,
+    }
+    R.record_metadata(registry, "SRR0000001", "metadata/SRR0000001_metadata.xml", fields)
+    R.record_analysis(registry, "SRR0000001", "quality", "analysis/SRR0000001.json", {"mean_q": 38.5})
+    targeted = tmp_path / "targeted" / "SRR0000001"
+    params = {
+        "genome_fasta": "genomes/GCF_000001.fna",
+        "preset": "sr",
+        "threshold": 0.9,
+        "filter_flags": "-F 4",
+        "min_mapq": 0,
+        "index": "genomes/GCF_000001.mmi",
+    }
+    coverage = {"breadth": 0.75, "mean_depth": 3.2, "coverage_tsv": targeted / "GCF_000001_coverage.tsv"}
+    files = [targeted / "GCF_000001_1.fastq.gz", targeted / "GCF_000001_2.fastq.gz"]
+    R.record_extraction(registry, "SRR0000001", "GCF_000001", files, 40, False, params, 42, coverage)
+    stats = {"contigs": 3, "total_bp": 1500, "n50": 600, "largest": 700, "n90": 300, "gc": 0.41}
+    stats.update({"genome_fraction_estimate": 0.8, "mapping_rate": 0.95})
+    assembly_params = {"min_contig_len": 200, "k_list": "21,29,39"}
+    asm_dir = targeted / "GCF_000001_assembly"
+    R.record_assembly(registry, "SRR0000001", "GCF_000001", asm_dir, stats, "MEGAHIT v1.2.9", assembly_params)
+
+    R.record_exclusion(registry, "SRR0000002", "low quality", source="qc")
+    R.record_download(registry, "SRR0000002", "failed", fastq, message="prefetch failed: timeout")
+
+    R.set_download_verdict(registry, "SRR0000003", {"verdict": "unverified"})
+    R.record_metadata(registry, "SRR0000003", "metadata/SRR0000003_metadata.xml", {})
+    B.mark_inferred(registry, "SRR0000003", "metadata")
+
+    asm_dir = tmp_path / "targeted/SRR0000004/GCF_000002_assembly"
+    R.record_assembly(
+        registry,
+        "SRR0000004",
+        "GCF_000002",
+        asm_dir,
+        {"contigs": 1, "total_bp": 300, "n50": 300, "largest": 300},
+        "",
+        {},
+    )
+    B.mark_inferred(registry, "SRR0000004", "extractions", genome_id="GCF_000002")
+    R.record_exclusion(registry, "SRR0000004", "contaminated")
+    R.clear_exclusion(registry, "SRR0000004")
+
+    R.record_download(registry, "SRR0000005", "downloaded", fastq)
+    B.mark_inferred(registry, "SRR0000005", "download", attempts=0)
+    R.set_download_verdict(registry, "SRR0000005", {"method": "spots", "ratio": 0.5, "verdict": "truncated"})
+    R.record_extraction(registry, "SRR0000005", "GCF_000002", [], 0, True, {"preset": "sr"})
+    R.clear_assembly(registry, "SRR0000005", "GCF_000002")
+
+    registry.project = {k: v for k, v in fixture_data["project"].items() if k != "exports"}
+    R.record_export(registry, "results_table", "results/results.tsv", {"rows": 5})
+    registry.store = dict(fixture_data["store"])
+
+    assert _mask(registry.datasets) == _mask(fixture_data["datasets"])
+    assert _mask(registry.genomes) == _mask(fixture_data["genomes"])
+    assert _mask(registry.project) == _mask(fixture_data["project"])
 
 
 def test_registry_accessors_and_setters_round_trip(tmp_path, fixture_data):

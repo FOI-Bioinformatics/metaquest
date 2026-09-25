@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.registry import Registry, load_registry
+from metaquest.data.registry_blocks import project_block, set_project_block
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths
 
@@ -50,22 +51,19 @@ def ensure_project_identity(registry: Registry) -> Dict[str, Any]:
     persists it with whatever else that transaction records, and the catalogue row follows from
     the next ``record_usage_safe``/``record_usage_many`` call.
     """
-    project = dict(registry.project or {})
-    if project.get("id"):
-        return project
+    project = project_block(registry)
+    if project.id:
+        return project.to_dict()
 
     cwd = Path.cwd()
     # Keys this function does not own (e.g. "exports" from results_table) are kept.
-    project = {
-        **project,
-        "id": str(uuid.uuid4()),
-        "name": project.get("name") or cwd.name,
-        "path": project.get("path") or str(cwd.resolve()),
-        "created": project.get("created") or datetime.now(timezone.utc).isoformat(),
-    }
-    registry.project = project
-    logger.info("Recorded this project's identity for the shared store: %s (%s)", project["id"], project["name"])
-    return project
+    project.id = str(uuid.uuid4())
+    project.name = project.name or cwd.name
+    project.path = project.path or str(cwd.resolve())
+    project.created = project.created or datetime.now(timezone.utc).isoformat()
+    set_project_block(registry, project)
+    logger.info("Recorded this project's identity for the shared store: %s (%s)", project.id, project.name)
+    return project.to_dict()
 
 
 def record_usage_safe(

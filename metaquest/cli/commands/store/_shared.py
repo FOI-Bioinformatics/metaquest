@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from metaquest.cli.base import emit_error_json
 from metaquest.data.registry import Registry
+from metaquest.data.registry_blocks import set_store_block, store_block
 from metaquest.store.layout import StorePaths, sidecar_path
 from metaquest.store.sidecar import sidecar_completeness
 
@@ -88,9 +89,11 @@ def update_linked(registry: Registry, accession: str, add: bool) -> None:
     The list is kept sorted and free of duplicates, so calling this twice with the same arguments
     leaves the registry as one call did.
     """
-    linked = set(registry.store.get("linked") or [])
+    store = store_block(registry)
+    linked = set(store.linked or [])
     if add:
         linked.add(accession)
     else:
         linked.discard(accession)
-    registry.store["linked"] = sorted(linked)
+    store.linked = sorted(linked)
+    set_store_block(registry, store)

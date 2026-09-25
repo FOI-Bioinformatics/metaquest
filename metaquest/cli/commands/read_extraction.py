@@ -34,8 +34,8 @@ from metaquest.data.registry import (
     registry_transaction,
     resolve_project_path,
     scan_downloads,
-    upsert_dataset,
 )
+from metaquest.data.registry_blocks import set_mate_reads
 from metaquest.data.sra import count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.store.layout import StorePaths
@@ -255,9 +255,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 continue
             counts[accession] = pair
             with registry_transaction(args.registry) as reg:
-                download = upsert_dataset(reg, accession).setdefault("download", {"attempts": 0})
-                download["mate_reads"] = [pair[0], pair[1]]
-                download["mate_reads_signature"] = signature
+                set_mate_reads(reg, accession, [pair[0], pair[1]], signature)
         return counts
 
     def _samples_needing_mate_counts(
