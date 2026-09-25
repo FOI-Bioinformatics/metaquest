@@ -1,5 +1,5 @@
 """
-STARTER TESTS for sra/reporting.py (18% → 50%+ coverage)
+STARTER TESTS for sra/reporting.py (18% -> 50%+ coverage)
 
 This file provides foundational tests for the SRA reporting module.
 Run: pytest tests/test_sra_reporting_starter.py -v
@@ -28,7 +28,7 @@ class MockQualityProfile:
     total_reads: int
     total_bases: int
     avg_read_length: float
-    gc_content: float
+    gc_percent: float
     quality_grade: str
     complexity_score: float
     n_content: float
@@ -49,7 +49,7 @@ def mock_quality_profile():
         total_reads=1000000,
         total_bases=150000000,
         avg_read_length=150.0,
-        gc_content=0.45,
+        gc_percent=45.0,
         quality_grade="good",
         complexity_score=0.85,
         n_content=0.02,
@@ -110,7 +110,7 @@ class TestHelperMethods:
         assert "total_datasets" in result
         assert result["total_datasets"] == 2
         assert "total_reads" in result
-        assert "average_gc_content" in result
+        assert "average_gc_percent" in result
         assert "quality_grade_distribution" in result
 
 
@@ -154,7 +154,7 @@ class TestHTMLGeneration:
             "total_datasets": 5,
             "summary_stats": {
                 "total_reads": 5000000,
-                "average_gc_content": 0.45,
+                "average_gc_percent": 45.0,
                 "high_contamination_count": 2,
                 "quality_grade_distribution": {"good": 3},
             },
@@ -195,7 +195,7 @@ class TestHTMLGeneration:
 #
 # After running these starter tests:
 # - Expected: 18 tests pass
-# - Coverage: 18% → 50%+ for sra/reporting.py
+# - Coverage: 18% -> 50%+ for sra/reporting.py
 # - Key methods tested: init, quality summary helpers, HTML generation
 #
 # Run tests:

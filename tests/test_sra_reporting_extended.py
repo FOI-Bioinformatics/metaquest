@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for sra/reporting.py (64% → 75%+ coverage)
+EXTENDED TESTS for sra/reporting.py (64% -> 75%+ coverage)
 
 This file adds tests for untested methods in the SRA reporting module:
 - generate_quality_dashboard
@@ -34,7 +34,7 @@ class MockQualityProfile:
     total_reads: int
     total_bases: int
     avg_read_length: float
-    gc_content: float
+    gc_percent: float
     quality_grade: str
     complexity_score: float
     n_content: float
@@ -87,7 +87,7 @@ def mock_quality_profiles():
             total_reads=1000000,
             total_bases=150000000,
             avg_read_length=150.0,
-            gc_content=0.45,
+            gc_percent=45.0,
             quality_grade="excellent",
             complexity_score=0.90,
             n_content=0.01,
@@ -98,7 +98,7 @@ def mock_quality_profiles():
             total_reads=800000,
             total_bases=120000000,
             avg_read_length=150.0,
-            gc_content=0.52,
+            gc_percent=52.0,
             quality_grade="good",
             complexity_score=0.85,
             n_content=0.02,
@@ -109,7 +109,7 @@ def mock_quality_profiles():
             total_reads=500000,
             total_bases=75000000,
             avg_read_length=150.0,
-            gc_content=0.48,
+            gc_percent=48.0,
             quality_grade="fair",
             complexity_score=0.75,
             n_content=0.05,
@@ -132,7 +132,7 @@ def mock_comparative_analysis():
     """Create mock comparative analysis."""
     return MockComparativeAnalysis(
         statistical_tests={
-            "gc_content": MockStatisticalTest(test="Mann-Whitney U", p_value=0.045, significant=True),
+            "gc_percent": MockStatisticalTest(test="Mann-Whitney U", p_value=0.045, significant=True),
             "read_length": MockStatisticalTest(test="T-test", p_value=0.32, significant=False),
         },
         visualization_data={
@@ -140,28 +140,28 @@ def mock_comparative_analysis():
                 {
                     "group": "Group A",
                     "avg_read_length": 150,
-                    "gc_content": 0.45,
+                    "gc_percent": 45.0,
                     "total_reads": 1000000,
                     "complexity_score": 0.85,
                 },
                 {
                     "group": "Group A",
                     "avg_read_length": 148,
-                    "gc_content": 0.46,
+                    "gc_percent": 46.0,
                     "total_reads": 1100000,
                     "complexity_score": 0.87,
                 },
                 {
                     "group": "Group B",
                     "avg_read_length": 151,
-                    "gc_content": 0.52,
+                    "gc_percent": 52.0,
                     "total_reads": 900000,
                     "complexity_score": 0.82,
                 },
                 {
                     "group": "Group B",
                     "avg_read_length": 149,
-                    "gc_content": 0.53,
+                    "gc_percent": 53.0,
                     "total_reads": 950000,
                     "complexity_score": 0.83,
                 },
@@ -283,7 +283,7 @@ class TestQualityDashboardGeneration:
             total_bases=1850000,
             avg_read_length=150.0,
             read_length_distribution={},
-            gc_content=0.55,
+            gc_percent=55.0,
             gc_histogram={},
             quality_distribution={"excellent_q30+": 0.9},
             n_content=0.01,
@@ -307,7 +307,7 @@ class TestQualityDashboardGeneration:
         mock_profile_call.assert_not_called()
         assert result_path.exists()
         # The supplied profile's own values (not some freshly computed default) reached the
-        # rendered summary: total_reads=12,345 and gc_content=55.0%.
+        # rendered summary: total_reads=12,345 and GC 55.0%.
         html_content = result_path.read_text()
         assert "12,345" in html_content
         assert "55.0%" in html_content
@@ -479,7 +479,7 @@ class TestJinja2TemplateRendering:
             "total_datasets": 3,
             "summary_stats": {
                 "total_reads": 5000000,
-                "average_gc_content": 0.45,
+                "average_gc_percent": 45.0,
                 "high_contamination_count": 1,
                 "quality_grade_distribution": {"excellent": 2, "good": 1},
             },
@@ -508,7 +508,7 @@ class TestJinja2TemplateRendering:
             "timestamp": "2025-01-01 12:00:00",
             "group_counts": {"Group A": 10, "Group B": 15},
             "comparison": MockComparativeAnalysis(
-                statistical_tests={"gc_content": MockStatisticalTest("Mann-Whitney U", 0.03, True)},
+                statistical_tests={"gc_percent": MockStatisticalTest("Mann-Whitney U", 0.03, True)},
                 visualization_data={},
                 recommendations=["Use different pipelines"],
             ),
@@ -531,7 +531,7 @@ class TestJinja2TemplateRendering:
 #
 # After running these extended tests:
 # - Expected: 25+ additional tests pass
-# - Coverage: 64% → 75%+ for sra/reporting.py
+# - Coverage: 64% -> 75%+ for sra/reporting.py
 # - All major methods now tested
 #
 # Run tests:
@@ -542,3 +542,55 @@ class TestJinja2TemplateRendering:
 #          tests/test_sra_reporting_starter.py \
 #          tests/test_sra_reporting_extended.py
 # ============================================================================
+
+
+def _real_profile(accession, gc_percent):
+    return QualityProfile(
+        accession=accession,
+        total_reads=12345,
+        total_bases=1850000,
+        avg_read_length=150.0,
+        read_length_distribution={},
+        gc_percent=gc_percent,
+        gc_histogram={},
+        quality_distribution={"excellent_q30+": 0.9},
+        n_content=0.0,
+        contamination_indicators={"adapter_contamination": 0.0},
+        complexity_score=0.9,
+        duplication_rate=0.1,
+        technology_confidence=0.8,
+        quality_grade="good",
+        recommendations=[],
+    )
+
+
+def test_generate_report_renders_both_sections_from_the_supplied_profiles(tmp_path):
+    """sra_report's one page: the quality section and the comparison, nothing profiled again."""
+    from metaquest.sra.analytics import ComparativeAnalysis
+
+    generator = SRAReportGenerator(tmp_path / "reports")
+    profiles = {"SRR1": _real_profile("SRR1", 40.0), "SRR2": _real_profile("SRR2", 60.0)}
+    comparison = ComparativeAnalysis(
+        dataset_groups={"A": ["SRR1"], "B": ["SRR2"]},
+        summary_statistics={},
+        statistical_tests={"gc_percent": {"test": "t-test", "p_value": 0.01, "significant": True}},
+        outlier_datasets=[],
+        clustering_results=None,
+        batch_effects={},
+        recommendations=["Significant differences detected in: gc_percent"],
+        visualization_data={},
+    )
+    with patch.object(generator.analyzer, "profile_dataset_quality") as profile_call:
+        path = generator.generate_report(profiles, title="One Report", comparison=comparison)
+
+    profile_call.assert_not_called()
+    assert path == tmp_path / "reports" / "sra_report.html"
+    html = path.read_text()
+    assert "One Report" in html
+    assert "50.0%" in html  # mean GC percent of the two profiles
+    assert "Statistical tests" in html and "significant" in html
+
+
+def test_generate_report_without_profiles_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="No datasets could be profiled"):
+        SRAReportGenerator(tmp_path / "reports").generate_report({})

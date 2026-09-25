@@ -884,6 +884,14 @@ class TestScanners:
         _, extractions = to_dataframes(r)
         assert extractions.loc[0, "breadth"] == 0.5 and extractions.loc[0, "mean_depth"] == 3.25
 
+    def test_to_dataframes_reads_the_profile_or_an_old_quality_analysis(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_analysis(r, "SRR1", "profile", tmp_path / "p.json", {"total_reads": 10, "gc_percent": 40.0})
+        reg.record_analysis(r, "SRR2", "quality", tmp_path / "q.json", {"grade": "good", "gc_content": 0.5})
+        datasets, _ = to_dataframes(r)
+        assert datasets.loc["SRR1", "gc_percent"] == 40.0 and datasets.loc["SRR1", "total_reads"] == 10
+        assert datasets.loc["SRR2", "gc_percent"] == 50.0 and datasets.loc["SRR2", "quality_grade"] == "good"
+
 
 class TestStoreLinksInTheRegistry:
     """Store-backed downloads: recorded source, and dangling links reported as drift."""

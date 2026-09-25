@@ -24,7 +24,7 @@ import pandas as pd
 # (including numpy/scipy, transitively). A later fresh import of anything under metaquest.sra
 # in the same process then hits numpy's C extensions with "ImportError: cannot load module
 # more than once per process". Individual tests below still patch
-# metaquest.sra.analytics.SeqIO directly where they need to avoid touching real FASTQ files.
+# metaquest.sra.quality.SeqIO directly where they need to avoid touching real FASTQ files.
 from metaquest.sra.analytics import (
     SRADatasetAnalyzer,
     SequenceQualityAnalyzer,
@@ -32,8 +32,8 @@ from metaquest.sra.analytics import (
     ComparativeAnalysis,
     AnomalyReport,
     ProcessingRecommendations,
-    load_quality_profiles,
 )
+from metaquest.sra.profiles import load_quality_profiles
 
 from metaquest.core.exceptions import DataAccessError
 
@@ -129,7 +129,7 @@ class TestSequenceQualityAnalyzer:
         assert indicators["adapter_contamination"] > 0
 
     @patch("builtins.open", new_callable=mock_open, read_data="@seq1\nATGCGTACGT\n+\nIIIIIIIIII\n")
-    @patch("metaquest.sra.analytics.SeqIO")
+    @patch("metaquest.sra.quality.SeqIO")
     def test_analyze_fastq_quality_success(self, mock_seqio, mock_file):
         """Test successful FASTQ quality analysis."""
         # Mock SeqIO.parse to return mock records
@@ -165,6 +165,23 @@ class TestSequenceQualityAnalyzer:
             with pytest.raises(DataAccessError, match="Failed to analyze FASTQ file"):
                 self.analyzer.analyze_fastq_quality("test.fastq")
 
+    def test_analyze_fastq_quality_lets_a_bug_propagate(self, tmp_path):
+        fastq = tmp_path / "reads.fastq"
+        fastq.write_text("@r\nACGT\n+\nIIII\n")
+        with patch.object(self.analyzer, "_sample_uniform", side_effect=TypeError("bug")):
+            with pytest.raises(TypeError):
+                self.analyzer.analyze_fastq_quality(fastq)
+
+    def test_analyze_fastq_quality_samples_every_mate(self, tmp_path):
+        r1 = tmp_path / "SRR1_1.fastq"
+        r2 = tmp_path / "SRR1_2.fastq"
+        r1.write_text("@r\nAAAA\n+\nIIII\n")
+        r2.write_text("@r\nGGGG\n+\nIIII\n")
+        for sampler in ("uniform", "head"):
+            result = self.analyzer.analyze_fastq_quality([r1, r2], sample_size=10, sampler=sampler)
+            assert result["total_reads_sampled"] == 2
+            assert result["gc_content_stats"]["mean"] == 50.0  # percent
+
     def test_calculate_duplication_rate(self):
         """Duplication rate is 1 - unique/total over the sampled reads."""
         assert self.analyzer._calculate_duplication_rate([]) == 0.0
@@ -172,7 +189,7 @@ class TestSequenceQualityAnalyzer:
         assert self.analyzer._calculate_duplication_rate(["A", "A", "C", "G"]) == 0.25
         assert self.analyzer._calculate_duplication_rate(["A", "A", "A", "A"]) == 0.75
 
-    @patch("metaquest.sra.analytics.SeqIO")
+    @patch("metaquest.sra.quality.SeqIO")
     @patch("builtins.open", new_callable=mock_open, read_data="")
     def test_analyze_fastq_quality_reports_duplication(self, mock_file, mock_seqio):
         """analyze_fastq_quality includes a real duplication_rate for duplicate reads."""
@@ -218,13 +235,14 @@ class TestSequenceQualityAnalyzer:
         result = self.analyzer.analyze_fastq_quality(fastq, sample_size=200, sampler="uniform")
 
         assert result["total_reads_sampled"] == 200
-        # A head-biased sample would show gc_content == 0.0; the tail is 20% of the file.
-        assert result["gc_content_stats"]["mean"] > 0.02
+        # A head-biased sample would show a GC mean of 0.0; the tail is 20% of the file.
+        # GC is in percent.
+        assert result["gc_content_stats"]["mean"] > 2
 
 
 class TestLoadQualityProfiles:
-    """load_quality_profiles must read both the old (gc_distribution list) and the new
-    (gc_histogram dict) on-disk JSON shape."""
+    """load_quality_profiles must read both the old (gc_distribution list, gc_content fraction)
+    and the new (gc_histogram dict, gc_percent) on-disk JSON shape."""
 
     def _base_profile_json(self, accession):
         return {
@@ -310,9 +328,8 @@ class TestLoadQualityProfiles:
         assert profiles["SRR_NEW"].gc_histogram == {"45-50": 2, "50-55": 1}
 
     def test_prefers_complexity_score_key_when_both_present(self, tmp_path):
-        """complexity_score is the historical key; when a profile JSON carries both (as
-        _write_profile_json now writes), it takes priority so an old reader's expectations
-        still hold."""
+        """complexity_score is the only key written since 0.5.0; when an older profile JSON
+        carries both it and the sequence_complexity alias, complexity_score takes priority."""
         import json
 
         data = self._base_profile_json("SRR_BOTH")
@@ -338,6 +355,24 @@ class TestLoadQualityProfiles:
 
         assert profile.complexity_score == 0.63
 
+    def test_reads_an_old_gc_content_fraction_as_percent(self, tmp_path):
+        import json
+
+        data = self._base_profile_json("SRR_OLD_GC")  # "gc_content": 0.5, as written before 0.5.0
+        (tmp_path / "SRR_OLD_GC_quality_profile.json").write_text(json.dumps(data))
+
+        assert load_quality_profiles(tmp_path)["SRR_OLD_GC"].gc_percent == 50.0
+
+    def test_reads_gc_percent_directly(self, tmp_path):
+        import json
+
+        data = self._base_profile_json("SRR_NEW_GC")
+        del data["gc_content"]
+        data["gc_percent"] = 41.5
+        (tmp_path / "SRR_NEW_GC_quality_profile.json").write_text(json.dumps(data))
+
+        assert load_quality_profiles(tmp_path)["SRR_NEW_GC"].gc_percent == 41.5
+
 
 class TestSRADatasetAnalyzer:
     """Test main SRA dataset analyzer functionality."""
@@ -354,16 +389,16 @@ class TestSRADatasetAnalyzer:
     def test_find_fastq_in_per_accession_folder(self, tmp_path):
         acc_dir = tmp_path / "fastq" / "SRR123456"
         acc_dir.mkdir(parents=True)
-        (acc_dir / "SRR123456_2.fastq").write_text("")
+        (acc_dir / "SRR123456_2.fastq").write_text("@r\nA\n+\nI\n")
         r1 = acc_dir / "SRR123456_1.fastq"
-        r1.write_text("")
+        r1.write_text("@r\nA\n+\nI\n")
         analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path / "fastq")
         assert analyzer.find_fastq("SRR123456") == r1
 
     def test_find_fastq_flat_layout(self, tmp_path):
         flat = tmp_path / "fastq" / "SRR123456.fastq.gz"
         flat.parent.mkdir(parents=True)
-        flat.write_text("")
+        flat.write_text("@r\nA\n+\nI\n")
         analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path / "fastq")
         assert analyzer.find_fastq("SRR123456") == flat
 
@@ -371,7 +406,7 @@ class TestSRADatasetAnalyzer:
         monkeypatch.chdir(tmp_path)
         r1 = tmp_path / "fastq" / "SRR1" / "SRR1_1.fastq"
         r1.parent.mkdir(parents=True)
-        r1.write_text("")
+        r1.write_text("@r\nA\n+\nI\n")
         assert SRADatasetAnalyzer().find_fastq("SRR1") == Path("fastq/SRR1/SRR1_1.fastq")
 
     def test_find_fastq_missing_returns_none(self, tmp_path):
@@ -379,12 +414,21 @@ class TestSRADatasetAnalyzer:
 
     def test_find_fastq_ignores_prefix_collisions(self, tmp_path):
         other = tmp_path / "SRR10_1.fastq"
-        other.write_text("")
+        other.write_text("@r\nA\n+\nI\n")
         (tmp_path / "SRR10").mkdir()
-        (tmp_path / "SRR10" / "SRR10_1.fastq").write_text("")
+        (tmp_path / "SRR10" / "SRR10_1.fastq").write_text("@r\nA\n+\nI\n")
         analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path)
         assert analyzer.find_fastq("SRR1") is None
         assert analyzer.find_fastq("SRR10") == tmp_path / "SRR10" / "SRR10_1.fastq"
+
+    def test_find_fastq_files_returns_every_mate_and_skips_zero_byte_files(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        for name in ("SRR1_1.fastq", "SRR1_2.fastq"):
+            (acc_dir / name).write_text("@r\nA\n+\nI\n")
+        (acc_dir / "SRR1_3.fastq").write_text("")  # left by an interrupted download
+        analyzer = SRADatasetAnalyzer(fastq_dir=tmp_path)
+        assert analyzer.find_fastq_files("SRR1") == [acc_dir / "SRR1_1.fastq", acc_dir / "SRR1_2.fastq"]
 
     def test_calculate_quality_grade(self):
         """Test quality grade calculation."""
@@ -466,7 +510,7 @@ class TestSRADatasetAnalyzer:
         mock_analyze.return_value = {
             "total_reads_sampled": 10000,
             "read_length_stats": {"mean": 150, "distribution": {"101-150": 10000}},
-            "gc_content_stats": {"mean": 0.45, "distribution": [0.45] * 10000},
+            "gc_content_stats": {"mean": 45.0},
             "quality_stats": {"mean": 30, "distribution": {"excellent_q30+": 0.8}},
             "n_content_stats": {"mean": 0.01},
             "complexity_metrics": {"complexity_score": 0.7},
@@ -474,7 +518,7 @@ class TestSRADatasetAnalyzer:
             "duplication_rate": 0.3,
         }
 
-        with patch.object(self.analyzer, "find_fastq", return_value=Path("test.fastq")):
+        with patch.object(self.analyzer, "find_fastq_files", return_value=[Path("test.fastq")]):
             with patch("pathlib.Path.exists", return_value=True):
                 profile = self.analyzer.profile_dataset_quality("SRR123456")
 
@@ -482,7 +526,7 @@ class TestSRADatasetAnalyzer:
         assert profile.accession == "SRR123456"
         assert profile.total_reads == 10000
         assert profile.avg_read_length == 150
-        assert profile.gc_content == 0.45
+        assert profile.gc_percent == 45.0
         assert profile.complexity_score == 0.7
         assert profile.duplication_rate == 0.3
         assert profile.quality_grade in ["excellent", "good", "fair", "poor"]
@@ -498,7 +542,7 @@ class TestSRADatasetAnalyzer:
         mock_analyze.return_value = {
             "total_reads_sampled": 10000,
             "read_length_stats": {"mean": 150, "distribution": {}},
-            "gc_content_stats": {"mean": 0.45},
+            "gc_content_stats": {"mean": 45.0},
             "quality_stats": {"mean": 30, "distribution": {}},
             "n_content_stats": {"mean": 0.01},
             "complexity_metrics": {"complexity_score": 0.7},
@@ -507,7 +551,7 @@ class TestSRADatasetAnalyzer:
         }
         record = {"reads_total": 1724338, "bases_total": 258650700}
 
-        with patch.object(self.analyzer, "find_fastq", return_value=Path("test.fastq")):
+        with patch.object(self.analyzer, "find_fastq_files", return_value=[Path("test.fastq")]):
             with patch("pathlib.Path.exists", return_value=True):
                 profile = self.analyzer.profile_dataset_quality("SRR123456", dataset_stats=record)
 
@@ -523,7 +567,7 @@ class TestSRADatasetAnalyzer:
         mock_analyze.return_value = {
             "total_reads_sampled": 100,
             "read_length_stats": {"mean": 150, "distribution": {}},
-            "gc_content_stats": {"mean": 0.45},
+            "gc_content_stats": {"mean": 45.0},
             "quality_stats": {"mean": 30, "distribution": {}},
             "n_content_stats": {"mean": 0.0},
             "complexity_metrics": {"complexity_score": 0.7},
@@ -531,7 +575,7 @@ class TestSRADatasetAnalyzer:
             "duplication_rate": 0.0,
         }
 
-        with patch.object(self.analyzer, "find_fastq", return_value=Path("test.fastq")):
+        with patch.object(self.analyzer, "find_fastq_files", return_value=[Path("test.fastq")]):
             with patch("pathlib.Path.exists", return_value=True):
                 profile = self.analyzer.profile_dataset_quality(
                     "SRR123456", dataset_stats={"reads_total": 1000, "bases_total": None}
@@ -554,7 +598,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1500000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.45,
+                gc_percent=45.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
@@ -571,7 +615,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1800000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.48,
+                gc_percent=48.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.015,
@@ -588,7 +632,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1200000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.42,
+                gc_percent=42.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.008,
@@ -605,7 +649,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1350000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.40,
+                gc_percent=40.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.012,
@@ -644,7 +688,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1500000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.45,
+                gc_percent=45.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
@@ -661,7 +705,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1200000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.15,  # Unusual GC
+                gc_percent=15.0,  # Unusual GC
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.08,  # High N
@@ -678,7 +722,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1650000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.42,
+                gc_percent=42.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.012,
@@ -718,7 +762,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1500000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.45,
+                gc_percent=45.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
@@ -735,7 +779,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1200000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.40,
+                gc_percent=40.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.02,
@@ -765,7 +809,7 @@ class TestSRADatasetAnalyzer:
             total_bases=1500000,
             avg_read_length=150,
             read_length_distribution={},
-            gc_content=0.45,
+            gc_percent=45.0,
             gc_histogram={},
             quality_distribution={},
             n_content=0.01,
@@ -782,7 +826,7 @@ class TestSRADatasetAnalyzer:
             total_bases=3000000,
             avg_read_length=150,
             read_length_distribution={},
-            gc_content=0.50,
+            gc_percent=50.0,
             gc_histogram={},
             quality_distribution={},
             n_content=0.01,
@@ -815,7 +859,7 @@ class TestSRADatasetAnalyzer:
             total_bases=1500000,
             avg_read_length=150,
             read_length_distribution={},
-            gc_content=0.45,
+            gc_percent=45.0,
             gc_histogram={},
             quality_distribution={},
             n_content=0.01,
@@ -848,7 +892,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1500000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.45,
+                gc_percent=45.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
@@ -865,7 +909,7 @@ class TestSRADatasetAnalyzer:
                 total_bases=1200000,
                 avg_read_length=150,
                 read_length_distribution={},
-                gc_content=0.15,
+                gc_percent=15.0,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.08,
@@ -894,7 +938,7 @@ class TestSRADatasetAnalyzer:
             total_bases=1500000,
             avg_read_length=150,
             read_length_distribution={},
-            gc_content=0.45,
+            gc_percent=45.0,
             gc_histogram={},
             quality_distribution={},
             n_content=0.01,
@@ -934,7 +978,7 @@ class TestStatisticalAnalysis:
                 "accession": ["SRR1", "SRR2", "SRR3", "SRR4"],
                 "group": ["A", "A", "B", "B"],
                 "avg_read_length": [150, 155, 250, 245],
-                "gc_content": [0.45, 0.47, 0.52, 0.50],
+                "gc_percent": [45.0, 47.0, 52.0, 50.0],
                 "total_reads": [10000, 12000, 8000, 9000],
                 "complexity_score": [0.7, 0.75, 0.6, 0.65],
             }
@@ -945,7 +989,7 @@ class TestStatisticalAnalysis:
         tests = self.analyzer._perform_statistical_tests(comparison_df, groups)
 
         assert "avg_read_length" in tests
-        assert "gc_content" in tests
+        assert "gc_percent" in tests
         assert tests["avg_read_length"]["test"] == "t-test"  # Two groups
         assert "statistic" in tests["avg_read_length"]
         assert "p_value" in tests["avg_read_length"]
@@ -958,7 +1002,7 @@ class TestStatisticalAnalysis:
             {
                 "accession": ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5"],
                 "avg_read_length": [150, 155, 148, 152, 500],  # SRR5 is outlier
-                "gc_content": [0.45, 0.47, 0.44, 0.46, 0.48],
+                "gc_percent": [45.0, 47.0, 44.0, 46.0, 48.0],
                 "total_reads": [10000, 12000, 11000, 10500, 9500],
             }
         )
@@ -990,7 +1034,7 @@ class TestStatisticalAnalysis:
                 "accession": ["SRR1", "SRR2", "SRR3"],
                 "group": ["A", "A", "B"],
                 "avg_read_length": [150, 155, 250],
-                "gc_content": [0.45, 0.47, 0.52],
+                "gc_percent": [45.0, 47.0, 52.0],
             }
         )
 
@@ -1013,7 +1057,7 @@ class TestDataStructures:
             total_bases=1500000,
             avg_read_length=150.0,
             read_length_distribution={"101-150": 8000, "151-250": 2000},
-            gc_content=0.45,
+            gc_percent=45.0,
             gc_histogram={},
             quality_distribution={"excellent_q30+": 0.8},
             n_content=0.01,
@@ -1128,10 +1172,9 @@ def test_json_safe_converts_a_pandas_dataframe_to_a_dict():
     json.dumps(safe)  # must not raise
 
 
-def _profile_with_gc(accession: str, gc_content: float) -> QualityProfile:
-    """Build a real QualityProfile with a chosen gc_content, otherwise matching the
-    ``make_profile`` helper in tests/test_cli_sra_intelligent.py (which hardcodes
-    gc_content=0.45 and so cannot vary it across groups)."""
+def _profile_with_gc(accession: str, gc_percent: float) -> QualityProfile:
+    """Build a real QualityProfile with a chosen GC percent, otherwise matching the
+    ``make_profile`` helper in tests/test_cli_sra_report.py."""
     return QualityProfile(
         accession=accession,
         total_reads=1000,
@@ -1139,7 +1182,7 @@ def _profile_with_gc(accession: str, gc_content: float) -> QualityProfile:
         total_bases=150000,
         avg_read_length=150.0,
         read_length_distribution={},
-        gc_content=gc_content,
+        gc_percent=gc_percent,
         gc_histogram={},
         quality_distribution={"excellent_q30+": 0.9},
         n_content=0.0,
@@ -1155,8 +1198,8 @@ def _profile_with_gc(accession: str, gc_content: float) -> QualityProfile:
 @requires_analysis
 def test_compare_datasets_result_dumps(tmp_path):
     """compare_datasets' real statistical_tests output (numpy bool included) must be
-    JSON-serialisable once passed through json_safe, matching what _save_comparison_results
-    now does before writing comparative_analysis.json."""
+    JSON-serialisable once passed through json_safe, matching what sra_report does before
+    writing sra_report.json."""
     import json
 
     from metaquest.sra.analytics import SRADatasetAnalyzer, json_safe
@@ -1165,11 +1208,11 @@ def test_compare_datasets_result_dumps(tmp_path):
     groups = {"a": ["A1", "A2", "A3"], "b": ["B1", "B2"]}
     profiles = {}
     for i, accession in enumerate(groups["a"]):
-        profiles[accession] = _profile_with_gc(accession, 0.40 + i * 0.01)
+        profiles[accession] = _profile_with_gc(accession, 40.0 + i)
     for i, accession in enumerate(groups["b"]):
-        profiles[accession] = _profile_with_gc(accession, 0.55 + i * 0.01)
+        profiles[accession] = _profile_with_gc(accession, 55.0 + i)
 
     result = analyzer.compare_datasets(groups, profiles=profiles)
 
-    assert result.statistical_tests["gc_content"]["test"] == "t-test"
+    assert result.statistical_tests["gc_percent"]["test"] == "t-test"
     json.dumps(json_safe(result.statistical_tests))

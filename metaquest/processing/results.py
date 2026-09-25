@@ -1,9 +1,9 @@
 """The consolidated results table: one row per screened (accession, genome) pair.
 
 Joins what the project registry records for each pair (screening, selection, exclusion,
-download, run metadata, read extraction, reference coverage and assembly) with the
-containment values of the parsed containment table, which are unrounded and not limited
-by ``cap_screening``.
+download, run metadata, the dataset profile of ``sra_profile``, read extraction, reference
+coverage and assembly) with the containment values of the parsed containment table, which
+are unrounded and not limited by ``cap_screening``.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,6 +24,9 @@ RESULTS_COLUMNS = [
     "download_state",
     "run_total_spots",
     "run_size",
+    "total_reads",
+    "gc_percent",
+    "quality_grade",
     "mapped_reads",
     "mapping_rate_to_reference",
     "breadth",
@@ -100,6 +103,7 @@ def _row(registry: Registry, accession: str, genome_id: str, containment: Option
     assembly = extraction.assembly.to_dict() if extraction.assembly is not None else {}
     spots = to_int_or_none(metadata.run_total_spots)
     mapped_reads = to_int_or_none(extraction.mapped_reads)
+    profile = rb.profile_summary(registry, accession)
     return {
         "accession": accession,
         "genome_id": genome_id,
@@ -110,6 +114,9 @@ def _row(registry: Registry, accession: str, genome_id: str, containment: Option
         "download_state": (download.state or None) if download is not None else None,
         "run_total_spots": spots,
         "run_size": to_int_or_none(metadata.run_size),
+        "total_reads": to_int_or_none(profile["total_reads"]),
+        "gc_percent": profile["gc_percent"],
+        "quality_grade": profile["quality_grade"],
         "mapped_reads": mapped_reads,
         "mapping_rate_to_reference": _mapping_rate(mapped_reads, spots),
         "breadth": extraction.breadth,

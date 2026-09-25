@@ -38,6 +38,9 @@ def test_columns_in_stated_order():
         "download_state",
         "run_total_spots",
         "run_size",
+        "total_reads",
+        "gc_percent",
+        "quality_grade",
         "mapped_reads",
         "mapping_rate_to_reference",
         "breadth",
@@ -182,3 +185,30 @@ def test_dataframe_keeps_integers_as_integers(tmp_path):
     assert fields["run_total_spots"] == "1000" and fields["contigs"] == "12"
     missing = next(line for line in text.splitlines() if line.startswith("SRR2\tGCF_A"))
     assert dict(zip(RESULTS_COLUMNS, missing.split("\t")))["mapped_reads"] == ""
+
+
+def test_profile_columns_come_from_the_profile_analysis(tmp_path):
+    r = _registry(tmp_path)
+    summary = {"total_reads": 2000, "gc_percent": 41.5, "quality_grade": "good"}
+    reg.record_analysis(r, "SRR1", "profile", tmp_path / "profiles" / "SRR1_quality_profile.json", summary)
+    row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
+    assert (row["total_reads"], row["gc_percent"], row["quality_grade"]) == (2000, 41.5, "good")
+
+
+def test_profile_columns_read_an_old_registrys_quality_summary(tmp_path):
+    """Before 0.5.0 sra_profile_quality recorded "quality" with GC as a 0-1 fraction."""
+    r = _registry(tmp_path)
+    old = {"grade": "fair", "total_reads": 1500, "reads_sampled": 100, "gc_content": 0.38}
+    reg.record_analysis(r, "SRR1", "quality", tmp_path / "SRR1_quality_profile.json", old)
+    row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
+    assert row["total_reads"] == 1500
+    assert row["gc_percent"] == pytest.approx(38.0)
+    assert row["quality_grade"] == "fair"
+
+
+def test_profile_columns_read_an_old_registrys_sra_stats_summary(tmp_path):
+    """Before 0.5.0 sra_stats recorded "sra_stats" with GC already in percent."""
+    r = _registry(tmp_path)
+    reg.record_analysis(r, "SRR1", "sra_stats", tmp_path / "s.csv", {"total_reads": 900, "gc_content": 52.0})
+    row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
+    assert (row["total_reads"], row["gc_percent"], row["quality_grade"]) == (900, 52.0, None)

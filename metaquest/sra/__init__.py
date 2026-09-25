@@ -6,6 +6,8 @@ comparison, and interactive HTML reporting for SRA-derived sequencing data.
 
 Main Components:
 - analytics: Quality profiling and comparative dataset analysis
+- dataset_stats: A dataset's FASTQ files and its shared statistics record
+- profiles: Per-accession profile JSONs and the sra_profile statistics row
 - reporting: Interactive HTML reports and dashboards
 """
 
@@ -16,9 +18,9 @@ from .analytics import (
     ComparativeAnalysis,
     AnomalyReport,
     ProcessingRecommendations,
-    load_quality_profiles,
     json_safe,
 )
+from .profiles import load_quality_profiles
 
 from .reporting import SRAReportGenerator
 

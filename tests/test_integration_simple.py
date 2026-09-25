@@ -13,6 +13,7 @@ Run: pytest tests/test_integration_simple.py -v
 import pytest
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from unittest.mock import Mock
 import matplotlib
 
@@ -23,10 +24,33 @@ from metaquest.data.sra_metadata import (  # noqa: E402
     SRADatasetInfo,
     detect_sequencing_technology,
     save_metadata_report,
-    generate_statistics_report,
     create_download_preview,
 )
+from metaquest.cli.commands.sra_profile import SRAProfileCommand  # noqa: E402
 from metaquest.plugins.visualizers.bar import BarChartPlugin  # noqa: E402
+
+
+def run_sra_profile(fastq_dir, output_report):
+    """Run sra_profile over every accession folder in ``fastq_dir``; returns its exit status."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    SRAProfileCommand().configure_parser(parser)
+    work = Path(output_report).parent
+    args = parser.parse_args(
+        [
+            "--fastq-folder",
+            str(fastq_dir),
+            "--output-report",
+            str(output_report),
+            "--output-dir",
+            str(work / "profiles"),
+            "--registry",
+            str(work / "metaquest_registry.json"),
+        ]
+    )
+    return SRAProfileCommand().execute(args)
+
 
 # ============================================================================
 # TEST CLASS: SRA Metadata to Visualization Workflow
@@ -97,7 +121,7 @@ class TestSRAMetadataWorkflow:
         }
 
     def test_metadata_retrieval_and_export_workflow(self, sample_metadata, tmp_path):
-        """Test: retrieve metadata → export to CSV."""
+        """Test: retrieve metadata -> export to CSV."""
         # Save metadata report
         report_file = tmp_path / "sra_metadata.csv"
         save_metadata_report(sample_metadata, report_file)
@@ -112,7 +136,7 @@ class TestSRAMetadataWorkflow:
         assert "technology" in df.columns
 
     def test_metadata_to_visualization_workflow(self, sample_metadata, tmp_path):
-        """Test: metadata → technology analysis → visualization."""
+        """Test: metadata -> technology analysis -> visualization."""
         # Step 1: Analyze technologies
         tech_counts = {}
         for acc, info in sample_metadata.items():
@@ -142,7 +166,7 @@ class TestSRAMetadataWorkflow:
         assert plot_file.exists()
 
     def test_metadata_preview_workflow(self, sample_metadata, tmp_path):
-        """Test: metadata → download preview → summary."""
+        """Test: metadata -> download preview -> summary."""
         # Create mock client
         mock_client = Mock(spec=SRAMetadataClient)
         mock_client.get_sra_metadata.return_value = sample_metadata
@@ -191,11 +215,11 @@ class TestFASTQProcessingWorkflow:
         return fastq_dir
 
     def test_fastq_statistics_workflow(self, fastq_workspace, tmp_path):
-        """Test: FASTQ files → statistics → report."""
+        """Test: FASTQ files -> statistics -> report."""
         output_report = tmp_path / "fastq_statistics.csv"
 
         # Generate statistics
-        generate_statistics_report(fastq_workspace, output_report)
+        assert run_sra_profile(fastq_workspace, output_report) == 0
 
         assert output_report.exists()
 
@@ -206,10 +230,10 @@ class TestFASTQProcessingWorkflow:
         assert all(stats_df["total_reads"] == 20)  # 10 reads per file, 2 files
 
     def test_fastq_to_visualization_workflow(self, fastq_workspace, tmp_path):
-        """Test: FASTQ stats → visualization."""
+        """Test: FASTQ stats -> visualization."""
         # Generate statistics
         stats_file = tmp_path / "stats.csv"
-        generate_statistics_report(fastq_workspace, stats_file)
+        assert run_sra_profile(fastq_workspace, stats_file) == 0
 
         # Read stats
         stats_df = pd.read_csv(stats_file)
@@ -236,7 +260,7 @@ class TestMultiSampleComparison:
     """Test workflows comparing multiple samples."""
 
     def test_technology_comparison_workflow(self, tmp_path):
-        """Test: Multiple samples → technology comparison → visualization."""
+        """Test: Multiple samples -> technology comparison -> visualization."""
         # Create sample data with different technologies
         samples = []
         for i in range(10):
@@ -279,7 +303,7 @@ class TestMultiSampleComparison:
         assert tech_plot.exists()
 
     def test_quality_analysis_workflow(self, tmp_path):
-        """Test: Quality metrics → analysis → visualization."""
+        """Test: Quality metrics -> analysis -> visualization."""
         # Create quality data for multiple samples
         quality_data = []
         for i in range(20):
@@ -320,7 +344,7 @@ class TestDataExportWorkflow:
     """Test data export and reporting workflows."""
 
     def test_metadata_to_multiple_formats_workflow(self, tmp_path):
-        """Test: Metadata → export to multiple formats."""
+        """Test: Metadata -> export to multiple formats."""
         # Create test metadata
         metadata = {
             "SRR001": SRADatasetInfo(
@@ -362,7 +386,7 @@ class TestDataExportWorkflow:
         assert json_file.exists()
 
     def test_summary_report_generation_workflow(self, tmp_path):
-        """Test: Data analysis → summary report → export."""
+        """Test: Data analysis -> summary report -> export."""
         # Create analysis results
         results = {
             "total_samples": 100,
@@ -405,8 +429,8 @@ class TestErrorHandlingWorkflows:
         non_existent = tmp_path / "does_not_exist"
         output_file = tmp_path / "output.csv"
 
-        with pytest.raises(Exception):
-            generate_statistics_report(non_existent, output_file)
+        assert run_sra_profile(non_existent, output_file) == 1
+        assert not output_file.exists()
 
     def test_workflow_with_empty_results(self, tmp_path):
         """Test workflow handles empty results."""
@@ -439,10 +463,11 @@ class TestErrorHandlingWorkflows:
 
         # Should process valid data despite invalid directory
         output_file = tmp_path / "stats.csv"
-        generate_statistics_report(fastq_dir, output_file)
+        # Exit 1 reports the accession that could not be profiled ...
+        assert run_sra_profile(fastq_dir, output_file) == 1
 
-        # Should have results for at least the valid directory
-        assert output_file.exists()
+        # ... and the valid directory still has its row.
+        assert list(pd.read_csv(output_file)["accession"]) == ["SRR001"]
 
 
 # ============================================================================

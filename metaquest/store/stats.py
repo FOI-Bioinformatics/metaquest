@@ -1,10 +1,9 @@
 """
 One cached FASTQ statistics record per dataset.
 
-Today three commands read the same FASTQ files three different ways: ``sra_stats`` parses
-every read in pure Python, ``sra_profile_quality`` samples the first 10,000 reads, and
-``sra_compare``/anomaly detection reprofile from scratch every time. ``compute_dataset_stats``
-computes one record covering what all three need; ``cached_stats`` and ``store_stats`` are
+``compute_dataset_stats`` computes the record that ``sra_profile`` and ``sra_report`` take a
+dataset's read and base totals and GC content from (through
+``metaquest.sra.dataset_stats.load_dataset_stats``); ``cached_stats`` and ``store_stats`` are
 the sidecar-backed cache around it (see ``metaquest.store.sidecar.Sidecar.stats``), so a
 dataset already profiled once is not re-read for the next command.
 

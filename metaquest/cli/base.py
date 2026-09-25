@@ -9,7 +9,52 @@ import json
 import logging
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
+
+from metaquest.core.exceptions import DataAccessError
+
+if TYPE_CHECKING:
+    from metaquest.data.registry import Registry
+    from metaquest.store.layout import StorePaths
+
+
+def read_accessions_file(path: Union[str, Path]) -> List[str]:
+    """Accessions listed in ``path``, one per line, in file order.
+
+    Surrounding whitespace is stripped; blank lines and lines starting with ``#`` are skipped.
+    A file that does not exist or cannot be read raises ``DataAccessError`` naming it.
+    """
+    try:
+        with open(path, "r") as handle:
+            lines = handle.read().splitlines()
+    except OSError as e:
+        raise DataAccessError(f"Cannot read accessions file {path}: {e}") from e
+    return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+
+
+def accessions_from_args(accessions_file: Optional[str], accessions: Optional[Sequence[str]]) -> List[str]:
+    """The accessions named by ``--accessions-file`` and repeated ``--accession`` flags together.
+
+    File entries come first, then the flag values, each accession once in first-seen order.
+    Empty when neither was given.
+    """
+    named = read_accessions_file(accessions_file) if accessions_file else []
+    named += list(accessions or [])
+    return list(dict.fromkeys(named))
+
+
+def resolve_command_store(args: argparse.Namespace, registry: "Registry") -> Optional["StorePaths"]:
+    """The shared data store (if any) for a command's ``--data-root`` and registry.
+
+    ``getattr`` guards ``args.data_root`` so a namespace built without that attribute is not
+    broken by it. A store that cannot be reached only costs the usage record, so it is
+    logged and skipped rather than failing an analysis the project can run on its own files.
+    """
+    from metaquest.data import registry_blocks as rb
+    from metaquest.store.resolve import resolve_optional_store
+
+    return resolve_optional_store(getattr(args, "data_root", None), rb.store_block(registry).root)
 
 
 class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -58,6 +103,11 @@ class BaseCommand(ABC):
     def group(self) -> str:
         """Pipeline step the command belongs to, used to group the main help listing."""
         return "Other"
+
+    @property
+    def hidden(self) -> bool:
+        """True for a command that parses but is left out of the main help (e.g. a renamed one)."""
+        return False
 
     @abstractmethod
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:

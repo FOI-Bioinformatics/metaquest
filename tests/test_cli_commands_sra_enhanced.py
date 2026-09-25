@@ -1,22 +1,18 @@
 """
 Test CLI enhanced SRA commands functionality.
 
-Tests for the sra_info, sra_stats, and sra_validate command classes,
-focusing on argument parsing, validation, and proper delegation with mocked dependencies.
+Tests for the sra_info and sra_validate command classes, focusing on argument parsing,
+validation, and proper delegation with mocked dependencies. The statistics that sra_stats
+computed before 0.5.0 are sra_profile's, tested in tests/test_cli_sra_profile.py.
 """
 
 import argparse
 import json
 from unittest.mock import Mock, patch, mock_open
 
-import pandas as pd_module
 import pytest
 
-from metaquest.cli.commands.sra_enhanced import (
-    SRAInfoCommand,
-    SRAStatsCommand,
-    SRAValidateCommand,
-)
+from metaquest.cli.commands.sra_enhanced import SRAInfoCommand, SRAValidateCommand
 
 
 class TestSRAInfoCommand:
@@ -165,262 +161,6 @@ class TestSRAInfoCommand:
         mock_logger.error.assert_called_once()
 
 
-class TestSRAStatsCommand:
-    """Test SRAStatsCommand."""
-
-    def test_command_properties(self):
-        """Test command name and help."""
-        command = SRAStatsCommand()
-        assert command.name == "sra_stats"
-        assert "statistics" in command.help.lower()
-
-    def test_configure_parser(self):
-        """Test parser configuration."""
-        command = SRAStatsCommand()
-        parser = argparse.ArgumentParser()
-        command.configure_parser(parser)
-
-        args = parser.parse_args([])
-        assert args.fastq_folder == "fastq"
-        assert args.output_report == "sra_statistics.csv"
-        assert args.accessions is None
-
-    def test_configure_parser_with_options(self):
-        """Test parser with all options."""
-        command = SRAStatsCommand()
-        parser = argparse.ArgumentParser()
-        command.configure_parser(parser)
-
-        args = parser.parse_args(
-            [
-                "--fastq-folder",
-                "custom_fastq",
-                "--output-report",
-                "custom_stats.csv",
-                "--accessions",
-                "SRR123",
-                "SRR456",
-            ]
-        )
-
-        assert args.fastq_folder == "custom_fastq"
-        assert args.output_report == "custom_stats.csv"
-        assert args.accessions == ["SRR123", "SRR456"]
-
-    def test_sample_size_defaults_and_rejects_non_positive_values(self):
-        command = SRAStatsCommand()
-        parser = argparse.ArgumentParser()
-        command.configure_parser(parser)
-
-        assert parser.parse_args([]).sample_size == 10000
-        assert parser.parse_args(["--sample-size", "500"]).sample_size == 500
-        with pytest.raises(SystemExit):
-            parser.parse_args(["--sample-size", "0"])
-
-    @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
-    def test_execute_passes_sample_size_through(self, mock_generate_report, tmp_path):
-        """--sample-size reaches the report generator, which uses it for both the shared
-        statistics record and the streaming per-read sample."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        args = argparse.Namespace(
-            fastq_folder=str(fastq_folder), output_report="stats.csv", accessions=None, sample_size=500
-        )
-
-        assert SRAStatsCommand().execute(args) == 0
-
-        mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv", sample_size=500)
-
-    @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
-    def test_execute_success(self, mock_generate_report, tmp_path):
-        """Test successful execution."""
-        command = SRAStatsCommand()
-
-        # Create test fastq folder
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-
-        args = argparse.Namespace(fastq_folder=str(fastq_folder), output_report="stats.csv", accessions=None)
-
-        result = command.execute(args)
-
-        assert result == 0
-        mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv", sample_size=10000)
-
-    def test_execute_writes_the_summary_lines_to_stdout(self, tmp_path, capsys):
-        """The library returns the summary; the command is what writes it to stdout."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        args = argparse.Namespace(
-            fastq_folder=str(fastq_folder),
-            output_report=str(tmp_path / "stats.csv"),
-            accessions=None,
-            registry=str(tmp_path / "metaquest_registry.json"),
-            data_root=None,
-        )
-
-        with patch(
-            "metaquest.cli.commands.sra_enhanced.generate_statistics_report",
-            return_value=["Total datasets: 2", "  PAIRED: 2"],
-        ):
-            assert SRAStatsCommand().execute(args) == 0
-
-        out = capsys.readouterr().out
-        assert "Total datasets: 2\n  PAIRED: 2\n" in out
-
-    def test_execute_records_analyses_in_registry(self, tmp_path):
-        """Each accession in the (mocked) statistics report is recorded as an sra_stats analysis."""
-        command = SRAStatsCommand()
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        report_path = tmp_path / "stats.csv"
-        registry_path = tmp_path / "metaquest_registry.json"
-
-        def fake_generate_report(folder, output_report, sample_size=None):
-            pd_module.DataFrame(
-                [
-                    {"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0},
-                    {"accession": "SRR2", "total_reads": 2000, "gc_content": 50.0, "avg_read_length": 151.0},
-                ]
-            ).to_csv(output_report, index=False)
-            return []
-
-        args = argparse.Namespace(
-            fastq_folder=str(fastq_folder),
-            output_report=str(report_path),
-            accessions=None,
-            registry=str(registry_path),
-            data_root=None,
-        )
-
-        with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
-            result = command.execute(args)
-
-        assert result == 0
-        registry = json.loads(registry_path.read_text())
-        for acc, total_reads in (("SRR1", 1000), ("SRR2", 2000)):
-            analysis = registry["datasets"][acc]["analyses"]["sra_stats"]
-            # report_path lives under the project root (the registry's own folder), so the
-            # registry records it relative to it, which keeps the project movable.
-            assert analysis["output"] == "stats.csv"
-            assert analysis["summary"]["total_reads"] == total_reads
-
-    def test_execute_records_usage_in_store_catalogue(self, tmp_path):
-        """Each accession is also recorded as 'analysed' usage in the store catalogue."""
-        from metaquest.data.registry import load_registry as _load, save_registry as _save
-        from metaquest.store.catalog import Catalog
-        from metaquest.store.layout import init_store, store_paths
-
-        command = SRAStatsCommand()
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        report_path = tmp_path / "stats.csv"
-        registry_path = tmp_path / "metaquest_registry.json"
-        store_root = tmp_path / "store"
-        init_store(store_root)
-
-        registry = _load(registry_path)
-        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
-        _save(registry)
-
-        def fake_generate_report(folder, output_report, sample_size=None):
-            pd_module.DataFrame(
-                [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
-            ).to_csv(output_report, index=False)
-            return []
-
-        args = argparse.Namespace(
-            fastq_folder=str(fastq_folder),
-            output_report=str(report_path),
-            accessions=None,
-            registry=str(registry_path),
-            data_root=str(store_root),
-        )
-
-        with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
-            result = command.execute(args)
-
-        assert result == 0
-        with Catalog(store_paths(store_root)) as catalog:
-            row = catalog.conn.execute(
-                "SELECT stage FROM usage WHERE accession = ? AND project_id = ?", ("SRR1", "proj1")
-            ).fetchone()
-        assert row["stage"] == "analysed"
-
-    def test_catalog_failure_leaves_analysis_outcome_unchanged(self, tmp_path):
-        """A broken catalogue write never changes the sra_stats registry outcome or exit code."""
-        from metaquest.data.registry import load_registry as _load, save_registry as _save
-        from metaquest.store.layout import init_store
-
-        command = SRAStatsCommand()
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        report_path = tmp_path / "stats.csv"
-        registry_path = tmp_path / "metaquest_registry.json"
-        store_root = tmp_path / "store"
-        init_store(store_root)
-
-        registry = _load(registry_path)
-        registry.project = {"id": "proj1", "name": "demo", "path": str(tmp_path), "created": "now"}
-        _save(registry)
-
-        def fake_generate_report(folder, output_report, sample_size=None):
-            pd_module.DataFrame(
-                [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
-            ).to_csv(output_report, index=False)
-            return []
-
-        args = argparse.Namespace(
-            fastq_folder=str(fastq_folder),
-            output_report=str(report_path),
-            accessions=None,
-            registry=str(registry_path),
-            data_root=str(store_root),
-        )
-
-        with patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report):
-            with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
-                result = command.execute(args)
-
-        assert result == 0
-        registry_after = json.loads(registry_path.read_text())
-        analysis = registry_after["datasets"]["SRR1"]["analyses"]["sra_stats"]
-        assert analysis["summary"]["total_reads"] == 1000
-
-    def test_execute_folder_not_exists(self, caplog, capsys):
-        """Test execution when fastq folder doesn't exist."""
-        command = SRAStatsCommand()
-        args = argparse.Namespace(fastq_folder="/nonexistent/folder", output_report="stats.csv", accessions=None)
-
-        result = command.execute(args)
-
-        assert result == 1
-        assert "FASTQ folder /nonexistent/folder does not exist" in caplog.text
-        assert "does not exist" not in capsys.readouterr().out
-
-    @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
-    @patch("metaquest.cli.commands.sra_enhanced.logger")
-    def test_execute_exception_handling(self, mock_logger, mock_generate_report, tmp_path):
-        """Test exception handling during execution."""
-        command = SRAStatsCommand()
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-
-        args = argparse.Namespace(fastq_folder=str(fastq_folder), output_report="stats.csv", accessions=None)
-
-        # Mock generate_statistics_report to raise an exception
-        mock_generate_report.side_effect = Exception("Test error")
-
-        result = command.execute(args)
-
-        assert result == 1
-        mock_logger.error.assert_called_once()
-
-
 class TestSRAValidateCommand:
     """Test SRAValidateCommand."""
 
@@ -438,7 +178,7 @@ class TestSRAValidateCommand:
 
         args = parser.parse_args([])
         assert args.fastq_folder == "fastq"
-        assert args.accessions is None
+        assert args.accession is None and args.accessions_file is None
         assert not args.check_pairs
         assert not args.md5
 
@@ -449,11 +189,23 @@ class TestSRAValidateCommand:
         command.configure_parser(parser)
 
         args = parser.parse_args(
-            ["--fastq-folder", "custom_fastq", "--accessions", "SRR123", "SRR456", "--check-pairs", "--md5"]
+            [
+                "--fastq-folder",
+                "custom_fastq",
+                "--accession",
+                "SRR123",
+                "--accession",
+                "SRR456",
+                "--accessions-file",
+                "acc.txt",
+                "--check-pairs",
+                "--md5",
+            ]
         )
 
         assert args.fastq_folder == "custom_fastq"
-        assert args.accessions == ["SRR123", "SRR456"]
+        assert args.accession == ["SRR123", "SRR456"]
+        assert args.accessions_file == "acc.txt"
         assert args.check_pairs
         assert args.md5
 
@@ -934,7 +686,7 @@ class TestSRAValidateCommand:
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
-            accessions=None,
+            accession=None,
             check_pairs=False,
             registry=str(tmp_path / "metaquest_registry.json"),
             data_root=None,
@@ -967,7 +719,7 @@ class TestSRAValidateCommand:
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
-            accessions=None,
+            accession=None,
             check_pairs=False,
             registry=str(registry_path),
             data_root=None,
@@ -1015,7 +767,7 @@ class TestSRAValidateCommand:
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
-            accessions=None,
+            accession=None,
             check_pairs=False,
             registry=str(registry_path),
             data_root=str(store_root),
@@ -1059,7 +811,7 @@ class TestSRAValidateCommand:
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
-            accessions=None,
+            accession=None,
             check_pairs=False,
             registry=str(registry_path),
             data_root=str(store_root),
@@ -1097,7 +849,7 @@ class TestSRAValidateCommand:
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
-            accessions=None,
+            accession=None,
             check_pairs=False,
             md5=False,
             registry=str(registry_path),
@@ -1116,7 +868,7 @@ class TestSRAValidateCommand:
     def test_execute_folder_not_exists(self, caplog, capsys):
         """Test execution when fastq folder doesn't exist."""
         command = SRAValidateCommand()
-        args = argparse.Namespace(fastq_folder="/nonexistent/folder", accessions=None, check_pairs=False)
+        args = argparse.Namespace(fastq_folder="/nonexistent/folder", accession=None, check_pairs=False)
 
         result = command.execute(args)
 
@@ -1131,7 +883,7 @@ class TestSRAValidateCommand:
         fastq_folder = tmp_path / "fastq"
         fastq_folder.mkdir()
 
-        args = argparse.Namespace(fastq_folder=str(fastq_folder), accessions=None, check_pairs=False)
+        args = argparse.Namespace(fastq_folder=str(fastq_folder), accession=None, check_pairs=False)
 
         result = command.execute(args)
 
@@ -1150,7 +902,7 @@ class TestSRAValidateCommand:
 
         args = argparse.Namespace(
             fastq_folder=str(fastq_folder),
-            accessions=None,
+            accession=None,
             check_pairs=False,
             registry=str(tmp_path / "metaquest_registry.json"),
             data_root=None,
@@ -1164,43 +916,24 @@ class TestSRAValidateCommand:
         mock_logger.error.assert_called_once()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+def test_validate_restricts_to_the_accessions_file_and_flags(tmp_path):
+    """--accessions-file and --accession together name the folders to validate (--accessions went in 0.5.0)."""
+    fastq_folder = tmp_path / "fastq"
+    for accession in ("SRR1", "SRR2", "SRR3"):
+        (fastq_folder / accession).mkdir(parents=True)
+        (fastq_folder / accession / f"{accession}.fastq").write_text("@r\nACGT\n+\nIIII\n")
+    accessions_file = tmp_path / "acc.txt"
+    accessions_file.write_text("SRR1\n")
+    args = argparse.Namespace(
+        fastq_folder=str(fastq_folder),
+        accessions_file=str(accessions_file),
+        accession=["SRR3"],
+        check_pairs=False,
+        registry=str(tmp_path / "metaquest_registry.json"),
+        data_root=None,
+    )
 
+    assert SRAValidateCommand().execute(args) == 0
 
-class TestAnalysisWithoutAReachableStore:
-    """A store that cannot be read costs the usage record, never the analysis."""
-
-    def test_sra_stats_warns_and_completes_when_the_store_root_is_gone(self, tmp_path, caplog):
-        import logging
-
-        command = SRAStatsCommand()
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        report_path = tmp_path / "stats.csv"
-        registry_path = tmp_path / "metaquest_registry.json"
-        gone = tmp_path / "unmounted"
-
-        def fake_generate_report(folder, output_report, sample_size=None):
-            pd_module.DataFrame(
-                [{"accession": "SRR1", "total_reads": 1000, "gc_content": 45.0, "avg_read_length": 150.0}]
-            ).to_csv(output_report, index=False)
-            return []
-
-        args = argparse.Namespace(
-            fastq_folder=str(fastq_folder),
-            output_report=str(report_path),
-            accessions=None,
-            registry=str(registry_path),
-            data_root=str(gone),
-        )
-
-        with caplog.at_level(logging.WARNING):
-            with patch(
-                "metaquest.cli.commands.sra_enhanced.generate_statistics_report", side_effect=fake_generate_report
-            ):
-                result = command.execute(args)
-
-        assert result == 0
-        assert report_path.is_file()
-        assert any("store unavailable" in record.message for record in caplog.records)
+    registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    assert set(registry["datasets"]) == {"SRR1", "SRR3"}

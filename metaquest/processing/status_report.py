@@ -292,6 +292,7 @@ def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
                 "bytes_total": download.bytes_total,
                 "metadata": "metadata" in record,
                 "analyses": ",".join(sorted(record.get("analyses", {}))),
+                **rb.profile_summary(registry, acc),
             }
         )
         for genome_id, ext in rb.extraction_blocks(registry, acc).items():

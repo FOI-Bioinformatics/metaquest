@@ -486,6 +486,38 @@ def extraction_blocks(registry: Registry, accession: str) -> Dict[str, Extractio
     return {g: ExtractionBlock.from_dict(raw) for g, raw in extractions.items() if isinstance(raw, dict)}
 
 
+def _analysis_summary(registry: Registry, accession: str, name: str) -> Dict[str, Any]:
+    """The summary of ``accession``'s analysis ``name``, or ``{}`` when it was never recorded."""
+    raw = (registry.datasets.get(accession, {}).get("analyses") or {}).get(name)
+    return AnalysisEntry.from_dict(raw).summary if isinstance(raw, dict) else {}
+
+
+def profile_summary(registry: Registry, accession: str) -> Dict[str, Any]:
+    """``total_reads``, ``gc_percent`` and ``quality_grade`` from ``accession``'s profile analysis.
+
+    ``sra_profile`` records the ``"profile"`` analysis (GC in percent). A registry written before
+    0.5.0 holds the ``"sra_stats"`` analysis (GC already in percent) and the ``"quality"`` one of
+    ``sra_profile_quality`` (GC as a 0-1 fraction, the grade under ``grade``); those are read when
+    there is no ``"profile"`` analysis, ``sra_stats`` first for totals and GC. Fields that no
+    analysis recorded are None.
+    """
+    new = _analysis_summary(registry, accession, "profile")
+    if new:
+        return {key: new.get(key) for key in ("total_reads", "gc_percent", "quality_grade")}
+    stats = _analysis_summary(registry, accession, "sra_stats")
+    quality = _analysis_summary(registry, accession, "quality")
+    quality_gc = quality.get("gc_content")
+    gc_percent = stats.get("gc_content")
+    if gc_percent is None and quality_gc is not None:
+        gc_percent = quality_gc * 100
+    total_reads = stats.get("total_reads")
+    return {
+        "total_reads": total_reads if total_reads is not None else quality.get("total_reads"),
+        "gc_percent": gc_percent,
+        "quality_grade": quality.get("grade"),
+    }
+
+
 def project_block(registry: Registry) -> ProjectBlock:
     """This project's identity and exports (empty fields when ``store_init`` never ran)."""
     return ProjectBlock.from_dict(registry.project)
