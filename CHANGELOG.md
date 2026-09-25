@@ -30,6 +30,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `results_table` output. The previous `gc_content` key (a 0-1 fraction in the JSON, already percent
   in the CSV) is gone. `avg_quality` in the CSV is now a per-read mean over a sample of reads from
   every mate file, rather than mate-1 records only.
+- `results_table` gains `total_reads`, `gc_percent`, and `quality_grade` columns, inserted after
+  `run_size` and before `mapped_reads`. Every later column shifts position accordingly; a script
+  that reads `results_table`'s output by column index rather than by header name must be updated.
 - `import metaquest.data.sra` now imports a package (`metaquest/data/sra/`) rather than a single
   module. The public functions re-exported from `metaquest.data.sra` are unchanged; private helper
   names moved to their new submodules (`fastq`, `cleanup`, `accession`, `store_handoff`, `retry`,
