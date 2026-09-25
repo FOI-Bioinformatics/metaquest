@@ -308,6 +308,11 @@ Before committing code:
 3. `make pipeline` integration test must pass
 4. No decrease in overall coverage percentage
 
+### Continuous Integration
+Besides the pull-request checks, a nightly GitHub Actions workflow (`.github/workflows/smoke.yml`)
+runs `scripts/smoke_chain.sh` against real NCBI/SRA services with conda-installed tools, the only
+CI job that touches the network; the same chain runs locally via `make test-network`.
+
 ## Development Workflow & Implementation Priorities
 
 ### Recommended Development Approach

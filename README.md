@@ -853,6 +853,15 @@ make pipeline      # Full integration test
 make help
 ```
 
+### Nightly Smoke Test
+
+A scheduled GitHub Actions workflow (`.github/workflows/smoke.yml`) runs `scripts/smoke_chain.sh`
+against real NCBI/SRA services every night: it downloads the tiny SRR2517620 run, validates and
+profiles it, extracts reads against the bundled test genome, and writes the results table. It is
+the only CI job that touches the network, using the tools the `metaquest` conda environment
+installs (fasterq-dump, prefetch, minimap2, samtools). Run the same chain locally with
+`make test-network` (needs the `metaquest` conda environment; see `make env`).
+
 ### Testing Structure
 - **Comprehensive Test Suite**: covers CLI, data processing, visualization, and advanced SRA features
   - Unit tests: 170+ tests per critical module with extended test files

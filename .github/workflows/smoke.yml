@@ -1,0 +1,68 @@
+name: Nightly Smoke Test
+
+# Runs the real-data smoke chain (scripts/smoke_chain.sh) against live NCBI/SRA
+# services, with the conda-installed tools (fasterq-dump, prefetch, minimap2,
+# samtools, megahit) the "metaquest" environment provides. This is the only CI job
+# that talks to the network and downloads real sequencing data, so it runs nightly
+# rather than on every push or pull request; see CLAUDE.md's CI section and
+# README.md's "Nightly smoke" paragraph for what it covers.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC every day
+  workflow_dispatch: # allow manual triggering
+
+concurrency:
+  # Serializes nightly runs instead of letting two overlap: a run already in
+  # progress finishes before a second (nightly or manual) one starts.
+  group: nightly-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Real-data smoke chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # Required by conda-incubator/setup-miniconda so each step's shell has the
+        # "metaquest" environment activated (its own conda init hooks need a login
+        # shell to take effect).
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up the metaquest conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: metaquest
+          miniforge-version: latest
+          auto-activate-base: false
+
+      - name: Configure sra-tools non-interactively
+        run: |
+          # A fresh sra-tools install otherwise opens an interactive first-run
+          # configuration wizard the first time any tool (fasterq-dump, prefetch,
+          # vdb-config itself) touches its config file, which would hang a CI job.
+          # --restore-defaults writes that config non-interactively. The download
+          # cache root is then pointed at $RUNNER_TEMP so it lands under the
+          # runner's per-job temp directory rather than $HOME, kept tidy even
+          # though GitHub-hosted runners are already thrown away after the job.
+          mkdir -p "$RUNNER_TEMP/ncbi"
+          vdb-config --restore-defaults
+          vdb-config -s /repository/user/main/public/root="$RUNNER_TEMP/ncbi"
+
+      - name: Run network smoke tests
+        run: make test-network
+
+      - name: Run the real-data smoke chain
+        run: bash scripts/smoke_chain.sh "$RUNNER_TEMP/smoke-project"
+
+      - name: Upload project folder on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-project
+          path: ${{ runner.temp }}/smoke-project
+          retention-days: 5
