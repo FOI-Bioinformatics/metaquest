@@ -72,8 +72,7 @@ class TestSRAInfoCommand:
     @patch("metaquest.cli.commands.sra_enhanced.save_metadata_report")
     @patch("metaquest.cli.commands.sra_enhanced.create_download_preview")
     @patch("metaquest.cli.commands.sra_enhanced.SRAMetadataClient")
-    @patch("builtins.print")
-    def test_execute_success(self, mock_print, mock_client_class, mock_create_preview, mock_save_report, tmp_path):
+    def test_execute_success(self, mock_client_class, mock_create_preview, mock_save_report, tmp_path, capsys):
         """Test successful execution."""
         command = SRAInfoCommand()
         args = argparse.Namespace(
@@ -102,12 +101,14 @@ class TestSRAInfoCommand:
             result = command.execute(args)
 
         assert result == 0
+        out = capsys.readouterr().out
+        assert "Total accessions: 2" in out
+        assert "Metadata fetched: 2" in out
         mock_client_class.assert_called_once_with("test@example.com", "test_key")
         mock_create_preview.assert_called_once_with(["SRR123456", "SRR789012"], mock_client)
         mock_save_report.assert_called_once()
 
-    @patch("builtins.print")
-    def test_execute_no_accessions(self, mock_print):
+    def test_execute_no_accessions(self, caplog):
         """Test execution with empty accessions file."""
         command = SRAInfoCommand()
         args = argparse.Namespace(
@@ -122,12 +123,11 @@ class TestSRAInfoCommand:
             result = command.execute(args)
 
         assert result == 1
-        mock_print.assert_called_with("No accessions found in file")
+        assert "No accessions found in file" in caplog.text
 
     @patch("metaquest.cli.commands.sra_enhanced.create_download_preview")
     @patch("metaquest.cli.commands.sra_enhanced.SRAMetadataClient")
-    @patch("builtins.print")
-    def test_execute_no_metadata(self, mock_print, mock_client_class, mock_create_preview):
+    def test_execute_no_metadata(self, mock_client_class, mock_create_preview, caplog):
         """Test execution when no metadata can be fetched."""
         command = SRAInfoCommand()
         args = argparse.Namespace(
@@ -144,9 +144,7 @@ class TestSRAInfoCommand:
             result = command.execute(args)
 
         assert result == 1
-        # Check that the specific error message was printed (might not be the last call)
-        calls = [str(call) for call in mock_print.call_args_list]
-        assert any("Could not fetch metadata" in call for call in calls)
+        assert "Could not fetch metadata for any accessions" in caplog.text
 
     @patch("metaquest.cli.commands.sra_enhanced.logger")
     @patch("builtins.open", side_effect=FileNotFoundError())
@@ -220,8 +218,7 @@ class TestSRAStatsCommand:
             parser.parse_args(["--sample-size", "0"])
 
     @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
-    @patch("builtins.print")
-    def test_execute_passes_sample_size_through(self, mock_print, mock_generate_report, tmp_path):
+    def test_execute_passes_sample_size_through(self, mock_generate_report, tmp_path):
         """--sample-size reaches the report generator, which uses it for both the shared
         statistics record and the streaming per-read sample."""
         fastq_folder = tmp_path / "fastq"
@@ -235,8 +232,7 @@ class TestSRAStatsCommand:
         mock_generate_report.assert_called_once_with(fastq_folder, "stats.csv", sample_size=500)
 
     @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
-    @patch("builtins.print")
-    def test_execute_success(self, mock_print, mock_generate_report, tmp_path):
+    def test_execute_success(self, mock_generate_report, tmp_path):
         """Test successful execution."""
         command = SRAStatsCommand()
 
@@ -272,8 +268,7 @@ class TestSRAStatsCommand:
         out = capsys.readouterr().out
         assert "Total datasets: 2\n  PAIRED: 2\n" in out
 
-    @patch("builtins.print")
-    def test_execute_records_analyses_in_registry(self, mock_print, tmp_path):
+    def test_execute_records_analyses_in_registry(self, tmp_path):
         """Each accession in the (mocked) statistics report is recorded as an sra_stats analysis."""
         command = SRAStatsCommand()
 
@@ -311,8 +306,7 @@ class TestSRAStatsCommand:
             assert analysis["output"] == "stats.csv"
             assert analysis["summary"]["total_reads"] == total_reads
 
-    @patch("builtins.print")
-    def test_execute_records_usage_in_store_catalogue(self, mock_print, tmp_path):
+    def test_execute_records_usage_in_store_catalogue(self, tmp_path):
         """Each accession is also recorded as 'analysed' usage in the store catalogue."""
         from metaquest.data.registry import load_registry as _load, save_registry as _save
         from metaquest.store.catalog import Catalog
@@ -355,8 +349,7 @@ class TestSRAStatsCommand:
             ).fetchone()
         assert row["stage"] == "analysed"
 
-    @patch("builtins.print")
-    def test_catalog_failure_leaves_analysis_outcome_unchanged(self, mock_print, tmp_path):
+    def test_catalog_failure_leaves_analysis_outcome_unchanged(self, tmp_path):
         """A broken catalogue write never changes the sra_stats registry outcome or exit code."""
         from metaquest.data.registry import load_registry as _load, save_registry as _save
         from metaquest.store.layout import init_store
@@ -397,8 +390,7 @@ class TestSRAStatsCommand:
         analysis = registry_after["datasets"]["SRR1"]["analyses"]["sra_stats"]
         assert analysis["summary"]["total_reads"] == 1000
 
-    @patch("builtins.print")
-    def test_execute_folder_not_exists(self, mock_print):
+    def test_execute_folder_not_exists(self, caplog, capsys):
         """Test execution when fastq folder doesn't exist."""
         command = SRAStatsCommand()
         args = argparse.Namespace(fastq_folder="/nonexistent/folder", output_report="stats.csv", accessions=None)
@@ -406,7 +398,8 @@ class TestSRAStatsCommand:
         result = command.execute(args)
 
         assert result == 1
-        mock_print.assert_called_with("FASTQ folder /nonexistent/folder does not exist")
+        assert "FASTQ folder /nonexistent/folder does not exist" in caplog.text
+        assert "does not exist" not in capsys.readouterr().out
 
     @patch("metaquest.cli.commands.sra_enhanced.generate_statistics_report")
     @patch("metaquest.cli.commands.sra_enhanced.logger")
@@ -509,8 +502,7 @@ class TestSRAValidateCommand:
 
         assert [d.name for d in result] == ["SRR123"]
 
-    @patch("builtins.print")
-    def test_validate_directory_ignores_appledouble_files(self, mock_print, tmp_path):
+    def test_validate_directory_ignores_appledouble_files(self, tmp_path):
         """A ``._<name>.fastq.gz`` AppleDouble file is not counted as a FASTQ file."""
         command = SRAValidateCommand()
         acc_dir = tmp_path / "SRR123"
@@ -522,8 +514,7 @@ class TestSRAValidateCommand:
 
         assert result["num_files"] == 1
 
-    @patch("builtins.print")
-    def test_validate_directory_no_files(self, mock_print, tmp_path):
+    def test_validate_directory_no_files(self, tmp_path):
         """Test validation of directory with no FASTQ files."""
         command = SRAValidateCommand()
 
@@ -537,8 +528,7 @@ class TestSRAValidateCommand:
         assert "No FASTQ files found" in result["issues"]
         assert result["num_files"] == 0
 
-    @patch("builtins.print")
-    def test_validate_directory_success(self, mock_print, tmp_path):
+    def test_validate_directory_success(self, tmp_path):
         """Test successful directory validation."""
         command = SRAValidateCommand()
 
@@ -558,8 +548,7 @@ class TestSRAValidateCommand:
         assert result["num_files"] == 1
         assert result["checks"] == ["empty_files", "format", "completeness"]
 
-    @patch("builtins.print")
-    def test_validate_directory_empty_files(self, mock_print, tmp_path):
+    def test_validate_directory_empty_files(self, tmp_path):
         """Test validation with empty files."""
         command = SRAValidateCommand()
 
@@ -575,8 +564,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "FAILED"
         assert "Empty file: test.fastq" in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_mate_count_mismatch(self, mock_print, tmp_path):
+    def test_validate_directory_mate_count_mismatch(self, tmp_path):
         """A paired-end dataset whose mates have different read counts is flagged, with the
         read counts named in the message."""
         command = SRAValidateCommand()
@@ -595,8 +583,7 @@ class TestSRAValidateCommand:
 
     @patch("metaquest.cli.commands.sra_enhanced.cached_stats")
     @patch("metaquest.cli.commands.sra_enhanced.count_fastq_reads")
-    @patch("builtins.print")
-    def test_validate_directory_mate_count_uses_cached_stats(self, mock_print, mock_count, mock_cached, tmp_path):
+    def test_validate_directory_mate_count_uses_cached_stats(self, mock_count, mock_cached, tmp_path):
         """When a cached stats record is available, mate counts come from its
         ``reads_per_file`` rather than a fresh ``count_fastq_reads`` pass."""
         mock_cached.return_value = {"reads_per_file": {"SRR123_1.fastq": 5, "SRR123_2.fastq": 5}}
@@ -612,8 +599,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "PASSED"
         mock_count.assert_not_called()
 
-    @patch("builtins.print")
-    def test_validate_directory_format_error_broken_header(self, mock_print, tmp_path):
+    def test_validate_directory_format_error_broken_header(self, tmp_path):
         """A file whose first line is not a FASTQ header is caught."""
         command = SRAValidateCommand()
 
@@ -629,8 +615,7 @@ class TestSRAValidateCommand:
         assert "FASTQ format error" in result["issues"]
         assert "header does not start with" in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_checks_every_file_not_just_the_first(self, mock_print, tmp_path):
+    def test_validate_directory_checks_every_file_not_just_the_first(self, tmp_path):
         """A download can leave one good mate and one broken one; both are checked."""
         command = SRAValidateCommand()
 
@@ -645,8 +630,7 @@ class TestSRAValidateCommand:
         assert "SRR123_2.fastq" in result["issues"]
         assert "SRR123_1.fastq" not in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_reads_a_gz_first_record(self, mock_print, tmp_path):
+    def test_validate_directory_reads_a_gz_first_record(self, tmp_path):
         """The first-record check is gzip aware in both directions: a valid gzipped file
         passes and a broken one is caught, without decompressing the whole file."""
         import gzip as gzip_module
@@ -667,8 +651,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "FAILED"
         assert "sequence/quality length mismatch" in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_md5_without_a_sidecar_is_a_no_op(self, mock_print, tmp_path):
+    def test_validate_directory_md5_without_a_sidecar_is_a_no_op(self, tmp_path):
         """A plain project folder has no recorded md5 to compare against, so --md5 passes
         rather than failing every file."""
         command = SRAValidateCommand()
@@ -682,8 +665,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "PASSED"
         assert "md5" in result["checks"]
 
-    @patch("builtins.print")
-    def test_validate_directory_reads_the_statistics_record_only_for_check_pairs(self, mock_print, tmp_path):
+    def test_validate_directory_reads_the_statistics_record_only_for_check_pairs(self, tmp_path):
         """Without --check-pairs nothing needs the record, so the sidecar is not read."""
         command = SRAValidateCommand()
 
@@ -699,8 +681,7 @@ class TestSRAValidateCommand:
             command._validate_directory(acc_dir, check_pairs=True)
             mock_cached.assert_called_once()
 
-    @patch("builtins.print")
-    def test_validate_directory_format_error_length_mismatch(self, mock_print, tmp_path):
+    def test_validate_directory_format_error_length_mismatch(self, tmp_path):
         """A first record whose sequence and quality strings differ in length is caught."""
         command = SRAValidateCommand()
 
@@ -715,8 +696,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "FAILED"
         assert "sequence/quality length mismatch" in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_format_check_does_not_read_a_large_file_in_full(self, mock_print, tmp_path):
+    def test_validate_directory_format_check_does_not_read_a_large_file_in_full(self, tmp_path):
         """The first-record shape check never falls back to a full-file read: a large file
         with a broken header is rejected without ``count_fastq_reads`` (a full streaming
         pass) ever being called."""
@@ -736,8 +716,7 @@ class TestSRAValidateCommand:
         assert "header does not start with" in result["issues"]
         mock_count.assert_not_called()
 
-    @patch("builtins.print")
-    def test_validate_directory_partial_sidecar_reports_spots(self, mock_print, tmp_path):
+    def test_validate_directory_partial_sidecar_reports_spots(self, tmp_path):
         """A store-linked accession whose sidecar records a partial download is failed with
         the reads-on-disk-vs-spots-at-NCBI message."""
         from metaquest.store.sidecar import Sidecar, write_sidecar
@@ -770,8 +749,7 @@ class TestSRAValidateCommand:
         "state, expected",
         [("failed", "store state failed: see store_verify"), ("downloading", "download in progress elsewhere")],
     )
-    @patch("builtins.print")
-    def test_validate_directory_flags_failed_and_downloading_sidecars(self, mock_print, tmp_path, state, expected):
+    def test_validate_directory_flags_failed_and_downloading_sidecars(self, tmp_path, state, expected):
         """Only a complete or adopted dataset passes: a failed download, and one another
         project is still downloading, are not finished datasets even when their files parse.
 
@@ -795,8 +773,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "FAILED"
         assert expected in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_failed_sidecar_reports_its_own_error(self, mock_print, tmp_path):
+    def test_validate_directory_failed_sidecar_reports_its_own_error(self, tmp_path):
         """When the sidecar recorded why the download failed, that reason is surfaced instead
         of the generic 'see store_verify' fallback."""
         from metaquest.store.sidecar import Sidecar, write_sidecar
@@ -819,8 +796,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "FAILED"
         assert "store state failed: connection reset by NCBI" in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_passes_a_complete_sidecar(self, mock_print, tmp_path):
+    def test_validate_directory_passes_a_complete_sidecar(self, tmp_path):
         from metaquest.store.sidecar import Sidecar, write_sidecar
 
         store_acc_dir = tmp_path / "store" / "sra" / "SRR123"
@@ -835,8 +811,7 @@ class TestSRAValidateCommand:
 
         assert SRAValidateCommand()._validate_directory(acc_dir)["status"] == "PASSED"
 
-    @patch("builtins.print")
-    def test_validate_directory_registry_verdict_truncated_reports_spots(self, mock_print, tmp_path):
+    def test_validate_directory_registry_verdict_truncated_reports_spots(self, tmp_path):
         """A plain project directory (no store sidecar) falls back to the registry's own
         download verdict for the same completeness check."""
         from metaquest.data.registry import Registry
@@ -856,8 +831,7 @@ class TestSRAValidateCommand:
         assert result["status"] == "FAILED"
         assert "partial: 5 reads on disk vs 100 spots at NCBI" in result["issues"]
 
-    @patch("builtins.print")
-    def test_validate_directory_md5_mismatch(self, mock_print, tmp_path):
+    def test_validate_directory_md5_mismatch(self, tmp_path):
         """--md5 fails a file whose content no longer matches the sidecar's recorded md5."""
         from metaquest.store.sidecar import Sidecar, write_sidecar
 
@@ -885,8 +859,7 @@ class TestSRAValidateCommand:
         assert "md5 mismatch: SRR123.fastq" in result["issues"]
         assert "md5" in result["checks"]
 
-    @patch("builtins.print")
-    def test_validate_directory_md5_match_passes(self, mock_print, tmp_path):
+    def test_validate_directory_md5_match_passes(self, tmp_path):
         """--md5 passes when the file's md5 matches the sidecar's recorded value."""
         from metaquest.store.sidecar import Sidecar, md5_file, write_sidecar
 
@@ -919,8 +892,7 @@ class TestSRAValidateCommand:
 
         assert result["status"] == "PASSED"
 
-    @patch("builtins.print")
-    def test_print_validation_results_success(self, mock_print):
+    def test_print_validation_results_success(self):
         """Test printing successful validation results."""
         command = SRAValidateCommand()
 
@@ -933,8 +905,7 @@ class TestSRAValidateCommand:
 
         assert result is True
 
-    @patch("builtins.print")
-    def test_print_validation_results_with_failures(self, mock_print):
+    def test_print_validation_results_with_failures(self, capsys):
         """Test printing validation results with failures."""
         command = SRAValidateCommand()
 
@@ -946,9 +917,11 @@ class TestSRAValidateCommand:
         result = command._print_validation_results(validation_results)
 
         assert result is False
+        out = capsys.readouterr().out
+        assert "Passed: 1\nFailed: 1\n" in out
+        assert "  SRR456: Empty files" in out
 
-    @patch("builtins.print")
-    def test_execute_success(self, mock_print, tmp_path):
+    def test_execute_success(self, tmp_path):
         """Test successful execution."""
         command = SRAValidateCommand()
 
@@ -981,8 +954,7 @@ class TestSRAValidateCommand:
         assert result == 0
         mock_validate.assert_called_once()
 
-    @patch("builtins.print")
-    def test_execute_records_analyses_in_registry(self, mock_print, tmp_path):
+    def test_execute_records_analyses_in_registry(self, tmp_path):
         """Each validated accession is recorded with its pass/fail status and file count."""
         command = SRAValidateCommand()
 
@@ -1020,8 +992,7 @@ class TestSRAValidateCommand:
             "issues": [],
         }
 
-    @patch("builtins.print")
-    def test_execute_records_usage_in_store_catalogue(self, mock_print, tmp_path):
+    def test_execute_records_usage_in_store_catalogue(self, tmp_path):
         """A validated accession is also recorded as 'analysed' usage in the store catalogue."""
         from metaquest.data.registry import load_registry as _load, save_registry as _save
         from metaquest.store.catalog import Catalog
@@ -1066,8 +1037,7 @@ class TestSRAValidateCommand:
             ).fetchone()
         assert row["stage"] == "analysed"
 
-    @patch("builtins.print")
-    def test_catalog_failure_leaves_validate_outcome_unchanged(self, mock_print, tmp_path):
+    def test_catalog_failure_leaves_validate_outcome_unchanged(self, tmp_path):
         """A broken catalogue write never changes validate's registry outcome or exit code."""
         from metaquest.data.registry import load_registry as _load, save_registry as _save
         from metaquest.store.layout import init_store
@@ -1113,8 +1083,7 @@ class TestSRAValidateCommand:
             "issues": [],
         }
 
-    @patch("builtins.print")
-    def test_execute_records_failing_issues_in_registry_summary(self, mock_print, tmp_path):
+    def test_execute_records_failing_issues_in_registry_summary(self, tmp_path):
         """A failed accession's registry summary carries the raw issue list, not just the
         joined display string, and names the checks that ran."""
         command = SRAValidateCommand()
@@ -1144,8 +1113,7 @@ class TestSRAValidateCommand:
         assert summary["files"] == 1
         assert summary["issues"] == ["Empty file: test.fastq"]
 
-    @patch("builtins.print")
-    def test_execute_folder_not_exists(self, mock_print):
+    def test_execute_folder_not_exists(self, caplog, capsys):
         """Test execution when fastq folder doesn't exist."""
         command = SRAValidateCommand()
         args = argparse.Namespace(fastq_folder="/nonexistent/folder", accessions=None, check_pairs=False)
@@ -1153,10 +1121,10 @@ class TestSRAValidateCommand:
         result = command.execute(args)
 
         assert result == 1
-        mock_print.assert_called_with("FASTQ folder /nonexistent/folder does not exist")
+        assert "FASTQ folder /nonexistent/folder does not exist" in caplog.text
+        assert "does not exist" not in capsys.readouterr().out
 
-    @patch("builtins.print")
-    def test_execute_no_accession_dirs(self, mock_print, tmp_path):
+    def test_execute_no_accession_dirs(self, tmp_path, caplog):
         """Test execution when no accession directories found."""
         command = SRAValidateCommand()
 
@@ -1168,7 +1136,7 @@ class TestSRAValidateCommand:
         result = command.execute(args)
 
         assert result == 1
-        mock_print.assert_called_with("No accession directories found")
+        assert "No accession directories found" in caplog.text
 
     @patch("metaquest.cli.commands.sra_enhanced.logger")
     def test_execute_exception_handling(self, mock_logger, tmp_path):
@@ -1203,8 +1171,7 @@ if __name__ == "__main__":
 class TestAnalysisWithoutAReachableStore:
     """A store that cannot be read costs the usage record, never the analysis."""
 
-    @patch("builtins.print")
-    def test_sra_stats_warns_and_completes_when_the_store_root_is_gone(self, mock_print, tmp_path, caplog):
+    def test_sra_stats_warns_and_completes_when_the_store_root_is_gone(self, tmp_path, caplog):
         import logging
 
         command = SRAStatsCommand()

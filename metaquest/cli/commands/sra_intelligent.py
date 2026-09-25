@@ -9,7 +9,7 @@ import logging
 import json
 import zlib
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError, ValidationError
@@ -48,16 +48,16 @@ def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
     return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
 
 
-def _read_accession_file(filename: str, emit: Callable[[str], None]) -> List[str]:
+def _read_accession_file(filename: str) -> List[str]:
     """Read non-empty, stripped accession lines from a file.
 
-    A missing file is reported through ``emit`` (the calling command's output) and gives [].
+    A missing file is logged as an error and gives [].
     """
     try:
         with open(filename, "r") as f:
             accessions = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        emit(f"Accessions file not found: {filename}")
+        logger.error(f"Accessions file not found: {filename}")
         return []
     return accessions
 
@@ -135,7 +135,7 @@ class SRAQualityProfileCommand(BaseCommand):
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
-        return _read_accession_file(filename, self.emit)
+        return _read_accession_file(filename)
 
     def _print_quality_profile(self, profile: QualityProfile):
         """Print quality profile summary."""
@@ -383,7 +383,7 @@ class SRAQualityProfileCommand(BaseCommand):
             self.emit(f"Summary saved to: {summary_file}")
 
             if failed_accessions:
-                self.emit(f"⚠️  {len(failed_accessions)} accessions failed analysis")
+                self.emit(f"WARNING: {len(failed_accessions)} accessions failed analysis")
                 return 1
 
             return 0
@@ -454,7 +454,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
     def _read_accessions(self, filename: str) -> List[str]:
         """Read accessions from file."""
-        return _read_accession_file(filename, self.emit)
+        return _read_accession_file(filename)
 
     def _resolve_accessions(self, args, profiles: Dict[str, QualityProfile]) -> List[str]:
         """Return the accessions to dashboard, or [] if none.
@@ -532,7 +532,7 @@ class SRAInteractiveDashboardCommand(BaseCommand):
 
                 return 0
             else:
-                self.emit("No dashboard was generated")
+                self.logger.error("No dashboard was generated")
                 return 1
 
         except (MetaQuestError, OSError) as e:
@@ -603,10 +603,10 @@ class SRAComparativeAnalysisCommand(BaseCommand):
                 groups = json.load(f)
             return groups
         except FileNotFoundError:
-            self.emit(f"Groups file not found: {filename}")
+            self.logger.error(f"Groups file not found: {filename}")
             return {}
         except json.JSONDecodeError as e:
-            self.emit(f"Invalid JSON in groups file: {e}")
+            self.logger.error(f"Invalid JSON in groups file: {e}")
             return {}
 
     def _print_group_summaries(self, groups, comparison) -> None:

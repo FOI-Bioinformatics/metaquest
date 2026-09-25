@@ -1,8 +1,9 @@
 """Tests for the output helpers on `BaseCommand` and the one-stdout-channel rule.
 
 stdout carries a command's result (tables, JSON); stderr carries logging. The JSON-mode tests
-build a project state that makes the command log a warning and then parse the whole of stdout
-as one JSON document, so a stray print or a log line on stdout would fail them.
+run each ``--json`` command through ``metaquest.cli.main.main``, so ``setup_logging`` binds its
+real stderr handler, and then parse the whole of stdout as one JSON document: a stray print or
+a log line on stdout would fail them.
 
 Every store test runs under tmp_path and monkeypatches HOME/XDG_CONFIG_HOME/METAQUEST_DATA so
 nothing here reads or writes the real user config.
@@ -13,18 +14,13 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from typing import List
 
 import pytest
 
 from metaquest.cli.base import BaseCommand, emit_error_json
-from metaquest.cli.commands.status import StatusCommand
-from metaquest.cli.commands.store import (
-    StoreGcCommand,
-    StoreInitCommand,
-    StoreStatusCommand,
-    StoreUsageCommand,
-)
+from metaquest.cli.commands.store import StoreInitCommand
+from metaquest.cli.main import main
 from metaquest.core.constants import STORE_ENV
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import init_store, store_paths
@@ -83,6 +79,11 @@ class TestEmitHelpers:
 
         assert capsys.readouterr().out == "hello\n"
 
+    def test_emit_raw_writes_the_text_as_is(self, capsys):
+        _EmitCommand(lambda cmd: cmd.emit_raw("a\tb\n1\t2")).execute(argparse.Namespace())
+
+        assert capsys.readouterr().out == "a\tb\n1\t2"
+
     def test_emit_without_text_writes_an_empty_line(self, capsys):
         _EmitCommand(lambda cmd: cmd.emit()).execute(argparse.Namespace())
 
@@ -99,11 +100,26 @@ class TestEmitHelpers:
 # ---------------------------------------------------------------- JSON commands
 
 
+@pytest.fixture
+def restore_root_logging():
+    """``main`` replaces the root logger's handlers with a stderr handler bound to the stream
+    capsys installed; put the previous handlers and level back so later tests do not log to a
+    closed stream."""
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    yield
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+    for handler in handlers:
+        root.addHandler(handler)
+    root.setLevel(level)
+
+
 def _corrupt_project_registry(tmp_path: Path) -> Path:
     """A store with one registered project whose registry no longer parses.
 
     ``stale_projects`` (used by ``store_status`` and ``store_gc``) logs a warning for such a
-    project instead of failing, which is the warning these tests rely on.
+    project instead of failing.
     """
     root = tmp_path / "store"
     project_dir = tmp_path / "project"
@@ -115,118 +131,88 @@ def _corrupt_project_registry(tmp_path: Path) -> Path:
     return root
 
 
-def _store_status_args(tmp_path: Path) -> argparse.Namespace:
+def _store_status_argv(tmp_path: Path) -> List[str]:
     root = _corrupt_project_registry(tmp_path)
-    return argparse.Namespace(data_root=str(root), registry=None, json=True, verbose=True)
+    return ["store_status", "--data-root", str(root), "--verbose", "--json"]
 
 
-def _store_gc_args(tmp_path: Path) -> argparse.Namespace:
+def _store_gc_argv(tmp_path: Path) -> List[str]:
     root = _corrupt_project_registry(tmp_path)
-    return argparse.Namespace(
-        data_root=str(root),
-        registry=None,
-        dry_run=True,
-        yes=False,
-        older_than=None,
-        keep_partial=False,
-        include_stale=False,
-        accept_rebuilt=False,
-        json=True,
-    )
+    return ["store_gc", "--data-root", str(root), "--dry-run", "--json"]
 
 
-def _store_usage_args(tmp_path: Path) -> argparse.Namespace:
+def _store_usage_argv(tmp_path: Path) -> List[str]:
     root = tmp_path / "store"
     paths = init_store(root)
     with catalog_write(paths) as cat:
         cat.upsert_project("proja", "Wolbachia", str(tmp_path), str(tmp_path / "metaquest_registry.json"))
         cat.upsert_dataset(Sidecar(accession="SRR1", state="complete"))
         cat.record_usage("SRR1", "proja", "wMel", "downloaded")
-    return argparse.Namespace(
-        data_root=str(store_paths(root).root),
-        registry=None,
-        accession="SRR404",
-        project=None,
-        organism=None,
-        unused=False,
-        bytes_by_organism=False,
-        json=True,
-    )
+    return ["store_usage", "--data-root", str(store_paths(root).root), "--accession", "SRR404", "--json"]
 
 
-def _status_args(tmp_path: Path) -> argparse.Namespace:
+def _status_argv(tmp_path: Path) -> List[str]:
     # The store this project names is not there: status warns and still reports.
     for folder in ("fastq", "metadata", "genomes"):
         (tmp_path / folder).mkdir()
-    return argparse.Namespace(
-        fastq_folder=str(tmp_path / "fastq"),
-        metadata_folder=str(tmp_path / "metadata"),
-        genomes_folder=str(tmp_path / "genomes"),
-        targeted_folder=str(tmp_path / "targeted"),
-        matches_folder=str(tmp_path / "matches"),
-        registry=str(tmp_path / "metaquest_registry.json"),
-        data_root=str(tmp_path / "unmounted"),
-        accessions_file=None,
-        parsed_containment=None,
-        stage=None,
-        genome=None,
-        init=False,
-        reconcile=False,
-        export_tsv=None,
-        next=False,
-        list_missing=False,
-        json=True,
-    )
+    return [
+        "status",
+        "--fastq-folder",
+        str(tmp_path / "fastq"),
+        "--metadata-folder",
+        str(tmp_path / "metadata"),
+        "--genomes-folder",
+        str(tmp_path / "genomes"),
+        "--targeted-folder",
+        str(tmp_path / "targeted"),
+        "--matches-folder",
+        str(tmp_path / "matches"),
+        "--registry",
+        str(tmp_path / "metaquest_registry.json"),
+        "--data-root",
+        str(tmp_path / "unmounted"),
+        "--json",
+    ]
 
 
-def _warn_then(original):
-    """Wrap a store_usage row lookup so it logs a warning first; an unknown accession alone
-    produces no warning in store_usage."""
-
-    def wrapper(catalog, accession):
-        logging.getLogger("metaquest.cli.commands.store").warning("no usage recorded for %s", accession)
-        return original(catalog, accession)
-
-    return wrapper
-
-
+# (argv builder, a WARNING the state provokes or None). store_usage has no warning path of its
+# own, so for it the test only shows that its INFO line lands on stderr.
 JSON_COMMANDS = [
-    pytest.param(StoreStatusCommand, _store_status_args, id="store_status"),
-    pytest.param(StoreGcCommand, _store_gc_args, id="store_gc"),
-    pytest.param(StoreUsageCommand, _store_usage_args, id="store_usage"),
-    pytest.param(StatusCommand, _status_args, id="status"),
+    pytest.param(_store_status_argv, "Could not check registry", id="store_status"),
+    pytest.param(_store_gc_argv, "Could not check registry", id="store_gc"),
+    pytest.param(_store_usage_argv, None, id="store_usage"),
+    pytest.param(_status_argv, "store unavailable", id="status"),
 ]
 
 
-@pytest.mark.parametrize("command,argsbuilder", JSON_COMMANDS)
-def test_json_mode_stdout_is_a_single_document_despite_warnings(
-    command, argsbuilder, tmp_path, monkeypatch, capsys, caplog
+@pytest.mark.parametrize("argv_builder,warning", JSON_COMMANDS)
+def test_json_mode_stdout_is_a_single_document_and_logs_go_to_stderr(
+    argv_builder, warning, tmp_path, monkeypatch, capsys, restore_root_logging
 ):
     monkeypatch.chdir(tmp_path)
-    args = argsbuilder(tmp_path)
+    argv = argv_builder(tmp_path)
     capsys.readouterr()
-    caplog.clear()
 
-    original = StoreUsageCommand._rows_for_accession
-    with (
-        caplog.at_level(logging.WARNING),
-        patch.object(StoreUsageCommand, "_rows_for_accession", staticmethod(_warn_then(original))),
-    ):
-        rc = command().execute(args)
+    rc = main(argv)
 
-    out = capsys.readouterr().out
-    assert rc == 0
-    json.loads(out)  # the whole stream parses as one document
-    assert any(record.levelno >= logging.WARNING for record in caplog.records), caplog.text
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    json.loads(captured.out)  # the whole stream parses as one document
+    assert "Resolved store root" in captured.err
+    assert "Resolved store root" not in captured.out
+    if warning:
+        assert "WARNING" in captured.err
+        assert warning in captured.err
 
 
 def test_no_library_module_prints():
+    """The gate's own pattern, limited to the library packages."""
     hits = subprocess.run(
         [
             "grep",
             "-rlnE",
-            r"(^|[^.a-zA-Z_])print\(",
             "--include=*.py",
+            r"(^|[^.a-zA-Z0-9_])print\(|sys\.stdout\.write",
             "metaquest/data",
             "metaquest/store",
             "metaquest/processing",
@@ -250,6 +236,7 @@ def test_print_gate_script_fails_on_a_print_outside_base(tmp_path):
     (tmp_path / "metaquest" / "cli").mkdir(parents=True)
     (tmp_path / "metaquest" / "cli" / "base.py").write_text('print("allowed")\n')
     (tmp_path / "metaquest" / "library.py").write_text('def f():\n    print("not allowed")\n')
+    (tmp_path / "metaquest" / "writer.py").write_text('import sys\nsys.stdout.write("not allowed")\n')
     (tmp_path / "metaquest" / "other.py").write_text("import pprint\npprint.pprint(1)\nself._print_table(1)\n")
 
     result = subprocess.run(
@@ -258,5 +245,6 @@ def test_print_gate_script_fails_on_a_print_outside_base(tmp_path):
 
     assert result.returncode == 1
     assert "metaquest/library.py:2:" in result.stdout
+    assert "metaquest/writer.py:2:" in result.stdout
     assert "metaquest/cli/base.py:1:" not in result.stdout
     assert "metaquest/other.py:" not in result.stdout

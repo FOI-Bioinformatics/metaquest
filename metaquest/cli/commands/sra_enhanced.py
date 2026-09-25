@@ -150,7 +150,7 @@ class SRAInfoCommand(BaseCommand):
                 accessions = [line.strip() for line in f if line.strip()]
 
             if not accessions:
-                self.emit("No accessions found in file")
+                self.logger.error("No accessions found in file")
                 return 1
 
             self.emit(f"Analyzing {len(accessions)} SRA accessions...")
@@ -159,7 +159,7 @@ class SRAInfoCommand(BaseCommand):
             metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
 
             if not metadata:
-                self.emit("Could not fetch metadata for any accessions")
+                self.logger.error("Could not fetch metadata for any accessions")
                 return 1
 
             self._print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, args.bandwidth_mbps)
@@ -256,7 +256,7 @@ class SRAStatsCommand(BaseCommand):
             fastq_folder = Path(args.fastq_folder)
 
             if not fastq_folder.exists():
-                self.emit(f"FASTQ folder {fastq_folder} does not exist")
+                self.logger.error(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
 
             self.emit("Calculating comprehensive statistics for downloaded datasets...")
@@ -531,14 +531,14 @@ class SRAValidateCommand(BaseCommand):
         try:
             fastq_folder = Path(args.fastq_folder)
             if not fastq_folder.exists():
-                self.emit(f"FASTQ folder {fastq_folder} does not exist")
+                self.logger.error(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
 
             self.emit("Validating downloaded SRA datasets...")
 
             accession_dirs = self._find_accession_dirs(fastq_folder, args.accessions)
             if not accession_dirs:
-                self.emit("No accession directories found")
+                self.logger.error("No accession directories found")
                 return 1
 
             registry = load_registry(args.registry)

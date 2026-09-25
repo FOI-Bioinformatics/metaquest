@@ -1,7 +1,6 @@
 """Taxonomy enrichment and containment exploration CLI commands."""
 
 import argparse
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -294,7 +293,7 @@ class FindByTaxonomyCommand(BaseCommand):
                 result.to_csv(args.output, sep="\t")
                 self.logger.info("Wrote %d results to %s", len(result), args.output)
             else:
-                sys.stdout.write(result.to_csv(sep="\t"))
+                self.emit_raw(result.to_csv(sep="\t"))
 
             return 0
         except MetaQuestError as e:

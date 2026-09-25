@@ -375,12 +375,13 @@ class TestStoreStatusCommand:
         assert cmd.name == "store_status"
         assert cmd.group == "Store"
 
-    def test_no_store_configured_prints_hint_and_returns_1(self, tmp_path, monkeypatch, capsys):
+    def test_no_store_configured_logs_hint_and_returns_1(self, tmp_path, monkeypatch, capsys, caplog):
         monkeypatch.chdir(tmp_path)
         rc = StoreStatusCommand().execute(_status_args(registry=str(tmp_path / "metaquest_registry.json")))
-        out = capsys.readouterr().out
         assert rc == 1
-        assert "store_init" in out
+        assert "store_init" in caplog.text
+        # Without --json the hint is an error on stderr; stdout carries no result.
+        assert capsys.readouterr().out == ""
 
     def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
@@ -549,16 +550,16 @@ class TestStoreAdoptCommand:
         assert cmd.name == "store_adopt"
         assert cmd.group == "Store"
 
-    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys):
+    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys, caplog):
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         monkeypatch.chdir(project_dir)
 
         rc = StoreAdoptCommand().execute(_adopt_args(registry=str(project_dir / "metaquest_registry.json")))
-        out = capsys.readouterr().out
 
         assert rc == 1
-        assert "store_init" in out
+        assert "store_init" in caplog.text
+        assert capsys.readouterr().out == ""
 
     def test_adopts_moves_links_and_records_registry(self, tmp_path, monkeypatch):
         root = tmp_path / "store"

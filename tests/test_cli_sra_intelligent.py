@@ -915,18 +915,18 @@ class TestSRAComparativeAnalysisCommand:
         assert "Group_A" in result
         assert len(result["Group_A"]) == 2
 
-    def test_load_groups_file_not_found(self, capsys):
-        """Test loading non-existent groups file."""
+    def test_load_groups_file_not_found(self, capsys, caplog):
+        """A missing groups file is an error on stderr, not a line of the result on stdout."""
         cmd = SRAComparativeAnalysisCommand()
 
         result = cmd._load_groups("/nonexistent/groups.json")
 
         assert result == {}
-        captured = capsys.readouterr()
-        assert "not found" in captured.out
+        assert "Groups file not found" in caplog.text
+        assert "not found" not in capsys.readouterr().out
 
-    def test_load_groups_invalid_json(self, tmp_path, capsys):
-        """Test loading invalid JSON groups file."""
+    def test_load_groups_invalid_json(self, tmp_path, capsys, caplog):
+        """An unparsable groups file is an error on stderr, not a line of the result on stdout."""
         cmd = SRAComparativeAnalysisCommand()
         groups_file = tmp_path / "invalid.json"
         groups_file.write_text("{invalid json")
@@ -934,8 +934,8 @@ class TestSRAComparativeAnalysisCommand:
         result = cmd._load_groups(str(groups_file))
 
         assert result == {}
-        captured = capsys.readouterr()
-        assert "Invalid JSON" in captured.out
+        assert "Invalid JSON in groups file" in caplog.text
+        assert "Invalid JSON" not in capsys.readouterr().out
 
     def test_print_group_summaries_labels_reads_as_mean_reads_in_sample(self, capsys):
         """total_reads here is the per-dataset sample size the comparison drew, not a

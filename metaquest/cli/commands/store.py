@@ -21,7 +21,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand, emit_error_json
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
@@ -60,14 +60,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _no_store_hint(emit: Callable[[str], None], as_json: bool = False) -> None:
-    """Tell the user no store is configured: a JSON error document with ``--json``, else one line
-    through the calling command's ``emit``."""
+def _no_store_hint(as_json: bool = False) -> None:
+    """Tell the user no store is configured: an ERROR log line, plus a JSON error document on
+    stdout with ``--json`` so a script parsing stdout sees it too."""
     message = "No store configured; run: metaquest store_init --data-root PATH"
+    logger.error(message)
     if as_json:
         emit_error_json(message)
-    else:
-        emit(message)
 
 
 def _stale_project_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -362,7 +361,7 @@ class StoreStatusCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit, getattr(args, "json", False))
+            _no_store_hint(getattr(args, "json", False))
             return 1
 
         try:
@@ -431,7 +430,7 @@ class StoreReindexCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit)
+            _no_store_hint()
             return 1
 
         try:
@@ -572,7 +571,7 @@ class StoreAdoptCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit)
+            _no_store_hint()
             return 1
 
         try:
@@ -1026,7 +1025,7 @@ class StoreVerifyCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit)
+            _no_store_hint()
             return 1
 
         try:
@@ -1129,7 +1128,7 @@ class StoreLinkCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit)
+            _no_store_hint()
             return 1
 
         paths = store_paths(root)
@@ -1391,7 +1390,7 @@ class StoreUsageCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit, getattr(args, "json", False))
+            _no_store_hint(getattr(args, "json", False))
             return 1
 
         try:
@@ -1764,7 +1763,7 @@ class StoreGcCommand(BaseCommand):
             return 1
 
         if root is None:
-            _no_store_hint(self.emit, getattr(args, "json", False))
+            _no_store_hint(getattr(args, "json", False))
             return 1
 
         paths = store_paths(root)

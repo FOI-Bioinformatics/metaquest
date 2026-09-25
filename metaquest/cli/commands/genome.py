@@ -2,7 +2,6 @@
 
 import argparse
 import csv
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -97,7 +96,7 @@ class GenomeSearchCommand(BaseCommand):
                 Path(args.output).write_text(output_text)
                 self.logger.info("Wrote accessions to %s", args.output)
             else:
-                sys.stdout.write(output_text)
+                self.emit_raw(output_text)
 
             return 0
         except MetaQuestError as e:
