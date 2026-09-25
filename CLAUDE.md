@@ -83,10 +83,23 @@ New commands should:
 4. **CRITICAL**: Use dashes in CLI arguments (e.g., `--matches-folder`), not underscores
 
 ### Advanced SRA Commands
-The SRA package provides three analysis commands:
-- `sra_profile_quality` - Comprehensive quality analysis of downloaded datasets
-- `sra_dashboard` - Interactive HTML dashboard generation
-- `sra_compare` - Statistical comparison between dataset groups
+Two analysis commands, both in the "Reads" group, share one statistics path
+(`metaquest/sra/`: `dataset_stats` finds an accession's mate files and loads the cached statistics
+record, `quality` samples per-read figures, `analytics.SRADatasetAnalyzer.profile_dataset_quality`
+combines them, `profiles.profile_accession` is the one entry point both commands call):
+- `sra_profile` (`cli/commands/sra_profile.py`) - statistics table, one profile JSON per accession,
+  registry analysis `"profile"`. Totals and GC come from `store.stats.compute_dataset_stats`; GC is in
+  percent (`gc_percent`) everywhere.
+- `sra_report` (`cli/commands/sra_report.py`) - one HTML report (`sra_report.html`, figures in
+  `sra_report.json`); with `--groups-file` it adds the comparison and statistical tests. Each accession
+  is profiled once and the profiles are reused by both sections; registry analysis `"report"`.
+
+`sra_stats`, `sra_profile_quality`, `sra_dashboard` and `sra_compare` (and the dash aliases) were
+merged into these in 0.5.0; `cli/commands/renamed.py` keeps the old names as hidden commands that log
+the new name and exit 2. `results_table` and `status --export-tsv` read the `"profile"` analysis, or
+the old `"sra_stats"`/`"quality"` ones of a registry written before 0.5.0
+(`data/registry_blocks.profile_summary`). Shared CLI helpers `read_accessions_file`,
+`accessions_from_args` and `resolve_command_store` live in `cli/base.py`.
 
 ### Store Commands
 `metaquest/store/` (package: `resolve`, `layout`, `sidecar`, `catalog`, `link`, `adopt`, `usage`,
@@ -162,7 +175,7 @@ The typical workflow involves:
 3. Parsing containment data (`parse_containment`) 
 4. Visualization and analysis (`plot_containment`, `count_metadata`)
 5. Excluding unwanted datasets (`blacklist`)
-6. Advanced SRA operations (`download_sra`, `sra_profile_quality`, `sra_dashboard`)
+6. Advanced SRA operations (`download_sra`, `sra_profile`, `sra_report`)
 7. Checking project state (`status`)
 
 Each step records its outcome in the project registry (`metaquest_registry.json`, see
@@ -346,7 +359,7 @@ When working on MetaQuest, follow this priority order:
 
 #### Well-Tested Files (Reference Implementations)
 - `metaquest/cli/commands/*.py` - comprehensive CLI testing patterns
-- `metaquest/cli/commands/sra_intelligent.py` - intelligent SRA commands
+- `metaquest/cli/commands/sra_profile.py`, `sra_report.py` - SRA analysis commands
 - `metaquest/data/file_io.py` - robust file operations
 - `metaquest/data/branchwater.py` - format handling exemplar
 - `metaquest/data/metadata.py` - external API integration
@@ -375,7 +388,7 @@ When working on MetaQuest, follow this priority order:
 - [x] **Core processing tested** - Coverage raised from an untested baseline to comprehensive
 - [x] **Data layer testing completed** - Key modules thoroughly covered
 - [x] **Test coverage improvement session** - A large batch of tests added across multiple files
-- [x] **Critical modules improved** - sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy
+- [x] **Critical modules improved** - sra_reporting, the SRA analysis commands, sra_metadata, bar visualizer, taxonomy
 - [x] **Integration test suite created** - End-to-end workflow tests added
 - [x] **Performance benchmarks established** - Benchmarked tests added with pytest-benchmark
 - [x] **Overall project coverage improved** - Raised substantially from an early baseline
@@ -384,7 +397,7 @@ When working on MetaQuest, follow this priority order:
 #### Advanced SRA Features Achievements
 - [x] **SRADatasetAnalyzer** - Quality profiling, comparative analysis, anomaly detection
 - [x] **SRAReportGenerator** - Interactive dashboards, Plotly visualizations
-- [x] **CLI Integration** - Three intelligent SRA commands (sra-profile-quality, sra-dashboard, sra-compare) fully functional
+- [x] **CLI Integration** - Two SRA analysis commands (sra_profile, sra_report) fully functional
 
 #### Current Development Priorities (Low Priority)
 - [ ] **Remaining visualization modules** - interactive.py, reporting.py, plots.py (currently 0%)

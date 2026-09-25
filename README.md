@@ -31,8 +31,8 @@ matplotlib plotting steps. Other features need an extra:
 
 | Extra | Packages | Needed for |
 |---|---|---|
-| `analysis` | scikit-learn, scipy | `diversity_analysis`, PCA, t-SNE and clustered heatmaps in `interactive_plot`, group statistics in `sra_compare` |
-| `interactive` | plotly, jinja2 | `interactive_plot`, `explore_containment`, `sra_dashboard`, the `sra_compare` HTML report |
+| `analysis` | scikit-learn, scipy | `diversity_analysis`, PCA, t-SNE and clustered heatmaps in `interactive_plot`, group statistics in `sra_report --groups-file` |
+| `interactive` | plotly, jinja2 | `interactive_plot`, `explore_containment`, the `sra_report` HTML report (not needed with `--no-report`) |
 | `maps` | cartopy | geographic sample maps |
 | `sourmash` | sourmash | sketching a genome in `branchwater_search`, and the `sourmash scripts metaquest_*` plugin |
 | `all` | all of the above | everything |
@@ -84,7 +84,7 @@ Download and assembly steps call command-line tools that are not Python packages
 | `datasets` (ncbi-datasets-cli) | `genome_download`, `genome_prepare`, `download_test_genome` |
 | `minimap2`, `samtools` | `extract_target_reads` |
 | `megahit` | `extract_target_reads --assemble` |
-| `seqkit` (optional) | `sra_stats`, `sra_profile_quality` (faster read statistics; falls back to a plain Python reader when absent) |
+| `seqkit` (optional) | `sra_profile`, `sra_report` (faster read statistics; falls back to a plain Python reader when absent) |
 
 `environment.yml` installs all of them together with MetaQuest:
 
@@ -318,7 +318,9 @@ metaquest results_table --output results.tsv
 ```
 
 `results_table` writes one row per screened accession and genome, joining containment, selection,
-exclusion, download, run size, mapped reads, reference coverage and assembly statistics. It records the
+exclusion, download, run size, the dataset profile of `sra_profile` (total reads, GC in percent,
+quality grade), mapped reads, reference coverage and assembly statistics. A registry written before
+0.5.0 still fills the profile columns from its `sra_stats` and `quality` analyses. It records the
 export in the project registry when one exists, and does not create a registry when there is none.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
@@ -431,11 +433,10 @@ names the folder, and `store_gc --dry-run` separately lists such leftovers as re
 `--temp-folder`, `fasterq-dump`'s own scratch files default to `<data-root>/tmp/<ACCESSION>_fqtmp`
 (inside the store, not the system temp directory) when a store is configured.
 
-`--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_stats`, `sra_validate`,
-`sra_profile_quality`, and `extract_target_reads`; it never replaces `--fastq-folder`, which still names
-where the project expects its reads (as a folder or as the store's symlink). `sra_compare` and
-`sra_dashboard` do not take `--data-root` themselves; instead they reuse quality profiles a store-aware
-`sra_profile_quality` run already saved, via `--quality-profiles`. With a store configured, `status`
+`--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_profile`, `sra_report`,
+`sra_validate` and `extract_target_reads`; it never replaces `--fastq-folder`, which still names
+where the project expects its reads (as a folder or as the store's symlink). `sra_report` can also
+reuse the quality profiles an earlier `sra_profile` run saved, via `--quality-profiles`. With a store configured, `status`
 flags a wanted accession whose `fastq/<ACC>` is a link into the store but whose store dataset is not yet
 `complete` or `unverified` (still `downloading`, `failed`, or `partial`) as linked to a store dataset
 that is not complete, rather than simply listing it as missing.
@@ -538,7 +539,7 @@ hint. The log also reports the summed size of the selected runs.
 
 `accessions.txt` is the input for `download_sra`, which writes
 `fastq/<accession>/<accession>_1.fastq.gz` (and `_2` for paired runs; gzip-compressed by default, see
-below), the layout `status`, `sra_stats`, `sra_profile_quality`, `sra_dashboard` and
+below), the layout `status`, `sra_profile`, `sra_report`, `sra_validate` and
 `extract_target_reads` read.
 
 ### Downloading reads
@@ -597,74 +598,55 @@ metaquest blacklist --remove SRR2517418
 
 ### SRA Quality Profiling
 
-`sra_profile_quality`, `sra_compare` and `sra_dashboard` name the FASTQ folder with `--fastq-dir`,
-while the rest of the pipeline (`download_sra`, `sra_stats`, `sra_validate`, `extract_target_reads`,
-`status`) uses `--fastq-folder`; both flags point at the same kind of folder, one per-accession
-directory of downloaded reads, the naming just differs by command.
-
-Generate comprehensive quality profiles for downloaded SRA datasets:
+`sra_profile` computes statistics and a quality profile for each downloaded dataset. It reads the
+same `--fastq-folder` as the rest of the pipeline and, by default, profiles every accession folder
+in it; `--accessions-file` and repeated `--accession` flags restrict the run to the accessions named:
 
 ```bash
-# Profile multiple datasets with detailed reports
-metaquest sra_profile_quality \
+# Every accession folder under fastq/
+metaquest sra_profile --fastq-folder fastq
+
+# Selected accessions, printing the path of each profile JSON as it is written
+metaquest sra_profile \
     --accessions-file accessions.txt \
-    --fastq-dir fastq \
+    --accession SRR123456 \
     --output-dir quality_profiles \
     --detailed-reports
-
-# Profile single dataset
-metaquest sra_profile_quality \
-    --accession SRR123456 \
-    --fastq-dir fastq \
-    --include-contamination
 ```
 
-Read totals are always exact; per-read metrics such as GC content, quality and length are computed
-from a sample of the reads, `--sample-size` per dataset (default 10000), drawn uniformly across the
-file by default or from just the start with `--sampler head`. `sra_stats` takes the same
-`--sample-size` flag for the same reason. The sample is cached in the store sidecar and reused by
-`sra_stats`, `sra_validate` and `sra_profile_quality` alike until the underlying file's size or
-modification time changes.
+Each dataset is profiled once, by one path. Read and base totals, mean read length and GC content
+come from the dataset's statistics record: exact read counts (from `seqkit stats` when it is
+installed, otherwise a streaming count) and GC from a uniform sample of the reads. The record is
+cached in the store sidecar and reused by `sra_profile`, `sra_report` and `sra_validate --check-pairs`
+until a file's size or modification time changes. The per-read quality, complexity, duplication and
+adapter figures come from a sample of `--sample-size` reads per dataset (default 10000) drawn from
+every mate file, uniformly across each file by default or from the start of each file with
+`--sampler head`.
 
-`sra_stats` and `sra_profile_quality` label every printed read total "(mates counted)": a paired-end
-run's two mate files are counted separately, so the figure is twice the spot count NCBI reports for
-that run. The per-accession quality profile JSON (`--detailed-reports`) writes the complexity score
-under both `complexity_score` and the newer `sequence_complexity` key, so either name can be read back.
+The command writes three things: the table `--output-report` (default `sra_statistics.csv`, one
+row per accession), one `<accession>_quality_profile.json` per accession in `--output-dir` (default
+`sra_quality_profiles`) together with `quality_summary.json`, and a `profile` analysis per accession in
+the project registry. GC is given in percent (0 to 100) in all three, under `gc_percent`; the profile
+JSON carries the complexity score under `complexity_score`. Printed read totals are labelled
+"(mates counted)": a paired-end run's two mate files are counted separately, so the figure is twice
+the spot count NCBI reports for that run. The command exits with status 1 when any accession has no
+readable FASTQ files; the others are still profiled and written.
 
-### Interactive SRA Dashboards
+### SRA Reports
 
-Generate interactive HTML dashboards for SRA analysis:
-
-```bash
-# Comprehensive dashboard
-metaquest sra_dashboard \
-    --accessions-file accessions.txt \
-    --output-dir dashboards \
-    --title "Project SRA Analysis" \
-    --dashboard-type full
-
-# Quality analysis dashboard only
-metaquest sra_dashboard \
-    --accessions-file accessions.txt \
-    --dashboard-type quality
-```
-
-Pass `--quality-profiles DIR` to reuse quality profiles already saved by `sra_profile_quality`
-instead of recomputing them. `--accessions-file` is required unless `--quality-profiles` names a
-directory with saved profiles, in which case every accession found there is dashboarded and
-`--accessions-file` can be left out entirely.
-
-### Comparative SRA Analysis
-
-Perform statistical comparisons between SRA dataset groups:
+`sra_report` writes one HTML report, `sra_report.html` in `--output-dir` (default `sra_reports`),
+with the figures behind it in `sra_report.json`. Without groups the report covers the quality of
+the datasets named by `--accessions-file`; with `--groups-file` it adds a comparison of the groups
+and their statistical tests (a t-test for two groups, one-way ANOVA for more):
 
 ```bash
-# Compare treatment vs control groups
-metaquest sra_compare \
+# Quality of a set of datasets
+metaquest sra_report --accessions-file accessions.txt --title "Project SRA Analysis"
+
+# Treatment against control, reusing the profiles an earlier sra_profile run saved
+metaquest sra_report \
     --groups-file comparison_groups.json \
-    --fastq-dir fastq \
-    --statistical-tests \
-    --generate-report
+    --quality-profiles sra_quality_profiles
 ```
 
 Example groups file format:
@@ -675,8 +657,31 @@ Example groups file format:
 }
 ```
 
-The per-group summary prints "Mean reads in sample", the average of each dataset's `total_reads` value
-(mates counted, see "SRA Quality Profiling" above), not a per-mate or per-sample-size figure.
+Each accession is profiled once, by the same path as `sra_profile`, and that one profile is used
+for both the quality section and the comparison. An accession found in `--quality-profiles` is not
+profiled again; with no `--accessions-file` or `--groups-file`, every profile in that folder is
+reported on. An accession without readable FASTQ files is left out with a warning. The report opens
+in a browser unless `--no-open` is given; `--no-report` writes only `sra_report.json` and prints the
+results, and needs neither plotly nor jinja2. A `report` analysis is recorded per accession.
+
+### Renamed SRA commands (0.5.0)
+
+Four commands were merged into two in 0.5.0. The old names still parse, print where the command
+went and exit with status 2:
+
+| Before 0.5.0 | Since 0.5.0 |
+|---|---|
+| `sra_stats` | `sra_profile` |
+| `sra_profile_quality` (`sra-profile-quality`) | `sra_profile` |
+| `sra_dashboard` (`sra-dashboard`) | `sra_report` |
+| `sra_compare` (`sra-compare`) | `sra_report --groups-file` |
+| `--fastq-dir` | `--fastq-folder` |
+| `sra_stats --accessions A B`, `sra_validate --accessions A B` | `--accession A --accession B` or `--accessions-file` |
+| `sra_dashboard --dashboard-type` | removed: one report, with the comparison when `--groups-file` is given |
+| `sra_compare --statistical-tests`, `--generate-report` | removed: tests come with `--groups-file`; `--no-report` skips the HTML |
+| `--include-contamination` | removed: the adapter figures are always computed |
+| `gc_content` (0-1 fraction in the profile JSON, percent in the CSV) | `gc_percent` (percent everywhere) |
+| registry analyses `sra_stats`, `quality`, and none for the dashboard | `profile`, `report` |
 
 ## Visualizing Results
 
@@ -826,7 +831,7 @@ Significant improvements have been implemented across the codebase:
 - **Intelligent SRA Package**: Complete implementation of next-generation SRA capabilities including intelligent downloads with resume functionality, comprehensive quality profiling, and interactive dashboard generation
 - **Major Test Coverage Achievement**: Substantial coverage improvement with a large batch of comprehensive
   tests added across multiple files
-  - Extended test suites for critical modules (sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy)
+  - Extended test suites for critical modules (sra_reporting, the SRA analysis commands, sra_metadata, bar visualizer, taxonomy)
   - Integration test suite with end-to-end workflow tests
   - Performance benchmarks using pytest-benchmark
   - Critical modules now thoroughly covered

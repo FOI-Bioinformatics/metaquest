@@ -112,7 +112,8 @@ each other and each is small enough to test alone:
   and `store_adopt` bounds how long each waits for another project's lock before giving up.
 - **stats**: computes and caches the per-dataset statistics block (streaming exact read and base
   counts, plus a sample for per-read metrics such as GC content), invalidated when the FASTQ file's size
-  or modification time changes; used by `sra_stats`, `sra_validate` and `sra_profile_quality`.
+  or modification time changes; used by `sra_profile`, `sra_report` and `sra_validate` (through
+  `metaquest.sra.dataset_stats.load_dataset_stats` for the first two).
 
 Nothing outside `metaquest/store` depends on its internal layout; other layers call its public
 functions (`resolve_store_root`, `link_dataset`, `record_usage_safe`, and so on) and otherwise treat a

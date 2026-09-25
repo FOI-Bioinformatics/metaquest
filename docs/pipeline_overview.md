@@ -14,7 +14,7 @@ files they produce and what the registry keeps. The [README](../README.md) docum
 | 1. Screen | `branchwater_search`, `use_branchwater`, `parse_containment` | `matches/*.csv`, `parsed_containment.txt` | containment and cANI per accession and genome |
 | 2. Select | `select_datasets`, `blacklist` | `accessions.txt`, `blacklist.txt` | selection criteria and date; exclusions with reasons |
 | 3. Download | `download_sra` | `fastq/<accession>/` | outcome per accession: downloaded, failed, skipped |
-| 4. Analyse | `sra_stats`, `sra_validate`, `sra_profile_quality`, `sra_dashboard`, `sra_compare` | CSV, JSON and HTML reports | one analysis entry per accession |
+| 4. Analyse | `sra_validate`, `sra_profile`, `sra_report` | CSV, JSON and HTML reports | one analysis entry per accession |
 | 5. Extract | `extract_target_reads` | `targeted/<accession>/<genome>_*.fastq.gz` | mapped read count, parameters, files |
 | 6. Assemble | `extract_target_reads --assemble` | `targeted/<accession>/<genome>_assembly/final.contigs.fa` | contig count, total length, N50, megahit version |
 
@@ -130,30 +130,35 @@ store cooperate on the same accession without downloading it twice. See the stor
 ## 4. Analyse
 
 ```bash
-metaquest sra_stats --fastq-folder fastq --output-report sra_statistics.csv
 metaquest sra_validate --fastq-folder fastq
-metaquest sra_profile_quality --fastq-dir fastq --accessions-file accessions.txt --detailed-reports
-metaquest sra_dashboard --fastq-dir fastq --accessions-file accessions.txt --quality-profiles sra_quality_profiles
+metaquest sra_profile --fastq-folder fastq --accessions-file accessions.txt
+metaquest sra_report --fastq-folder fastq --groups-file groups.json --quality-profiles sra_quality_profiles
 ```
 
-`sra_stats` writes read counts, GC content and read lengths per accession; `sra_validate` checks the
-FASTQ files, and with `--check-pairs` compares mate read counts, and with `--md5` compares each file's
-checksum against the value recorded for it; `sra_profile_quality` grades each dataset and writes a
-summary JSON (and a JSON per accession with `--detailed-reports`). Each of them records one analysis
-entry per accession in the registry. `sra_dashboard` and `sra_compare` build interactive reports; with
-`--quality-profiles` the dashboard reuses saved profiles instead of profiling the reads again.
+`sra_validate` checks the FASTQ files, and with `--check-pairs` compares mate read counts, and with
+`--md5` compares each file's checksum against the value recorded for it. `sra_profile` writes one
+statistics table (`sra_statistics.csv`: read and base totals, read lengths, GC content, mean base
+quality, grade) and one profile JSON per accession into `sra_quality_profiles/`. `sra_report` writes
+one HTML report on the quality of the datasets and, with `--groups-file`, a comparison of the groups
+with t-test or ANOVA results; with `--quality-profiles` it reuses the profiles `sra_profile` saved
+instead of profiling the reads again. Each of them records one analysis entry per accession in the
+registry (`validate`, `profile`, `report`). All three take `--accessions-file`, and `sra_profile` and
+`sra_validate` also take repeated `--accession` flags; without either, every accession folder is used.
 
-Read counts are always exact; per-read metrics (GC content, quality, length) come from a sample of
-`--sample-size` reads per dataset (default 10000, uniform by default, or `--sampler head`). For a
-dataset held in the shared data store, this sample and the exact counts are cached in the store sidecar
-(the `stats` block, invalidated when the FASTQ file's size or modification time changes), so
-`sra_stats`, `sra_validate` and `sra_profile_quality` compute it once and reuse it rather than
-re-reading the file each time.
+Each dataset is profiled by one path. Read and base totals, mean read length and GC content come from
+the dataset's statistics record: exact read counts, and GC from a uniform sample. Per-read quality,
+complexity and adapter figures come from a sample of `--sample-size` reads per dataset (default
+10000) drawn from every mate file (uniformly across each file by default, or `--sampler head`). For a
+dataset held in the shared data store, the statistics record is cached in the store sidecar (the
+`stats` block, invalidated when a FASTQ file's size or modification time changes), so `sra_profile`,
+`sra_report` and `sra_validate --check-pairs` compute it once and reuse it rather than re-reading the
+files each time. GC is reported in percent (0 to 100) under `gc_percent` in the table, the profile
+JSON and the registry.
 
-`sra_stats` and `sra_profile_quality` label every printed read total "(mates counted)", since a
-paired-end run's two mate files are counted separately; `sra_compare`'s per-group summary reports the
-same figure as "Mean reads in sample". `sra_profile_quality --detailed-reports` writes the per-accession
-complexity score under both `complexity_score` and `sequence_complexity` in the profile JSON.
+`sra_profile` and `sra_report` label every printed read total "(mates counted)", since a paired-end
+run's two mate files are counted separately. Before 0.5.0 these steps were four commands,
+`sra_stats`, `sra_profile_quality`, `sra_dashboard` and `sra_compare`; those names now print where
+the command went and exit with status 2.
 
 ## 5. Extract
 
@@ -294,11 +299,11 @@ they never touch a real store or the user's configuration file.
 | Download | pigz (optional) | parallel gzip compression of downloaded FASTQ files |
 | Extract | minimap2, samtools | mapping and filtering reads |
 | Assemble | megahit | assembling the extracted reads |
-| Analyse | seqkit (optional) | faster read statistics for `sra_stats` and `sra_profile_quality` |
+| Analyse | seqkit (optional) | faster read statistics for `sra_profile` and `sra_report` |
 
 Python packages beyond the core install sit behind extras: `analysis` (scikit-learn, scipy) for
-`diversity_analysis` and the group statistics in `sra_compare`, `interactive` (plotly, jinja2) for the
-HTML outputs (`explore_containment`, `sra_dashboard`, `sra_compare`, `interactive_plot`), `maps`
+`diversity_analysis` and the group statistics in `sra_report --groups-file`, `interactive` (plotly,
+jinja2) for the HTML outputs (`explore_containment`, `sra_report`, `interactive_plot`), `maps`
 (cartopy) and `sourmash`. A command that needs a missing extra exits with an error naming it; the
 download, parse, metadata, status and extraction stages above need none of them.
 
