@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from metaquest.cli.base import BaseCommand, read_accessions_file, resolve_command_store
 from metaquest.cli.commands.sra_profile import add_sampling_arguments
 from metaquest.core.exceptions import MetaQuestError, ValidationError
+from metaquest.core.optional import require
 from metaquest.data.registry import load_registry, record_analysis, save_registry
 from metaquest.sra.analytics import AnomalyReport, ComparativeAnalysis, QualityProfile, json_safe
 from metaquest.sra.dataset_stats import DATASET_READ_ERRORS
@@ -249,6 +250,10 @@ class SRAReportCommand(BaseCommand):
             self.emit("Could not open a browser automatically; open the link above manually.")
 
     def _run(self, args: argparse.Namespace) -> int:
+        if not args.no_report:
+            # Fail on a missing extra before any profiling or output, not after the JSON is written.
+            require("plotly.graph_objects", "interactive", "The sra_report HTML report")
+            require("jinja2", "interactive", "The sra_report HTML report")
         groups = load_groups(args.groups_file) if args.groups_file else None
         saved = self._saved_profiles(args.quality_profiles)
         accessions = self._resolve_accessions(args, groups, saved)

@@ -235,6 +235,21 @@ def test_no_report_writes_only_the_json_and_needs_no_plotting_packages(tmp_path,
     assert registry["datasets"]["SRR1"]["analyses"]["report"]["output"] == "reports/sra_report.json"
 
 
+@pytest.mark.parametrize("package", ["plotly", "jinja2"])
+def test_a_missing_interactive_extra_fails_before_any_work_or_output(tmp_path, monkeypatch, caplog, package):
+    import sys
+
+    _datasets(tmp_path, ("SRR1", "SRR2"))
+    monkeypatch.setitem(sys.modules, package, None)
+    with patch.object(SRADatasetAnalyzer, "profile_dataset_quality") as profile_call:
+        with caplog.at_level(logging.ERROR):
+            assert SRAReportCommand().execute(_args(tmp_path, groups_file=_groups_file(tmp_path))) == 1
+    profile_call.assert_not_called()
+    assert "metaquest[interactive]" in caplog.text
+    assert not (tmp_path / "reports").exists()
+    assert not (tmp_path / "metaquest_registry.json").exists()
+
+
 def test_the_report_is_opened_unless_no_open(tmp_path):
     _datasets(tmp_path, ("SRR1",))
     accessions = tmp_path / "acc.txt"
