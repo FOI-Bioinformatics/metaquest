@@ -9,6 +9,7 @@ import shutil
 from typing import Callable, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
+from metaquest.cli.commands.store._shared import update_linked
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
@@ -288,7 +289,7 @@ class DownloadSraCommand(BaseCommand):
                         store_name=acc if from_store else None,
                     )
                     if from_store:
-                        self._mark_linked(reg, acc)
+                        update_linked(reg, acc, add=True)
             if from_store:
                 usage_rows.append((acc, "", "linked", "already downloaded"))
         if usage_rows:
@@ -367,7 +368,7 @@ class DownloadSraCommand(BaseCommand):
                     store_name=accession if from_store else None,
                 )
                 if from_store:
-                    self._mark_linked(reg, accession)
+                    update_linked(reg, accession, add=True)
                     usage = (reg, "linked" if linked else "downloaded", message)
 
             if usage is not None:
@@ -389,13 +390,6 @@ class DownloadSraCommand(BaseCommand):
         if store is None:
             return None
         return sidecar_completeness(sidecar_path(store, accession))
-
-    @staticmethod
-    def _mark_linked(reg: Registry, accession: str) -> None:
-        """Add ``accession`` to the registry's list of datasets this project links from the store."""
-        linked = set(reg.store.get("linked") or [])
-        linked.add(accession)
-        reg.store["linked"] = sorted(linked)
 
     def _transient_folders(self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths]) -> Set[Path]:
         """Folders where ``download_accession`` can leave ``.sra-cache`` archives or

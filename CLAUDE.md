@@ -78,7 +78,7 @@ The SRA package provides three analysis commands:
 
 ### Store Commands
 `metaquest/store/` (package: `resolve`, `layout`, `sidecar`, `catalog`, `link`, `adopt`, `usage`,
-`locks`, `stats`, `journal`) and `metaquest/cli/commands/store.py` implement a shared data store: one
+`locks`, `stats`, `journal`) and `metaquest/cli/commands/store/` implement a shared data store: one
 copy of each downloaded SRA accession, reused by every project that links into it. Nine commands,
 registered under the "Store" group in `cli/main.py`:
 - `store_init` - create a store at `--data-root`, record the project's use of it
