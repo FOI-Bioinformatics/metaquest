@@ -8,6 +8,7 @@ detecting sequencing technologies, and calculating dataset statistics.
 import json
 import logging
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -21,6 +22,10 @@ from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_record
 from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats, compute_dataset_stats, store_stats
 
 logger = logging.getLogger(__name__)
+
+# What reading a FASTQ file raises for a file that is missing, unreadable, truncated or
+# malformed (``iter_fastq_records`` raises ValueError on a truncated record).
+_FASTQ_READ_ERRORS = (OSError, EOFError, ValueError, UnicodeDecodeError)
 
 
 @dataclass
@@ -125,7 +130,7 @@ class SRAMetadataClient:
             try:
                 batch_results = self._fetch_batch_metadata(batch)
                 results.update(batch_results)
-            except Exception as e:
+            except (DataAccessError, json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to fetch metadata for batch: {e}")
                 # Continue with other batches
                 continue
@@ -187,45 +192,41 @@ class SRAMetadataClient:
         raw XML), every RUN in every package is returned, matching the historical behaviour.
         """
         try:
-            import xml.etree.ElementTree as ET
-
             root = ET.fromstring(xml_content)
-            results = {}
-            requested_upper = {r.upper() for r in requested} if requested is not None else None
-
-            packages = root.findall(".//EXPERIMENT_PACKAGE")
-
-            matched = []
-            uninspected = 0
-            for package in packages:
-                try:
-                    if requested_upper is None or self._package_matches_requested(package, requested_upper):
-                        matched.append(package)
-                except Exception as e:
-                    uninspected += 1
-                    logger.warning(f"Failed to inspect dataset package: {e}")
-            if requested_upper is not None and packages and not matched:
-                if uninspected:
-                    # At least one package could not be checked at all: falling back to "keep
-                    # everything" here would resurrect a package that was never confirmed to
-                    # match, so only the (empty) set of cleanly-inspected matches is kept.
-                    logger.warning("%d package(s) could not be inspected for the requested accessions", uninspected)
-                else:
-                    logger.warning("requested accessions matched no package in the reply; listing every run returned")
-                    matched = packages
-
-            for package in matched:
-                try:
-                    for info in self._extract_dataset_info(package):
-                        results[info.accession] = info
-                except Exception as e:
-                    logger.warning(f"Failed to parse dataset package: {e}")
-                    continue
-
-            return results
-        except Exception as e:
+        except ET.ParseError as e:
             logger.error(f"Failed to parse SRA XML: {e}")
             return {}
+
+        results = {}
+        requested_upper = {r.upper() for r in requested} if requested is not None else None
+
+        packages = root.findall(".//EXPERIMENT_PACKAGE")
+
+        matched = []
+        uninspected = 0
+        for package in packages:
+            try:
+                if requested_upper is None or self._package_matches_requested(package, requested_upper):
+                    matched.append(package)
+            except ValueError as e:
+                uninspected += 1
+                logger.warning(f"Failed to inspect dataset package: {e}")
+        if requested_upper is not None and packages and not matched:
+            if uninspected:
+                # At least one package could not be checked at all: falling back to "keep
+                # everything" here would resurrect a package that was never confirmed to
+                # match, so only the (empty) set of cleanly-inspected matches is kept.
+                logger.warning("%d package(s) could not be inspected for the requested accessions", uninspected)
+            else:
+                logger.warning("requested accessions matched no package in the reply; listing every run returned")
+                matched = packages
+
+        # _extract_dataset_info logs and skips a package whose values cannot be read.
+        for package in matched:
+            for info in self._extract_dataset_info(package):
+                results[info.accession] = info
+
+        return results
 
     @staticmethod
     def _package_matches_requested(package, requested_upper: Set[str]) -> bool:
@@ -358,7 +359,7 @@ class SRAMetadataClient:
                 )
             return infos
 
-        except Exception as e:
+        except ValueError as e:
             logger.warning(f"Failed to extract dataset info: {e}")
             return []
 
@@ -381,7 +382,8 @@ class SRAMetadataClient:
                 # Element text
                 elem = element.find(xpath)
                 return elem.text or default if elem is not None else default
-        except Exception:
+        except SyntaxError:
+            # ElementPath rejects a path it cannot evaluate with SyntaxError.
             return default
 
 
@@ -512,7 +514,7 @@ def calculate_read_statistics(
                     quals = [ord(c) - 33 for c in qual]
                     quality_scores.append(sum(quals) / len(quals))
 
-        except Exception as e:
+        except _FASTQ_READ_ERRORS as e:
             logger.error(f"Error processing {fastq_file}: {e}")
             continue
 
@@ -679,12 +681,12 @@ def _cached_dataset_stats(acc_dir: Path, files: List[Path], sample_size: int) ->
     try:
         files_for_stats: List[Union[str, Path]] = list(files)
         cached = compute_dataset_stats(files_for_stats, sample_size=sample_size)
-    except Exception as e:
+    except _FASTQ_READ_ERRORS as e:
         logger.debug("Could not compute dataset stats for %s: %s", acc_dir.name, e)
         return None
     try:
         store_stats(sidecar_path, cached)
-    except Exception as e:
+    except (OSError, DataAccessError) as e:
         logger.warning("Could not cache statistics for %s: %s", acc_dir.name, e)
     return cached
 
@@ -714,7 +716,7 @@ def _dataset_stats_row(acc_dir: Path, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
 
     try:
         stats = calculate_read_statistics(files, max_reads=sample_size, cached=cached)
-    except Exception as e:
+    except _FASTQ_READ_ERRORS as e:
         logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
         return None
 

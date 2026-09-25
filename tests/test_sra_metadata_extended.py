@@ -127,7 +127,7 @@ class TestSRAMetadataClientAPI:
         with patch.object(self.client, "_fetch_batch_metadata") as mock_fetch:
             # First batch fails, second succeeds
             mock_fetch.side_effect = [
-                Exception("API Error"),
+                DataAccessError("API Error"),
                 {"SRR000200": Mock(spec=SRADatasetInfo)},
             ]
 
@@ -1230,3 +1230,67 @@ def test_parse_falls_back_to_statistics_child_when_run_attributes_missing():
 #   pytest --cov=metaquest.data.sra_metadata --cov-report=term-missing \
 #          tests/test_sra_metadata_client.py tests/test_sra_metadata_extended.py
 # ============================================================================
+
+
+# ============================================================================
+# Narrow exception handling (tech debt): a programming error must not be swallowed
+# ============================================================================
+
+
+def test_unexpected_error_in_batch_metadata_propagates(monkeypatch):
+    """Kind (a): a bug in a batch fetch is no longer logged and skipped."""
+    client = SRAMetadataClient(email="a@b.c")
+
+    def buggy(batch):
+        raise TypeError("bug")
+
+    monkeypatch.setattr(client, "_fetch_batch_metadata", buggy)
+    with pytest.raises(TypeError):
+        client.get_sra_metadata(["SRR1"])
+
+
+def test_ncbi_error_in_batch_metadata_is_still_skipped(monkeypatch):
+    """Kind (a): an NCBI failure skips the batch and the call returns what it has."""
+    client = SRAMetadataClient(email="a@b.c")
+
+    def failing(batch):
+        raise DataAccessError("NCBI down")
+
+    monkeypatch.setattr(client, "_fetch_batch_metadata", failing)
+    assert client.get_sra_metadata(["SRR1"]) == {}
+
+
+def test_parse_sra_xml_returns_empty_for_malformed_xml_and_propagates_a_bug(monkeypatch):
+    """Kind (b): malformed XML yields the default; a bug in extraction propagates."""
+    client = SRAMetadataClient(email="a@b.c")
+    assert client._parse_sra_xml("<not xml") == {}
+
+    def buggy(package):
+        raise TypeError("bug")
+
+    monkeypatch.setattr(client, "_extract_dataset_info", buggy)
+    with pytest.raises(TypeError):
+        client._parse_sra_xml(MOCK_SRA_XML)
+
+
+def test_statistics_cache_write_failure_is_logged_and_a_bug_propagates(tmp_path, caplog):
+    """Kind (e): a sidecar that cannot be written loses only the cache; a TypeError propagates."""
+    from metaquest.data import sra_metadata
+
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    fastq = acc_dir / "SRR1.fastq"
+    fastq.write_text("@r\nACGT\n+\nIIII\n")
+    sidecar = tmp_path / "SRR1.json"
+    with (
+        patch.object(sra_metadata, "_resolved_sidecar_path", return_value=sidecar),
+        patch.object(sra_metadata, "cached_stats", return_value=None),
+    ):
+        with patch.object(sra_metadata, "store_stats", side_effect=PermissionError("read-only")):
+            with caplog.at_level("WARNING"):
+                result = sra_metadata._cached_dataset_stats(acc_dir, [fastq], 10)
+        assert result is not None
+        assert "Could not cache statistics" in caplog.text
+        with patch.object(sra_metadata, "store_stats", side_effect=TypeError("bug")):
+            with pytest.raises(TypeError):
+                sra_metadata._cached_dataset_stats(acc_dir, [fastq], 10)
