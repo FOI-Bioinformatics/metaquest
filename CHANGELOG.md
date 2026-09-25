@@ -6,7 +6,6 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ### Breaking changes
 
-- Python 3.11 remains unsupported (dropped in 0.4.0); this release keeps the 3.12 floor.
 - Optional packages moved behind extras: `analysis` (scikit-learn, scipy), `interactive` (plotly,
   jinja2), `maps` (cartopy), `sourmash`, and `all` (every extra). A plain `pip install .` no longer
   installs any of them; a command that needs a missing extra stops with a `ConfigurationError`
@@ -37,6 +36,20 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   module. The public functions re-exported from `metaquest.data.sra` are unchanged; private helper
   names moved to their new submodules (`fastq`, `cleanup`, `accession`, `store_handoff`, `retry`,
   `download`) and are no longer importable from the old single-file path.
+- Public Python API changes outside `metaquest.data.sra`:
+  `metaquest.data.sra_metadata.calculate_read_statistics` is removed (statistics come from
+  `metaquest.sra.dataset_stats` and `metaquest.sra.profiles`), and
+  `metaquest.data.sra_metadata.generate_statistics_report` now takes a sequence of statistics rows
+  and an output path instead of a FASTQ folder and a sample size. `SequenceQualityAnalyzer` moved to
+  `metaquest/sra/quality.py`; it is still importable from `metaquest.sra` and
+  `metaquest.sra.analytics`.
+- Error lines that end a command with exit status 1 (for example "No accessions found in file" and
+  "FASTQ folder ... does not exist") are now written to the log on stderr instead of stdout. A
+  script that parsed those lines from stdout must read stderr or check the exit status instead. The
+  `--json` error document for a missing store stays on stdout.
+- Registry analysis keys changed: `sra_profile` records its outcome under `profile` and `sra_report`
+  under `report`, replacing the `sra_stats` and `quality` keys. Only `results_table` and `status`
+  still fall back to the old keys when reading a registry written by an earlier version.
 
 ### Exception handling
 
@@ -72,7 +85,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   and function), enforced on a defined set of modules: the registry, the `metaquest/data/sra/` and
   `metaquest/store/` packages, the `metaquest/cli/commands/store/` and
   `metaquest/cli/commands/status/` packages, `processing/selection.py`, `processing/results.py`,
-  `processing/status_report.py`, and the SRA analysis command and profiling modules. Every other
+  `processing/status_report.py`, `data/registry_blocks.py`, `core/optional.py`, `sra/quality.py`,
+  and the SRA analysis command and profiling modules. Every other
   module has the check switched off explicitly in `setup.cfg` rather than by a wildcard, so the
   enforced set stays visible and can grow one file at a time.
 
