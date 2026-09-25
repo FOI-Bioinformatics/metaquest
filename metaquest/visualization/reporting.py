@@ -40,6 +40,10 @@ except ImportError:
 # KeyError on data it cannot correlate. The figure is then left out of the report.
 _PLOT_ERRORS = (MetaQuestError, OSError, ValueError, KeyError)
 
+# The correlation heatmap also compares every genome column against the threshold, which raises
+# TypeError for a column holding text; the heatmap is then left out, as before.
+_HEATMAP_ERRORS = (*_PLOT_ERRORS, TypeError)
+
 
 def generate_report(
     title: str,
@@ -276,7 +280,7 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
             correlation_matrix = summary_data[top_genome_cols].corr()
             fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
             pdf.savefig(fig)
-    except _PLOT_ERRORS as e:
+    except _HEATMAP_ERRORS as e:
         logger.warning(f"Error generating heatmap: {e}")
     finally:
         if fig is not None:
@@ -534,7 +538,7 @@ def _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files):
             rel = _save_report_fig(fig, images_dir, "genome_correlation.png")
             if rel:
                 plot_files["heatmap_plot"] = rel
-    except _PLOT_ERRORS as e:
+    except _HEATMAP_ERRORS as e:
         logger.warning(f"Error generating heatmap: {e}")
 
 

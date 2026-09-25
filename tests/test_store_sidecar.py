@@ -241,3 +241,24 @@ def test_ncbi_from_metadata_xml_corrupt_xml_returns_empty(tmp_path, caplog):
 
     assert "Could not read NCBI metadata" in caplog.text
     assert "corrupt.xml" in caplog.text
+
+
+def _write_corrupt_gzip_fastq(path):
+    """Write a gzip FASTQ whose deflate stream has one flipped byte, so reading it raises zlib.error."""
+    import gzip as _gzip
+
+    records = "".join(f"@r{i}\n{'ACGT' * 25}\n+\n{'I' * 100}\n" for i in range(200))
+    data = bytearray(_gzip.compress(records.encode()))
+    data[20] ^= 0xFF
+    path.write_bytes(bytes(data))
+    return path
+
+
+def test_build_sidecar_records_a_corrupt_gzip_as_failed(tmp_path):
+    """Fix round 1: a corrupt gzip file gives a failed sidecar with the error, not an exception."""
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    _write_corrupt_gzip_fastq(acc_dir / "SRR1.fastq.gz")
+    sidecar = build_sidecar("SRR1", acc_dir, {"spots": 10}, "3.0.0", "gzip")
+    assert sidecar.state == "failed"
+    assert "SRR1.fastq.gz" in sidecar.error

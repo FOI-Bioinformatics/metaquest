@@ -5,6 +5,7 @@ This module provides functions for downloading and processing metadata from NCBI
 """
 
 import copy
+import http.client
 import logging
 import os
 import xml.etree.ElementTree as ET
@@ -201,7 +202,8 @@ def _download_single_metadata(
             logger.warning(f"Error downloading {accession}, retrying ({attempt}/{MAX_RETRIES}): {e}")
             time.sleep(2**attempt)
 
-        except (URLError, OSError) as e:
+        # A truncated NCBI reply raises http.client.IncompleteRead, an HTTPException, not an OSError.
+        except (URLError, OSError, http.client.HTTPException) as e:
             last_error_message = str(e)
             logger.warning(f"Error downloading {accession}, retrying ({attempt}/{MAX_RETRIES}): {e}")
             time.sleep(2**attempt)
@@ -349,7 +351,8 @@ def _download_batch_metadata(
                 continue
             return {}, {accession: f"HTTP {e.code}: {e.reason}" for accession in batch}
 
-        except (URLError, OSError) as e:
+        # A truncated NCBI reply raises http.client.IncompleteRead, an HTTPException, not an OSError.
+        except (URLError, OSError, http.client.HTTPException) as e:
             last_failures = {accession: str(e) for accession in batch}
             logger.warning(f"Error fetching batch, retrying ({attempt}/{MAX_RETRIES}): {e}")
             time.sleep(2**attempt)

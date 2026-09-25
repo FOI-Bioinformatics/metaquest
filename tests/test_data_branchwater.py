@@ -908,7 +908,7 @@ def test_data_access_error_from_genome_containments_chains_the_cause(tmp_path):
     """Kind (c): the wrapped error keeps its cause."""
     with pytest.raises(DataAccessError) as exc:
         _process_genome_containments(tmp_path / "missing.csv", "g1", defaultdict(dict))
-    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, DataAccessError)  # read_csv reports the missing file
 
 
 def test_data_access_error_from_metadata_extraction_chains_the_cause(tmp_path):

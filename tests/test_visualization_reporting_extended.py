@@ -331,15 +331,15 @@ def test_generate_report_propagates_a_bug(tmp_path):
 
 
 def test_correlation_heatmap_skips_a_plot_error_and_propagates_a_bug():
-    """Kind (e): a plotting failure is logged and skipped; a TypeError propagates."""
+    """Kind (e): a plotting failure is logged and skipped; an AttributeError propagates."""
     data = pd.DataFrame({"g1": [0.5, 0.2], "g2": [0.4, 0.1]})
     pdf = MagicMock()
     with patch(
         "metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=VisualizationError("bad")
     ):
         _add_correlation_heatmap(pdf, data, 0.1)
-    with patch("metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=TypeError("bug")):
-        with pytest.raises(TypeError):
+    with patch("metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=AttributeError("bug")):
+        with pytest.raises(AttributeError):
             _add_correlation_heatmap(pdf, data, 0.1)
 
 
@@ -351,3 +351,32 @@ def test_html_plots_skip_a_save_error_and_propagate_a_bug(tmp_path):
     with patch("metaquest.visualization.reporting._add_containment_plot_files", side_effect=TypeError("bug")):
         with pytest.raises(TypeError):
             _generate_plots_for_html(data, None, 0.1, tmp_path)
+
+
+def test_correlation_heatmap_skips_a_text_genome_column(caplog):
+    """Fix round 1: a genome column holding text skips the heatmap with a warning."""
+    data = pd.DataFrame(
+        {
+            "max_containment": [0.5, 0.2],
+            "max_containment_annotation": ["g1", "g1"],
+            "g1": [0.5, 0.2],
+            "g2": ["x", "y"],
+        }
+    )
+    pdf = MagicMock()
+    with caplog.at_level("WARNING"):
+        _add_correlation_heatmap(pdf, data, 0.1)
+    pdf.savefig.assert_not_called()
+    assert "Error generating heatmap" in caplog.text
+
+
+def test_html_heatmap_skips_a_text_genome_column(tmp_path, caplog):
+    """Fix round 1: the HTML report's heatmap step is skipped the same way."""
+    from metaquest.visualization.reporting import _add_correlation_plot_file
+
+    data = pd.DataFrame({"max_containment": [0.5, 0.2], "g1": [0.5, 0.2], "g2": ["x", "y"]})
+    plot_files: dict = {}
+    with caplog.at_level("WARNING"):
+        _add_correlation_plot_file(data, 0.1, tmp_path, plot_files)
+    assert plot_files == {}
+    assert "Error generating heatmap" in caplog.text

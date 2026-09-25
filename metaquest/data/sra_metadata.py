@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -24,8 +25,9 @@ from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats, compute_dat
 logger = logging.getLogger(__name__)
 
 # What reading a FASTQ file raises for a file that is missing, unreadable, truncated or
-# malformed (``iter_fastq_records`` raises ValueError on a truncated record).
-_FASTQ_READ_ERRORS = (OSError, EOFError, ValueError, UnicodeDecodeError)
+# malformed (``iter_fastq_records`` raises ValueError on a truncated record). A corrupt gzip
+# stream raises zlib.error, which is not an OSError.
+_FASTQ_READ_ERRORS = (OSError, EOFError, ValueError, UnicodeDecodeError, zlib.error)
 
 
 @dataclass

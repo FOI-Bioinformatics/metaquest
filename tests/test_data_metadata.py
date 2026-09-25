@@ -1141,3 +1141,37 @@ def test_unique_sample_attributes_default_on_os_error_and_propagate_a_bug(tmp_pa
     with patch("metaquest.data.metadata.list_files", side_effect=TypeError("bug")):
         with pytest.raises(TypeError):
             get_unique_sample_attributes(tmp_path)
+
+
+def test_incomplete_read_in_a_batch_is_retried_then_reported_as_failed(tmp_path):
+    """Fix round 1: a truncated NCBI reply takes the retry path instead of escaping raw."""
+    from http.client import IncompleteRead
+
+    handle = MagicMock()
+    handle.read.side_effect = IncompleteRead(b"<EXPERIMENT")
+    with (
+        patch("metaquest.data.metadata.Entrez.efetch", return_value=handle),
+        patch("metaquest.data.metadata._pace_requests"),
+        patch("time.sleep") as mock_sleep,
+    ):
+        successes, failures = _download_batch_metadata(["SRR1", "SRR2"], tmp_path, "a@b.c", None)
+    assert successes == {}
+    assert set(failures) == {"SRR1", "SRR2"}
+    assert mock_sleep.call_count == 3
+
+
+def test_incomplete_read_for_one_accession_is_retried_then_reported_as_failed(tmp_path):
+    """Fix round 1: the single-accession path retries a truncated reply the same way."""
+    from http.client import IncompleteRead
+
+    handle = MagicMock()
+    handle.read.side_effect = IncompleteRead(b"<EXPERIMENT")
+    with (
+        patch("metaquest.data.metadata.Entrez.efetch", return_value=handle),
+        patch("metaquest.data.metadata._pace_requests"),
+        patch("time.sleep") as mock_sleep,
+    ):
+        success, message = _download_single_metadata("SRR1", tmp_path, "a@b.c")
+    assert success is False
+    assert "IncompleteRead" in message
+    assert mock_sleep.call_count == 3

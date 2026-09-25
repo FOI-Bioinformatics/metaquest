@@ -1294,3 +1294,25 @@ def test_statistics_cache_write_failure_is_logged_and_a_bug_propagates(tmp_path,
         with patch.object(sra_metadata, "store_stats", side_effect=TypeError("bug")):
             with pytest.raises(TypeError):
                 sra_metadata._cached_dataset_stats(acc_dir, [fastq], 10)
+
+
+def _write_corrupt_gzip_fastq(path):
+    """Write a gzip FASTQ whose deflate stream has one flipped byte, so reading it raises zlib.error."""
+    import gzip as _gzip
+
+    records = "".join(f"@r{i}\n{'ACGT' * 25}\n+\n{'I' * 100}\n" for i in range(200))
+    data = bytearray(_gzip.compress(records.encode()))
+    data[20] ^= 0xFF
+    path.write_bytes(bytes(data))
+    return path
+
+
+def test_corrupt_gzip_fastq_is_skipped_and_the_other_files_are_read(tmp_path):
+    """Fix round 1: a corrupt gzip raises zlib.error; that file is skipped and the next one is read."""
+    from metaquest.data.sra_metadata import calculate_read_statistics
+
+    corrupt = _write_corrupt_gzip_fastq(tmp_path / "bad.fastq.gz")
+    good = tmp_path / "good.fastq"
+    good.write_text("@r\nACGT\n+\nIIII\n")
+    stats = calculate_read_statistics([corrupt, good], max_reads=0)
+    assert stats.total_reads == 1

@@ -7,6 +7,7 @@ analysis, comparative dataset analysis, and interactive reporting dashboards.
 
 import logging
 import json
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -31,8 +32,9 @@ from metaquest.utils.browser import open_in_browser
 logger = logging.getLogger(__name__)
 
 # What reading a dataset's FASTQ files raises for a file that is missing, unreadable,
-# truncated or malformed; MetaQuestError covers the store and analyzer layers.
-_DATASET_READ_ERRORS = (OSError, EOFError, ValueError, MetaQuestError)
+# truncated or malformed (a corrupt gzip stream raises zlib.error, which is not an OSError);
+# MetaQuestError covers the store and analyzer layers.
+_DATASET_READ_ERRORS = (OSError, EOFError, ValueError, zlib.error, MetaQuestError)
 
 
 def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:

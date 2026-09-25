@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
+import zlib
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -33,9 +34,9 @@ _TOOL_ERRORS = (subprocess.CalledProcessError, subprocess.TimeoutExpired, Securi
 
 # What a download worker (download_accession, or the store downloader) raises for a dataset
 # that could not be fetched: store and catalogue failures arrive as DataAccessError, file and
-# FASTQ reading failures as OSError, EOFError or ValueError. Anything else is a programming
-# error and propagates.
-_DOWNLOAD_ERRORS = (MetaQuestError, OSError, EOFError, ValueError, subprocess.SubprocessError)
+# FASTQ reading failures as OSError, EOFError, ValueError or (a corrupt gzip stream)
+# zlib.error. Anything else is a programming error and propagates.
+_DOWNLOAD_ERRORS = (MetaQuestError, OSError, EOFError, ValueError, zlib.error, subprocess.SubprocessError)
 
 # Ratio of downloaded reads to NCBI's recorded run_total_spots at or above which a download
 # counts as complete rather than truncated.
@@ -861,7 +862,7 @@ def download_accession(
         message = f"Security error: {e}"
         return False, f"{classify_download_error(message)}: {message}"
 
-    except (OSError, EOFError, ValueError, subprocess.TimeoutExpired, DataAccessError) as e:
+    except (OSError, EOFError, ValueError, zlib.error, subprocess.TimeoutExpired, DataAccessError) as e:
         logger.error(f"Error downloading {accession}: {e}")
         # <acc>_temp is kept for inspection; a new attempt starts clean.
         message = f"Download failed: {str(e)}"
@@ -1213,7 +1214,7 @@ def _process_download_results(futures_results, accessions_to_download, download_
                 failed_accessions.append(accession)
                 logger.warning(f"Failed to download {accession}: {message}")
 
-        # A worker that raised leaves None here (see _run_download_pool), which does not unpack.
+        # A worker that raised leaves None here (see _execute_parallel_downloads), which does not unpack.
         except (TypeError, ValueError) as e:
             failed_count += 1
             failed_accessions.append(accession)

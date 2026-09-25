@@ -1619,3 +1619,40 @@ def test_dataset_stats_cache_write_failure_is_logged_and_a_bug_propagates(tmp_pa
         with patch(f"{module}.store_stats", side_effect=TypeError("bug")):
             with pytest.raises(TypeError):
                 SRAQualityProfileCommand._dataset_stats(fastq)
+
+
+def _write_corrupt_gzip_fastq(path):
+    """Write a gzip FASTQ whose deflate stream has one flipped byte, so reading it raises zlib.error."""
+    import gzip as _gzip
+
+    records = "".join(f"@r{i}\n{'ACGT' * 25}\n+\n{'I' * 100}\n" for i in range(200))
+    data = bytearray(_gzip.compress(records.encode()))
+    data[20] ^= 0xFF
+    path.write_bytes(bytes(data))
+    return path
+
+
+def test_corrupt_gzip_fastq_fails_one_accession_and_the_run_continues(tmp_path):
+    """Fix round 1: a corrupt gzip marks its accession failed; the other accession is profiled."""
+    fastq_dir = tmp_path / "fastq"
+    fastq_dir.mkdir()
+    _write_corrupt_gzip_fastq(fastq_dir / "SRR1.fastq.gz")
+    (fastq_dir / "SRR2.fastq").write_text("@r\nACGTACGT\n+\nIIIIIIII\n")
+    accessions_file = tmp_path / "accessions.txt"
+    accessions_file.write_text("SRR1\nSRR2\n")
+    args = _profile_args(tmp_path, accession=None, accessions_file=str(accessions_file), fastq_dir=str(fastq_dir))
+
+    assert SRAQualityProfileCommand().execute(args) == 1
+
+    summary = json.loads((tmp_path / "output" / "quality_summary.json").read_text())
+    assert summary["failed_accessions"] == ["SRR1"]
+    assert summary["total_analyzed"] == 1
+
+
+def test_dataset_stats_is_none_for_a_corrupt_gzip_fastq(tmp_path):
+    """Fix round 1: the statistics record falls back to None rather than aborting."""
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    fastq = _write_corrupt_gzip_fastq(acc_dir / "SRR1.fastq.gz")
+    with patch("metaquest.store.stats.shutil.which", return_value=None):
+        assert SRAQualityProfileCommand._dataset_stats(fastq) is None

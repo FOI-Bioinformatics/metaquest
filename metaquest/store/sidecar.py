@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,7 +131,8 @@ def build_sidecar(
     for file_path in files:
         try:
             reads_by_path[file_path] = count_fastq_reads(file_path)
-        except (EOFError, OSError) as exc:
+        # A corrupt gzip stream raises zlib.error, which is not an OSError.
+        except (EOFError, OSError, zlib.error) as exc:
             reads_by_path[file_path] = None
             error = f"{file_path.name}: {exc}"
 
