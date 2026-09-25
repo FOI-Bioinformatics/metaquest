@@ -272,7 +272,7 @@ class TestAddCorrelationHeatmapEdgeCases:
 
         with patch(
             "metaquest.visualization.reporting.plot_correlation_matrix",
-            side_effect=Exception("Plot error"),
+            side_effect=VisualizationError("Plot error"),
         ):
             with patch("metaquest.visualization.reporting.logger") as mock_logger:
                 _add_correlation_heatmap(mock_pdf, df, threshold=0.1)
@@ -408,7 +408,7 @@ class TestGeneratePlotsForHtmlComprehensive:
 
         with patch(
             "metaquest.visualization.reporting.plot_containment",
-            side_effect=Exception("Rendering error"),
+            side_effect=VisualizationError("Rendering error"),
         ):
             with patch("metaquest.visualization.reporting.logger") as mock_logger:
                 result = _generate_plots_for_html(summary_df, None, threshold=0.1, images_dir=images_dir)
@@ -427,7 +427,7 @@ class TestGeneratePlotsForHtmlComprehensive:
         with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
             with patch(
                 "metaquest.visualization.reporting.plot_metadata_counts",
-                side_effect=Exception("Counts error"),
+                side_effect=VisualizationError("Counts error"),
             ):
                 with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
                     with patch("matplotlib.pyplot.close"):
@@ -450,7 +450,7 @@ class TestGeneratePlotsForHtmlComprehensive:
         with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
             with patch(
                 "metaquest.visualization.reporting.plot_correlation_matrix",
-                side_effect=Exception("Heatmap error"),
+                side_effect=VisualizationError("Heatmap error"),
             ):
                 with patch("matplotlib.pyplot.close"):
                     result = _generate_plots_for_html(summary_df, None, threshold=0.1, images_dir=images_dir)
@@ -529,7 +529,7 @@ class TestGeneratePdfReportComprehensive:
                     with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
                         with patch(
                             "metaquest.visualization.reporting.plot_metadata_counts",
-                            side_effect=Exception("Counts error"),
+                            side_effect=VisualizationError("Counts error"),
                         ):
                             with patch(
                                 "metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig

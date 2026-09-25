@@ -13,7 +13,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import MetaQuestError, VisualizationError
 from metaquest.core.utils import get_genome_columns as _get_genome_columns
 from metaquest.visualization.plots import (
     plot_containment,
@@ -29,9 +29,16 @@ try:
     import jinja2
 
     JINJA2_AVAILABLE = True
+    _TEMPLATE_ERRORS: tuple = (jinja2.TemplateError,)
 except ImportError:
     JINJA2_AVAILABLE = False
+    _TEMPLATE_ERRORS = ()
     logger.warning("jinja2 not available. HTML report generation will be limited.")
+
+# What drawing or saving one optional figure raises: the plot helpers raise VisualizationError,
+# the genome-column helper ProcessingError, savefig OSError or ValueError, and pandas ValueError or
+# KeyError on data it cannot correlate. The figure is then left out of the report.
+_PLOT_ERRORS = (MetaQuestError, OSError, ValueError, KeyError)
 
 
 def generate_report(
@@ -93,10 +100,11 @@ def generate_report(
         # Add a default return to satisfy the type checker
         return Path(output_file)  # This ensures a value is always returned
 
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error generating report: {e}")
+    except VisualizationError:
+        raise
+    # pandas' ParserError and EmptyDataError are ValueErrors.
+    except (OSError, ValueError, KeyError, MetaQuestError, *_TEMPLATE_ERRORS) as e:
+        raise VisualizationError(f"Error generating report: {e}") from e
 
 
 def _create_title_page(title, summary_data, metadata_data):
@@ -268,7 +276,7 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
             correlation_matrix = summary_data[top_genome_cols].corr()
             fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
             pdf.savefig(fig)
-    except Exception as e:
+    except _PLOT_ERRORS as e:
         logger.warning(f"Error generating heatmap: {e}")
     finally:
         if fig is not None:
@@ -358,7 +366,7 @@ def _generate_pdf_report(
                 )
                 pdf.savefig(fig)
                 plt.close(fig)
-            except Exception as e:
+            except _PLOT_ERRORS as e:
                 logger.warning(f"Error generating metadata count plots: {e}")
 
         # Heatmap of top genomes
@@ -512,7 +520,7 @@ def _add_metadata_count_plot_files(counts_data, images_dir, plot_files):
         rel = _save_report_fig(fig, images_dir, "metadata_pie.png")
         if rel:
             plot_files["pie_plot"] = rel
-    except Exception as e:
+    except _PLOT_ERRORS as e:
         logger.warning(f"Error generating metadata count plots: {e}")
 
 
@@ -526,7 +534,7 @@ def _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files):
             rel = _save_report_fig(fig, images_dir, "genome_correlation.png")
             if rel:
                 plot_files["heatmap_plot"] = rel
-    except Exception as e:
+    except _PLOT_ERRORS as e:
         logger.warning(f"Error generating heatmap: {e}")
 
 
@@ -550,7 +558,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
         if counts_data is not None:
             _add_metadata_count_plot_files(counts_data, images_dir, plot_files)
         _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files)
-    except Exception as e:
+    except _PLOT_ERRORS as e:
         logger.warning(f"Error generating plots: {e}")
 
     return plot_files

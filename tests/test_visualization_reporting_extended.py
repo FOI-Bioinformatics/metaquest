@@ -309,3 +309,45 @@ class TestEdgeCases:
 #   pytest --cov=metaquest.visualization.reporting --cov-report=term-missing \
 #          tests/test_visualization_reporting_*.py
 # ============================================================================
+
+
+# ============================================================================
+# Narrow exception handling (tech debt): a programming error must not be swallowed
+# ============================================================================
+
+
+def test_generate_report_wraps_a_read_error_with_its_cause(tmp_path):
+    """Kind (c): the wrapped error keeps its cause."""
+    with pytest.raises(VisualizationError) as exc:
+        generate_report(title="t", summary_file=tmp_path / "missing.tsv", output_file=tmp_path / "r.pdf")
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+def test_generate_report_propagates_a_bug(tmp_path):
+    """Kind (c): a programming error is not re-labelled as a report error."""
+    with patch("metaquest.visualization.reporting.pd.read_csv", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            generate_report(title="t", summary_file=tmp_path / "s.tsv", output_file=tmp_path / "r.pdf")
+
+
+def test_correlation_heatmap_skips_a_plot_error_and_propagates_a_bug():
+    """Kind (e): a plotting failure is logged and skipped; a TypeError propagates."""
+    data = pd.DataFrame({"g1": [0.5, 0.2], "g2": [0.4, 0.1]})
+    pdf = MagicMock()
+    with patch(
+        "metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=VisualizationError("bad")
+    ):
+        _add_correlation_heatmap(pdf, data, 0.1)
+    with patch("metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            _add_correlation_heatmap(pdf, data, 0.1)
+
+
+def test_html_plots_skip_a_save_error_and_propagate_a_bug(tmp_path):
+    """Kind (e): a figure that cannot be saved is skipped; a TypeError propagates."""
+    data = pd.DataFrame({"max_containment": [0.5, 0.2], "g1": [0.5, 0.2]})
+    with patch("metaquest.visualization.reporting._add_containment_plot_files", side_effect=OSError("disk full")):
+        assert _generate_plots_for_html(data, None, 0.1, tmp_path) == {}
+    with patch("metaquest.visualization.reporting._add_containment_plot_files", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            _generate_plots_for_html(data, None, 0.1, tmp_path)
