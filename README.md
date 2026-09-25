@@ -20,15 +20,40 @@ Requires Python 3.12 or newer.
 ```bash
 git clone https://github.com/FOI-Bioinformatics/MetaQuest.git
 cd MetaQuest
-make dev-install  # Installs with all development dependencies
+make dev-install  # Installs every extra plus the development tools
 ```
 
-### Alternative Installation
+### Core install and optional extras
+
+A plain install brings only the core packages (pandas, numpy, matplotlib, biopython, lxml,
+requests). That is enough to load the CLI and run the download, containment, metadata and
+matplotlib plotting steps. Other features need an extra:
+
+| Extra | Packages | Needed for |
+|---|---|---|
+| `analysis` | scikit-learn, scipy | `diversity_analysis`, PCA, t-SNE and clustered heatmaps in `interactive_plot`, group statistics in `sra_compare` |
+| `interactive` | plotly, jinja2 | `interactive_plot`, `explore_containment`, `sra_dashboard`, the `sra_compare` HTML report |
+| `maps` | cartopy | geographic sample maps |
+| `sourmash` | sourmash | sketching a genome in `branchwater_search`, and the `sourmash scripts metaquest_*` plugin |
+| `all` | all of the above | everything |
+
 ```bash
-# Traditional approach (still supported)
-pip install -r requirements.txt
-pip install .
+pip install .                      # core only
+pip install '.[analysis,interactive]'
+pip install '.[all]'               # every extra; environment.yml does this
 ```
+
+A command that needs a missing extra stops with an error naming the extra and the interpreter to
+install it into, for example:
+
+```
+Diversity analysis needs the 'scikit-learn' package. Install it into this interpreter with:
+/path/to/python -m pip install 'metaquest[analysis]'
+```
+
+`requirements.txt` lists the core packages and `requirements-all.txt` the core plus every extra.
+Since 0.5.0 the extras are no longer installed by default, and seaborn, statsmodels, umap-learn,
+networkx and upsetplot are no longer dependencies.
 
 ### Development environment
 
@@ -68,7 +93,7 @@ conda env create -f environment.yml
 conda activate metaquest
 ```
 
-Map plots need the optional extra: `pip install 'metaquest[maps]'`.
+Map plots need the `maps` extra (see the extras table above); `environment.yml` installs every extra.
 
 ### Development Commands
 ```bash

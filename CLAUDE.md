@@ -26,7 +26,19 @@ MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic dat
 ### Installation
 - `make install` - Install package for development
 - `make dev-install` - Install with development dependencies
-- Legacy: `pip install -r requirements.txt` (still supported)
+- Legacy: `pip install -r requirements.txt` (core only) or `requirements-all.txt` (core plus every extra)
+
+### Dependencies and extras
+- Core runtime: pandas, numpy, matplotlib, biopython, lxml, requests. The CLI must import and build its
+  parser with only these (`tests/test_optional_imports.py` blocks every optional module and checks this).
+- Extras: `analysis` (scikit-learn, scipy), `interactive` (plotly, jinja2), `maps` (cartopy), `sourmash`;
+  `all` installs them all and `dev` depends on `all`.
+- Import an optional package at the point of use with `metaquest.core.optional.require(module, extra, purpose)`,
+  never at module top level and never behind a silent `*_AVAILABLE` flag: a missing package is a
+  `ConfigurationError` naming the extra, not a degraded output file. A command that catches broad exceptions
+  must re-raise `ConfigurationError` (see `cli/commands/advanced_analysis.py`).
+- A test that needs an extra is skipped when it is absent (`pytest.importorskip` or a `requires_*` skip mark),
+  so the suite also passes in a core-only install.
 
 ## Architecture
 

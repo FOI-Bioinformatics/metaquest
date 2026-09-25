@@ -296,6 +296,13 @@ they never touch a real store or the user's configuration file.
 | Assemble | megahit | assembling the extracted reads |
 | Analyse | seqkit (optional) | faster read statistics for `sra_stats` and `sra_profile_quality` |
 
+Python packages beyond the core install sit behind extras: `analysis` (scikit-learn, scipy) for
+`diversity_analysis` and the group statistics in `sra_compare`, `interactive` (plotly, jinja2) for the
+HTML outputs (`explore_containment`, `sra_dashboard`, `sra_compare`, `interactive_plot`), `maps`
+(cartopy) and `sourmash`. A command that needs a missing extra exits with an error naming it; the
+download, parse, metadata, status and extraction stages above need none of them.
+
 The README's installation section lists them; `environment.yml` installs sra-tools, pigz,
 ncbi-datasets-cli, minimap2, samtools, megahit and sourmash by default (pigz is a real dependency, not
-optional there), and comments out `seqkit` as one additional, optional line.
+optional there), comments out `seqkit` as one additional, optional line, and installs MetaQuest
+with every extra (`-e ".[all]"`).
