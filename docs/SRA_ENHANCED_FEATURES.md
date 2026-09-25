@@ -21,7 +21,7 @@ accession, read and base totals, read-length statistics, N50, GC content (in per
 `--output-report` (default `sra_statistics.csv`) and one `<accession>_quality_profile.json` each in
 `--output-dir` (default `sra_quality_profiles`). Totals and GC come from the dataset's statistics
 record, cached in the store sidecar for a store-linked dataset; the per-read figures come from a
-sample of `--sample-size` reads drawn from every mate file.
+sample of `--sample-size` reads drawn from every mate file. GC content is computed from a sample of the first mate file; per-read quality from a sample of all mates.
 
 ```bash
 metaquest sra_profile --fastq-folder fastq --accession SRR123456 --accession SRR123457

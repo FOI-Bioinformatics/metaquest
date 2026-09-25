@@ -334,6 +334,14 @@ def test_a_bad_groups_file_is_an_error_on_stderr_not_stdout(tmp_path, caplog, ca
     assert "Invalid JSON" not in capsys.readouterr().out
 
 
+def test_an_expected_error_is_one_line_without_traceback(caplog, tmp_path):
+    args = _args(tmp_path, accessions_file=str(tmp_path / "missing.txt"))
+    with caplog.at_level("ERROR"):
+        assert SRAReportCommand().execute(args) == 1
+    assert any("Report failed" in r.message and "missing.txt" in r.message for r in caplog.records)
+    assert not any(r.exc_info for r in caplog.records)
+
+
 def test_cli_execute_logs_traceback_for_unexpected_error(caplog, monkeypatch, tmp_path):
     """An unexpected error still returns 1, and its traceback is logged."""
     cmd = SRAReportCommand()

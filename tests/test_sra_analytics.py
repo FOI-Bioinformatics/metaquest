@@ -754,42 +754,27 @@ class TestSRADatasetAnalyzer:
     @requires_analysis
     def test_compare_datasets_with_profiles_does_not_call_profile_dataset_quality(self):
         """Supplying profiles reuses them; profile_dataset_quality must not be called."""
-        groups = {"group1": ["SRR1"], "group2": ["SRR2"]}
+        # Two accessions per group: a group of one has no variance and is not tested.
+        groups = {"group1": ["SRR1", "SRR2"], "group2": ["SRR3", "SRR4"]}
         profiles = {
-            "SRR1": QualityProfile(
-                accession="SRR1",
-                total_reads=10000,
-                total_bases=1500000,
-                avg_read_length=150,
+            accession: QualityProfile(
+                accession=accession,
+                total_reads=10000 - 500 * i,
+                total_bases=1500000 - 70000 * i,
+                avg_read_length=150 - 3 * i,
                 read_length_distribution={},
-                gc_percent=45.0,
+                gc_percent=45.0 - 2.5 * i,
                 gc_histogram={},
                 quality_distribution={},
                 n_content=0.01,
                 contamination_indicators={"adapter_contamination": 0.02},
-                complexity_score=0.7,
+                complexity_score=0.7 - 0.05 * i,
                 duplication_rate=None,
                 technology_confidence=0.9,
                 quality_grade="good",
                 recommendations=[],
-            ),
-            "SRR2": QualityProfile(
-                accession="SRR2",
-                total_reads=8000,
-                total_bases=1200000,
-                avg_read_length=150,
-                read_length_distribution={},
-                gc_percent=40.0,
-                gc_histogram={},
-                quality_distribution={},
-                n_content=0.02,
-                contamination_indicators={"adapter_contamination": 0.03},
-                complexity_score=0.6,
-                duplication_rate=None,
-                technology_confidence=0.85,
-                quality_grade="fair",
-                recommendations=[],
-            ),
+            )
+            for i, accession in enumerate(["SRR1", "SRR2", "SRR3", "SRR4"])
         }
 
         with patch.object(self.analyzer, "profile_dataset_quality") as mock_profile:
@@ -798,6 +783,30 @@ class TestSRADatasetAnalyzer:
         mock_profile.assert_not_called()
         assert isinstance(comparison, ComparativeAnalysis)
         assert "group1" in comparison.summary_statistics
+
+    def test_a_group_of_one_is_not_tested(self, caplog):
+        """A t-test with a single dataset in a group gives NaN and scipy warnings; it is skipped."""
+        import logging
+        import math
+        import warnings
+
+        df = pd.DataFrame(
+            {
+                "accession": ["SRR1", "SRR2", "SRR3"],
+                "group": ["A", "A", "B"],
+                "avg_read_length": [150.0, 152.0, 149.0],
+                "gc_percent": [45.0, 47.0, 52.0],
+                "total_reads": [10000, 12000, 8000],
+                "complexity_score": [0.7, 0.75, 0.6],
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with caplog.at_level(logging.INFO):
+                tests = self.analyzer._perform_statistical_tests(df, {"A": ["SRR1", "SRR2"], "B": ["SRR3"]})
+        assert tests["gc_percent"]["test"] == "skipped (a group has fewer than 2 values)"
+        assert math.isnan(tests["gc_percent"]["p_value"]) and tests["gc_percent"]["significant"] is False
+        assert "a group has fewer than 2 values" in caplog.text
 
     def test_compare_datasets_profiles_a_group_accession_missing_from_supplied_profiles(self):
         """A partial ``profiles`` dict must not silently drop the accessions it lacks:

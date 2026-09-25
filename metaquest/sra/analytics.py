@@ -683,7 +683,17 @@ class SRADatasetAnalyzer:
                 if not data.empty:
                     group_data.append(data.values)
 
-            if len(group_data) >= 2:
+            if len(group_data) >= 2 and min(len(values) for values in group_data) < 2:
+                # A group of one has no variance of its own; the test would give NaN and warnings.
+                logger.info("Not testing %s: a group has fewer than 2 values", col)
+                tests[col] = {
+                    "test": "skipped (a group has fewer than 2 values)",
+                    "statistic": np.nan,
+                    "p_value": np.nan,
+                    "significant": False,
+                    "note": "Each group needs at least 2 datasets for a statistical comparison",
+                }
+            elif len(group_data) >= 2:
                 # Check if data is nearly identical (would cause precision loss)
                 all_values = np.concatenate(group_data)
                 variance = np.var(all_values)

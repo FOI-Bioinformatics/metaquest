@@ -146,7 +146,7 @@ registry (`validate`, `profile`, `report`). All three take `--accessions-file`, 
 `sra_validate` also take repeated `--accession` flags; without either, every accession folder is used.
 
 Each dataset is profiled by one path. Read and base totals, mean read length and GC content come from
-the dataset's statistics record: exact read counts, and GC from a uniform sample. Per-read quality,
+the dataset's statistics record: exact read counts, and GC from a uniform sample. GC content is computed from a sample of the first mate file; per-read quality from a sample of all mates. Per-read quality,
 complexity and adapter figures come from a sample of `--sample-size` reads per dataset (default
 10000) drawn from every mate file (uniformly across each file by default, or `--sampler head`). For a
 dataset held in the shared data store, the statistics record is cached in the store sidecar (the
