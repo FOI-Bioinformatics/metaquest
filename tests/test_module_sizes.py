@@ -19,7 +19,9 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "metaquest"
 MAX_LINES = 800
 MIN_MAINTAINABILITY = 20.0
 
-# path relative to the repository -> (line ceiling, maintainability floor), measured 2026-09-25
+# path relative to the repository -> (line ceiling, maintainability floor), measured 2026-09-25.
+# Follow-up after 0.5.0: split each of these three into a package, as metaquest/data/sra.py was
+# split in 0.5.0, and drop its entry here once every resulting module meets the ceilings.
 KNOWN_EXCEPTIONS: Dict[str, Tuple[int, float]] = {
     "metaquest/data/read_extraction.py": (1210, MIN_MAINTAINABILITY),
     "metaquest/data/registry.py": (1117, 15.3),

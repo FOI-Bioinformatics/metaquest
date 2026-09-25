@@ -2,21 +2,16 @@
 # Fail on any non-ASCII byte in the project's tracked Python, script and config source.
 #
 # ASCII-only keeps terminal output, diffs and grep-based tooling (including the other gates in
-# this directory) predictable regardless of locale. Two kinds of file are exempt because their
-# non-ASCII content is meaningful rather than incidental, not because the rule does not apply:
-#   - pyproject.toml's `authors` entries carry the maintainer's name with a diacritic.
-#   - tests/test_security_comprehensive.py and tests/test_performance_simple.py hold deliberate
-#     non-ASCII fixtures (full-width and superscript homoglyphs, non-Latin category labels) that
-#     their tests need in order to exercise input sanitisation and Unicode-safe serialisation;
-#     replacing those literals with ASCII would make the tests stop testing what they claim to.
+# this directory) predictable regardless of locale. A line may still hold non-ASCII bytes when
+# that content is meaningful rather than incidental and the line carries the marker "# ascii-ok"
+# with a reason: the maintainer's name in pyproject.toml, and deliberate test fixtures (full-width
+# and superscript homoglyphs, non-Latin category labels) that exercise input sanitisation and
+# Unicode-safe serialisation. The marker covers only its own line, so the rest of the file is
+# still checked.
 # Usage: scripts/check_ascii.sh [ROOT]   (ROOT defaults to the repository root)
 set -euo pipefail
 
 cd "${1:-$(dirname "$0")/..}"
-
-EXEMPT="pyproject.toml
-tests/test_security_comprehensive.py
-tests/test_performance_simple.py"
 
 # A bracket expression excluding printable ASCII (space through tilde) and tab, matched byte by
 # byte (LC_ALL=C). Deliberately not `grep -P '[^\x00-\x7F]'`: plain BSD grep, which this runs
@@ -28,10 +23,7 @@ non_ascii=$'[^ -~\t]'
 
 hits=""
 while IFS= read -r file; do
-    if grep -qxF "$file" <<<"$EXEMPT"; then
-        continue
-    fi
-    match=$(LC_ALL=C grep -n "$non_ascii" "$file" || true)
+    match=$(LC_ALL=C grep -n "$non_ascii" "$file" | LC_ALL=C grep -vF '# ascii-ok' || true)
     if [ -n "$match" ]; then
         hits="${hits}${file}:
 ${match}

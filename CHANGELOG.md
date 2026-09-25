@@ -112,8 +112,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `tests/test_module_sizes.py` for modules that were already over a ceiling when the gate was
   added.
 - Added an ASCII-only gate for `metaquest/`, `tests/`, `scripts/`, `Makefile`, `setup.cfg`, and
-  `pyproject.toml`, with a documented exemption for the package author's name and two test files
-  whose non-ASCII fixtures are what those tests check.
+  `pyproject.toml`. A single line can be exempted with an `# ascii-ok` marker and a reason; the
+  package author's name and the test fixtures that check Unicode handling use it.
 - Added a documented-commands gate: every command visible in `metaquest --help` must be mentioned
   in README.md, and README.md must not invoke a command the CLI registry does not have.
 
