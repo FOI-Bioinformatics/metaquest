@@ -1,5 +1,5 @@
 """
-STARTER TESTS for visualization/reporting.py (0% → 20% coverage)
+STARTER TESTS for visualization/reporting.py (0% -> 20% coverage)
 
 This file provides a working foundation to start testing the reporting module.
 Run: pytest tests/test_visualization_reporting_starter.py -v
@@ -87,7 +87,7 @@ class TestPDFReportGeneration:
     """Test PDF report generation.
 
     These tests verify the PDF generation workflow with proper mocking.
-    Tests lines 68-92 (generate_report → _generate_pdf_report)
+    Tests lines 68-92 (generate_report -> _generate_pdf_report)
     """
 
     def test_generate_pdf_report_minimal(self, sample_summary_data, tmp_path):

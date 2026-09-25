@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for visualization/interactive.py (65% → 80%+ coverage)
+EXTENDED TESTS for visualization/interactive.py (65% -> 80%+ coverage)
 
 This file provides comprehensive testing for interactive visualization functions,
 focusing on uncovered code paths, error handling, and edge cases.
@@ -366,7 +366,7 @@ class TestEdgeCasesExtended:
 #
 # After running these extended tests:
 # - Expected: 37+ tests pass
-# - Coverage: 65% → 80%+ for visualization/interactive.py
+# - Coverage: 65% -> 80%+ for visualization/interactive.py
 # - All interactive functions comprehensively tested
 #
 # Run tests:

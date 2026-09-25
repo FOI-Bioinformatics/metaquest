@@ -192,11 +192,39 @@ Each step records its outcome in the project registry (`metaquest_registry.json`
 - **API compatibility maintained** - DataFrame deprecation warnings addressed
 
 #### Quality Requirements
-- **Line length**: 120 characters maximum (configured in pyproject.toml)
-- **Formatting**: Use Black for consistent code formatting
-- **Linting**: All code must pass flake8 without violations
-- **Type hints**: Encouraged (mypy checking enabled)
-- **Coverage**: Minimum 80% for new code, 60% project-wide target
+Every gate below runs as part of `make check`, in this order; each also runs alone with the
+command shown.
+
+- **Formatting**: Black, no reformatting needed; 120 character line length (pyproject.toml).
+  `python -m black --check --diff metaquest tests`
+- **Linting**: flake8 clean. `B902` (bare `except Exception`) and `D101`/`D102`/`D103` (a
+  docstring on every public class, method and function) are enforced only on the modules listed
+  in `setup.cfg`; every other module has D101-D103 switched off there rather than by a wildcard.
+  `python -m flake8 metaquest tests`
+- **Type hints**: mypy clean. `python -m mypy metaquest`
+- **No print**: no `print(` or `sys.stdout.write` outside `metaquest/cli/base.py`; commands write
+  their result through `self.emit`/`emit_raw`/`emit_json`, everything else logs.
+  `bash scripts/check_no_print.sh`
+- **Plotly CDN**: no reference to the frozen `cdn.plot.ly/plotly-latest` alias; use
+  `metaquest.utils.html.plotly_cdn_script()` instead.
+  `grep -rn "cdn.plot.ly/plotly-latest" metaquest --include='*.py'`
+- **Complexity**: no function at radon cyclomatic-complexity rank D or worse.
+  `python -m radon cc metaquest -n D -s`
+- **Module size and maintainability**: 800 lines and a maintainability index of 20 or higher per
+  module under `metaquest/`. `tests/test_module_sizes.py` holds a short, shrink-only
+  `KNOWN_EXCEPTIONS` list for modules that were already over a ceiling when the guard was added.
+  `python tests/test_module_sizes.py --check`
+- **ASCII only**: no non-ASCII byte in `metaquest/`, `tests/`, `scripts/`, `Makefile`,
+  `setup.cfg` or `pyproject.toml`, aside from the documented exemptions in
+  `scripts/check_ascii.sh` (the package author's name, and two test files whose non-ASCII
+  fixtures are what those tests check). `bash scripts/check_ascii.sh`
+- **Documented commands**: every command visible in `metaquest --help` is mentioned in
+  README.md, and README.md invokes no command the CLI registry does not have.
+  `python scripts/check_docs_commands.py`
+- **Coverage**: minimum 80% for new code, 60% project-wide target; checked by `make test`
+  (coverage report), not `make check`.
+- **Dependency audit**: `pip-audit --strict` clean; runs in CI (`ci.yml`, `audit.yml`), not in
+  `make check`. `pip-audit --strict .`
 
 #### Maintenance Standards
 1. **Continuous quality assurance** - Focus on maintaining clean codebase

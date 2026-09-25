@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for visualization/reporting.py (49% → 70%+ coverage)
+EXTENDED TESTS for visualization/reporting.py (49% -> 70%+ coverage)
 
 This file extends the starter tests with HTML generation and helper function tests.
 Run: pytest tests/test_visualization_reporting_extended.py -v
@@ -305,7 +305,7 @@ class TestEdgeCases:
 #
 # After running these extended tests:
 # - Total tests: 10 (starter) + 12 (extended) = 22 tests
-# - Expected coverage: 49% → 70%+ for reporting.py
+# - Expected coverage: 49% -> 70%+ for reporting.py
 # - Tests cover: HTML generation, helper functions, error handling, edge cases
 #
 # Run all reporting tests:

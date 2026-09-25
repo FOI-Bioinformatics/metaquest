@@ -295,7 +295,7 @@ class TestLookupGenomeTaxonomyGtdb:
         assert info.family == "Bacillaceae"
         assert info.organism == "Bacillus subtilis"
         assert info.tax_id == "1423"
-        # genome endpoint hit returns immediately — no fallback call
+        # genome endpoint hit returns immediately -- no fallback call
         assert mock_get.call_count == 1
 
     @patch("metaquest.data.genome_taxonomy.requests.get")

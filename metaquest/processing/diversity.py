@@ -261,7 +261,7 @@ def _calculate_pielou_evenness(data: np.ndarray) -> np.ndarray:
 
     # Pielou's J = H / ln(S)
     evenness = shannon / np.log(observed)
-    evenness[observed <= 1] = 0  # Handle cases with ≤1 species
+    evenness[observed <= 1] = 0  # Handle cases with <=1 species
 
     return evenness
 

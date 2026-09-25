@@ -6,7 +6,7 @@ genomes and analyze associated metadata.
 """
 
 __version__ = "0.4.0"
-__author__ = "Andreas Sjödin"
+__author__ = "Andreas Sjodin"
 __email__ = "andreas.sjodin@gmail.com"
 
 # Conditional import to avoid issues during installation
