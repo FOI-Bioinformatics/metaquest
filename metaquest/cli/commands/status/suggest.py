@@ -34,7 +34,7 @@ def _as_float(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
-def _as_positive_int(value: Any) -> Optional[int]:
+def as_positive_int(value: Any) -> Optional[int]:
     """``value`` as a positive int, or None when it is not one."""
     if isinstance(value, bool):
         return None
@@ -45,7 +45,7 @@ def _as_positive_int(value: Any) -> Optional[int]:
     return number if number > 0 else None
 
 
-def _as_non_negative_int(value: Any) -> Optional[int]:
+def as_non_negative_int(value: Any) -> Optional[int]:
     """``value`` as an int of zero or more, or None when it is not one."""
     if isinstance(value, bool):
         return None
@@ -70,9 +70,9 @@ def _run_filter_flags(criteria: Dict[str, Any]) -> str:
     """
     part = ""
     numeric = [
-        ("max_run_size", "--max-run-size", _as_positive_int),
-        ("min_spots", "--min-spots", _as_non_negative_int),
-        ("max_spots", "--max-spots", _as_non_negative_int),
+        ("max_run_size", "--max-run-size", as_positive_int),
+        ("min_spots", "--min-spots", as_non_negative_int),
+        ("max_spots", "--max-spots", as_non_negative_int),
     ]
     for key, flag, coerce in numeric:
         raw = criteria.get(key)
@@ -89,7 +89,7 @@ def _run_filter_flags(criteria: Dict[str, Any]) -> str:
     return part
 
 
-def _reselect_command(criteria: Dict[str, Any], output: str) -> str:
+def reselect_command(criteria: Dict[str, Any], output: str) -> str:
     """A runnable ``select_datasets`` command that redoes a selection with ``--skip-excluded``.
 
     Built from the criteria the original ``--no-skip-excluded`` run recorded, targeting the same
@@ -138,7 +138,7 @@ def _reselect_command(criteria: Dict[str, Any], output: str) -> str:
             f" --metadata-value {shlex.quote(str(metadata_value))}"
         )
     raw_top_n = criteria.get("top_n")
-    top_n = _as_positive_int(raw_top_n)
+    top_n = as_positive_int(raw_top_n)
     if top_n:
         command += f" --top-n {top_n}"
     elif raw_top_n is not None:
@@ -150,7 +150,8 @@ def _reselect_command(criteria: Dict[str, Any], output: str) -> str:
     return command
 
 
-def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
+def download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
+    """Suggested commands for selected accessions that are neither excluded nor downloaded yet."""
     selected, excluded, downloaded = (set(query(registry, s)) for s in ("selected", "excluded", "downloaded"))
     to_download = [acc for acc in registry.datasets if acc in selected - excluded - downloaded]
     if not to_download:
@@ -175,7 +176,7 @@ def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
         for output, accs in by_output.items()
     ]
     for output, (criteria, accs) in reselect_groups.items():
-        steps.append({"command": _reselect_command(criteria, output), "accessions": accs})
+        steps.append({"command": reselect_command(criteria, output), "accessions": accs})
     return steps
 
 
@@ -226,5 +227,6 @@ def _extraction_next_steps(registry: Registry, paths: ProjectPaths) -> List[Dict
     return steps
 
 
-def _next_steps(registry: Registry, paths: ProjectPaths) -> List[Dict[str, Any]]:
-    return _download_next_steps(registry) + _extraction_next_steps(registry, paths)
+def next_steps(registry: Registry, paths: ProjectPaths) -> List[Dict[str, Any]]:
+    """Every suggested next command for the project: downloads first, then read extractions."""
+    return download_next_steps(registry) + _extraction_next_steps(registry, paths)

@@ -8,10 +8,10 @@ given (the command's `BaseCommand.emit`), so stdout stays the command's single c
 import argparse
 from typing import Any, Callable, Dict, List, Optional
 
-from metaquest.cli.commands.status.suggest import _as_non_negative_int, _as_positive_int
+from metaquest.cli.commands.status.suggest import as_non_negative_int, as_positive_int
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry, STAGES, known_genome_ids, query
-from metaquest.processing.status_report import _download_verdicts, _stage_filter_accessions
+from metaquest.processing.status_report import download_verdicts, stage_filter_accessions
 
 
 def _format_bytes(count: int) -> str:
@@ -29,11 +29,11 @@ def _run_filter_detail(criteria: Dict[str, Any]) -> List[str]:
     reselect command.
     """
     parts = []
-    size = _as_positive_int(criteria.get("max_run_size"))
+    size = as_positive_int(criteria.get("max_run_size"))
     if size is not None:
         parts.append(f"max size {_format_bytes(size)}")
     for key, symbol in (("min_spots", ">="), ("max_spots", "<=")):
-        spots = _as_non_negative_int(criteria.get(key))
+        spots = as_non_negative_int(criteria.get(key))
         if spots is not None:
             parts.append(f"spots {symbol} {spots}")
     if criteria.get("platform") is not None:
@@ -78,7 +78,7 @@ def _print_inventory(report: Dict[str, Any], list_missing: bool, emit: Callable[
                 emit("  Missing metadata : " + ", ".join(w["metadata_missing"]))
 
 
-def _selection_detail(registry: Registry) -> str:
+def selection_detail(registry: Registry) -> str:
     """The criteria and date of the most recent selection, for the selected stage row."""
     latest: Optional[rb.SelectionBlock] = None
     for acc in registry.datasets:
@@ -115,14 +115,14 @@ def _print_stages(stages: Dict[str, Any], registry: Registry, emit: Callable[[st
     emit("\nStages")
     emit("======")
     details = {
-        "selected": _selection_detail(registry),
+        "selected": selection_detail(registry),
         "excluded": _exclusion_detail(registry),
     }
     for stage in STAGES:
         info = stages[stage]
         detail = details.get(stage)
         emit(f"  {stage:<10s} : {info['count']}" + (f"   {detail}" if detail else ""))
-    truncated = _download_verdicts(registry)["truncated"]
+    truncated = download_verdicts(registry)["truncated"]
     if truncated:
         emit(f"  truncated downloads: {len(truncated)} (" + ", ".join(truncated) + ")")
 
@@ -146,7 +146,7 @@ def _print_stage_filter(
 ) -> None:
     if not stage:
         return
-    accs = _stage_filter_accessions(registry, stage, genomes)
+    accs = stage_filter_accessions(registry, stage, genomes)
     detail = f" (genome {', '.join(genomes)})" if genomes else ""
     emit(f"\nStage '{stage}'{detail}: " + (", ".join(accs) if accs else "(none)"))
 
@@ -198,9 +198,10 @@ def _print_next(steps: List[Dict[str, Any]], emit: Callable[[str], None]) -> Non
         emit("    accessions: " + ", ".join(step["accessions"]))
 
 
-def _print_report(
+def print_report(
     args: argparse.Namespace, report: Dict[str, Any], registry: Registry, emit: Callable[[str], None]
 ) -> None:
+    """Write the text form of a ``status`` report through ``emit``, one section after another."""
     _print_inventory(report, args.list_missing, emit)
     if report.get("store"):
         _print_store(report["store"], emit)

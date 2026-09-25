@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands.status.render_text import _print_report
-from metaquest.cli.commands.status.suggest import _next_steps
+from metaquest.cli.commands.status.render_text import print_report
+from metaquest.cli.commands.status.suggest import next_steps
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.file_io import write_csv
 from metaquest.data.registry import (
@@ -106,7 +106,7 @@ class StatusCommand(BaseCommand):
         if args.json:
             self.emit_json(report)
         else:
-            _print_report(args, report, registry, self.emit)
+            print_report(args, report, registry, self.emit)
 
     def execute(self, args: argparse.Namespace) -> int:
         """Build and emit the status report; return 0 on success or 1 on a handled error.
@@ -157,7 +157,7 @@ class StatusCommand(BaseCommand):
 
             report = build_report(registry, args, paths, registry_file, existed, drift)
             if args.next:
-                report["next"] = _next_steps(registry, paths)
+                report["next"] = next_steps(registry, paths)
             if args.export_tsv:
                 self._export_tsv(registry, args.export_tsv)
 

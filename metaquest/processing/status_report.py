@@ -73,9 +73,10 @@ def _reconcile_present_missing(wanted: List[str], present_fn) -> Tuple[List[str]
     return present, missing
 
 
-def _inventory_report(
+def inventory_report(
     args: argparse.Namespace, registry: Registry, store: Optional[StorePaths] = None
 ) -> Dict[str, Any]:
+    """The on-disk inventory part of the report: FASTQ, metadata and genome files against what is wanted."""
     fastq_dir = Path(args.fastq_folder)
     meta_dir = Path(args.metadata_folder)
     genomes_dir = Path(args.genomes_folder)
@@ -133,7 +134,8 @@ def _incomplete_store_links(fastq_dir: Path, missing: List[str], store: Optional
     return sorted(incomplete)
 
 
-def _stage_filter_accessions(registry: Registry, stage: str, genomes: Optional[List[str]]) -> List[str]:
+def stage_filter_accessions(registry: Registry, stage: str, genomes: Optional[List[str]]) -> List[str]:
+    """Accessions at ``stage``, restricted to the given genomes when any are named, in first-seen order."""
     if not genomes:
         return query(registry, stage)
     seen: List[str] = []
@@ -181,7 +183,7 @@ def _drift_report(drift: ReconcileReport) -> Dict[str, Any]:
     }
 
 
-def _download_verdicts(registry: Registry) -> Dict[str, List[str]]:
+def download_verdicts(registry: Registry) -> Dict[str, List[str]]:
     """Accessions whose recorded completeness verdict is "truncated" or "unverified"."""
     truncated = []
     unverified = []
@@ -252,7 +254,7 @@ def build_report(
         store = store_paths(store_root)
         logger.info("Using shared data store at %s", store_root)
 
-    report = _inventory_report(args, registry, store)
+    report = inventory_report(args, registry, store)
     report["registry"] = {
         "path": str(registry_file),
         "version": registry.version,
@@ -263,7 +265,7 @@ def build_report(
         report["store"] = _store_block(store_root, store_available)
     counts = stage_counts(registry)
     report["stages"] = {s: {"count": counts["stages"][s], "accessions": query(registry, s)} for s in STAGES}
-    report["downloads"] = _download_verdicts(registry)
+    report["downloads"] = download_verdicts(registry)
     report["genomes"] = _genome_report(registry, paths, args.genome, counts)
     report["drift"] = _drift_report(drift) if drift else {}
     return report
