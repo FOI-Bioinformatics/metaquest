@@ -493,7 +493,8 @@ class DownloadSraCommand(BaseCommand):
                     truncated = {
                         acc
                         for acc in project_registry.datasets
-                        if getattr(rb.download_verdict(project_registry, acc), "verdict", None) == "truncated"
+                        if (verdict := rb.download_verdict(project_registry, acc)) is not None
+                        and verdict.verdict == "truncated"
                     }
 
                 on_result = self._result_recorder(args, fastq_dir, store)

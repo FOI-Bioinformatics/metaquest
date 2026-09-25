@@ -288,7 +288,8 @@ def test_registry_accessors_and_setters_round_trip(tmp_path, fixture_data):
     B.set_store_block(registry, B.store_block(registry))
     R.save_registry(registry)
 
-    written = json.loads(target.read_text())
-    original = dict(fixture_data)
-    assert written.pop("updated") and original.pop("updated")
-    assert written == original
+    # Compared as text, so a value that changed type (1 against 1.0) is caught too.
+    def without_updated(text):
+        return [line for line in text.splitlines() if not line.startswith('  "updated": ')]
+
+    assert without_updated(target.read_text()) == without_updated(FIXTURE.read_text())

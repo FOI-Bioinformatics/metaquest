@@ -68,7 +68,8 @@ def _resolve_wanted(args: argparse.Namespace, registry: Registry) -> List[str]:
 def _reconcile_present_missing(wanted: List[str], present_fn) -> Tuple[List[str], List[str]]:
     """Split a wanted list into (present, missing) using a predicate."""
     present = [a for a in wanted if present_fn(a)]
-    missing = [a for a in wanted if a not in present]
+    present_set = set(present)
+    missing = [a for a in wanted if a not in present_set]
     return present, missing
 
 
@@ -185,8 +186,8 @@ def _download_verdicts(registry: Registry) -> Dict[str, List[str]]:
     truncated = []
     unverified = []
     for acc in registry.datasets:
-        complete = rb.download_verdict(registry, acc)
-        verdict = complete.verdict if complete is not None else None
+        complete = rb.raw(registry, acc, "download", "complete")
+        verdict = complete.get("verdict") if isinstance(complete, dict) else None
         if verdict == "truncated":
             truncated.append(acc)
         elif verdict == "unverified":

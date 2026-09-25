@@ -22,7 +22,7 @@ MIN_MAINTAINABILITY = 20.0
 # path relative to the repository -> (line ceiling, maintainability floor), measured 2026-09-25
 KNOWN_EXCEPTIONS: Dict[str, Tuple[int, float]] = {
     "metaquest/data/read_extraction.py": (1210, MIN_MAINTAINABILITY),
-    "metaquest/data/registry.py": (1191, 14.9),
+    "metaquest/data/registry.py": (1117, 15.3),
     "metaquest/data/sra_metadata.py": (833, MIN_MAINTAINABILITY),
     "metaquest/sra/analytics.py": (1104, 12.3),
     "metaquest/visualization/reporting.py": (826, MIN_MAINTAINABILITY),

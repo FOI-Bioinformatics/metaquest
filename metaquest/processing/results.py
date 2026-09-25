@@ -59,9 +59,9 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
     """
     pairs: Dict[Pair, Optional[float]] = {}
     for accession in registry.datasets:
-        screening = rb.screening_block(registry, accession) or rb.ScreeningBlock()
-        for genome_id, entry in screening.genomes.items():
-            value = entry.containment if entry is not None else None
+        # One field per entry, so it is read straight from the registry dict (see ``rb.raw``).
+        for genome_id, entry in (rb.raw(registry, accession, "screening", "genomes") or {}).items():
+            value = entry.get("containment") if isinstance(entry, dict) else None
             pairs[(accession, genome_id)] = float(value) if value is not None else None
     if parsed_table is not None:
         genome_columns = [c for c in parsed_table.columns if c not in _KNOWN_METADATA_COLUMNS]
@@ -71,8 +71,9 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
                 if value is not None:
                     pairs[(str(accession), str(genome_id))] = value
     for accession in registry.datasets:
-        for genome_id in rb.extraction_blocks(registry, accession):
-            pairs.setdefault((accession, genome_id), None)
+        for genome_id, entry in (registry.datasets[accession].get("extractions") or {}).items():
+            if isinstance(entry, dict):
+                pairs.setdefault((accession, genome_id), None)
     return pairs
 
 

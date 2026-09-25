@@ -719,40 +719,33 @@ def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
         rb.set_extraction_block(registry, accession, genome_id, entry)
 
 
-def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
-    """The recorded extraction for ``accession`` against ``genome_id`` as a plain dict, or ``None``.
-
-    This is the registry's own dict, not a copy; code that reads or changes an extraction uses
-    ``registry_blocks.extraction_block`` and ``set_extraction_block`` instead.
-    """
-    return registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
-
-
 # --------------------------------------------------------------------- queries
 
 
 def _extraction_stage(registry: Registry, acc: str, stage: str, genome_id: Optional[str]) -> bool:
     """Handle the "extracted"/"assembled" stages of ``_in_stage`` (kept separate to bound complexity)."""
-    extractions = rb.extraction_blocks(registry, acc)
-    chosen = list(extractions.values()) if genome_id is None else [e for g, e in extractions.items() if g == genome_id]
+    if genome_id is None:
+        chosen = [e for e in (registry.datasets[acc].get("extractions") or {}).values() if isinstance(e, dict)]
+    else:
+        chosen = [e for e in (rb.raw(registry, acc, "extractions", genome_id),) if isinstance(e, dict)]
     if stage == "extracted":
-        return any((e.mapped_reads or 0) > 0 for e in chosen)
+        return any((e.get("mapped_reads") or 0) > 0 for e in chosen)
     if stage == "assembled":
-        return any(e.assembly is not None and (e.assembly.contigs or 0) > 0 for e in chosen)
+        return any(isinstance(e.get("assembly"), dict) and (e["assembly"].get("contigs") or 0) > 0 for e in chosen)
     raise DataAccessError(f"Unknown stage '{stage}'. Choose one of: {', '.join(STAGES)}")
 
 
 def _in_stage(registry: Registry, acc: str, stage: str, genome_id: Optional[str]) -> bool:
-    """Whether ``acc`` is in ``stage``; each stage converts only the one block it looks at."""
+    """Whether ``acc`` is in ``stage``; reads the one field it needs, without building a block."""
     if stage == "screened":
-        genomes = (rb.screening_block(registry, acc) or rb.ScreeningBlock()).genomes
+        genomes = rb.raw(registry, acc, "screening", "genomes") or {}
         return bool(genomes) if genome_id is None else genome_id in genomes
     if stage == "selected":
-        return bool((rb.selection_block(registry, acc) or rb.SelectionBlock()).selected)
+        return bool(rb.raw(registry, acc, "selection", "selected"))
     if stage == "excluded":
-        return bool((rb.exclusion_block(registry, acc) or rb.ExclusionBlock()).excluded)
+        return bool(rb.raw(registry, acc, "exclusion", "excluded"))
     if stage == "downloaded":
-        return (rb.download_block(registry, acc) or rb.DownloadBlock()).state == "downloaded"
+        return rb.raw(registry, acc, "download", "state") == "downloaded"
     if stage == "analysed":
         return bool(registry.datasets[acc].get("analyses"))
     return _extraction_stage(registry, acc, stage, genome_id)
@@ -779,8 +772,8 @@ def stage_counts(registry: Registry) -> Dict[str, Any]:
         zero = [
             acc
             for acc in registry.datasets
-            if (extraction := rb.extraction_block(registry, acc, genome_id)) is not None
-            and (extraction.mapped_reads or 0) == 0
+            if isinstance(extraction := rb.raw(registry, acc, "extractions", genome_id), dict)
+            and (extraction.get("mapped_reads") or 0) == 0
         ]
         genomes[genome_id] = {
             "extracted": len(query(registry, "extracted", genome_id)),
@@ -794,7 +787,7 @@ def known_genome_ids(registry: Registry) -> Set[str]:
     """Return every genome id the registry knows about: recorded genomes plus any seen only in a dataset entry."""
     ids: Set[str] = set(registry.genomes)
     for acc in registry.datasets:
-        ids.update((rb.screening_block(registry, acc) or rb.ScreeningBlock()).genomes)
+        ids.update(rb.raw(registry, acc, "screening", "genomes") or {})
         ids.update(registry.datasets[acc].get("extractions") or {})
     return ids
 
@@ -1085,6 +1078,7 @@ def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> 
     """
     for acc in registry.datasets:
         download = rb.download_block(registry, acc) or rb.DownloadBlock()
+        # A verdict recorded as an empty dict counts as none, as it did before the typed blocks.
         if download.state != "downloaded" or (download.complete is not None and download.complete.to_dict()):
             continue
         if download.source == "store":

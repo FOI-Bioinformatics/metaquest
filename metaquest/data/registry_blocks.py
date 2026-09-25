@@ -416,6 +416,20 @@ def _dataset_block(registry: Registry, accession: str, key: str, cls: Type[_B]) 
     return cls.from_dict(raw) if isinstance(raw, dict) else None
 
 
+def raw(registry: Registry, accession: str, block: str, key: str, default: Any = None) -> Any:
+    """One value from ``accession``'s ``block`` read straight from the registry dict, or ``default``.
+
+    For stage checks that look at a single field of every dataset (``query``, ``stage_counts``):
+    building a full typed block per dataset just to read one value costs about ten times more
+    on a large registry. The value is the registry's own, not a copy; do not change it. For
+    ``block="extractions"`` the ``key`` is a genome id and the value is that extraction's dict.
+    """
+    found = registry.datasets.get(accession, {}).get(block)
+    if not isinstance(found, dict):
+        return default
+    return found.get(key, default)
+
+
 def screening_block(registry: Registry, accession: str) -> Optional[ScreeningBlock]:
     """``accession``'s screening block, or None when it was never screened."""
     return _dataset_block(registry, accession, "screening", ScreeningBlock)
