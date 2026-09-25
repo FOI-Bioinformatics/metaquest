@@ -10,6 +10,7 @@ from typing import Any, List
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_completeness, _gitignore_guard, update_linked
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry, record_download, registry_transaction
 from metaquest.store.adopt import adopt
 from metaquest.store.layout import StorePaths, store_paths
@@ -104,7 +105,7 @@ class StoreAdoptCommand(BaseCommand):
         """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
-            root = resolve_store_root(args.data_root, registry.store.get("root"))
+            root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1

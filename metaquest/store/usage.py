@@ -28,13 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 def _upsert_project_row(catalog, registry: Registry, project_id: str) -> None:
-    project = registry.project or {}
-    catalog.upsert_project(
-        project_id,
-        project.get("name", ""),
-        project.get("path", ""),
-        str(registry.path),
-    )
+    project = project_block(registry)
+    catalog.upsert_project(project_id, project.name or "", project.path or "", str(registry.path))
 
 
 def ensure_project_identity(registry: Registry) -> Dict[str, Any]:
@@ -86,8 +81,7 @@ def record_usage_safe(
     stage, and turned into False: the pipeline stage that triggered this call must never
     fail because the catalogue could not be written.
     """
-    project = registry.project or {}
-    project_id = project.get("id")
+    project_id = project_block(registry).id
     if paths is None or not project_id:
         return False
 
@@ -114,8 +108,7 @@ def record_usage_many(
     bound project returns False without writing anything; any exception during the write
     is caught, logged at warning, and turned into False.
     """
-    project = registry.project or {}
-    project_id = project.get("id")
+    project_id = project_block(registry).id
     if paths is None or not project_id:
         return False
 
@@ -170,7 +163,7 @@ def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
             logger.warning("Could not check registry %s while checking staleness: %s", registry_path, e)
             stale.append({**row, "reason": "registry unreadable"})
             continue
-        if (registry.project or {}).get("id") != row["project_id"]:
+        if project_block(registry).id != row["project_id"]:
             stale.append({**row, "reason": "project id differs"})
     return stale
 

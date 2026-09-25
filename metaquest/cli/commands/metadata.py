@@ -14,6 +14,7 @@ import pandas as pd
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.metadata import (
     check_metadata_attributes,
@@ -123,7 +124,7 @@ class DownloadMetadataCommand(BaseCommand):
         store that cannot be written to costs the sharing, never the metadata this project just
         fetched.
         """
-        paths = resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
+        paths = resolve_optional_store(getattr(args, "data_root", None), rb.store_block(registry).root)
         if paths is None:
             return
         try:

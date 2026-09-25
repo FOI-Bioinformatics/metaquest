@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_PARSED_CONTAINMENT_FILE, GENOME_FASTA_GLOBS
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import (
     ProjectPaths,
     Registry,
-    extraction_record,
     known_genome_ids,
     query,
     resolve_project_path,
@@ -151,13 +151,8 @@ def _reselect_command(criteria: Dict[str, Any], output: str) -> str:
 
 
 def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
-    to_download = [
-        acc
-        for acc, record in registry.datasets.items()
-        if record.get("selection", {}).get("selected")
-        and not record.get("exclusion", {}).get("excluded")
-        and record.get("download", {}).get("state") != "downloaded"
-    ]
+    selected, excluded, downloaded = (set(query(registry, s)) for s in ("selected", "excluded", "downloaded"))
+    to_download = [acc for acc in registry.datasets if acc in selected - excluded - downloaded]
     if not to_download:
         return []
     # A selection recorded with --no-skip-excluded may still list an excluded
@@ -167,9 +162,9 @@ def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
     by_output: Dict[str, List[str]] = {}
     reselect_groups: Dict[str, Tuple[Dict[str, Any], List[str]]] = {}
     for acc in to_download:
-        selection = registry.datasets[acc].get("selection", {})
-        criteria = selection.get("criteria") or {}
-        output = selection.get("output") or "accessions.txt"
+        selection = rb.selection_block(registry, acc) or rb.SelectionBlock()
+        criteria = selection.criteria or {}
+        output = selection.output or "accessions.txt"
         if criteria.get("skip_excluded") is False:
             group = reselect_groups.setdefault(output, (criteria, []))
             group[1].append(acc)
@@ -186,9 +181,9 @@ def _download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
 
 def _selection_table(registry: Registry) -> str:
     """The containment table a selection was recorded from, else the default name."""
-    for record in registry.datasets.values():
-        selection = record.get("selection") or {}
-        table = (selection.get("criteria") or {}).get("table") if selection.get("selected") else None
+    for acc in registry.datasets:
+        selection = rb.selection_block(registry, acc) or rb.SelectionBlock()
+        table = (selection.criteria or {}).get("table") if selection.selected else None
         if table:
             return str(table)
     return DEFAULT_PARSED_CONTAINMENT_FILE
@@ -218,7 +213,7 @@ def _extraction_next_steps(registry: Registry, paths: ProjectPaths) -> List[Dict
             f"--genome-id {genome_id} --genome-fasta {genome_fasta}"
         )
         # Any record, including a zero-mapped one, means the sample has been tried.
-        recorded = {acc for acc in registry.datasets if extraction_record(registry, acc, genome_id) is not None}
+        recorded = {acc for acc in registry.datasets if rb.extraction_block(registry, acc, genome_id) is not None}
         to_extract = [acc for acc in downloaded if acc not in recorded]
         if to_extract:
             steps.append({"command": base, "accessions": to_extract})

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from metaquest.core.utils import _KNOWN_METADATA_COLUMNS
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry, to_int_or_none
 
 RESULTS_COLUMNS = [
@@ -57,9 +58,10 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
     the table's is used, since the registry rounds it to four decimals.
     """
     pairs: Dict[Pair, Optional[float]] = {}
-    for accession, record in registry.datasets.items():
-        for genome_id, entry in ((record.get("screening") or {}).get("genomes") or {}).items():
-            value = (entry or {}).get("containment")
+    for accession in registry.datasets:
+        screening = rb.screening_block(registry, accession) or rb.ScreeningBlock()
+        for genome_id, entry in screening.genomes.items():
+            value = entry.containment if entry is not None else None
             pairs[(accession, genome_id)] = float(value) if value is not None else None
     if parsed_table is not None:
         genome_columns = [c for c in parsed_table.columns if c not in _KNOWN_METADATA_COLUMNS]
@@ -68,10 +70,9 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
                 value = _positive_float(row[genome_id])
                 if value is not None:
                     pairs[(str(accession), str(genome_id))] = value
-    for accession, record in registry.datasets.items():
-        for genome_id, entry in (record.get("extractions") or {}).items():
-            if entry is not None:
-                pairs.setdefault((accession, genome_id), None)
+    for accession in registry.datasets:
+        for genome_id in rb.extraction_blocks(registry, accession):
+            pairs.setdefault((accession, genome_id), None)
     return pairs
 
 
@@ -89,29 +90,29 @@ def _mapping_rate(mapped_reads: Optional[int], spots: Optional[int]) -> Optional
 
 
 def _row(registry: Registry, accession: str, genome_id: str, containment: Optional[float]) -> Dict[str, Any]:
-    record = registry.datasets.get(accession) or {}
-    selection = record.get("selection") or {}
-    exclusion = record.get("exclusion") or {}
-    excluded = bool(exclusion.get("excluded"))
-    metadata = record.get("metadata") or {}
-    extraction = (record.get("extractions") or {}).get(genome_id) or {}
-    assembly = extraction.get("assembly") or {}
-    spots = to_int_or_none(metadata.get("run_total_spots"))
-    mapped_reads = to_int_or_none(extraction.get("mapped_reads"))
+    exclusion = rb.exclusion_block(registry, accession) or rb.ExclusionBlock()
+    excluded = bool(exclusion.excluded)
+    metadata = rb.metadata_block(registry, accession) or rb.MetadataBlock()
+    download = rb.download_block(registry, accession)
+    extraction = rb.extraction_block(registry, accession, genome_id) or rb.ExtractionBlock()
+    # A missing assembly reads as None in every column, unlike a recorded one whose stats are 0.
+    assembly = extraction.assembly.to_dict() if extraction.assembly is not None else {}
+    spots = to_int_or_none(metadata.run_total_spots)
+    mapped_reads = to_int_or_none(extraction.mapped_reads)
     return {
         "accession": accession,
         "genome_id": genome_id,
         "containment": containment,
-        "selected": bool(selection.get("selected")),
+        "selected": bool((rb.selection_block(registry, accession) or rb.SelectionBlock()).selected),
         "excluded": excluded,
-        "exclusion_reason": (exclusion.get("reason") or None) if excluded else None,
-        "download_state": (record.get("download") or {}).get("state"),
+        "exclusion_reason": (exclusion.reason or None) if excluded else None,
+        "download_state": (download.state or None) if download is not None else None,
         "run_total_spots": spots,
-        "run_size": to_int_or_none(metadata.get("run_size")),
+        "run_size": to_int_or_none(metadata.run_size),
         "mapped_reads": mapped_reads,
         "mapping_rate_to_reference": _mapping_rate(mapped_reads, spots),
-        "breadth": extraction.get("breadth"),
-        "mean_depth": extraction.get("mean_depth"),
+        "breadth": extraction.breadth,
+        "mean_depth": extraction.mean_depth,
         "contigs": assembly.get("contigs"),
         "total_bp": assembly.get("total_bp"),
         "n50": assembly.get("n50"),

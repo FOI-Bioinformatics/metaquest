@@ -29,9 +29,8 @@ from metaquest.data.registry import (
     reconcile,
     registry_path,
     save_registry,
-    to_dataframes,
 )
-from metaquest.processing.status_report import build_report
+from metaquest.processing.status_report import build_report, to_dataframes
 
 
 class StatusCommand(BaseCommand):

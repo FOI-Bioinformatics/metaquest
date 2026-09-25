@@ -11,6 +11,7 @@ import pytest
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry as reg
 from metaquest.data.read_extraction import summarise_contigs
+from metaquest.processing.status_report import to_dataframes
 
 
 def _fastq(path: Path, reads: int = 2, gz: bool = False) -> Path:
@@ -872,7 +873,7 @@ class TestScanners:
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_selection(r, ["SRR1"], {"threshold": 0.1}, Path("a.txt"))
         reg.record_extraction(r, "SRR1", "GCF_1", [], 7, False, {"preset": "sr"})
-        datasets, extractions = reg.to_dataframes(r)
+        datasets, extractions = to_dataframes(r)
         assert list(datasets.index) == ["SRR1"] and bool(datasets.loc["SRR1", "selected"]) is True
         assert extractions.loc[0, "genome_id"] == "GCF_1" and int(extractions.loc[0, "mapped_reads"]) == 7
         assert "breadth" in extractions.columns and "mean_depth" in extractions.columns
@@ -881,7 +882,7 @@ class TestScanners:
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         coverage = {"breadth": 0.5, "mean_depth": 3.25, "coverage_tsv": tmp_path / "c.tsv"}
         reg.record_extraction(r, "SRR1", "GCF_1", [], 7, False, {}, coverage=coverage)
-        _, extractions = reg.to_dataframes(r)
+        _, extractions = to_dataframes(r)
         assert extractions.loc[0, "breadth"] == 0.5 and extractions.loc[0, "mean_depth"] == 3.25
 
 

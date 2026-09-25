@@ -10,10 +10,11 @@ prints; the text rendering and the suggested next steps live in `metaquest.cli.c
 import argparse
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
 from metaquest.data.registry import (
     ProjectPaths,
@@ -31,6 +32,9 @@ from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import read_sidecar
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -180,8 +184,9 @@ def _download_verdicts(registry: Registry) -> Dict[str, List[str]]:
     """Accessions whose recorded completeness verdict is "truncated" or "unverified"."""
     truncated = []
     unverified = []
-    for acc, record in registry.datasets.items():
-        verdict = (record.get("download") or {}).get("complete", {}).get("verdict")
+    for acc in registry.datasets:
+        complete = rb.download_verdict(registry, acc)
+        verdict = complete.verdict if complete is not None else None
         if verdict == "truncated":
             truncated.append(acc)
         elif verdict == "unverified":
@@ -208,10 +213,10 @@ def _resolve_store_root(args, registry) -> Tuple[Optional[Path], bool]:
     produces) is reported as usual.
     """
     try:
-        return resolve_store_root(args.data_root, registry.store.get("root")), True
+        return resolve_store_root(args.data_root, rb.store_block(registry).root), True
     except DataAccessError as e:
         logger.warning("store unavailable: %s; continuing without it", e)
-        return resolve_store_root(args.data_root, registry.store.get("root"), require_marker=False), False
+        return resolve_store_root(args.data_root, rb.store_block(registry).root, require_marker=False), False
 
 
 def _store_block(root: Path, available: bool) -> Dict[str, Any]:
@@ -261,3 +266,49 @@ def build_report(
     report["genomes"] = _genome_report(registry, paths, args.genome, counts)
     report["drift"] = _drift_report(drift) if drift else {}
     return report
+
+
+def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
+    """Flat views of the registry for ``status --export-tsv``: one row per accession, and one row
+    per (accession, genome) extraction, as two pandas DataFrames."""
+    import pandas as pd
+
+    rows = []
+    ext_rows = []
+    for acc, record in registry.datasets.items():
+        screening = rb.screening_block(registry, acc) or rb.ScreeningBlock()
+        exclusion = rb.exclusion_block(registry, acc) or rb.ExclusionBlock()
+        download = rb.download_block(registry, acc) or rb.DownloadBlock()
+        rows.append(
+            {
+                "accession": acc,
+                "screened_genomes": ",".join(sorted(screening.genomes)),
+                "selected": bool((rb.selection_block(registry, acc) or rb.SelectionBlock()).selected),
+                "excluded": bool(exclusion.excluded),
+                "exclusion_reason": exclusion.reason,
+                "download_state": download.state,
+                "download_date": download.date,
+                "bytes_total": download.bytes_total,
+                "metadata": "metadata" in record,
+                "analyses": ",".join(sorted(record.get("analyses", {}))),
+            }
+        )
+        for genome_id, ext in rb.extraction_blocks(registry, acc).items():
+            asm = ext.assembly
+            ext_rows.append(
+                {
+                    "accession": acc,
+                    "genome_id": genome_id,
+                    "mapped_reads": ext.mapped_reads,
+                    "breadth": ext.breadth,
+                    "mean_depth": ext.mean_depth,
+                    "extraction_date": ext.date or None,
+                    "contigs": asm.contigs if asm else None,
+                    "total_bp": asm.total_bp if asm else None,
+                    "n50": asm.n50 if asm else None,
+                    "assembly_date": asm.date if asm else None,
+                }
+            )
+    datasets = pd.DataFrame(rows).set_index("accession") if rows else pd.DataFrame()
+    extractions = pd.DataFrame(ext_rows)
+    return datasets, extractions

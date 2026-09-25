@@ -9,6 +9,7 @@ import argparse
 from typing import Any, Callable, Dict, List, Optional
 
 from metaquest.cli.commands.status.suggest import _as_non_negative_int, _as_positive_int
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry, STAGES, known_genome_ids, query
 from metaquest.processing.status_report import _download_verdicts, _stage_filter_accessions
 
@@ -79,14 +80,14 @@ def _print_inventory(report: Dict[str, Any], list_missing: bool, emit: Callable[
 
 def _selection_detail(registry: Registry) -> str:
     """The criteria and date of the most recent selection, for the selected stage row."""
-    latest: Dict[str, Any] = {}
-    for record in registry.datasets.values():
-        selection = record.get("selection") or {}
-        if selection.get("selected") and str(selection.get("date", "")) >= str(latest.get("date", "")):
+    latest: Optional[rb.SelectionBlock] = None
+    for acc in registry.datasets:
+        selection = rb.selection_block(registry, acc)
+        if selection is not None and selection.selected and str(selection.date) >= str(latest.date if latest else ""):
             latest = selection
-    if not latest:
+    if latest is None:
         return ""
-    criteria = latest.get("criteria") or {}
+    criteria = latest.criteria or {}
     parts = []
     if criteria.get("column"):
         parts.append(f"column {criteria['column']}")
@@ -95,17 +96,17 @@ def _selection_detail(registry: Registry) -> str:
     if criteria.get("metadata_column"):
         parts.append(f"{criteria['metadata_column']} = {criteria.get('metadata_value')}")
     parts.extend(_run_filter_detail(criteria))
-    parts.append(str(latest.get("date", "")))
+    parts.append(str(latest.date))
     return ", ".join(p for p in parts if p)
 
 
 def _exclusion_detail(registry: Registry) -> str:
     """How many accessions carry each exclusion reason."""
     reasons: Dict[str, int] = {}
-    for record in registry.datasets.values():
-        exclusion = record.get("exclusion") or {}
-        if exclusion.get("excluded"):
-            reason = str(exclusion.get("reason") or "no reason given")
+    for acc in registry.datasets:
+        exclusion = rb.exclusion_block(registry, acc)
+        if exclusion is not None and exclusion.excluded:
+            reason = str(exclusion.reason or "no reason given")
             reasons[reason] = reasons.get(reason, 0) + 1
     return ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items()))
 

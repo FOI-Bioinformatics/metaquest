@@ -23,7 +23,21 @@ Values are passed through without coercion, so an integer stays an integer and a
 from __future__ import annotations
 
 from dataclasses import MISSING, Field, dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Self, Set, Tuple, Type, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Self,
+    Set,
+    Tuple,
+    Type,
+    TypeVar,
+)
 
 if TYPE_CHECKING:
     # Only for annotations: metaquest.data.registry imports this module.
@@ -52,24 +66,37 @@ def _copy(value: Any) -> Any:
     return value
 
 
-def _default_of(f: "Field[Any]") -> Any:
-    """The value a field takes when its key is absent."""
-    if f.default is not MISSING:
-        return f.default
-    if f.default_factory is not MISSING:
-        return f.default_factory()
-    return None
+class _FieldSpec(NamedTuple):
+    """What the conversion needs to know about one declared field, worked out once per class."""
+
+    name: str
+    default: Any
+    factory: Optional[Callable[[], Any]]
+    load: Optional[Callable[[Any], Any]]
+    dump: Optional[Callable[[Any], Any]]
+    omit: bool
+
+    def default_value(self) -> Any:
+        """The value the field takes when its key is absent."""
+        return self.factory() if self.factory is not None else self.default
 
 
-_FIELDS: Dict[type, Tuple["Field[Any]", ...]] = {}
+_SPECS: Dict[type, Tuple[_FieldSpec, ...]] = {}
 
 
-def _block_fields(cls: type) -> Tuple["Field[Any]", ...]:
+def _field_specs(cls: type) -> Tuple[_FieldSpec, ...]:
     """The declared (key-carrying) fields of a block class, cached per class."""
-    found = _FIELDS.get(cls)
+    found = _SPECS.get(cls)
     if found is None:
-        found = _FIELDS[cls] = tuple(f for f in fields(cls) if f.name not in _INTERNAL)
+        found = _SPECS[cls] = tuple(_spec_of(f) for f in fields(cls) if f.name not in _INTERNAL)
     return found
+
+
+def _spec_of(f: Field[Any]) -> _FieldSpec:
+    factory = f.default_factory if f.default_factory is not MISSING else None
+    default = f.default if f.default is not MISSING else None
+    meta = f.metadata
+    return _FieldSpec(f.name, default, factory, meta.get(_LOAD), meta.get(_DUMP), bool(meta.get(_OMIT)))
 
 
 @dataclass
@@ -90,38 +117,52 @@ class RegistryBlock:
     def from_dict(cls, data: Optional[Mapping[str, Any]]) -> Self:
         """Build the block from its JSON form; missing keys take the field defaults."""
         data = data or {}
-        declared = {f.name: f for f in _block_fields(cls)}
-        values: Dict[str, Any] = {}
-        for name, f in declared.items():
-            if name in data:
-                value = data[name]
-                load: Optional[Callable[[Any], Any]] = f.metadata.get(_LOAD)
-                values[name] = load(value) if load is not None and value is not None else _copy(value)
-        block = cls(**values)
-        block.extra = {k: _copy(v) for k, v in data.items() if k not in declared}
-        object.__setattr__(block, "_keys", set(values))
+        state: Dict[str, Any] = {}
+        present: Set[str] = set()
+        for spec in _field_specs(cls):
+            if spec.name in data:
+                value = data[spec.name]
+                state[spec.name] = spec.load(value) if spec.load is not None and value is not None else _copy(value)
+                present.add(spec.name)
+            else:
+                state[spec.name] = spec.default_value()
+        # Filled in directly rather than through __init__: a registry can hold tens of thousands
+        # of datasets, and status converts each of their blocks several times over.
+        block = cls.__new__(cls)
+        block.__dict__.update(state)
+        block.__dict__["extra"] = {k: _copy(v) for k, v in data.items() if k not in state}
+        block.__dict__["_keys"] = present
         return block
 
     def to_dict(self) -> Dict[str, Any]:
         """The JSON form: the keys this block holds (see the module docstring), then ``extra``."""
         out: Dict[str, Any] = {}
-        for f in _block_fields(type(self)):
-            value = getattr(self, f.name)
-            if self._keys is not None and f.name not in self._keys and value == _default_of(f):
+        keys = self._keys
+        for spec in _field_specs(type(self)):
+            value = getattr(self, spec.name)
+            if (keys is None and not spec.omit) or (keys is not None and spec.name in keys):
+                pass
+            elif value == spec.default_value():
                 continue
-            if self._keys is None and f.metadata.get(_OMIT) and value == _default_of(f):
-                continue
-            dump: Optional[Callable[[Any], Any]] = f.metadata.get(_DUMP)
-            out[f.name] = dump(value) if dump is not None and value is not None else _copy(value)
+            out[spec.name] = spec.dump(value) if spec.dump is not None and value is not None else _copy(value)
         out.update(self.extra)
         return out
 
     def discard(self, name: str) -> None:
         """Reset field ``name`` to its default and leave its key out of ``to_dict``."""
-        f = {f.name: f for f in _block_fields(type(self))}[name]
-        object.__setattr__(self, name, _default_of(f))
+        spec = next(spec for spec in _field_specs(type(self)) if spec.name == name)
+        object.__setattr__(self, name, spec.default_value())
         if self._keys is not None:
             self._keys.discard(name)
+
+
+def _load_or_none(cls: type[RegistryBlock], value: Any) -> Any:
+    """One nested block from its dict; a JSON null stays None so it is written back as null."""
+    return cls.from_dict(value) if value is not None else None
+
+
+def _dump_or_none(block: Optional[RegistryBlock]) -> Any:
+    return block.to_dict() if block is not None else None
 
 
 def _nested(cls: type[RegistryBlock], default: Any = None, omit: bool = False) -> Any:
@@ -133,8 +174,8 @@ def _nested(cls: type[RegistryBlock], default: Any = None, omit: bool = False) -
 def _nested_list(cls: type[RegistryBlock]) -> Any:
     """A field holding a list of nested blocks."""
     metadata = {
-        _LOAD: lambda items: [cls.from_dict(item) for item in items],
-        _DUMP: lambda blocks: [block.to_dict() for block in blocks],
+        _LOAD: lambda items: [_load_or_none(cls, item) for item in items],
+        _DUMP: lambda blocks: [_dump_or_none(block) for block in blocks],
     }
     return field(default_factory=list, metadata=metadata)
 
@@ -142,8 +183,8 @@ def _nested_list(cls: type[RegistryBlock]) -> Any:
 def _nested_map(cls: type[RegistryBlock], omit: bool = False) -> Any:
     """A field holding a mapping of name to nested block."""
     metadata = {
-        _LOAD: lambda items: {k: cls.from_dict(v) for k, v in items.items()},
-        _DUMP: lambda blocks: {k: block.to_dict() for k, block in blocks.items()},
+        _LOAD: lambda items: {k: _load_or_none(cls, v) for k, v in items.items()},
+        _DUMP: lambda blocks: {k: _dump_or_none(block) for k, block in blocks.items()},
         _OMIT: omit,
     }
     return field(default_factory=dict, metadata=metadata)
@@ -156,7 +197,7 @@ def _nested_map(cls: type[RegistryBlock], omit: bool = False) -> Any:
 class ScreeningEntry(RegistryBlock):
     """One genome's screening result for one accession."""
 
-    containment: float = 0.0
+    containment: Optional[float] = None
     cani: Optional[float] = None
     csv: Optional[str] = None
     source: str = ""
@@ -393,6 +434,12 @@ def exclusion_block(registry: Registry, accession: str) -> Optional[ExclusionBlo
 def download_block(registry: Registry, accession: str) -> Optional[DownloadBlock]:
     """``accession``'s download block, or None when nothing about its download was recorded."""
     return _dataset_block(registry, accession, "download", DownloadBlock)
+
+
+def download_verdict(registry: Registry, accession: str) -> Optional[Verdict]:
+    """``accession``'s recorded completeness verdict, or None when it has none."""
+    download = download_block(registry, accession)
+    return download.complete if download is not None else None
 
 
 def download_block_for_write(registry: Registry, accession: str) -> DownloadBlock:

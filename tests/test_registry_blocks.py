@@ -109,6 +109,14 @@ def test_from_dict_tolerates_missing_keys():
     assert ExtractionBlock.from_dict(None).to_dict() == {}
 
 
+def test_null_nested_entries_stay_null():
+    screening = {"date": "d", "genomes": {"G1": None}}
+    assert ScreeningBlock.from_dict(screening).to_dict() == screening
+    download = {"attempts": 1, "files": [None], "complete": None}
+    assert DownloadBlock.from_dict(download).to_dict() == download
+    assert ScreeningEntry.from_dict({}).containment is None
+
+
 def test_assignment_after_load_writes_the_key():
     block = DownloadBlock.from_dict({"attempts": 0})
     block.message = ""

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Tuple
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.store._shared import _no_store_hint
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry
 from metaquest.store.catalog import Catalog
 from metaquest.store.layout import store_paths
@@ -177,7 +178,7 @@ class StoreUsageCommand(BaseCommand):
         """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
-            root = resolve_store_root(args.data_root, registry.store.get("root"))
+            root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1

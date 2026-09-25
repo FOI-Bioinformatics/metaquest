@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from metaquest.cli.base import BaseCommand, emit_error_json
 from metaquest.cli.commands.store._shared import _no_store_hint, _stale_project_row
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import is_hidden_name
 from metaquest.data.registry import load_registry
 from metaquest.data.sra import is_transient_folder
@@ -358,7 +359,7 @@ class StoreGcCommand(BaseCommand):
 
         try:
             registry = load_registry(args.registry)
-            root = resolve_store_root(args.data_root, registry.store.get("root"))
+            root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
             self.logger.error(str(e))
             return 1

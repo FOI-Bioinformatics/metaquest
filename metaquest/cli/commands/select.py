@@ -6,6 +6,7 @@ from pathlib import Path
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_TOP_N
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection, save_registry
 from metaquest.processing.selection import RunFilters, parse_size, select_accessions_ranked
@@ -55,8 +56,8 @@ def _recorded_selection_files(registry: Registry) -> set:
     directory, since the recording run may have been started from either.
     """
     files = set()
-    for record in registry.datasets.values():
-        recorded = (record.get("selection") or {}).get("output")
+    for acc in registry.datasets:
+        recorded = (rb.selection_block(registry, acc) or rb.SelectionBlock()).output
         if not recorded:
             continue
         path = Path(recorded)

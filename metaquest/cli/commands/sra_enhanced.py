@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from metaquest.cli.base import BaseCommand
+from metaquest.data import registry_blocks as rb
 from metaquest.data.defaults import read_records
 from metaquest.data.file_io import visible_files
 from metaquest.data.registry import Registry, load_registry, nan_to_none, record_analysis, save_registry
@@ -58,7 +59,7 @@ def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
     that cannot be reached only costs the usage record, so it is logged and skipped rather
     than failing an analysis the project can run on its own files.
     """
-    return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
+    return resolve_optional_store(getattr(args, "data_root", None), rb.store_block(registry).root)
 
 
 class SRAInfoCommand(BaseCommand):
@@ -400,7 +401,7 @@ class SRAValidateCommand(BaseCommand):
         return []
 
     @staticmethod
-    def _completeness_issues(acc_dir: Path, record: Optional[Dict[str, Any]]) -> list:
+    def _completeness_issues(acc_dir: Path, verdict: Optional[rb.Verdict]) -> list:
         """Issue when this accession's download did not complete against NCBI's spot count.
 
         Prefers the store sidecar (freshest, when ``acc_dir`` is a store link) over the
@@ -428,10 +429,9 @@ class SRAValidateCommand(BaseCommand):
                 return ["download in progress elsewhere"]
             return []
 
-        verdict = ((record or {}).get("download") or {}).get("complete") or {}
-        if verdict.get("verdict") == "truncated":
-            reads = verdict.get("reads_r1")
-            spots = verdict.get("expected_spots")
+        if verdict is not None and verdict.verdict == "truncated":
+            reads = verdict.reads_r1
+            spots = verdict.expected_spots
             return [f"partial: {reads} reads on disk vs {spots} spots at NCBI"]
         return []
 
@@ -492,8 +492,8 @@ class SRAValidateCommand(BaseCommand):
             issues += self._mate_count_issues(acc_dir, cached_stats(acc_dir, _resolved_sidecar_path(acc_dir)))
 
         checks.append("completeness")
-        record = registry.datasets.get(acc_dir.name) if registry is not None else None
-        issues += self._completeness_issues(acc_dir, record)
+        verdict = rb.download_verdict(registry, acc_dir.name) if registry is not None else None
+        issues += self._completeness_issues(acc_dir, verdict)
 
         if check_md5:
             checks.append("md5")

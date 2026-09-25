@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
@@ -24,9 +24,6 @@ from metaquest.data.file_io import visible_files
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -706,47 +703,49 @@ def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
 
 
 def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
-    """Return the recorded extraction block for ``accession`` against ``genome_id``, or ``None`` if there is none."""
+    """The recorded extraction for ``accession`` against ``genome_id`` as a plain dict, or ``None``.
+
+    This is the registry's own dict, not a copy; code that reads or changes an extraction uses
+    ``registry_blocks.extraction_block`` and ``set_extraction_block`` instead.
+    """
     return registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
 
 
 # --------------------------------------------------------------------- queries
 
 
-def _extraction_stage(record: Dict[str, Any], stage: str, genome_id: Optional[str]) -> bool:
+def _extraction_stage(registry: Registry, acc: str, stage: str, genome_id: Optional[str]) -> bool:
     """Handle the "extracted"/"assembled" stages of ``_in_stage`` (kept separate to bound complexity)."""
-    extractions = record.get("extractions", {})
-    if genome_id is None:
-        chosen = [e for e in extractions.values() if e is not None]
-    else:
-        chosen = [extractions[genome_id]] if extractions.get(genome_id) is not None else []
+    extractions = rb.extraction_blocks(registry, acc)
+    chosen = list(extractions.values()) if genome_id is None else [e for g, e in extractions.items() if g == genome_id]
     if stage == "extracted":
-        return any((e.get("mapped_reads") or 0) > 0 for e in chosen)
+        return any((e.mapped_reads or 0) > 0 for e in chosen)
     if stage == "assembled":
-        return any((e.get("assembly") or {}).get("contigs", 0) > 0 for e in chosen)
+        return any(e.assembly is not None and (e.assembly.contigs or 0) > 0 for e in chosen)
     raise DataAccessError(f"Unknown stage '{stage}'. Choose one of: {', '.join(STAGES)}")
 
 
-def _in_stage(record: Dict[str, Any], stage: str, genome_id: Optional[str]) -> bool:
+def _in_stage(registry: Registry, acc: str, stage: str, genome_id: Optional[str]) -> bool:
+    """Whether ``acc`` is in ``stage``; each stage converts only the one block it looks at."""
     if stage == "screened":
-        genomes = record.get("screening", {}).get("genomes", {})
+        genomes = (rb.screening_block(registry, acc) or rb.ScreeningBlock()).genomes
         return bool(genomes) if genome_id is None else genome_id in genomes
     if stage == "selected":
-        return bool(record.get("selection", {}).get("selected"))
+        return bool((rb.selection_block(registry, acc) or rb.SelectionBlock()).selected)
     if stage == "excluded":
-        return bool(record.get("exclusion", {}).get("excluded"))
+        return bool((rb.exclusion_block(registry, acc) or rb.ExclusionBlock()).excluded)
     if stage == "downloaded":
-        return record.get("download", {}).get("state") == "downloaded"
+        return (rb.download_block(registry, acc) or rb.DownloadBlock()).state == "downloaded"
     if stage == "analysed":
-        return bool(record.get("analyses"))
-    return _extraction_stage(record, stage, genome_id)
+        return bool(registry.datasets[acc].get("analyses"))
+    return _extraction_stage(registry, acc, stage, genome_id)
 
 
 def query(registry: Registry, stage: str, genome_id: Optional[str] = None) -> List[str]:
     """Accessions in ``stage`` (insertion order), optionally for one target genome."""
     if stage not in STAGES:
         raise DataAccessError(f"Unknown stage '{stage}'. Choose one of: {', '.join(STAGES)}")
-    return [acc for acc, record in registry.datasets.items() if _in_stage(record, stage, genome_id)]
+    return [acc for acc in registry.datasets if _in_stage(registry, acc, stage, genome_id)]
 
 
 def stage_counts(registry: Registry) -> Dict[str, Any]:
@@ -762,9 +761,9 @@ def stage_counts(registry: Registry) -> Dict[str, Any]:
     for genome_id in sorted(known_genome_ids(registry)):
         zero = [
             acc
-            for acc, record in registry.datasets.items()
-            if genome_id in record.get("extractions", {})
-            and (record["extractions"][genome_id].get("mapped_reads") or 0) == 0
+            for acc in registry.datasets
+            if (extraction := rb.extraction_block(registry, acc, genome_id)) is not None
+            and (extraction.mapped_reads or 0) == 0
         ]
         genomes[genome_id] = {
             "extracted": len(query(registry, "extracted", genome_id)),
@@ -777,9 +776,9 @@ def stage_counts(registry: Registry) -> Dict[str, Any]:
 def known_genome_ids(registry: Registry) -> Set[str]:
     """Return every genome id the registry knows about: recorded genomes plus any seen only in a dataset entry."""
     ids: Set[str] = set(registry.genomes)
-    for record in registry.datasets.values():
-        ids.update(record.get("screening", {}).get("genomes", {}))
-        ids.update(record.get("extractions", {}))
+    for acc in registry.datasets:
+        ids.update((rb.screening_block(registry, acc) or rb.ScreeningBlock()).genomes)
+        ids.update(registry.datasets[acc].get("extractions") or {})
     return ids
 
 
@@ -1044,7 +1043,7 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
     assemblies = scan_assemblies(paths.targeted, genome_ids)
     for acc, per_genome_files in scan_extractions(paths.targeted, genome_ids).items():
         for genome_id, files in per_genome_files.items():
-            if extraction_record(registry, acc, genome_id) is None:
+            if rb.extraction_block(registry, acc, genome_id) is None:
                 report.untracked_extractions.append((acc, genome_id))
                 _infer_extraction(registry, acc, genome_id, files)
                 asm_dir = assemblies.get(acc, {}).get(genome_id)
@@ -1067,16 +1066,16 @@ def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> 
     verified it when it was downloaded, and counting the reads again through a link would
     repeat work another project has done.
     """
-    for acc, record in registry.datasets.items():
-        download = record.get("download") or {}
-        if download.get("state") != "downloaded" or download.get("complete"):
+    for acc in registry.datasets:
+        download = rb.download_block(registry, acc) or rb.DownloadBlock()
+        if download.state != "downloaded" or (download.complete is not None and download.complete.to_dict()):
             continue
-        if download.get("source") == "store":
+        if download.source == "store":
             complete = _store_verdict(registry, acc)
             if complete is not None:
                 set_download_verdict(registry, acc, complete)
             continue
-        spots = (record.get("metadata") or {}).get("run_total_spots")
+        spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots
         if not spots:
             continue
         acc_dir = paths.fastq / acc
@@ -1093,7 +1092,7 @@ def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any
     Reads the store root the registry itself recorded; a project whose store has moved or is
     not mounted simply gets no verdict this time round, exactly as before.
     """
-    root = (registry.store or {}).get("root")
+    root = rb.store_block(registry).root
     if not root:
         return None
     # Imported here, not at module level: metaquest.store imports this module.
@@ -1105,45 +1104,3 @@ def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any
     except (OSError, DataAccessError) as e:
         logger.warning("Could not read the store sidecar for %s: %s", accession, e)
         return None
-
-
-def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
-    """Flat views: one row per accession, and one row per (accession, genome) extraction."""
-    import pandas as pd
-
-    rows = []
-    ext_rows = []
-    for acc, record in registry.datasets.items():
-        rows.append(
-            {
-                "accession": acc,
-                "screened_genomes": ",".join(sorted(record.get("screening", {}).get("genomes", {}))),
-                "selected": bool(record.get("selection", {}).get("selected", False)),
-                "excluded": bool(record.get("exclusion", {}).get("excluded", False)),
-                "exclusion_reason": record.get("exclusion", {}).get("reason", ""),
-                "download_state": record.get("download", {}).get("state", ""),
-                "download_date": record.get("download", {}).get("date", ""),
-                "bytes_total": record.get("download", {}).get("bytes_total", 0),
-                "metadata": "metadata" in record,
-                "analyses": ",".join(sorted(record.get("analyses", {}))),
-            }
-        )
-        for genome_id, ext in record.get("extractions", {}).items():
-            asm = ext.get("assembly") or {}
-            ext_rows.append(
-                {
-                    "accession": acc,
-                    "genome_id": genome_id,
-                    "mapped_reads": ext.get("mapped_reads"),
-                    "breadth": ext.get("breadth"),
-                    "mean_depth": ext.get("mean_depth"),
-                    "extraction_date": ext.get("date"),
-                    "contigs": asm.get("contigs"),
-                    "total_bp": asm.get("total_bp"),
-                    "n50": asm.get("n50"),
-                    "assembly_date": asm.get("date"),
-                }
-            )
-    datasets = pd.DataFrame(rows).set_index("accession") if rows else pd.DataFrame()
-    extractions = pd.DataFrame(ext_rows)
-    return datasets, extractions

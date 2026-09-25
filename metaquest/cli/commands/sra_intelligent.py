@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError, ValidationError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
 from metaquest.data.sra import fastq_files
 from metaquest.data.sra_metadata import _resolved_sidecar_path
@@ -45,7 +46,7 @@ def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
     that cannot be reached only costs the usage record, so it is logged and skipped rather
     than failing an analysis the project can run on its own files.
     """
-    return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
+    return resolve_optional_store(getattr(args, "data_root", None), rb.store_block(registry).root)
 
 
 def _read_accession_file(filename: str) -> List[str]:
