@@ -1,7 +1,7 @@
 """
 Tests for metaquest.store.stats: one cached FASTQ statistics record per dataset, computed
-once and shared by sra_stats, sra_profile_quality and sra_compare instead of each command
-re-parsing every read on its own.
+once and shared by sra_profile and sra_report instead of each command re-parsing every read
+on its own.
 """
 
 import gzip
@@ -83,6 +83,38 @@ class TestComputeDatasetStatsCounts:
         assert stats["reads_per_file"][f1.name] == 7
         assert stats["reads_per_file"][f2.name] == 3
         assert stats["reads_total"] == 10
+
+
+class TestComputeDatasetStatsFigures:
+    """Length, base and GC figures of the record (moved here from the removed
+    calculate_read_statistics tests, the second statistics path before 0.5.0)."""
+
+    def test_lengths_bases_and_gc(self, tmp_path):
+        fastq = tmp_path / "SRR1.fastq"
+        _write_fastq(fastq, ["ATCGATCGATCGATCG", "GCTAGCTAGCTAGCTA", "A" * 16, "G" * 16])
+
+        stats = compute_dataset_stats([fastq], use_seqkit=False)
+
+        assert stats["reads_total"] == 4
+        assert stats["bases_total"] == 64
+        assert stats["avg_read_length"] == 16.0
+        assert (stats["min_read_length"], stats["max_read_length"]) == (16, 16)
+        assert stats["gc_content"] == 0.5  # a 0-1 fraction; sra_profile reports it times 100
+
+    def test_n50(self, tmp_path):
+        fastq = tmp_path / "SRR1.fastq"
+        _write_fastq(fastq, ["A" * 100, "T" * 200, "C" * 300, "G" * 400])
+
+        # 1000 bases in total; the cumulative sum from the longest read reaches 500 at 300 bp.
+        assert compute_dataset_stats([fastq], use_seqkit=False)["n50"] == 300
+
+    def test_small_file_is_not_sampled(self, tmp_path):
+        fastq = tmp_path / "SRR1.fastq"
+        _write_fastq(fastq, ["ACGT"] * 5)
+
+        stats = compute_dataset_stats([fastq], use_seqkit=False)
+
+        assert stats["reads_total"] == 5 and stats["sampled"] is False
 
 
 class TestUniformSampling:

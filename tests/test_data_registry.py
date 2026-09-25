@@ -10,7 +10,9 @@ import pytest
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry as reg
+from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import summarise_contigs
+from metaquest.processing.status_report import to_dataframes
 
 
 def _fastq(path: Path, reads: int = 2, gz: bool = False) -> Path:
@@ -587,15 +589,13 @@ class TestRecords:
             "v1.2.9",
             {"threads": 1},
         )
-        rec = reg.extraction_record(r, "SRR1", "GCF_1")
-        assert (
-            rec["mapped_reads"] == 239464 and rec["assembly"]["n50"] == 15400 and rec["assembly"]["version"] == "v1.2.9"
-        )
+        rec = rb.extraction_block(r, "SRR1", "GCF_1")
+        assert rec.mapped_reads == 239464 and rec.assembly.n50 == 15400 and rec.assembly.version == "v1.2.9"
         assert r.datasets["SRR1"]["metadata"]["run_size"] == "1234"
         assert r.datasets["SRR1"]["analyses"]["sra_stats"]["summary"]["total_reads"] == 10
         # a new extraction record keeps the assembly block
         reg.record_extraction(r, "SRR1", "GCF_1", [], 0, True, {"genome_fasta": "g", "preset": "sr", "threshold": 0.1})
-        assert reg.extraction_record(r, "SRR1", "GCF_1")["assembly"]["contigs"] == 188
+        assert rb.extraction_block(r, "SRR1", "GCF_1").assembly.contigs == 188
 
     def test_record_metadata_keeps_spots_bases_layout_platform_as_int(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
@@ -783,9 +783,9 @@ class TestScanners:
             and r.datasets["SRR1"]["download"]["inferred"] is True
         )
         assert r.datasets["SRR1"]["metadata"]["inferred"] is True and "metadata" not in r.datasets["SRR2"]
-        ext = reg.extraction_record(r, "SRR1", "GCF_1")
+        ext = rb.extraction_block(r, "SRR1", "GCF_1")
         # both mates are counted, so the inferred count matches what a real extraction records
-        assert ext["mapped_reads"] == 4 and ext["assembly"]["contigs"] == 1 and ext["inferred"] is True
+        assert ext.mapped_reads == 4 and ext.assembly.contigs == 1 and ext.inferred is True
         assert "GCF_1" in r.genomes
 
         (paths.fastq / "SRR2" / "SRR2_1.fastq").unlink()
@@ -834,12 +834,12 @@ class TestScanners:
 
         r = reg.bootstrap_from_disk(paths)
 
-        ext = reg.extraction_record(r, "SRR1", "GCF_1")
-        assert ext["breadth"] == 0.625 and ext["mean_depth"] == 3.25
-        assert ext["coverage_tsv"] == "targeted/SRR1/GCF_1_coverage.tsv"
-        assert ext["inferred"] is True
-        without = reg.extraction_record(r, "SRR2", "GCF_1")
-        assert without["breadth"] is None and without["mean_depth"] is None and without["coverage_tsv"] is None
+        ext = rb.extraction_block(r, "SRR1", "GCF_1")
+        assert ext.breadth == 0.625 and ext.mean_depth == 3.25
+        assert ext.coverage_tsv == "targeted/SRR1/GCF_1_coverage.tsv"
+        assert ext.inferred is True
+        without = rb.extraction_block(r, "SRR2", "GCF_1")
+        assert without.breadth is None and without.mean_depth is None and without.coverage_tsv is None
 
     def test_bootstrap_with_an_unreadable_coverage_table_records_no_coverage(self, tmp_path, monkeypatch, caplog):
         monkeypatch.chdir(tmp_path)
@@ -852,9 +852,9 @@ class TestScanners:
         with caplog.at_level("WARNING"):
             r = reg.bootstrap_from_disk(paths)
 
-        ext = reg.extraction_record(r, "SRR1", "GCF_1")
-        assert ext["breadth"] is None and ext["mean_depth"] is None and ext["coverage_tsv"] is None
-        assert ext["mapped_reads"] == 2
+        ext = rb.extraction_block(r, "SRR1", "GCF_1")
+        assert ext.breadth is None and ext.mean_depth is None and ext.coverage_tsv is None
+        assert ext.mapped_reads == 2
         assert "GCF_1_coverage.tsv" in caplog.text
 
     def test_bootstrap_from_disk_ignores_transient_temp_folder(self, tmp_path):
@@ -872,7 +872,7 @@ class TestScanners:
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_selection(r, ["SRR1"], {"threshold": 0.1}, Path("a.txt"))
         reg.record_extraction(r, "SRR1", "GCF_1", [], 7, False, {"preset": "sr"})
-        datasets, extractions = reg.to_dataframes(r)
+        datasets, extractions = to_dataframes(r)
         assert list(datasets.index) == ["SRR1"] and bool(datasets.loc["SRR1", "selected"]) is True
         assert extractions.loc[0, "genome_id"] == "GCF_1" and int(extractions.loc[0, "mapped_reads"]) == 7
         assert "breadth" in extractions.columns and "mean_depth" in extractions.columns
@@ -881,8 +881,16 @@ class TestScanners:
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         coverage = {"breadth": 0.5, "mean_depth": 3.25, "coverage_tsv": tmp_path / "c.tsv"}
         reg.record_extraction(r, "SRR1", "GCF_1", [], 7, False, {}, coverage=coverage)
-        _, extractions = reg.to_dataframes(r)
+        _, extractions = to_dataframes(r)
         assert extractions.loc[0, "breadth"] == 0.5 and extractions.loc[0, "mean_depth"] == 3.25
+
+    def test_to_dataframes_reads_the_profile_or_an_old_quality_analysis(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        reg.record_analysis(r, "SRR1", "profile", tmp_path / "p.json", {"total_reads": 10, "gc_percent": 40.0})
+        reg.record_analysis(r, "SRR2", "quality", tmp_path / "q.json", {"grade": "good", "gc_content": 0.5})
+        datasets, _ = to_dataframes(r)
+        assert datasets.loc["SRR1", "gc_percent"] == 40.0 and datasets.loc["SRR1", "total_reads"] == 10
+        assert datasets.loc["SRR2", "gc_percent"] == 50.0 and datasets.loc["SRR2", "quality_grade"] == "good"
 
 
 class TestStoreLinksInTheRegistry:
@@ -1065,3 +1073,67 @@ class TestRecordExport:
     def test_to_int_or_none_is_public(self):
         assert reg.to_int_or_none("12") == 12
         assert reg.to_int_or_none("1.2G") is None
+
+
+class TestUpdateLinked:
+    """``update_linked`` is the one place the registry's ``store["linked"]`` list is changed."""
+
+    def test_add_keeps_the_list_sorted_and_free_of_duplicates(self):
+        registry = reg.Registry()
+        reg.update_linked(registry, "SRR2", add=True)
+        reg.update_linked(registry, "SRR1", add=True)
+        reg.update_linked(registry, "SRR2", add=True)
+        assert registry.store["linked"] == ["SRR1", "SRR2"]
+
+    def test_remove_drops_the_accession_and_is_idempotent(self):
+        registry = reg.Registry()
+        registry.store["linked"] = ["SRR1", "SRR2"]
+        reg.update_linked(registry, "SRR1", add=False)
+        reg.update_linked(registry, "SRR1", add=False)
+        assert registry.store["linked"] == ["SRR2"]
+
+    def test_remove_from_an_absent_list_leaves_an_empty_list(self):
+        registry = reg.Registry()
+        reg.update_linked(registry, "SRR1", add=False)
+        assert registry.store["linked"] == []
+
+
+class TestStageCountsSpeed:
+    """Stage checks read single fields rather than building typed blocks; catch a regression."""
+
+    def test_stage_counts_on_5000_datasets_is_fast(self):
+        import time
+
+        r = reg.Registry()
+        for i in range(5000):
+            accession = f"SRR{i:07d}"
+            reg.record_screening(r, accession, "G1", 0.5, None, "matches", 0.0, None)
+            r.datasets[accession]["download"] = {
+                "attempts": 1,
+                "state": "downloaded",
+                "date": "d",
+                "files": [{"path": "p", "bytes": 1, "mtime": "m"}, {"path": "q", "bytes": 1, "mtime": "m"}],
+                "bytes_total": 2,
+                "message": "",
+                "complete": {"verdict": "complete", "ratio": 1.0},
+            }
+            if i % 10 == 0:
+                r.datasets[accession]["extractions"] = {"G1": {"mapped_reads": i % 20, "files": [], "assembly": None}}
+        conversions = []
+        original = rb.RegistryBlock.from_dict.__func__
+
+        def counting(cls, data):
+            conversions.append(cls.__name__)
+            return original(cls, data)
+
+        start = time.perf_counter()
+        with patch.object(rb.RegistryBlock, "from_dict", classmethod(counting)):
+            counts = reg.stage_counts(r)
+        elapsed = time.perf_counter() - start
+        assert counts["stages"]["downloaded"] == 5000 and counts["genomes"]["G1"]["extracted"] == 250
+        assert len(counts["genomes"]["G1"]["zero_mapped"]) == 250
+        # The time bound is generous; the conversion count is what catches a regression, since
+        # building typed blocks here made stage_counts about eight times slower but still fast
+        # enough on 5000 datasets to pass any bound that is safe on a slow machine.
+        assert conversions == []
+        assert elapsed < 0.5, f"stage_counts took {elapsed:.2f} s on 5000 datasets"

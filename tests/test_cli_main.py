@@ -59,8 +59,9 @@ class TestRegisterAllCommands:
             "store_usage",
             "store_gc",
             "sra_info",
-            "sra_stats",
             "sra_validate",
+            "sra_profile",
+            "sra_report",
             "diversity_analysis",
             "interactive_plot",
             "validate_taxonomy",
@@ -76,7 +77,9 @@ class TestRegisterAllCommands:
         action = next(a for a in parser._subparsers._group_actions if getattr(a, "choices", None))
         return set(action.choices)
 
-    def test_kebab_aliases_parse_but_are_hidden(self):
+    def test_renamed_commands_parse_but_are_hidden(self):
+        # sra_profile_quality, sra_dashboard and sra_compare (and their dash aliases) were
+        # renamed in 0.5.0; the old names still parse, to point at the new command.
         parser = create_parser()
         choices = self._subcommand_choices(parser)
         for snake, kebab in (
@@ -86,8 +89,8 @@ class TestRegisterAllCommands:
         ):
             assert snake in choices and kebab in choices
         help_text = parser.format_help()
-        assert "sra_dashboard" in help_text
-        assert "sra-dashboard" not in help_text
+        assert "sra_report" in help_text
+        assert "sra_dashboard" not in help_text and "sra-dashboard" not in help_text
         assert "{" not in help_text.split("commands by pipeline step")[0].split("usage:")[1]
 
     def test_help_groups_commands_by_step(self):
@@ -108,7 +111,9 @@ class TestRegisterAllCommands:
         register_all_commands()
         help_text = create_parser().format_help()
         entry_lines = {}
-        for name in command_registry.get_all_commands():
+        for name, command in command_registry.get_all_commands().items():
+            if command.hidden:
+                continue
             matches = re.findall(rf"^    {re.escape(name)}\s", help_text, flags=re.MULTILINE)
             assert len(matches) == 1, f"{name} should be listed exactly once in the main help"
             entry_lines[name] = help_text.index(f"    {name} ")

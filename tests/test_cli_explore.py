@@ -7,10 +7,12 @@ Run: pytest tests/test_cli_explore.py -v
 """
 
 import argparse
+import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 from metaquest.cli.commands.explore import (
     EnrichTaxonomyCommand,
@@ -22,6 +24,11 @@ from metaquest.core.models import TaxonomyInfo
 # ============================================================================
 # Helpers
 # ============================================================================
+
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
+)
 
 
 def _write_containment_tsv(path: Path):
@@ -126,6 +133,7 @@ class TestExploreContainmentCommand:
         assert args.taxonomy_map == "tax.tsv"
         assert args.min_containment == 0.1
 
+    @requires_interactive
     @patch("metaquest.cli.commands.explore.load_taxonomy_cache")
     @patch("metaquest.visualization.explorer.generate_containment_explorer")
     def test_execute_with_taxonomy_map(self, mock_gen, mock_load, tmp_path):
@@ -152,6 +160,7 @@ class TestExploreContainmentCommand:
         assert result == 0
         mock_gen.assert_called_once()
 
+    @requires_interactive
     @patch("metaquest.cli.commands.explore.enrich_genomes_with_taxonomy")
     @patch("metaquest.visualization.explorer.generate_containment_explorer")
     def test_execute_without_taxonomy_map(self, mock_gen, mock_enrich, tmp_path):
@@ -187,6 +196,7 @@ class TestExploreContainmentCommand:
         result = cmd.execute(args)
         assert result == 1
 
+    @requires_interactive
     @patch("metaquest.cli.commands.explore.enrich_genomes_with_taxonomy")
     @patch("metaquest.visualization.explorer.generate_containment_explorer")
     def test_execute_logs_a_next_hint_when_not_opened(self, mock_gen, mock_enrich, tmp_path, caplog):
@@ -214,6 +224,7 @@ class TestExploreContainmentCommand:
         assert "Next:" in caplog.text
         assert str(output) in caplog.text
 
+    @requires_interactive
     @patch("metaquest.utils.browser.open_in_browser")
     @patch("metaquest.cli.commands.explore.enrich_genomes_with_taxonomy")
     @patch("metaquest.visualization.explorer.generate_containment_explorer")

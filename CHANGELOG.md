@@ -2,6 +2,128 @@
 
 All notable changes to MetaQuest are documented in this file. Dates are in YYYY-MM-DD format.
 
+## [0.5.0] - 2026-09-25
+
+### Breaking changes
+
+- Optional packages moved behind extras: `analysis` (scikit-learn, scipy), `interactive` (plotly,
+  jinja2), `maps` (cartopy), `sourmash`, and `all` (every extra). A plain `pip install .` no longer
+  installs any of them; a command that needs a missing extra stops with a `ConfigurationError`
+  naming the extra and the interpreter to install it into, for example
+  `/path/to/python -m pip install 'metaquest[analysis]'`. `statsmodels`, `umap-learn`, `networkx`,
+  `upsetplot`, and `seaborn` are no longer dependencies at all. A command that previously produced a
+  degraded plain-text or plain-HTML output when a package was absent now stops with that same error
+  instead; the correlation heatmap in `interactive_plot` is drawn with matplotlib, which is a core
+  dependency, so it no longer needs an extra.
+- `sra_stats`, `sra_profile_quality`, `sra_dashboard`, and `sra_compare` are replaced by two
+  commands: `sra_profile` (statistics table and a quality profile JSON per accession) and
+  `sra_report` (one HTML report, with a group comparison and statistical tests when `--groups-file`
+  is given). The four old names still parse; each prints the new command name and exits with status
+  2 rather than running. They are hidden from `metaquest --help`. See "Renamed SRA commands" in
+  README.md for the full flag mapping.
+- `sra_validate --accessions` is replaced by `--accessions-file` and repeatable `--accession`,
+  matching `sra_profile` and `sra_report`. `--include-contamination` is removed; the adapter figures
+  are always computed.
+- GC content is reported in percent (`gc_percent`, 0-100) everywhere: the `sra_profile` CSV, the
+  per-accession quality profile JSON (`complexity_score` also replaces the old ad hoc key), and the
+  `results_table` output. The previous `gc_content` key (a 0-1 fraction in the JSON, already percent
+  in the CSV) is gone. `avg_quality` in the CSV is now a per-read mean over a sample of reads from
+  every mate file, rather than mate-1 records only.
+- `results_table` gains `total_reads`, `gc_percent`, and `quality_grade` columns, inserted after
+  `run_size` and before `mapped_reads`. Every later column shifts position accordingly; a script
+  that reads `results_table`'s output by column index rather than by header name must be updated.
+- `import metaquest.data.sra` now imports a package (`metaquest/data/sra/`) rather than a single
+  module. The public functions re-exported from `metaquest.data.sra` are unchanged; private helper
+  names moved to their new submodules (`fastq`, `cleanup`, `accession`, `store_handoff`, `retry`,
+  `download`) and are no longer importable from the old single-file path.
+- Public Python API changes outside `metaquest.data.sra`:
+  `metaquest.data.sra_metadata.calculate_read_statistics` is removed (statistics come from
+  `metaquest.sra.dataset_stats` and `metaquest.sra.profiles`), and
+  `metaquest.data.sra_metadata.generate_statistics_report` now takes a sequence of statistics rows
+  and an output path instead of a FASTQ folder and a sample size. `SequenceQualityAnalyzer` moved to
+  `metaquest/sra/quality.py`; it is still importable from `metaquest.sra` and
+  `metaquest.sra.analytics`. `metaquest.data.branchwater_search.sourmash_hint` and
+  `SOURMASH_HINT` are removed; a missing sourmash is reported through
+  `metaquest.core.optional.require` like every other extra.
+- Error lines that end a command with exit status 1 (for example "No accessions found in file" and
+  "FASTQ folder ... does not exist") are now written to the log on stderr instead of stdout. A
+  script that parsed those lines from stdout must read stderr or check the exit status instead. The
+  `--json` error document for a missing store stays on stdout.
+- Registry analysis keys changed: `sra_profile` records its outcome under `profile` and `sra_report`
+  under `report`, replacing the `sra_stats` and `quality` keys. Only `results_table` and `status`
+  still fall back to the old keys when reading a registry written by an earlier version.
+
+### Exception handling
+
+- Added a `flake8-blind-except` lint gate (`B902`, bare `except Exception:`) with a per-module
+  exemption list in `setup.cfg` that only shrinks as modules are narrowed.
+- Narrowed broad exception handling in six modules (`metaquest/data/sra.py` and its later split,
+  `sra_metadata.py`, `metadata.py`, `branchwater.py`, `visualization/reporting.py`, and
+  `sra_intelligent.py`): a caught exception now names the specific error types the surrounding code
+  can actually raise, so a programming error (for example a `TypeError` or `AttributeError`) is no
+  longer swallowed and reported as a data or network failure. Corrupt gzip streams (`zlib.error`)
+  and truncated NCBI replies are now handled explicitly rather than falling through a catch-all.
+
+### Output
+
+- Every command now writes to stdout through exactly one channel: `BaseCommand.emit`,
+  `emit_raw`, and `emit_json` (plus the module-level `emit_error_json` for callers with no command
+  instance). Library modules that used to print now log or return their lines instead, and the
+  calling command writes them. The four `--json` commands (`status`, `store_status`, `store_usage`,
+  `store_gc`) each emit exactly one JSON document.
+- Added a `make check` gate (`scripts/check_no_print.sh`) that fails on any `print(` or
+  `sys.stdout.write` outside `metaquest/cli/base.py`.
+
+### Dependency audit
+
+- Added `pip-audit --strict --desc .` to the CI lint job, and a new weekly `audit.yml` workflow that
+  runs the same check on a schedule.
+- The weekly Branchwater workflow's verify step now makes real assertions about the pipeline's
+  output instead of only echoing that it ran.
+
+### Documentation
+
+- Added a `flake8-docstrings` gate (`D101`/`D102`/`D103`: a docstring on every public class, method,
+  and function), enforced on a defined set of modules: the registry, the `metaquest/data/sra/` and
+  `metaquest/store/` packages, the `metaquest/cli/commands/store/` and
+  `metaquest/cli/commands/status/` packages, `processing/selection.py`, `processing/results.py`,
+  `processing/status_report.py`, `data/registry_blocks.py`, `core/optional.py`, `sra/quality.py`,
+  and the SRA analysis command and profiling modules. Every other
+  module has the check switched off explicitly in `setup.cfg` rather than by a wildcard, so the
+  enforced set stays visible and can grow one file at a time.
+
+### Module layout
+
+- Split `metaquest/data/sra.py` into the package `metaquest/data/sra/` (`fastq`, `cleanup`,
+  `accession`, `store_handoff`, `retry`, `download`), each module under 600 lines.
+- Split `metaquest/cli/commands/store.py` into `metaquest/cli/commands/store/` (one module per
+  command: `init`, `status`, `reindex`, `adopt`, `verify`, `link`, `usage`, `gc`, plus a shared
+  `_shared.py`), and `metaquest/cli/commands/status.py` into
+  `metaquest/processing/status_report.py` (report building) and `metaquest/cli/commands/status/`
+  (`command.py`, `suggest.py`, `render_text.py`).
+- Added typed registry blocks (`metaquest/data/registry_blocks.py`): every block in
+  `metaquest_registry.json` (screening, selection, exclusion, download, metadata, analysis,
+  extraction, assembly, project, store) is now a dataclass with `from_dict`/`to_dict`, round-trips
+  any key it does not itself declare, and keeps the on-disk JSON layout unchanged. `update_linked`
+  moved from the store commands into `metaquest/data/registry.py`, next to the other registry
+  writers.
+- Added a module size and maintainability gate: 800 lines and a maintainability index of 20 or
+  higher per module under `metaquest/`, with a shrinking `KNOWN_EXCEPTIONS` list in
+  `tests/test_module_sizes.py` for modules that were already over a ceiling when the gate was
+  added.
+- Added an ASCII-only gate for `metaquest/`, `tests/`, `scripts/`, `Makefile`, `setup.cfg`, and
+  `pyproject.toml`. A single line can be exempted with an `# ascii-ok` marker and a reason; the
+  package author's name and the test fixtures that check Unicode handling use it.
+- Added a documented-commands gate: every command visible in `metaquest --help` must be mentioned
+  in README.md, and README.md must not invoke a command the CLI registry does not have.
+
+### Continuous integration
+
+- Added a nightly smoke workflow (`.github/workflows/smoke.yml`) that runs
+  `scripts/smoke_chain.sh` against the real SRR2517620 run on NCBI/SRA, using conda-installed
+  tools (fasterq-dump, prefetch, minimap2, samtools); `make test-network` runs the same chain
+  locally.
+
 ## [0.4.0] - 2026-09-24
 
 ### Breaking changes

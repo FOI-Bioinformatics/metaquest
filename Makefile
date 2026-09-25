@@ -7,7 +7,7 @@ help:
 	@echo "  test        - Run tests with coverage"
 	@echo "  lint        - Run flake8 linting"
 	@echo "  format      - Format code with black"
-	@echo "  check       - Run all quality checks (format, lint, type check)"
+	@echo "  check       - Run all quality checks (format, lint, type check, module size, ASCII, docs)"
 	@echo "  build       - Build distribution packages"
 	@echo "  clean       - Clean build artifacts and cache"
 	@echo "  pipeline    - Run full integration test pipeline"
@@ -46,6 +46,8 @@ check:
 	python -m flake8 metaquest tests
 	@echo "Running type check..."
 	python -m mypy metaquest
+	@echo "Checking that nothing prints outside metaquest/cli/base.py (commands use self.emit)..."
+	bash scripts/check_no_print.sh
 	@echo "Guarding against the frozen plotly-latest CDN alias..."
 	@if grep -rn "cdn.plot.ly/plotly-latest" metaquest --include='*.py'; then \
 		echo "ERROR: use metaquest.utils.html.plotly_cdn_script() instead of the plotly-latest alias"; \
@@ -58,6 +60,12 @@ check:
 		echo "ERROR: functions at complexity rank D or worse; refactor before merging"; \
 		exit 1; \
 	fi
+	@echo "Checking module size (800 lines) and maintainability (MI >= 20) ceilings..."
+	python tests/test_module_sizes.py --check
+	@echo "Checking for non-ASCII bytes outside the documented exemptions..."
+	bash scripts/check_ascii.sh
+	@echo "Checking every command is documented and README names no unknown command..."
+	python scripts/check_docs_commands.py
 	@echo "All quality checks passed!"
 
 build:

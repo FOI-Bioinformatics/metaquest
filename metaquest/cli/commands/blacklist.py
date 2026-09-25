@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import clear_exclusion, load_registry, query, record_exclusion, save_registry
 
 
@@ -65,7 +66,7 @@ class BlacklistCommand(BaseCommand):
             entries = read_blacklist_file(blacklist_path)
             if args.list:
                 for acc in query(registry, "excluded"):
-                    print(f"{acc}\t{registry.datasets[acc]['exclusion'].get('reason', '')}")
+                    self.emit(f"{acc}\t{(rb.exclusion_block(registry, acc) or rb.ExclusionBlock()).reason}")
                 return 0
             if args.remove:
                 for acc in args.remove:

@@ -1,10 +1,12 @@
 """
-EXTENDED TESTS for visualization/reporting.py (49% → 70%+ coverage)
+EXTENDED TESTS for visualization/reporting.py (49% -> 70%+ coverage)
 
 This file extends the starter tests with HTML generation and helper function tests.
 Run: pytest tests/test_visualization_reporting_extended.py -v
 """
 
+import sys
+import importlib.util
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
@@ -15,7 +17,11 @@ from metaquest.visualization.reporting import (
     _prepare_template_data,
     _generate_plots_for_html,
 )
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import ConfigurationError, VisualizationError
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
+)
 
 
 @pytest.fixture
@@ -69,6 +75,7 @@ def sample_counts_data(tmp_path):
 class TestHTMLReportGeneration:
     """Test HTML report generation with proper mocking."""
 
+    @requires_interactive
     def test_generate_html_report_minimal(self, sample_summary_data, tmp_path):
         """Test minimal HTML generation with full mocking."""
         output_file = tmp_path / "report.html"
@@ -80,22 +87,21 @@ class TestHTMLReportGeneration:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2.FileSystemLoader"):
-                with patch("metaquest.visualization.reporting.jinja2.Environment", return_value=mock_env):
-                    with patch("metaquest.visualization.reporting._create_default_template"):
-                        with patch("metaquest.visualization.plots.plot_containment", return_value=Mock()):
-                            with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=Mock()):
-                                with patch("matplotlib.pyplot.close"):
-                                    result = generate_report(
-                                        title="Test HTML Report",
-                                        summary_file=str(sample_summary_data),
-                                        output_file=str(output_file),
-                                        format="html",
-                                        threshold=0.1,
-                                        include_plots=True,
-                                        include_tables=True,
-                                    )
+        with patch("jinja2.FileSystemLoader"):
+            with patch("jinja2.Environment", return_value=mock_env):
+                with patch("metaquest.visualization.reporting._create_default_template"):
+                    with patch("metaquest.visualization.plots.plot_containment", return_value=Mock()):
+                        with patch("metaquest.visualization.plots.plot_correlation_matrix", return_value=Mock()):
+                            with patch("matplotlib.pyplot.close"):
+                                result = generate_report(
+                                    title="Test HTML Report",
+                                    summary_file=str(sample_summary_data),
+                                    output_file=str(output_file),
+                                    format="html",
+                                    threshold=0.1,
+                                    include_plots=True,
+                                    include_tables=True,
+                                )
 
         # Verify result
         assert result == output_file
@@ -104,6 +110,7 @@ class TestHTMLReportGeneration:
         # Verify template was rendered
         mock_template.render.assert_called_once()
 
+    @requires_interactive
     def test_generate_html_without_plots(self, sample_summary_data, tmp_path):
         """Test HTML generation with plots disabled."""
         output_file = tmp_path / "report.html"
@@ -114,19 +121,18 @@ class TestHTMLReportGeneration:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2.FileSystemLoader"):
-                with patch("metaquest.visualization.reporting.jinja2.Environment", return_value=mock_env):
-                    with patch("metaquest.visualization.reporting._create_default_template"):
-                        with patch("metaquest.visualization.plots.plot_containment") as mock_plot:
-                            result = generate_report(
-                                title="Test HTML Report",
-                                summary_file=str(sample_summary_data),
-                                output_file=str(output_file),
-                                format="html",
-                                include_plots=False,
-                                include_tables=True,
-                            )
+        with patch("jinja2.FileSystemLoader"):
+            with patch("jinja2.Environment", return_value=mock_env):
+                with patch("metaquest.visualization.reporting._create_default_template"):
+                    with patch("metaquest.visualization.plots.plot_containment") as mock_plot:
+                        result = generate_report(
+                            title="Test HTML Report",
+                            summary_file=str(sample_summary_data),
+                            output_file=str(output_file),
+                            format="html",
+                            include_plots=False,
+                            include_tables=True,
+                        )
 
         assert result == output_file
         # Verify plotting was NOT called when include_plots=False
@@ -241,8 +247,8 @@ class TestErrorHandling:
         """Test HTML generation fails gracefully when jinja2 unavailable."""
         output_file = tmp_path / "report.html"
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="requires jinja2"):
+        with patch.dict(sys.modules, {"jinja2": None}):
+            with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
                 generate_report(
                     title="Test", summary_file=str(sample_summary_data), output_file=str(output_file), format="html"
                 )
@@ -299,7 +305,7 @@ class TestEdgeCases:
 #
 # After running these extended tests:
 # - Total tests: 10 (starter) + 12 (extended) = 22 tests
-# - Expected coverage: 49% → 70%+ for reporting.py
+# - Expected coverage: 49% -> 70%+ for reporting.py
 # - Tests cover: HTML generation, helper functions, error handling, edge cases
 #
 # Run all reporting tests:
@@ -309,3 +315,74 @@ class TestEdgeCases:
 #   pytest --cov=metaquest.visualization.reporting --cov-report=term-missing \
 #          tests/test_visualization_reporting_*.py
 # ============================================================================
+
+
+# ============================================================================
+# Narrow exception handling (tech debt): a programming error must not be swallowed
+# ============================================================================
+
+
+def test_generate_report_wraps_a_read_error_with_its_cause(tmp_path):
+    """Kind (c): the wrapped error keeps its cause."""
+    with pytest.raises(VisualizationError) as exc:
+        generate_report(title="t", summary_file=tmp_path / "missing.tsv", output_file=tmp_path / "r.pdf")
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+def test_generate_report_propagates_a_bug(tmp_path):
+    """Kind (c): a programming error is not re-labelled as a report error."""
+    with patch("metaquest.visualization.reporting.pd.read_csv", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            generate_report(title="t", summary_file=tmp_path / "s.tsv", output_file=tmp_path / "r.pdf")
+
+
+def test_correlation_heatmap_skips_a_plot_error_and_propagates_a_bug():
+    """Kind (e): a plotting failure is logged and skipped; an AttributeError propagates."""
+    data = pd.DataFrame({"g1": [0.5, 0.2], "g2": [0.4, 0.1]})
+    pdf = MagicMock()
+    with patch(
+        "metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=VisualizationError("bad")
+    ):
+        _add_correlation_heatmap(pdf, data, 0.1)
+    with patch("metaquest.visualization.reporting._top_correlated_genome_columns", side_effect=AttributeError("bug")):
+        with pytest.raises(AttributeError):
+            _add_correlation_heatmap(pdf, data, 0.1)
+
+
+def test_html_plots_skip_a_save_error_and_propagate_a_bug(tmp_path):
+    """Kind (e): a figure that cannot be saved is skipped; a TypeError propagates."""
+    data = pd.DataFrame({"max_containment": [0.5, 0.2], "g1": [0.5, 0.2]})
+    with patch("metaquest.visualization.reporting._add_containment_plot_files", side_effect=OSError("disk full")):
+        assert _generate_plots_for_html(data, None, 0.1, tmp_path) == {}
+    with patch("metaquest.visualization.reporting._add_containment_plot_files", side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            _generate_plots_for_html(data, None, 0.1, tmp_path)
+
+
+def test_correlation_heatmap_skips_a_text_genome_column(caplog):
+    """Fix round 1: a genome column holding text skips the heatmap with a warning."""
+    data = pd.DataFrame(
+        {
+            "max_containment": [0.5, 0.2],
+            "max_containment_annotation": ["g1", "g1"],
+            "g1": [0.5, 0.2],
+            "g2": ["x", "y"],
+        }
+    )
+    pdf = MagicMock()
+    with caplog.at_level("WARNING"):
+        _add_correlation_heatmap(pdf, data, 0.1)
+    pdf.savefig.assert_not_called()
+    assert "Error generating heatmap" in caplog.text
+
+
+def test_html_heatmap_skips_a_text_genome_column(tmp_path, caplog):
+    """Fix round 1: the HTML report's heatmap step is skipped the same way."""
+    from metaquest.visualization.reporting import _add_correlation_plot_file
+
+    data = pd.DataFrame({"max_containment": [0.5, 0.2], "g1": [0.5, 0.2], "g2": ["x", "y"]})
+    plot_files: dict = {}
+    with caplog.at_level("WARNING"):
+        _add_correlation_plot_file(data, 0.1, tmp_path, plot_files)
+    assert plot_files == {}
+    assert "Error generating heatmap" in caplog.text

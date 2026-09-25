@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for data/taxonomy.py (73% → 85%+ coverage)
+EXTENDED TESTS for data/taxonomy.py (73% -> 85%+ coverage)
 
 This file adds tests for untested areas:
 - get_taxonomy_details method
@@ -470,7 +470,7 @@ class TestAdditionalEdgeCases:
 #
 # After running these tests:
 # - Expected: 35+ additional tests pass
-# - Coverage: 73% → 85%+ for data/taxonomy.py
+# - Coverage: 73% -> 85%+ for data/taxonomy.py
 # - All untested methods now covered
 #
 # Run tests:

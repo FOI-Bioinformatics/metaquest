@@ -315,7 +315,7 @@ class TestStoreInitCommand:
         (project_dir / ".git").mkdir()
         monkeypatch.chdir(project_dir)
 
-        with patch("metaquest.cli.commands.store.subprocess.run") as mock_run:
+        with patch("metaquest.cli.commands.store._shared.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
             rc = StoreInitCommand().execute(_init_args(root, project_dir))
         assert rc == 0
@@ -333,7 +333,7 @@ class TestStoreInitCommand:
         (project_dir / ".gitignore").write_text("fastq/\nother\n")
         monkeypatch.chdir(project_dir)
 
-        with patch("metaquest.cli.commands.store.subprocess.run") as mock_run:
+        with patch("metaquest.cli.commands.store._shared.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
             StoreInitCommand().execute(_init_args(root, project_dir))
 
@@ -347,7 +347,7 @@ class TestStoreInitCommand:
         (project_dir / ".git").mkdir()
         monkeypatch.chdir(project_dir)
 
-        with patch("metaquest.cli.commands.store.subprocess.run") as mock_run:
+        with patch("metaquest.cli.commands.store._shared.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="fastq/SRR1/SRR1.fastq\n", stderr=""
             )
@@ -362,7 +362,7 @@ class TestStoreInitCommand:
         project_dir.mkdir()
         monkeypatch.chdir(project_dir)
 
-        with patch("metaquest.cli.commands.store.subprocess.run") as mock_run:
+        with patch("metaquest.cli.commands.store._shared.subprocess.run") as mock_run:
             rc = StoreInitCommand().execute(_init_args(root, project_dir))
         assert rc == 0
         mock_run.assert_not_called()
@@ -375,12 +375,13 @@ class TestStoreStatusCommand:
         assert cmd.name == "store_status"
         assert cmd.group == "Store"
 
-    def test_no_store_configured_prints_hint_and_returns_1(self, tmp_path, monkeypatch, capsys):
+    def test_no_store_configured_logs_hint_and_returns_1(self, tmp_path, monkeypatch, capsys, caplog):
         monkeypatch.chdir(tmp_path)
         rc = StoreStatusCommand().execute(_status_args(registry=str(tmp_path / "metaquest_registry.json")))
-        out = capsys.readouterr().out
         assert rc == 1
-        assert "store_init" in out
+        assert "store_init" in caplog.text
+        # Without --json the hint is an error on stderr; stdout carries no result.
+        assert capsys.readouterr().out == ""
 
     def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
@@ -549,16 +550,16 @@ class TestStoreAdoptCommand:
         assert cmd.name == "store_adopt"
         assert cmd.group == "Store"
 
-    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys):
+    def test_no_store_configured_returns_1(self, tmp_path, monkeypatch, capsys, caplog):
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         monkeypatch.chdir(project_dir)
 
         rc = StoreAdoptCommand().execute(_adopt_args(registry=str(project_dir / "metaquest_registry.json")))
-        out = capsys.readouterr().out
 
         assert rc == 1
-        assert "store_init" in out
+        assert "store_init" in caplog.text
+        assert capsys.readouterr().out == ""
 
     def test_adopts_moves_links_and_records_registry(self, tmp_path, monkeypatch):
         root = tmp_path / "store"
@@ -1554,6 +1555,27 @@ class TestStoreInitRebinding:
         assert registry.store["linked"] == ["SRR1", "SRR2"]
         assert any("was bound to" in record.message for record in caplog.records)
 
+    def test_rerun_keeps_keys_it_does_not_know(self, tmp_path, monkeypatch):
+        from metaquest.data.registry import save_registry
+
+        root = tmp_path / "store"
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+        assert StoreInitCommand().execute(_init_args(root, project_dir)) == 0
+        registry = load_registry(registry_path)
+        registry.store["comment"] = "written by a newer version"
+        registry.project["notes"] = "also kept"
+        save_registry(registry, registry_path)
+
+        assert StoreInitCommand().execute(_init_args(root, project_dir)) == 0
+
+        registry = load_registry(registry_path)
+        assert registry.store["comment"] == "written by a newer version"
+        assert registry.project["notes"] == "also kept"
+        assert set(registry.store) == {"root", "mode", "linked", "comment"}
+
     def test_refuses_a_non_empty_folder_that_is_not_a_store(self, tmp_path, monkeypatch):
         home_like = tmp_path / "documents"
         home_like.mkdir()
@@ -1769,6 +1791,20 @@ class TestStoreReindexNeverLosesHistory:
         assert rc == 1
         assert any("SRR1" in record.message for record in caplog.records)
         # The usage history, which lives only in the catalogue, is untouched.
+        with Catalog(paths) as catalog:
+            assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
+
+    def test_a_sidecar_holding_a_json_list_aborts_the_reindex_as_unreadable(self, tmp_path, caplog):
+        import logging
+
+        root, paths = self._store_with_dataset(tmp_path)
+        sidecar_path(paths, "SRR1").write_text('[{"accession": "SRR1"}]')
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 1
+        assert any("SRR1" in record.message for record in caplog.records)
         with Catalog(paths) as catalog:
             assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
 

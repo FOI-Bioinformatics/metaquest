@@ -1,0 +1,31 @@
+name: Dependency Audit
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'  # Run weekly on Monday at 05:00 UTC
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  audit:
+    name: Audit dependencies for known vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Audit dependencies
+        run: |
+          # Audit the project path (not the installed environment) so pip-audit resolves
+          # dependencies from pyproject.toml instead of trying to look up the local,
+          # unpublished "metaquest" package itself on PyPI.
+          pip-audit --strict .

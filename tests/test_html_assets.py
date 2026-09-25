@@ -1,8 +1,17 @@
 """Tests for shared HTML report assets in metaquest.utils.html."""
 
+import sys
 from unittest.mock import patch
 
+import importlib.util
+import pytest
+
+from metaquest.core.exceptions import ConfigurationError
 from metaquest.utils import html
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
+)
 
 
 class TestReportCss:
@@ -40,12 +49,14 @@ class TestPlotlyLayout:
 class TestPlotlyJsScript:
     """Tests for the inline Plotly script tag."""
 
+    @requires_interactive
     def test_embeds_plotlyjs_inline(self):
         """The tag embeds the bundled plotly.js inline, not a network URL."""
         with patch("plotly.offline.get_plotlyjs", return_value="PLOTLY_JS_BODY"):
             tag = html.plotly_js_script()
         assert tag == '<script type="text/javascript">PLOTLY_JS_BODY</script>'
 
+    @requires_interactive
     def test_never_references_a_remote_cdn(self):
         """The opening <script> tag must be inline, never loading from a remote host."""
         tag = html.plotly_js_script()
@@ -53,10 +64,11 @@ class TestPlotlyJsScript:
         assert "src=" not in opening
         assert "cdn.plot.ly" not in opening
 
-    def test_returns_empty_when_plotly_unavailable(self):
-        """A failure to obtain plotly.js yields an empty string, not a crash."""
-        with patch("plotly.offline.get_plotlyjs", side_effect=RuntimeError("boom")):
-            assert html.plotly_js_script() == ""
+    def test_names_the_extra_when_plotly_is_missing(self, monkeypatch):
+        """Without plotly the error names the interactive extra rather than returning an empty tag."""
+        monkeypatch.setitem(sys.modules, "plotly", None)
+        with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
+            html.plotly_js_script()
 
 
 class TestTableScript:

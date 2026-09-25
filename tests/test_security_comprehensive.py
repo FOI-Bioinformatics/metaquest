@@ -1,5 +1,5 @@
 """
-COMPREHENSIVE TESTS for utils/security.py (53% → 85%+ coverage)
+COMPREHENSIVE TESTS for utils/security.py (53% -> 85%+ coverage)
 
 This file provides thorough testing of security-critical code including
 adversarial testing for injection attacks and path traversal.
@@ -550,7 +550,7 @@ class TestAdvancedSecurityScenarios:
         """Test handling of unicode normalization attacks."""
         # Unicode characters that could be used for obfuscation
         tricky_executables = [
-            "ｒｍ",  # Full-width characters
+            "ｒｍ",  # ascii-ok: full-width characters
             "r\u200bm",  # Zero-width space
         ]
 
@@ -679,7 +679,7 @@ class TestDefensiveGuards:
         """Unicode digits pass str.isdigit() but must fail the ASCII pattern."""
         # "SRR" + superscript digits: validate_accession() accepts it (isdigit()
         # is True) but the SRA_ACCESSION_PATTERN [0-9]+ check rejects it.
-        accession = "SRR¹²³"
+        accession = "SRR¹²³"  # ascii-ok: superscript digits
         with pytest.raises(SecurityError, match="invalid characters"):
             SecureSubprocess.validate_accession_for_subprocess(accession)
 
@@ -893,7 +893,7 @@ class TestChildProcessTracking:
 #
 # After running these comprehensive tests:
 # - Expected: 35+ tests pass
-# - Coverage: 53% → 85%+ for utils/security.py
+# - Coverage: 53% -> 85%+ for utils/security.py
 # - Security-critical code thoroughly tested with adversarial scenarios
 #
 # Run tests:

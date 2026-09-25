@@ -1,20 +1,20 @@
 """
 Enhanced SRA CLI commands for MetaQuest.
 
-This module provides the sra_info, sra_stats, and sra_validate commands for
-previewing NCBI metadata, computing statistics, and validating downloaded datasets.
+This module provides the sra_info and sra_validate commands for previewing NCBI metadata
+and validating downloaded datasets. Dataset statistics and quality profiles are
+``sra_profile`` (``metaquest.cli.commands.sra_profile``).
 """
 
-import argparse
 import gzip
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from metaquest.cli.base import BaseCommand
-from metaquest.data.defaults import read_records
+from metaquest.cli.base import BaseCommand, accessions_from_args, read_accessions_file, resolve_command_store
+from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
-from metaquest.data.registry import Registry, load_registry, nan_to_none, record_analysis, save_registry
+from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
 from metaquest.data.sra import (
     MATE1_SUFFIXES,
     MATE_SUFFIXES,
@@ -28,37 +28,15 @@ from metaquest.data.sra_metadata import (
     create_download_preview,
     estimate_download_time,
     save_metadata_report,
-    generate_statistics_report,
 )
-from metaquest.store.layout import StorePaths
-from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.sidecar import md5_file, read_sidecar
-from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats
+from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
 
 logger = logging.getLogger(__name__)
 
 # Suffixes marking the second mate of a pair, i.e. MATE_SUFFIXES minus MATE1_SUFFIXES.
 _MATE2_SUFFIXES = tuple(suffix for suffix in MATE_SUFFIXES if suffix not in MATE1_SUFFIXES)
-
-
-def _positive_int(value: str) -> int:
-    """argparse type for --sample-size: rejects zero and negative values with a clear message."""
-    parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError(f"--sample-size must be a positive integer, got {value!r}")
-    return parsed
-
-
-def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
-    """Resolve the shared data store (if any) for a command's ``--data-root``/registry.
-
-    ``getattr`` guards ``args.data_root`` so a namespace built without that attribute (an
-    older test, or a caller that never reaches this code path) is never broken by it. A store
-    that cannot be reached only costs the usage record, so it is logged and skipped rather
-    than failing an analysis the project can run on its own files.
-    """
-    return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
 
 
 class SRAInfoCommand(BaseCommand):
@@ -103,19 +81,18 @@ class SRAInfoCommand(BaseCommand):
             help="Estimated bandwidth in Mbps for download time estimation",
         )
 
-    @staticmethod
-    def _print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, bandwidth_mbps):
+    def _print_analysis_summary(self, accessions, metadata, tech_counts, total_size_gb, bandwidth_mbps):
         """Print the SRA dataset analysis summary (counts, distributions, size, ETA)."""
-        print("\nSRA Dataset Analysis:")
-        print("===================")
-        print(f"Total accessions: {len(accessions)}")
-        print(f"Metadata fetched: {len(metadata)}")
-        print(f"Total estimated size: {total_size_gb:.2f} GB")
+        self.emit("\nSRA Dataset Analysis:")
+        self.emit("===================")
+        self.emit(f"Total accessions: {len(accessions)}")
+        self.emit(f"Metadata fetched: {len(metadata)}")
+        self.emit(f"Total estimated size: {total_size_gb:.2f} GB")
 
         if tech_counts:
-            print("\nTechnology distribution:")
+            self.emit("\nTechnology distribution:")
             for tech, count in tech_counts.items():
-                print(f"  {tech}: {count} datasets")
+                self.emit(f"  {tech}: {count} datasets")
 
         platforms: dict = {}
         layouts: dict = {}
@@ -124,157 +101,53 @@ class SRAInfoCommand(BaseCommand):
             layouts[info.layout] = layouts.get(info.layout, 0) + 1
 
         if platforms:
-            print("\nPlatform distribution:")
+            self.emit("\nPlatform distribution:")
             for platform, count in platforms.items():
-                print(f"  {platform}: {count}")
+                self.emit(f"  {platform}: {count}")
         if layouts:
-            print("\nLayout distribution:")
+            self.emit("\nLayout distribution:")
             for layout, count in layouts.items():
-                print(f"  {layout}: {count}")
+                self.emit(f"  {layout}: {count}")
 
         sizes = [info.size_mb / 1024 for info in metadata.values()]  # Convert to GB
         if sizes:
-            print("\nSize statistics:")
-            print(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
-            print(f"  Largest dataset: {max(sizes):.2f} GB")
-            print(f"  Smallest dataset: {min(sizes):.2f} GB")
+            self.emit("\nSize statistics:")
+            self.emit(f"  Average size per dataset: {sum(sizes)/len(sizes):.2f} GB")
+            self.emit(f"  Largest dataset: {max(sizes):.2f} GB")
+            self.emit(f"  Smallest dataset: {min(sizes):.2f} GB")
 
         estimated_hours = estimate_download_time(total_size_gb, bandwidth_mbps, 4)
         if estimated_hours < 1:
-            print(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
+            self.emit(f"  Estimated download time: {estimated_hours*60:.0f} minutes")
         else:
-            print(f"  Estimated download time: {estimated_hours:.1f} hours")
+            self.emit(f"  Estimated download time: {estimated_hours:.1f} hours")
 
     def execute(self, args):
         try:
-            with open(args.accessions_file, "r") as f:
-                accessions = [line.strip() for line in f if line.strip()]
+            accessions = read_accessions_file(args.accessions_file)
 
             if not accessions:
-                print("No accessions found in file")
+                self.logger.error("No accessions found in file")
                 return 1
 
-            print(f"Analyzing {len(accessions)} SRA accessions...")
+            self.emit(f"Analyzing {len(accessions)} SRA accessions...")
 
             client = SRAMetadataClient(args.email, args.api_key)
             metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
 
             if not metadata:
-                print("Could not fetch metadata for any accessions")
+                self.logger.error("Could not fetch metadata for any accessions")
                 return 1
 
             self._print_analysis_summary(accessions, metadata, tech_counts, total_size_gb, args.bandwidth_mbps)
 
             save_metadata_report(metadata, args.output_report)
-            print(f"\nDetailed report saved to: {args.output_report}")
+            self.emit(f"\nDetailed report saved to: {args.output_report}")
 
             return 0
 
         except Exception as e:
             logger.error(f"SRA info command failed: {e}")
-            return 1
-
-
-class SRAStatsCommand(BaseCommand):
-    """Command for calculating comprehensive statistics on downloaded SRA data."""
-
-    @property
-    def name(self) -> str:
-        return "sra_stats"
-
-    @property
-    def help(self) -> str:
-        return "Calculate comprehensive statistics for downloaded SRA datasets"
-
-    @property
-    def group(self) -> str:
-        return "Reads"
-
-    def configure_parser(self, parser):
-        parser.add_argument(
-            "--fastq-folder",
-            default="fastq",
-            help="Folder containing downloaded FASTQ files",
-        )
-        parser.add_argument(
-            "--output-report",
-            default="sra_statistics.csv",
-            help="Output file for statistics report",
-        )
-        parser.add_argument(
-            "--accessions",
-            nargs="*",
-            help="Specific accessions to analyze (default: all)",
-        )
-        parser.add_argument(
-            "--sample-size",
-            type=_positive_int,
-            default=DEFAULT_SAMPLE_SIZE,
-            help="Records sampled per dataset for the per-read metrics such as GC content, "
-            f"quality and read length; read totals stay exact (default: {DEFAULT_SAMPLE_SIZE})",
-        )
-        parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
-        parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
-
-    def _record_statistics(self, args, report_path: Path) -> None:
-        """Record an sra_stats analysis for every accession in the statistics report.
-
-        If the report is missing, empty, or lacks an accession column (e.g. the
-        generator was mocked in a test without writing a real file), this logs at
-        debug level and does nothing.
-        """
-        if not report_path.exists():
-            logger.debug("Statistics report %s not found; skipping registry recording", report_path)
-            return
-        try:
-            df = read_records(report_path)
-        except Exception as e:
-            logger.debug("Could not read statistics report %s: %s", report_path, e)
-            return
-        if df.empty or "accession" not in df.columns:
-            logger.debug("Statistics report %s is empty; skipping registry recording", report_path)
-            return
-
-        registry = load_registry(args.registry)
-        store = _resolve_command_store(args, registry)
-        for _, row in df.iterrows():
-            accession = str(row["accession"])
-            sampled = nan_to_none(row.get("sampled"))
-            summary = {
-                "total_reads": nan_to_none(row.get("total_reads")),
-                "gc_content": nan_to_none(row.get("gc_content")),
-                "avg_read_length": nan_to_none(row.get("avg_read_length")),
-                # True when the per-read metrics came from a sample of the records; the
-                # read total itself is exact either way.
-                "sampled": None if sampled is None else bool(sampled),
-            }
-            record_analysis(registry, accession, "sra_stats", report_path, summary)
-            record_usage_safe(store, registry, accession, "", "analysed", detail="sra_stats")
-        save_registry(registry)
-
-    def execute(self, args):
-        try:
-            fastq_folder = Path(args.fastq_folder)
-
-            if not fastq_folder.exists():
-                print(f"FASTQ folder {fastq_folder} does not exist")
-                return 1
-
-            print("Calculating comprehensive statistics for downloaded datasets...")
-
-            # Generate statistics report
-            generate_statistics_report(
-                fastq_folder, args.output_report, sample_size=getattr(args, "sample_size", DEFAULT_SAMPLE_SIZE)
-            )
-
-            print(f"\nStatistics report saved to: {args.output_report}")
-
-            self._record_statistics(args, Path(args.output_report))
-
-            return 0
-
-        except Exception as e:
-            logger.error(f"SRA stats command failed: {e}")
             return 1
 
 
@@ -299,10 +172,13 @@ class SRAValidateCommand(BaseCommand):
             default="fastq",
             help="Folder containing downloaded FASTQ files",
         )
+        parser.add_argument("--accessions-file", default=None, help="Validate the accessions listed here")
         parser.add_argument(
-            "--accessions",
-            nargs="*",
-            help="Specific accessions to validate (default: all)",
+            "--accession",
+            action="append",
+            default=None,
+            help="Validate this accession (repeatable). With neither this nor --accessions-file, every "
+            "accession folder in --fastq-folder is validated",
         )
         parser.add_argument(
             "--check-pairs",
@@ -399,7 +275,7 @@ class SRAValidateCommand(BaseCommand):
         return []
 
     @staticmethod
-    def _completeness_issues(acc_dir: Path, record: Optional[Dict[str, Any]]) -> list:
+    def _completeness_issues(acc_dir: Path, verdict: Optional[rb.Verdict]) -> list:
         """Issue when this accession's download did not complete against NCBI's spot count.
 
         Prefers the store sidecar (freshest, when ``acc_dir`` is a store link) over the
@@ -427,10 +303,9 @@ class SRAValidateCommand(BaseCommand):
                 return ["download in progress elsewhere"]
             return []
 
-        verdict = ((record or {}).get("download") or {}).get("complete") or {}
-        if verdict.get("verdict") == "truncated":
-            reads = verdict.get("reads_r1")
-            spots = verdict.get("expected_spots")
+        if verdict is not None and verdict.verdict == "truncated":
+            reads = verdict.reads_r1
+            spots = verdict.expected_spots
             return [f"partial: {reads} reads on disk vs {spots} spots at NCBI"]
         return []
 
@@ -467,7 +342,7 @@ class SRAValidateCommand(BaseCommand):
         check_md5: bool = False,
     ):
         """Validate a single accession directory."""
-        print(f"Validating {acc_dir.name}...")
+        self.emit(f"Validating {acc_dir.name}...")
 
         raw_files = visible_files(acc_dir, "*.fastq*")
         if not raw_files:
@@ -491,8 +366,8 @@ class SRAValidateCommand(BaseCommand):
             issues += self._mate_count_issues(acc_dir, cached_stats(acc_dir, _resolved_sidecar_path(acc_dir)))
 
         checks.append("completeness")
-        record = registry.datasets.get(acc_dir.name) if registry is not None else None
-        issues += self._completeness_issues(acc_dir, record)
+        verdict = rb.download_verdict(registry, acc_dir.name) if registry is not None else None
+        issues += self._completeness_issues(acc_dir, verdict)
 
         if check_md5:
             checks.append("md5")
@@ -509,20 +384,20 @@ class SRAValidateCommand(BaseCommand):
 
     def _print_validation_results(self, validation_results):
         """Print validation results summary."""
-        print("\nValidation Results:")
-        print("=================")
+        self.emit("\nValidation Results:")
+        self.emit("=================")
 
         passed = [r for r in validation_results if r["status"] == "PASSED"]
         failed = [r for r in validation_results if r["status"] == "FAILED"]
 
-        print(f"Total validated: {len(validation_results)}")
-        print(f"Passed: {len(passed)}")
-        print(f"Failed: {len(failed)}")
+        self.emit(f"Total validated: {len(validation_results)}")
+        self.emit(f"Passed: {len(passed)}")
+        self.emit(f"Failed: {len(failed)}")
 
         if failed:
-            print("\nFailed validations:")
+            self.emit("\nFailed validations:")
             for result in failed:
-                print(f"  {result['accession']}: {result['issues']}")
+                self.emit(f"  {result['accession']}: {result['issues']}")
 
         return len(failed) == 0
 
@@ -530,18 +405,19 @@ class SRAValidateCommand(BaseCommand):
         try:
             fastq_folder = Path(args.fastq_folder)
             if not fastq_folder.exists():
-                print(f"FASTQ folder {fastq_folder} does not exist")
+                self.logger.error(f"FASTQ folder {fastq_folder} does not exist")
                 return 1
 
-            print("Validating downloaded SRA datasets...")
+            self.emit("Validating downloaded SRA datasets...")
 
-            accession_dirs = self._find_accession_dirs(fastq_folder, args.accessions)
+            wanted = accessions_from_args(getattr(args, "accessions_file", None), getattr(args, "accession", None))
+            accession_dirs = self._find_accession_dirs(fastq_folder, wanted)
             if not accession_dirs:
-                print("No accession directories found")
+                self.logger.error("No accession directories found")
                 return 1
 
             registry = load_registry(args.registry)
-            store = _resolve_command_store(args, registry)
+            store = resolve_command_store(args, registry)
             check_md5 = getattr(args, "md5", False)
             validation_results = []
             for acc_dir in accession_dirs:

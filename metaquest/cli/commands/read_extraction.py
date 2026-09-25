@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     ExtractionResult,
@@ -27,14 +28,13 @@ from metaquest.data.read_extraction import (
 from metaquest.data.registry import (
     Registry,
     clear_assembly,
-    extraction_record,
     load_registry,
+    query,
     record_assembly,
     record_extraction,
     registry_transaction,
     resolve_project_path,
     scan_downloads,
-    upsert_dataset,
 )
 from metaquest.data.sra import count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
@@ -162,7 +162,7 @@ class ExtractTargetReadsCommand(BaseCommand):
 
         Extraction reads the project's own ``fastq/`` folder either way, so a store that
         cannot be reached is a warning, not a reason to stop."""
-        return resolve_optional_store(getattr(args, "data_root", None), registry.store.get("root"))
+        return resolve_optional_store(getattr(args, "data_root", None), rb.store_block(registry).root)
 
     def _warn_dangling_links(self, args: argparse.Namespace) -> None:
         """Log one WARNING naming every ``fastq/<ACC>`` symlink whose target is missing.
@@ -212,11 +212,11 @@ class ExtractTargetReadsCommand(BaseCommand):
         matches, and the stale pair is ignored: an unequal pair would otherwise force
         single-end mapping of a now-complete paired run.
         """
-        download = registry.datasets.get(accession, {}).get("download") or {}
-        cached = download.get("mate_reads")
+        download = rb.download_block(registry, accession) or rb.DownloadBlock()
+        cached = download.mate_reads
         if cached is None or len(cached) != 2:
             return None
-        if download.get("mate_reads_signature") != self._mate_signature(reads):
+        if download.mate_reads_signature != self._mate_signature(reads):
             self.logger.debug("%s: the recorded mate counts no longer match the files on disk", accession)
             return None
         return int(cached[0]), int(cached[1])
@@ -255,9 +255,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 continue
             counts[accession] = pair
             with registry_transaction(args.registry) as reg:
-                download = upsert_dataset(reg, accession).setdefault("download", {"attempts": 0})
-                download["mate_reads"] = [pair[0], pair[1]]
-                download["mate_reads_signature"] = signature
+                rb.set_mate_reads(reg, accession, [pair[0], pair[1]], signature)
         return counts
 
     def _samples_needing_mate_counts(
@@ -290,9 +288,7 @@ class ExtractTargetReadsCommand(BaseCommand):
         but-not-downloaded samples reports one summary line instead of a warning per
         missing sample.
         """
-        recorded = {
-            acc for acc, rec in registry.datasets.items() if rec.get("download", {}).get("state") == "downloaded"
-        }
+        recorded = set(query(registry, "downloaded"))
         return recorded | set(scan_downloads(Path(args.fastq_folder)))
 
     @staticmethod
@@ -300,10 +296,10 @@ class ExtractTargetReadsCommand(BaseCommand):
         """Accession -> download completeness verdict, for every accession whose verdict is
         ``"truncated"``."""
         truncated = {}
-        for accession, record in registry.datasets.items():
-            verdict = (record.get("download") or {}).get("complete") or {}
-            if verdict.get("verdict") == "truncated":
-                truncated[accession] = verdict
+        for accession in registry.datasets:
+            verdict = rb.download_verdict(registry, accession)
+            if verdict is not None and verdict.verdict == "truncated":
+                truncated[accession] = verdict.to_dict()
         return truncated
 
     def _record_result(
@@ -352,21 +348,19 @@ class ExtractTargetReadsCommand(BaseCommand):
         the registry or its project root, so the paths must already be absolute (or otherwise
         directly usable) by the time they reach it.
         """
-        record = extraction_record(registry, accession, genome_id)
-        if record is None:
+        block = rb.extraction_block(registry, accession, genome_id)
+        if block is None:
             return None
-        resolved = dict(record)
-        genome_fasta = record.get("genome_fasta")
-        if genome_fasta is not None:
-            resolved["genome_fasta"] = str(resolve_project_path(registry, genome_fasta))
-        resolved["files"] = [str(resolve_project_path(registry, p)) for p in record.get("files", [])]
-        return resolved
+        if block.genome_fasta is not None:
+            block.genome_fasta = str(resolve_project_path(registry, block.genome_fasta))
+        block.files = [str(resolve_project_path(registry, p)) for p in block.files]
+        return block.to_dict()
 
     @staticmethod
     def _has_assembly_record(args: argparse.Namespace, accession: str) -> bool:
         """True when the registry already holds an assembly block for this sample and genome."""
-        record = extraction_record(load_registry(args.registry), accession, args.genome_id) or {}
-        return record.get("assembly") is not None
+        block = rb.extraction_block(load_registry(args.registry), accession, args.genome_id)
+        return block is not None and block.assembly is not None
 
     def _report_dry_run(self, args: argparse.Namespace, results: Dict[str, ExtractionResult]) -> None:
         """List the samples a real run would extract, and those it would skip."""

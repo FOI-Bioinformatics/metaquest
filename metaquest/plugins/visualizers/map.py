@@ -1,5 +1,7 @@
 """
 Map visualization plugin for MetaQuest.
+
+Maps need cartopy, from the ``maps`` extra; it is imported when a map is drawn.
 """
 
 import json
@@ -8,37 +10,27 @@ import re
 import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, cast
+from types import ModuleType
+from typing import List, Optional, Tuple, Union
 
 from metaquest.core.exceptions import VisualizationError
+from metaquest.core.optional import require
 from metaquest.plugins.base import Plugin
 
 logger = logging.getLogger(__name__)
 
-# Conditional import for cartopy
-try:
-    import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
-    from cartopy.mpl.geoaxes import GeoAxes
-
-    CARTOPY_AVAILABLE = True
-except ImportError:
-    CARTOPY_AVAILABLE = False
-    GeoAxes = None
-    logger.debug("Cartopy not available; map visualization is disabled")
+_PURPOSE = "Map visualization"
 
 
-def _validate_cartopy_availability():
-    """
-    Validate that cartopy is available.
+def _crs() -> ModuleType:
+    """cartopy.crs, or a ConfigurationError naming the maps extra."""
+    return require("cartopy.crs", "maps", _PURPOSE)
 
-    Raises:
-        VisualizationError: If cartopy is not available
-    """
-    if not CARTOPY_AVAILABLE:
-        raise VisualizationError(
-            "Cartopy is required for map visualization. Install it with: pip install 'metaquest[maps]'"
-        )
+
+def _require_cartopy() -> None:
+    """Raise a ConfigurationError naming the maps extra unless cartopy imports."""
+    require("cartopy.crs", "maps", _PURPOSE)
+    require("cartopy.feature", "maps", _PURPOSE)
 
 
 def _create_map_figure(figsize, projection):
@@ -52,11 +44,9 @@ def _create_map_figure(figsize, projection):
     Returns:
         Figure and axes objects
     """
-    proj_class = getattr(ccrs, projection)
+    proj_class = getattr(_crs(), projection)
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(1, 1, 1, projection=proj_class())
-    if GeoAxes is not None:
-        ax = cast(GeoAxes, ax)
     return fig, ax
 
 
@@ -67,6 +57,7 @@ def _add_map_features(ax):
     Args:
         ax: Matplotlib axes with map projection
     """
+    cfeature = require("cartopy.feature", "maps", _PURPOSE)
     ax.add_feature(cfeature.LAND)
     ax.add_feature(cfeature.OCEAN)
     ax.add_feature(cfeature.COASTLINE)
@@ -189,7 +180,7 @@ def _plot_points(ax, plot_df, value_column, marker_size, cmap, **kwargs):
         scatter = ax.scatter(
             plot_df["longitude"],
             plot_df["latitude"],
-            transform=ccrs.PlateCarree(),
+            transform=_crs().PlateCarree(),
             c=plot_df[value_column],
             s=marker_size,
             cmap=cmap,
@@ -206,7 +197,7 @@ def _plot_points(ax, plot_df, value_column, marker_size, cmap, **kwargs):
         scatter = ax.scatter(
             plot_df["longitude"],
             plot_df["latitude"],
-            transform=ccrs.PlateCarree(),
+            transform=_crs().PlateCarree(),
             s=marker_size,
             **kwargs,
         )
@@ -258,9 +249,10 @@ class MapVisualizerPlugin(Plugin):
             Matplotlib Figure object
 
         Raises:
+            ConfigurationError: If cartopy is not installed
             VisualizationError: If the plot cannot be created
         """
-        _validate_cartopy_availability()
+        _require_cartopy()
 
         try:
             # Create figure with projection

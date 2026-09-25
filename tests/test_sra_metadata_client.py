@@ -1,12 +1,10 @@
 """
-Tests for the SRA metadata client: NCBI queries, technology detection, and
-read statistics calculation.
+Tests for the SRA metadata client: NCBI queries and technology detection. Read statistics
+are the shared statistics record (tests/test_store_stats.py) since 0.5.0.
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
-import tempfile
-from pathlib import Path
 import sys
 
 
@@ -30,7 +28,6 @@ from metaquest.data.sra_metadata import (  # noqa: E402
     SRAMetadataClient,
     SRADatasetInfo,
     detect_sequencing_technology,
-    calculate_read_statistics,
 )
 
 
@@ -162,152 +159,6 @@ class TestTechnologyDetection:
         """Test unknown technology detection."""
         info = self.create_test_dataset_info("UNKNOWN", "Unknown Instrument")
         assert detect_sequencing_technology(info) == "unknown"
-
-
-class TestReadStatistics:
-    """Test read statistics calculation."""
-
-    def create_test_fastq_file(self, temp_dir, sequences):
-        """Create a test FASTQ file."""
-        fastq_path = temp_dir / "test.fastq"
-
-        with open(fastq_path, "w") as f:
-            for i, seq in enumerate(sequences):
-                f.write(f"@read_{i}\n")
-                f.write(f"{seq}\n")
-                f.write("+\n")
-                f.write("I" * len(seq) + "\n")  # High quality scores
-
-        return fastq_path
-
-    def test_read_statistics_calculation(self):
-        """Test basic read statistics calculation."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-
-            # Create test sequences
-            sequences = [
-                "ATCGATCGATCGATCG",  # 16 bp
-                "GCTAGCTAGCTAGCTA",  # 16 bp
-                "AAAAAAAAAAAAAAAA",  # 16 bp, no GC
-                "GGGGGGGGGGGGGGGG",  # 16 bp, all GC
-            ]
-
-            fastq_file = self.create_test_fastq_file(temp_path, sequences)
-            stats = calculate_read_statistics([fastq_file])
-
-            assert stats.total_reads == 4
-            assert stats.total_bases == 64
-            assert stats.avg_read_length == 16.0
-            assert stats.min_read_length == 16
-            assert stats.max_read_length == 16
-            assert 40 < stats.gc_content < 60  # Should be around 50%
-
-    def test_empty_fastq_file(self):
-        """Test with empty FASTQ file."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fastq_file = temp_path / "empty.fastq"
-            fastq_file.touch()  # Create empty file
-
-            stats = calculate_read_statistics([fastq_file])
-
-            assert stats.total_reads == 0
-            assert stats.total_bases == 0
-
-    def test_n50_calculation(self):
-        """Test N50 calculation."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-
-            # Create sequences of different lengths for N50 test
-            sequences = [
-                "A" * 100,  # 100 bp
-                "T" * 200,  # 200 bp
-                "C" * 300,  # 300 bp
-                "G" * 400,  # 400 bp
-            ]
-
-            fastq_file = self.create_test_fastq_file(temp_path, sequences)
-            stats = calculate_read_statistics([fastq_file])
-
-            # Total bases: 1000, so N50 should be 300 (cumulative reaches 500 at 300)
-            assert stats.n50 == 300
-
-    def test_default_result_is_not_sampled(self):
-        """A file smaller than max_reads is read in full: sampled is False."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fastq_file = self.create_test_fastq_file(temp_path, ["ACGT"] * 5)
-
-            stats = calculate_read_statistics([fastq_file])
-
-            assert stats.total_reads == 5
-            assert stats.sampled is False
-
-    def test_max_reads_caps_the_stream_and_marks_sampled(self):
-        """max_reads stops the stream early and marks the result as sampled."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fastq_file = self.create_test_fastq_file(temp_path, ["ACGT"] * 10)
-
-            stats = calculate_read_statistics([fastq_file], max_reads=4)
-
-            assert stats.total_reads == 4
-            assert stats.sampled is True
-
-    def test_zero_length_record_is_counted(self):
-        """A legal zero-length record in the middle of a file is a record, not truncation.
-
-        Before this was distinguished from a missing line, the stream stopped there and the
-        file's read count was silently reported short, marked as exact.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            fastq_file = Path(temp_dir) / "zero.fastq"
-            fastq_file.write_text("@r1\nACGT\n+\nIIII\n@r2\n\n+\n\n@r3\nACGT\n+\nIIII\n")
-
-            stats = calculate_read_statistics([fastq_file])
-
-            assert stats.total_reads == 3
-            assert stats.sampled is False
-            assert stats.min_read_length == 0
-
-    def test_max_reads_zero_means_exact(self):
-        """max_reads=0 reads every record, however many there are."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fastq_file = self.create_test_fastq_file(temp_path, ["ACGT"] * 10)
-
-            stats = calculate_read_statistics([fastq_file], max_reads=0)
-
-            assert stats.total_reads == 10
-            assert stats.sampled is False
-
-    def test_cached_dict_builds_read_statistics_without_file_io(self):
-        """When ``cached`` is given, the result comes straight from it: no FASTQ is read."""
-        cached = {
-            "reads_total": 12345,
-            "bases_total": 1850000,
-            "avg_read_length": 150.0,
-            "min_read_length": 100,
-            "max_read_length": 200,
-            "n50": 150,
-            "gc_content": 0.45,
-            "quality_summary": {"mean": 30.0, "median": 31.0, "q25": 25.0, "q75": 35.0},
-            "sampled": True,
-        }
-
-        stats = calculate_read_statistics([Path("/nonexistent/does-not-matter.fastq")], cached=cached)
-
-        assert stats.total_reads == 12345
-        assert stats.total_bases == 1850000
-        assert stats.avg_read_length == 150.0
-        assert stats.min_read_length == 100
-        assert stats.max_read_length == 200
-        assert stats.n50 == 150
-        assert stats.gc_content == pytest.approx(45.0)  # cache holds a 0-1 fraction
-        assert stats.sampled is True
-        assert stats.quality_scores["mean"] == pytest.approx(30.0)
 
 
 class TestSRAIntegration:

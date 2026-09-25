@@ -13,6 +13,7 @@ from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import (
     Registry,
     load_registry,
@@ -20,6 +21,7 @@ from metaquest.data.registry import (
     query,
     record_download,
     registry_transaction,
+    update_linked,
 )
 from metaquest.data.sra import (
     STORE_LINKED_PREFIX,
@@ -256,7 +258,7 @@ class DownloadSraCommand(BaseCommand):
         A blacklist entry or a `--max-downloads` cut-off must never erase the files and
         sizes of an accession that was downloaded on an earlier run.
         """
-        if reg.datasets.get(acc, {}).get("download", {}).get("state") == "downloaded":
+        if (rb.download_block(reg, acc) or rb.DownloadBlock()).state == "downloaded":
             return
         record_download(reg, acc, "skipped", fastq_dir, message)
 
@@ -275,7 +277,7 @@ class DownloadSraCommand(BaseCommand):
             with registry_transaction(args.registry) as reg:
                 if from_store:
                     ensure_project_identity(reg)
-                if reg.datasets.get(acc, {}).get("download", {}).get("state") != "downloaded":
+                if (rb.download_block(reg, acc) or rb.DownloadBlock()).state != "downloaded":
                     complete = self._sidecar_completeness(store, acc) if from_store else None
                     record_download(
                         reg,
@@ -288,7 +290,7 @@ class DownloadSraCommand(BaseCommand):
                         store_name=acc if from_store else None,
                     )
                     if from_store:
-                        self._mark_linked(reg, acc)
+                        update_linked(reg, acc, add=True)
             if from_store:
                 usage_rows.append((acc, "", "linked", "already downloaded"))
         if usage_rows:
@@ -324,7 +326,7 @@ class DownloadSraCommand(BaseCommand):
 
     def _resolve_store(self, args: argparse.Namespace, project_registry: Registry) -> Optional[StorePaths]:
         """Resolve the shared data store (if any), log it, and return its on-disk layout."""
-        store_root = resolve_store_root(args.data_root, project_registry.store.get("root"))
+        store_root = resolve_store_root(args.data_root, rb.store_block(project_registry).root)
         if store_root is None:
             return None
         self.logger.info("Using shared data store at %s", store_root)
@@ -367,7 +369,7 @@ class DownloadSraCommand(BaseCommand):
                     store_name=accession if from_store else None,
                 )
                 if from_store:
-                    self._mark_linked(reg, accession)
+                    update_linked(reg, accession, add=True)
                     usage = (reg, "linked" if linked else "downloaded", message)
 
             if usage is not None:
@@ -389,13 +391,6 @@ class DownloadSraCommand(BaseCommand):
         if store is None:
             return None
         return sidecar_completeness(sidecar_path(store, accession))
-
-    @staticmethod
-    def _mark_linked(reg: Registry, accession: str) -> None:
-        """Add ``accession`` to the registry's list of datasets this project links from the store."""
-        linked = set(reg.store.get("linked") or [])
-        linked.add(accession)
-        reg.store["linked"] = sorted(linked)
 
     def _transient_folders(self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths]) -> Set[Path]:
         """Folders where ``download_accession`` can leave ``.sra-cache`` archives or
@@ -489,16 +484,17 @@ class DownloadSraCommand(BaseCommand):
                 excluded = set(query(project_registry, "excluded"))
 
                 if verify_downloads:
-                    for acc, record in project_registry.datasets.items():
-                        spots = (record.get("metadata") or {}).get("run_total_spots")
+                    for acc in project_registry.datasets:
+                        spots = (rb.metadata_block(project_registry, acc) or rb.MetadataBlock()).run_total_spots
                         if spots is not None:
                             expected_spots[acc] = spots
 
                 if redownload_truncated:
                     truncated = {
                         acc
-                        for acc, record in project_registry.datasets.items()
-                        if (record.get("download") or {}).get("complete", {}).get("verdict") == "truncated"
+                        for acc in project_registry.datasets
+                        if (verdict := rb.download_verdict(project_registry, acc)) is not None
+                        and verdict.verdict == "truncated"
                     }
 
                 on_result = self._result_recorder(args, fastq_dir, store)

@@ -1,0 +1,313 @@
+{
+  "created": "2026-09-25T09:02:35+02:00",
+  "datasets": {
+    "SRR0000001": {
+      "analyses": {
+        "quality": {
+          "date": "2026-09-25T09:02:35+02:00",
+          "output": "analysis/SRR0000001.json",
+          "summary": {
+            "mean_q": 38.5
+          }
+        }
+      },
+      "download": {
+        "attempts": 1,
+        "bytes_total": 128,
+        "complete": {
+          "expected_spots": 2,
+          "ratio": 1.0,
+          "reads_r1": 2,
+          "verdict": "complete"
+        },
+        "date": "2026-09-25T09:02:35+02:00",
+        "files": [
+          {
+            "bytes": 64,
+            "mtime": "2026-09-25T09:02:35+02:00",
+            "path": "fastq/SRR0000001/SRR0000001_1.fastq.gz"
+          },
+          {
+            "bytes": 64,
+            "mtime": "2026-09-25T09:02:35+02:00",
+            "path": "fastq/SRR0000001/SRR0000001_2.fastq.gz"
+          }
+        ],
+        "mate_reads": [
+          2,
+          2
+        ],
+        "mate_reads_signature": [
+          [
+            "SRR0000001_1.fastq.gz",
+            60,
+            1758780000.5
+          ],
+          [
+            "SRR0000001_2.fastq.gz",
+            60,
+            1758780000.5
+          ]
+        ],
+        "message": "downloaded, complete (2 reads, 2 expected)",
+        "source": "store",
+        "state": "downloaded",
+        "store_name": "SRR0000001"
+      },
+      "extractions": {
+        "GCF_000001": {
+          "assembly": {
+            "contigs": 3,
+            "date": "2026-09-25T09:02:35+02:00",
+            "dir": "targeted/SRR0000001/GCF_000001_assembly",
+            "gc": 0.41,
+            "genome_fraction_estimate": 0.8,
+            "largest": 700,
+            "mapping_rate": 0.95,
+            "n50": 600,
+            "n90": 300,
+            "params": {
+              "k_list": "21,29,39",
+              "min_contig_len": 200
+            },
+            "tool": "megahit",
+            "total_bp": 1500,
+            "version": "MEGAHIT v1.2.9"
+          },
+          "breadth": 0.75,
+          "coverage_tsv": "targeted/SRR0000001/GCF_000001_coverage.tsv",
+          "date": "2026-09-25T09:02:35+02:00",
+          "files": [
+            "targeted/SRR0000001/GCF_000001_1.fastq.gz",
+            "targeted/SRR0000001/GCF_000001_2.fastq.gz"
+          ],
+          "filter_flags": "-F 4",
+          "genome_fasta": "genomes/GCF_000001.fna",
+          "index": "genomes/GCF_000001.mmi",
+          "mapped_reads": 40,
+          "mapped_total": 42,
+          "mean_depth": 3.2,
+          "min_mapq": 0,
+          "preset": "sr",
+          "threshold": 0.9,
+          "unequal_mates": false
+        }
+      },
+      "metadata": {
+        "assay_type": "WGS",
+        "collection_date": "2020-01-01",
+        "date": "2026-09-25T09:02:35+02:00",
+        "library_layout": "PAIRED",
+        "library_strategy": "WGS",
+        "organism": "vaginal metagenome",
+        "platform": "ILLUMINA",
+        "run_md5": "abc",
+        "run_size": "1234",
+        "run_total_bases": 16,
+        "run_total_spots": 2,
+        "xml": "metadata/SRR0000001_metadata.xml"
+      },
+      "screening": {
+        "date": "2026-09-25T09:02:35+02:00",
+        "genomes": {
+          "GCF_000001": {
+            "cani": 0.9877,
+            "containment": 0.9123,
+            "csv": "matches/GCF_000001.csv",
+            "query_threshold": 0.1,
+            "source": "branchwater"
+          },
+          "GCF_000002": {
+            "cani": null,
+            "containment": 0.25,
+            "csv": null,
+            "query_threshold": 0.0,
+            "source": "matches"
+          }
+        }
+      },
+      "selection": {
+        "criteria": {
+          "min_containment": 0.3,
+          "top": 1
+        },
+        "date": "2026-09-25T09:02:35+02:00",
+        "output": "selected.txt",
+        "ranked": [
+          {
+            "accession": "SRR0000001",
+            "column": "GCF_000001",
+            "rank": 1,
+            "value": 0.9123
+          }
+        ],
+        "selected": true
+      }
+    },
+    "SRR0000002": {
+      "download": {
+        "attempts": 1,
+        "bytes_total": 0,
+        "date": "2026-09-25T09:02:35+02:00",
+        "files": [],
+        "message": "prefetch failed: timeout",
+        "state": "failed"
+      },
+      "exclusion": {
+        "date": "2026-09-25T09:02:35+02:00",
+        "excluded": true,
+        "reason": "low quality",
+        "source": "qc"
+      },
+      "screening": {
+        "date": "2026-09-25T09:02:35+02:00",
+        "genomes": {
+          "GCF_000001": {
+            "cani": null,
+            "containment": 0.5,
+            "csv": "matches/GCF_000001.csv",
+            "query_threshold": 0.0,
+            "source": "matches"
+          }
+        },
+        "inferred": true
+      },
+      "selection": {
+        "criteria": {
+          "min_containment": 0.2
+        },
+        "date": "2026-09-25T09:02:35+02:00",
+        "output": "selected.txt",
+        "selected": false
+      }
+    },
+    "SRR0000003": {
+      "download": {
+        "attempts": 0,
+        "complete": {
+          "verdict": "unverified"
+        }
+      },
+      "metadata": {
+        "assay_type": null,
+        "collection_date": null,
+        "date": "2026-09-25T09:02:35+02:00",
+        "inferred": true,
+        "library_layout": null,
+        "library_strategy": null,
+        "organism": null,
+        "platform": null,
+        "run_md5": null,
+        "run_size": null,
+        "run_total_bases": null,
+        "run_total_spots": null,
+        "xml": "metadata/SRR0000003_metadata.xml"
+      }
+    },
+    "SRR0000004": {
+      "exclusion": {
+        "date": "2026-09-25T09:02:35+02:00",
+        "excluded": false,
+        "reason": "",
+        "source": "user"
+      },
+      "extractions": {
+        "GCF_000002": {
+          "assembly": {
+            "contigs": 1,
+            "date": "2026-09-25T09:02:35+02:00",
+            "dir": "targeted/SRR0000004/GCF_000002_assembly",
+            "largest": 300,
+            "n50": 300,
+            "params": {},
+            "tool": "megahit",
+            "total_bp": 300,
+            "version": ""
+          },
+          "files": [],
+          "inferred": true,
+          "mapped_reads": null
+        }
+      }
+    },
+    "SRR0000005": {
+      "download": {
+        "attempts": 0,
+        "bytes_total": 62,
+        "complete": {
+          "method": "spots",
+          "ratio": 0.5,
+          "verdict": "truncated"
+        },
+        "date": "2026-09-25T09:02:35+02:00",
+        "files": [
+          {
+            "bytes": 62,
+            "mtime": "2026-09-25T09:02:35+02:00",
+            "path": "fastq/SRR0000005/SRR0000005.fastq.gz"
+          }
+        ],
+        "inferred": true,
+        "message": "",
+        "state": "downloaded"
+      },
+      "extractions": {
+        "GCF_000002": {
+          "assembly": null,
+          "breadth": null,
+          "coverage_tsv": null,
+          "date": "2026-09-25T09:02:35+02:00",
+          "files": [],
+          "filter_flags": null,
+          "genome_fasta": null,
+          "index": null,
+          "mapped_reads": 0,
+          "mapped_total": null,
+          "mean_depth": null,
+          "min_mapq": null,
+          "preset": "sr",
+          "threshold": null,
+          "unequal_mates": true
+        }
+      }
+    }
+  },
+  "genomes": {
+    "GCF_000001": {
+      "date": "2026-09-25T09:02:35+02:00",
+      "fasta": "genomes/GCF_000001.fna",
+      "manifest": "genomes/manifest.csv"
+    },
+    "GCF_000002": {
+      "date": "2026-09-25T09:02:35+02:00",
+      "fasta": "genomes/GCF_000002.fna",
+      "manifest": ""
+    }
+  },
+  "project": {
+    "created": "2026-09-24T10:00:00+00:00",
+    "exports": {
+      "results_table": {
+        "date": "2026-09-25T09:02:35+02:00",
+        "output": "results/results.tsv",
+        "summary": {
+          "rows": 5
+        }
+      }
+    },
+    "id": "0f8e4c1e-0000-4000-8000-000000000001",
+    "name": "fixture",
+    "notes": "kept by round trip",
+    "path": "/projects/fixture"
+  },
+  "store": {
+    "comment": "kept by round trip",
+    "linked": [
+      "SRR0000001"
+    ],
+    "mode": "symlink",
+    "root": "/data/store"
+  },
+  "updated": "2026-09-25T09:02:35+02:00",
+  "version": 2
+}

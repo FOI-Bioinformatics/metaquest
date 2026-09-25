@@ -1,27 +1,32 @@
 """
 Interactive visualization functions for MetaQuest.
 
-This module provides interactive plotting capabilities using Plotly,
-essential for modern data exploration and publication-quality figures.
+This module provides interactive plotting capabilities using Plotly. Plotly comes from the
+``interactive`` extra, and PCA, t-SNE and clustering from the ``analysis`` extra (scikit-learn,
+scipy); each function imports what it needs when called, so importing this module needs neither.
 """
+
+from __future__ import annotations
 
 import logging
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-
-# from plotly.subplots import make_subplots
-# import plotly.offline as pyo
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from scipy.cluster.hierarchy import dendrogram, linkage
-from typing import Optional, Union
+from types import ModuleType
+from typing import TYPE_CHECKING, Optional, Union
 from pathlib import Path
 
 from metaquest.core.exceptions import VisualizationError
+from metaquest.core.optional import require
+
+if TYPE_CHECKING:
+    import plotly.graph_objects as go
 
 logger = logging.getLogger(__name__)
+
+
+def _plotly_express(purpose: str) -> ModuleType:
+    """plotly.express, or a ConfigurationError naming the interactive extra."""
+    return require("plotly.express", "interactive", purpose)
 
 
 def _pca_matrix(data):
@@ -74,6 +79,7 @@ def _add_size_column(plot_data, metadata, size_by, sample_names):
 
 def _build_pca_figure(plot_data, n_components, n_pcs, color_by, size_by, title, variance) -> go.Figure:
     """Build the 1D/2D/3D PCA scatter depending on the number of components available."""
+    px = _plotly_express("An interactive PCA plot")
     common = dict(color=color_by, size=size_by, hover_name="Sample", title=title)
     if n_components >= 3 and n_pcs >= 3:
         return px.scatter_3d(
@@ -135,12 +141,15 @@ def create_interactive_pca(
         Plotly Figure object
 
     Raises:
+        ConfigurationError: If plotly or scikit-learn is not installed
         VisualizationError: If PCA fails
     """
+    _plotly_express("An interactive PCA plot")
+    decomposition = require("sklearn.decomposition", "analysis", "An interactive PCA plot")
     try:
         X, sample_names = _pca_matrix(data)
 
-        pca = PCA(n_components=min(n_components, X.shape[1], X.shape[0]))
+        pca = decomposition.PCA(n_components=min(n_components, X.shape[1], X.shape[0]))
         X_pca = pca.fit_transform(X)
         n_pcs = X_pca.shape[1]
 
@@ -201,7 +210,12 @@ def create_interactive_tsne(
 
     Returns:
         Plotly Figure object
+
+    Raises:
+        ConfigurationError: If plotly or scikit-learn is not installed
     """
+    px = _plotly_express("An interactive t-SNE plot")
+    manifold = require("sklearn.manifold", "analysis", "An interactive t-SNE plot")
     try:
         # Prepare data
         if isinstance(data, pd.DataFrame):
@@ -212,7 +226,7 @@ def create_interactive_tsne(
             sample_names = [f"Sample_{i}" for i in range(X.shape[0])]
 
         # Perform t-SNE (use max_iter parameter for sklearn compatibility)
-        tsne = TSNE(n_components=2, perplexity=perplexity, max_iter=n_iter, random_state=42)
+        tsne = manifold.TSNE(n_components=2, perplexity=perplexity, max_iter=n_iter, random_state=42)
         X_tsne = tsne.fit_transform(X)
 
         # Create DataFrame for plotting
@@ -284,7 +298,13 @@ def create_interactive_heatmap(
 
     Returns:
         Plotly Figure object
+
+    Raises:
+        ConfigurationError: If plotly, or scipy when clustering, is not installed
     """
+    go = require("plotly.graph_objects", "interactive", "An interactive heatmap")
+    if cluster_samples or cluster_features:
+        hierarchy = require("scipy.cluster.hierarchy", "analysis", "Clustering an interactive heatmap")
     try:
         # Prepare data
         if isinstance(data, pd.DataFrame):
@@ -301,13 +321,13 @@ def create_interactive_heatmap(
         feature_order = list(range(len(feature_names)))
 
         if cluster_samples:
-            sample_linkage = linkage(data_matrix, method=linkage_method, metric=distance_metric)
-            sample_dendro = dendrogram(sample_linkage, no_plot=True)
+            sample_linkage = hierarchy.linkage(data_matrix, method=linkage_method, metric=distance_metric)
+            sample_dendro = hierarchy.dendrogram(sample_linkage, no_plot=True)
             sample_order = sample_dendro["leaves"]
 
         if cluster_features:
-            feature_linkage = linkage(data_matrix.T, method=linkage_method, metric=distance_metric)
-            feature_dendro = dendrogram(feature_linkage, no_plot=True)
+            feature_linkage = hierarchy.linkage(data_matrix.T, method=linkage_method, metric=distance_metric)
+            feature_dendro = hierarchy.dendrogram(feature_linkage, no_plot=True)
             feature_order = feature_dendro["leaves"]
 
         # Reorder data
@@ -378,7 +398,11 @@ def create_diversity_comparison_plot(
 
     Returns:
         Plotly Figure object
+
+    Raises:
+        ConfigurationError: If plotly is not installed
     """
+    px = _plotly_express("A diversity comparison plot")
     try:
         # Prepare data
         plot_data = alpha_diversity.copy()

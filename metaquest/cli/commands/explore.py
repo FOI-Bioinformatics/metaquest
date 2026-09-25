@@ -1,7 +1,6 @@
 """Taxonomy enrichment and containment exploration CLI commands."""
 
 import argparse
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -134,7 +133,10 @@ class ExploreContainmentCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
-            from metaquest.visualization.explorer import generate_containment_explorer
+            from metaquest.visualization.explorer import generate_containment_explorer, require_explorer_packages
+
+            # Check before the taxonomy lookup, which may call NCBI.
+            require_explorer_packages()
 
             containment_path = Path(args.parsed_containment)
             if not containment_path.exists():
@@ -294,7 +296,7 @@ class FindByTaxonomyCommand(BaseCommand):
                 result.to_csv(args.output, sep="\t")
                 self.logger.info("Wrote %d results to %s", len(result), args.output)
             else:
-                sys.stdout.write(result.to_csv(sep="\t"))
+                self.emit_raw(result.to_csv(sep="\t"))
 
             return 0
         except MetaQuestError as e:

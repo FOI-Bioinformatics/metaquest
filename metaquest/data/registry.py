@@ -16,16 +16,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import visible_files
+from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +58,17 @@ class ProjectPaths:
 
 @dataclass
 class Registry:
+    """In-memory form of one project's registry file: schema version, timestamps, and state.
+
+    Holds the per-genome screening thresholds (``genomes``), the per-accession dataset records
+    (``datasets``, keyed by accession, each carrying its stage history and provenance), this
+    project's own identity (``project``) once bound by ``store_init``, and the shared data store
+    it is linked to, if any (``store``). ``path`` is set once the registry is bound to a file on
+    disk (by ``load_registry`` or the first ``save_registry``); it is ``None`` for a registry
+    built only in memory, e.g. mid-``bootstrap_from_disk``, and callers that need a project root
+    from it should go through ``project_root`` rather than reading ``path`` directly.
+    """
+
     version: int = SCHEMA_VERSION
     created: str = field(default_factory=_now)
     updated: str = field(default_factory=_now)
@@ -120,6 +129,17 @@ def resolve_project_path(registry: Registry, value: Union[str, Path]) -> Path:
 
 @dataclass
 class ReconcileReport:
+    """Differences ``reconcile`` found between the registry and the project's filesystem.
+
+    ``recorded_missing`` lists accessions the registry marks downloaded whose FASTQ files are no
+    longer present; ``untracked_fastq`` lists accessions with FASTQ on disk that the registry does
+    not yet record as downloaded. ``untracked_extractions`` and ``empty_assembly_dirs`` are lists
+    of ``(accession, genome_id)`` pairs found on disk but missing from, respectively, the
+    registry's extraction and assembly records. ``dangling_links`` holds accessions whose project
+    folder is a symlink into a shared data store that is unmounted or has lost its copy, so the
+    link resolves to nothing.
+    """
+
     recorded_missing: List[str] = field(default_factory=list)
     untracked_fastq: List[str] = field(default_factory=list)
     untracked_extractions: List[Tuple[str, str]] = field(default_factory=list)
@@ -264,6 +284,7 @@ def registry_transaction(path: Optional[Union[str, Path]] = None) -> Iterator[Re
 
 
 def upsert_dataset(registry: Registry, accession: str) -> Dict[str, Any]:
+    """Return ``accession``'s dataset record, creating an empty one in ``registry.datasets`` first if absent."""
     return registry.datasets.setdefault(accession, {})
 
 
@@ -277,16 +298,24 @@ def record_screening(
     query_threshold: float,
     csv_path: Optional[Union[str, Path]],
 ) -> None:
-    screening = upsert_dataset(registry, accession).setdefault("screening", {})
-    screening["date"] = _now()
-    screening.pop("inferred", None)
-    screening.setdefault("genomes", {})[genome_id] = {
-        "containment": round(float(containment), 4),
-        "cani": round(float(cani), 4) if cani is not None else None,
-        "csv": str(csv_path) if csv_path else None,
-        "source": source,
-        "query_threshold": query_threshold,
-    }
+    """Record one genome's containment (and, when available, cANI) screening result for one accession.
+
+    Rounds ``containment`` and ``cani`` to four decimal places, clears any earlier "inferred"
+    flag on the accession's screening block (a real screening result supersedes one carried over
+    from another run), and registers ``genome_id`` in ``registry.genomes`` if it is not already
+    known. Returns nothing; raises nothing of its own.
+    """
+    screening = rb.screening_block(registry, accession) or rb.ScreeningBlock()
+    screening.date = _now()
+    screening.discard("inferred")
+    screening.genomes[genome_id] = rb.ScreeningEntry(
+        containment=round(float(containment), 4),
+        cani=round(float(cani), 4) if cani is not None else None,
+        csv=str(csv_path) if csv_path else None,
+        source=source,
+        query_threshold=query_threshold,
+    )
+    rb.set_screening_block(registry, accession, screening)
     registry.genomes.setdefault(genome_id, {})
 
 
@@ -319,22 +348,18 @@ def record_selection(
     the recorded list is always capped to what was actually selected.
     """
     chosen = set(accessions)
-    for accession, record in registry.datasets.items():
-        selection = record.get("selection")
-        if selection and selection.get("selected") and accession not in chosen:
-            selection["selected"] = False
-            selection["date"] = _now()
+    for accession in registry.datasets:
+        earlier = rb.selection_block(registry, accession)
+        if earlier and earlier.selected and accession not in chosen:
+            earlier.selected = False
+            earlier.date = _now()
+            rb.set_selection_block(registry, accession, earlier)
     ranked_by_accession = {entry["accession"]: entry for entry in ranked or [] if entry.get("accession") in chosen}
     for accession in accessions:
-        selection = {
-            "selected": True,
-            "date": _now(),
-            "criteria": dict(criteria),
-            "output": str(output),
-        }
+        selection = rb.SelectionBlock(selected=True, date=_now(), criteria=dict(criteria), output=str(output))
         if accession in ranked_by_accession:
-            selection["ranked"] = [ranked_by_accession[accession]]
-        upsert_dataset(registry, accession)["selection"] = selection
+            selection.ranked = [ranked_by_accession[accession]]
+        rb.set_selection_block(registry, accession, selection)
 
 
 def cap_screening(registry: Registry, genome_id: str, max_screened: int = DEFAULT_REGISTRY_MAX_SCREENED) -> int:
@@ -344,18 +369,20 @@ def cap_screening(registry: Registry, genome_id: str, max_screened: int = DEFAUL
     record; the registry keeps the best matches so it stays small enough to rewrite after
     every completed accession.
     """
+    screened = {acc: block for acc in registry.datasets if (block := rb.screening_block(registry, acc)) is not None}
     entries = [
-        (acc, float(record["screening"]["genomes"][genome_id].get("containment") or 0.0))
-        for acc, record in registry.datasets.items()
-        if genome_id in record.get("screening", {}).get("genomes", {})
+        (acc, float(block.genomes[genome_id].containment or 0.0))
+        for acc, block in screened.items()
+        if genome_id in block.genomes
     ]
     if len(entries) <= max_screened:
         return 0
     for accession, _ in sorted(entries, key=lambda item: item[1], reverse=True)[max_screened:]:
-        record = registry.datasets[accession]
-        genomes = record["screening"]["genomes"]
-        del genomes[genome_id]
-        if not genomes:
+        record, block = registry.datasets[accession], screened[accession]
+        del block.genomes[genome_id]
+        if block.genomes:
+            rb.set_screening_block(registry, accession, block)
+        else:
             del record["screening"]
         if not record:
             del registry.datasets[accession]
@@ -419,54 +446,29 @@ def record_screening_from_table(
 
 
 def record_exclusion(registry: Registry, accession: str, reason: str, source: str = "user") -> None:
-    upsert_dataset(registry, accession)["exclusion"] = {
-        "excluded": True,
-        "reason": reason,
-        "source": source,
-        "date": _now(),
-    }
+    """Mark ``accession`` excluded with ``reason`` and ``source``, timestamped; overwrites any earlier exclusion."""
+    block = rb.ExclusionBlock(excluded=True, reason=reason, source=source, date=_now())
+    rb.set_exclusion_block(registry, accession, block)
 
 
 def clear_exclusion(registry: Registry, accession: str) -> None:
-    record = registry.datasets.get(accession)
-    if record and "exclusion" in record:
-        record["exclusion"] = {"excluded": False, "reason": "", "source": "user", "date": _now()}
+    """Reverse a recorded exclusion for ``accession``, if any; a no-op when none was recorded.
+
+    Sets the exclusion block's ``excluded`` flag to ``False`` and blanks its reason rather than
+    deleting the block, so the accession keeps a record of having once been excluded.
+    """
+    if rb.exclusion_block(registry, accession) is not None:
+        cleared = rb.ExclusionBlock(excluded=False, reason="", source="user", date=_now())
+        rb.set_exclusion_block(registry, accession, cleared)
 
 
-def _file_entries(paths: Iterable[Path], root: Path) -> List[Dict[str, Any]]:
+def _file_entries(paths: Iterable[Path], root: Path) -> List[rb.FileEntry]:
     entries = []
     for path in paths:
         stat = path.stat()
-        entries.append(
-            {
-                "path": _project_relative(path, root),
-                "bytes": stat.st_size,
-                "mtime": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
-            }
-        )
+        mtime = datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds")
+        entries.append(rb.FileEntry(path=_project_relative(path, root), bytes=stat.st_size, mtime=mtime))
     return entries
-
-
-# Read counts in a completeness block that a new block with the same verdict may inherit.
-# ``ratio`` and ``expected_spots`` are deliberately absent: they always come from the new block.
-_CARRIED_COUNT_KEYS = ("reads_r1",)
-
-
-def _merge_verdict(previous: Any, new: Dict[str, Any]) -> Dict[str, Any]:
-    """The completeness block to record when ``new`` replaces ``previous``.
-
-    A count ``new`` leaves as ``None`` inherits the previous count only when both blocks carry
-    the same verdict (a complete-to-complete relink describes the same reads). Across a verdict
-    change the previous count describes other files, e.g. a truncated project copy relinked to
-    a complete store copy, so it stays ``None``; ``store_verify --rescan`` can fill in a real
-    count. Nothing else is carried, so the result never mixes two downloads' verdict blocks.
-    """
-    merged = dict(new)
-    if isinstance(previous, dict) and previous.get("verdict") == merged.get("verdict"):
-        for key in _CARRIED_COUNT_KEYS:
-            if merged.get(key) is None and previous.get(key) is not None:
-                merged[key] = previous[key]
-    return merged
 
 
 def record_download(
@@ -488,42 +490,35 @@ def record_download(
     (via ``parse_verdict_message``); when omitted, any verdict already on file is left as is.
     When given, it replaces the block on file, except that a read count it carries as ``None``
     (e.g. a store sidecar with no read count of its own) keeps the previous count if, and only
-    if, the previous verdict equals the new one; see ``_merge_verdict``.
+    if, the previous verdict equals the new one; see ``Verdict.carrying_counts_from``.
     ``source`` says where the reads came from (``"store"`` for a dataset the shared store
     holds and the project only links to) and ``store_name`` is the dataset's name inside
     that store. Both describe this outcome, so a call that names neither clears whatever
     an earlier outcome recorded rather than leaving a stale claim behind.
     """
-    download = upsert_dataset(registry, accession).setdefault("download", {"attempts": 0})
+    download = rb.download_block_for_write(registry, accession)
     if attempt and state in ("downloaded", "failed"):
-        download["attempts"] = int(download.get("attempts", 0)) + 1
-    files: List[Dict[str, Any]] = []
+        download.attempts = int(download.attempts or 0) + 1
+    files: List[rb.FileEntry] = []
     if state == "downloaded":
         files = _file_entries(fastq_files(Path(fastq_dir) / accession), project_root(registry))
-    download.update(
-        {
-            "state": state,
-            "date": _now(),
-            "files": files,
-            "bytes_total": sum(int(f["bytes"]) for f in files),
-            "message": message,
-        }
-    )
+    download.state, download.date, download.files, download.message = state, _now(), files, message
+    download.bytes_total = sum(int(f.bytes) for f in files)
     if complete is not None:
-        download["complete"] = _merge_verdict(download.get("complete"), complete)
+        download.complete = rb.Verdict.from_dict(complete).carrying_counts_from(download.complete)
     if source is None:
-        download.pop("source", None)
-        download.pop("store_name", None)
+        download.discard("source")
+        download.discard("store_name")
     else:
-        download["source"] = source
+        download.source = source
         if store_name is not None:
-            download["store_name"] = store_name
-    download.pop("inferred", None)
+            download.store_name = store_name
     # The mate read counts cached by extract_target_reads describe the files this entry
     # replaces, so they cannot survive a new attempt or state. Keeping them would let a pair
     # counted from a truncated download force single-end mapping of the complete one.
-    download.pop("mate_reads", None)
-    download.pop("mate_reads_signature", None)
+    for stale in ("inferred", "mate_reads", "mate_reads_signature"):
+        download.discard(stale)
+    rb.set_download_block(registry, accession, download)
 
 
 def set_download_verdict(registry: Registry, accession: str, verdict: Dict[str, Any]) -> None:
@@ -534,7 +529,26 @@ def set_download_verdict(registry: Registry, accession: str, verdict: Dict[str, 
     needs to change, e.g. computing one that a download recorded before verification existed
     never got.
     """
-    upsert_dataset(registry, accession).setdefault("download", {"attempts": 0})["complete"] = verdict
+    download = rb.download_block_for_write(registry, accession)
+    download.complete = rb.Verdict.from_dict(verdict)
+    rb.set_download_block(registry, accession, download)
+
+
+def update_linked(registry: Registry, accession: str, add: bool) -> None:
+    """Add ``accession`` to, or remove it from, the registry's list of datasets this project links
+    from the store (``registry.store["linked"]``).
+
+    The list is kept sorted and free of duplicates, so calling this twice with the same arguments
+    leaves the registry as one call did.
+    """
+    store = rb.store_block(registry)
+    linked = set(store.linked or [])
+    if add:
+        linked.add(accession)
+    else:
+        linked.discard(accession)
+    store.linked = sorted(linked)
+    rb.set_store_block(registry, store)
 
 
 def nan_to_none(value: Any) -> Any:
@@ -559,7 +573,14 @@ to_int_or_none = _to_int_or_none
 
 
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
-    record: Dict[str, Any] = {"xml": _project_relative(xml_path, project_root(registry)), "date": _now()}
+    """Record ``accession``'s downloaded NCBI metadata under its dataset entry, replacing any earlier record.
+
+    Copies a fixed set of fields out of ``fields`` (run size and md5, assay type, organism,
+    collection date, library layout, platform, library strategy, and the total spot/base counts,
+    coerced to ``int`` or ``None``), alongside the project-relative path to the metadata XML and
+    a timestamp. Fields absent from ``fields`` are recorded as ``None`` rather than omitted.
+    """
+    block = rb.MetadataBlock(xml=_project_relative(xml_path, project_root(registry)), date=_now())
     for key in (
         "run_size",
         "run_md5",
@@ -570,20 +591,24 @@ def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Pat
         "platform",
         "library_strategy",
     ):
-        record[key] = fields.get(key)
-    for key in ("run_total_spots", "run_total_bases"):
-        record[key] = _to_int_or_none(fields.get(key))
-    upsert_dataset(registry, accession)["metadata"] = record
+        setattr(block, key, fields.get(key))
+    block.run_total_spots = _to_int_or_none(fields.get("run_total_spots"))
+    block.run_total_bases = _to_int_or_none(fields.get("run_total_bases"))
+    rb.set_metadata_block(registry, accession, block)
 
 
 def record_analysis(
     registry: Registry, accession: str, analysis: str, output: Union[str, Path], summary: Dict[str, Any]
 ) -> None:
-    upsert_dataset(registry, accession).setdefault("analyses", {})[analysis] = {
-        "date": _now(),
-        "output": _project_relative(output, project_root(registry)),
-        "summary": dict(summary),
-    }
+    """Record one named analysis's output path, summary and timestamp for ``accession``.
+
+    Stored under the dataset entry's ``analyses`` mapping, keyed by ``analysis``, so a second
+    call with the same name overwrites that analysis's previous run rather than accumulating a
+    history of runs.
+    """
+    output_path = _project_relative(output, project_root(registry))
+    entry = rb.AnalysisEntry(date=_now(), output=output_path, summary=dict(summary))
+    upsert_dataset(registry, accession).setdefault("analyses", {})[analysis] = entry.to_dict()
 
 
 def record_export(registry: Registry, name: str, output: Union[str, Path], summary: Dict[str, Any]) -> None:
@@ -592,11 +617,10 @@ def record_export(registry: Registry, name: str, output: Union[str, Path], summa
     Only the latest run of each export is kept: its date, the project-relative output path
     and a summary of what it contained.
     """
-    registry.project.setdefault("exports", {})[name] = {
-        "date": _now(),
-        "output": _project_relative(output, project_root(registry)),
-        "summary": dict(summary),
-    }
+    project = rb.project_block(registry)
+    output_path = _project_relative(output, project_root(registry))
+    project.exports[name] = rb.ExportEntry(date=_now(), output=output_path, summary=dict(summary))
+    rb.set_project_block(registry, project)
 
 
 def record_extraction(
@@ -617,28 +641,28 @@ def record_extraction(
     ``coverage`` is None (nothing mapped, or the coverage step failed).
     """
     root = project_root(registry)
-    extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
-    previous = extractions.get(genome_id, {})
+    previous = rb.extraction_block(registry, accession, genome_id)
     genome_fasta = params.get("genome_fasta")
     coverage = coverage or {}
     coverage_tsv = coverage.get("coverage_tsv")
-    extractions[genome_id] = {
-        "date": _now(),
-        "genome_fasta": _project_relative(genome_fasta, root) if genome_fasta is not None else None,
-        "preset": params.get("preset"),
-        "threshold": params.get("threshold"),
-        "filter_flags": params.get("filter_flags"),
-        "min_mapq": params.get("min_mapq"),
-        "index": params.get("index"),
-        "mapped_reads": int(mapped_reads),
-        "mapped_total": int(mapped_total) if mapped_total is not None else None,
-        "unequal_mates": bool(unequal_mates),
-        "files": [_project_relative(p, root) for p in files],
-        "breadth": coverage.get("breadth"),
-        "mean_depth": coverage.get("mean_depth"),
-        "coverage_tsv": _project_relative(coverage_tsv, root) if coverage_tsv is not None else None,
-        "assembly": previous.get("assembly"),
-    }
+    block = rb.ExtractionBlock(
+        date=_now(),
+        genome_fasta=_project_relative(genome_fasta, root) if genome_fasta is not None else None,
+        preset=params.get("preset"),
+        threshold=params.get("threshold"),
+        filter_flags=params.get("filter_flags"),
+        min_mapq=params.get("min_mapq"),
+        index=params.get("index"),
+        mapped_reads=int(mapped_reads),
+        mapped_total=int(mapped_total) if mapped_total is not None else None,
+        unequal_mates=bool(unequal_mates),
+        files=[_project_relative(p, root) for p in files],
+        breadth=coverage.get("breadth"),
+        mean_depth=coverage.get("mean_depth"),
+        coverage_tsv=_project_relative(coverage_tsv, root) if coverage_tsv is not None else None,
+        assembly=previous.assembly if previous is not None else None,
+    )
+    rb.set_extraction_block(registry, accession, genome_id, block)
     registry.genomes.setdefault(genome_id, {})
 
 
@@ -665,22 +689,20 @@ def record_assembly(
     caller has always been able to rely on (``contigs``, ``total_bp``, ``n50``, ``largest``)
     are still guaranteed present as ints, defaulting to 0 when ``stats`` omits them.
     """
-    extractions = upsert_dataset(registry, accession).setdefault("extractions", {})
-    entry = extractions.setdefault(genome_id, {"files": [], "mapped_reads": None})
-    entry.pop("inferred", None)
-    assembly: Dict[str, Any] = {
-        "date": _now(),
-        "dir": _project_relative(assembly_dir, project_root(registry)),
-        "tool": "megahit",
-        "version": tool_version,
-        "params": dict(params),
-    }
-    for key, value in stats.items():
-        if key not in _REQUIRED_ASSEMBLY_STATS:
-            assembly[key] = value
-    for key in _REQUIRED_ASSEMBLY_STATS:
-        assembly[key] = int(stats.get(key, 0))
-    entry["assembly"] = assembly
+    entry = rb.extraction_block(registry, accession, genome_id)
+    if entry is None:
+        entry = rb.ExtractionBlock.from_dict({"files": [], "mapped_reads": None})
+    entry.discard("inferred")
+    entry.assembly = rb.AssemblyBlock(
+        date=_now(),
+        dir=_project_relative(assembly_dir, project_root(registry)),
+        tool="megahit",
+        version=tool_version,
+        params=dict(params),
+        extra={key: value for key, value in stats.items() if key not in _REQUIRED_ASSEMBLY_STATS},
+        **{key: int(stats.get(key, 0)) for key in _REQUIRED_ASSEMBLY_STATS},
+    )
+    rb.set_extraction_block(registry, accession, genome_id, entry)
 
 
 def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
@@ -691,63 +713,67 @@ def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
     (and a ``dir``) that no longer exist. A no-op when there is no extraction record (or no
     assembly block) for this accession/genome.
     """
-    entry = registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
+    entry = rb.extraction_block(registry, accession, genome_id)
     if entry is not None:
-        entry["assembly"] = None
-
-
-def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
-    return registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
+        entry.assembly = None
+        rb.set_extraction_block(registry, accession, genome_id, entry)
 
 
 # --------------------------------------------------------------------- queries
 
 
-def _extraction_stage(record: Dict[str, Any], stage: str, genome_id: Optional[str]) -> bool:
+def _extraction_stage(registry: Registry, acc: str, stage: str, genome_id: Optional[str]) -> bool:
     """Handle the "extracted"/"assembled" stages of ``_in_stage`` (kept separate to bound complexity)."""
-    extractions = record.get("extractions", {})
     if genome_id is None:
-        chosen = [e for e in extractions.values() if e is not None]
+        chosen = [e for e in (registry.datasets[acc].get("extractions") or {}).values() if isinstance(e, dict)]
     else:
-        chosen = [extractions[genome_id]] if extractions.get(genome_id) is not None else []
+        chosen = [e for e in (rb.raw(registry, acc, "extractions", genome_id),) if isinstance(e, dict)]
     if stage == "extracted":
         return any((e.get("mapped_reads") or 0) > 0 for e in chosen)
     if stage == "assembled":
-        return any((e.get("assembly") or {}).get("contigs", 0) > 0 for e in chosen)
+        return any(isinstance(e.get("assembly"), dict) and (e["assembly"].get("contigs") or 0) > 0 for e in chosen)
     raise DataAccessError(f"Unknown stage '{stage}'. Choose one of: {', '.join(STAGES)}")
 
 
-def _in_stage(record: Dict[str, Any], stage: str, genome_id: Optional[str]) -> bool:
+def _in_stage(registry: Registry, acc: str, stage: str, genome_id: Optional[str]) -> bool:
+    """Whether ``acc`` is in ``stage``; reads the one field it needs, without building a block."""
     if stage == "screened":
-        genomes = record.get("screening", {}).get("genomes", {})
+        genomes = rb.raw(registry, acc, "screening", "genomes") or {}
         return bool(genomes) if genome_id is None else genome_id in genomes
     if stage == "selected":
-        return bool(record.get("selection", {}).get("selected"))
+        return bool(rb.raw(registry, acc, "selection", "selected"))
     if stage == "excluded":
-        return bool(record.get("exclusion", {}).get("excluded"))
+        return bool(rb.raw(registry, acc, "exclusion", "excluded"))
     if stage == "downloaded":
-        return record.get("download", {}).get("state") == "downloaded"
+        return rb.raw(registry, acc, "download", "state") == "downloaded"
     if stage == "analysed":
-        return bool(record.get("analyses"))
-    return _extraction_stage(record, stage, genome_id)
+        return bool(registry.datasets[acc].get("analyses"))
+    return _extraction_stage(registry, acc, stage, genome_id)
 
 
 def query(registry: Registry, stage: str, genome_id: Optional[str] = None) -> List[str]:
     """Accessions in ``stage`` (insertion order), optionally for one target genome."""
     if stage not in STAGES:
         raise DataAccessError(f"Unknown stage '{stage}'. Choose one of: {', '.join(STAGES)}")
-    return [acc for acc, record in registry.datasets.items() if _in_stage(record, stage, genome_id)]
+    return [acc for acc in registry.datasets if _in_stage(registry, acc, stage, genome_id)]
 
 
 def stage_counts(registry: Registry) -> Dict[str, Any]:
+    """Return per-stage and per-genome accession counts for the registry.
+
+    The result has a ``"stages"`` mapping of each entry in ``STAGES`` to the number of
+    accessions currently in it, and a ``"genomes"`` mapping of each known genome id to its
+    extracted and assembled accession counts plus the list of accessions extracted against it
+    with zero mapped reads.
+    """
     stages = {stage: len(query(registry, stage)) for stage in STAGES}
     genomes: Dict[str, Dict[str, Any]] = {}
     for genome_id in sorted(known_genome_ids(registry)):
         zero = [
             acc
-            for acc, record in registry.datasets.items()
-            if genome_id in record.get("extractions", {})
-            and (record["extractions"][genome_id].get("mapped_reads") or 0) == 0
+            for acc in registry.datasets
+            if isinstance(extraction := rb.raw(registry, acc, "extractions", genome_id), dict)
+            and (extraction.get("mapped_reads") or 0) == 0
         ]
         genomes[genome_id] = {
             "extracted": len(query(registry, "extracted", genome_id)),
@@ -758,10 +784,11 @@ def stage_counts(registry: Registry) -> Dict[str, Any]:
 
 
 def known_genome_ids(registry: Registry) -> Set[str]:
+    """Return every genome id the registry knows about: recorded genomes plus any seen only in a dataset entry."""
     ids: Set[str] = set(registry.genomes)
-    for record in registry.datasets.values():
-        ids.update(record.get("screening", {}).get("genomes", {}))
-        ids.update(record.get("extractions", {}))
+    for acc in registry.datasets:
+        ids.update(rb.raw(registry, acc, "screening", "genomes") or {})
+        ids.update(registry.datasets[acc].get("extractions") or {})
     return ids
 
 
@@ -809,6 +836,7 @@ def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
 
 
 def scan_metadata(metadata_folder: Path) -> Set[str]:
+    """Return the accessions with an ``<accession>_metadata.xml`` file directly under ``metadata_folder``."""
     return {p.name[: -len("_metadata.xml")] for p in visible_files(metadata_folder, "*_metadata.xml")}
 
 
@@ -825,6 +853,13 @@ def _genome_ids_on_disk(paths: ProjectPaths, registry: Optional[Registry]) -> Se
 
 
 def scan_extractions(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[str, Dict[str, List[Path]]]:
+    """Return the extracted read files found on disk, as accession -> genome id -> list of file paths.
+
+    Walks each per-accession folder under ``targeted_folder`` and classifies its files with
+    ``split_extract_filename`` against ``genome_ids``; files that do not match a known genome id
+    or mate suffix pattern are skipped. Returns an empty mapping if ``targeted_folder`` does not
+    exist as a directory.
+    """
     found: Dict[str, Dict[str, List[Path]]] = {}
     if not targeted_folder.is_dir():
         return found
@@ -837,6 +872,13 @@ def scan_extractions(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[s
 
 
 def scan_assemblies(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[str, Dict[str, Path]]:
+    """Return the assembly directories found on disk, as accession -> genome id -> assembly directory path.
+
+    Walks each per-accession folder under ``targeted_folder`` for subfolders named
+    ``<genome_id>_assembly``; ``genome_ids`` is accepted for symmetry with ``scan_extractions``
+    but not otherwise used, since the assembly suffix alone identifies the genome id. Returns an
+    empty mapping if ``targeted_folder`` does not exist as a directory.
+    """
     found: Dict[str, Dict[str, Path]] = {}
     if not targeted_folder.is_dir():
         return found
@@ -881,7 +923,7 @@ def _screening_from_matches(registry: Registry, matches_folder: Path) -> None:
                 except ValueError:
                     cani = None
                 record_screening(registry, acc, csv_path.stem, containment, cani, "matches", 0.0, csv_path)
-                registry.datasets[acc]["screening"]["inferred"] = True
+                rb.mark_inferred(registry, acc, "screening")
 
 
 def _bootstrap_selection(
@@ -897,17 +939,16 @@ def _bootstrap_selection(
             registry, list(dict.fromkeys(wanted)), {"source": "bootstrap"}, accessions_file or parsed_containment or ""
         )
         for acc in wanted:
-            registry.datasets[acc]["selection"]["inferred"] = True
+            rb.mark_inferred(registry, acc, "selection")
 
 
 def _bootstrap_downloads_and_metadata(registry: Registry, paths: ProjectPaths) -> None:
     for acc in scan_downloads(paths.fastq):
         record_download(registry, acc, "downloaded", paths.fastq)
-        registry.datasets[acc]["download"]["inferred"] = True
-        registry.datasets[acc]["download"]["attempts"] = 0
+        rb.mark_inferred(registry, acc, "download", attempts=0)
     for acc in sorted(scan_metadata(paths.metadata)):
         record_metadata(registry, acc, paths.metadata / f"{acc}_metadata.xml", {})
-        registry.datasets[acc]["metadata"]["inferred"] = True
+        rb.mark_inferred(registry, acc, "metadata")
 
 
 def _infer_extraction(registry: Registry, acc: str, genome_id: str, files: Sequence[Path]) -> None:
@@ -921,7 +962,7 @@ def _infer_extraction(registry: Registry, acc: str, genome_id: str, files: Seque
     reads = sum(count_fastq_reads(f) for f in files)
     coverage = _infer_coverage(coverage_table_path(files[0].parent, genome_id)) if files else None
     record_extraction(registry, acc, genome_id, files, reads, False, {}, coverage=coverage)
-    registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+    rb.mark_inferred(registry, acc, "extractions", genome_id=genome_id)
 
 
 def _infer_coverage(tsv: Path) -> Optional[Dict[str, Any]]:
@@ -941,7 +982,7 @@ def _infer_assembly(registry: Registry, acc: str, genome_id: str, asm_dir: Path)
     stats = summarise_contigs(asm_dir / _CONTIGS_NAME)
     if stats["contigs"] > 0:
         record_assembly(registry, acc, genome_id, asm_dir, stats, "", {})
-        registry.datasets[acc]["extractions"][genome_id]["inferred"] = True
+        rb.mark_inferred(registry, acc, "extractions", genome_id=genome_id)
 
 
 def _bootstrap_extractions(registry: Registry, paths: ProjectPaths, genome_ids: List[str]) -> None:
@@ -997,23 +1038,22 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
 
     report = ReconcileReport()
     on_disk = scan_downloads(paths.fastq)
-    for acc, record in registry.datasets.items():
-        download = record.get("download", {})
-        if download.get("state") == "downloaded" and acc not in on_disk:
-            download["state"] = "missing"
-            download["date"] = _now()
+    for acc in registry.datasets:
+        download = rb.download_block(registry, acc)
+        if download is not None and download.state == "downloaded" and acc not in on_disk:
+            download.state, download.date = "missing", _now()
+            rb.set_download_block(registry, acc, download)
             report.recorded_missing.append(acc)
-    tracked = {acc for acc, r in registry.datasets.items() if r.get("download", {}).get("state") == "downloaded"}
+    tracked = set(query(registry, "downloaded"))
     report.untracked_fastq = sorted(acc for acc in on_disk if acc not in tracked)
     for acc in report.untracked_fastq:
         record_download(registry, acc, "downloaded", paths.fastq, attempt=False)
-        registry.datasets[acc]["download"]["inferred"] = True
-        registry.datasets[acc]["download"]["attempts"] = 0
+        rb.mark_inferred(registry, acc, "download", attempts=0)
     genome_ids = sorted(_genome_ids_on_disk(paths, registry))
     assemblies = scan_assemblies(paths.targeted, genome_ids)
     for acc, per_genome_files in scan_extractions(paths.targeted, genome_ids).items():
         for genome_id, files in per_genome_files.items():
-            if extraction_record(registry, acc, genome_id) is None:
+            if rb.extraction_block(registry, acc, genome_id) is None:
                 report.untracked_extractions.append((acc, genome_id))
                 _infer_extraction(registry, acc, genome_id, files)
                 asm_dir = assemblies.get(acc, {}).get(genome_id)
@@ -1036,16 +1076,17 @@ def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> 
     verified it when it was downloaded, and counting the reads again through a link would
     repeat work another project has done.
     """
-    for acc, record in registry.datasets.items():
-        download = record.get("download") or {}
-        if download.get("state") != "downloaded" or download.get("complete"):
+    for acc in registry.datasets:
+        download = rb.download_block(registry, acc) or rb.DownloadBlock()
+        # A verdict recorded as an empty dict counts as none, as it did before the typed blocks.
+        if download.state != "downloaded" or (download.complete is not None and download.complete.to_dict()):
             continue
-        if download.get("source") == "store":
+        if download.source == "store":
             complete = _store_verdict(registry, acc)
             if complete is not None:
                 set_download_verdict(registry, acc, complete)
             continue
-        spots = (record.get("metadata") or {}).get("run_total_spots")
+        spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots
         if not spots:
             continue
         acc_dir = paths.fastq / acc
@@ -1062,7 +1103,7 @@ def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any
     Reads the store root the registry itself recorded; a project whose store has moved or is
     not mounted simply gets no verdict this time round, exactly as before.
     """
-    root = (registry.store or {}).get("root")
+    root = rb.store_block(registry).root
     if not root:
         return None
     # Imported here, not at module level: metaquest.store imports this module.
@@ -1074,45 +1115,3 @@ def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any
     except (OSError, DataAccessError) as e:
         logger.warning("Could not read the store sidecar for %s: %s", accession, e)
         return None
-
-
-def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
-    """Flat views: one row per accession, and one row per (accession, genome) extraction."""
-    import pandas as pd
-
-    rows = []
-    ext_rows = []
-    for acc, record in registry.datasets.items():
-        rows.append(
-            {
-                "accession": acc,
-                "screened_genomes": ",".join(sorted(record.get("screening", {}).get("genomes", {}))),
-                "selected": bool(record.get("selection", {}).get("selected", False)),
-                "excluded": bool(record.get("exclusion", {}).get("excluded", False)),
-                "exclusion_reason": record.get("exclusion", {}).get("reason", ""),
-                "download_state": record.get("download", {}).get("state", ""),
-                "download_date": record.get("download", {}).get("date", ""),
-                "bytes_total": record.get("download", {}).get("bytes_total", 0),
-                "metadata": "metadata" in record,
-                "analyses": ",".join(sorted(record.get("analyses", {}))),
-            }
-        )
-        for genome_id, ext in record.get("extractions", {}).items():
-            asm = ext.get("assembly") or {}
-            ext_rows.append(
-                {
-                    "accession": acc,
-                    "genome_id": genome_id,
-                    "mapped_reads": ext.get("mapped_reads"),
-                    "breadth": ext.get("breadth"),
-                    "mean_depth": ext.get("mean_depth"),
-                    "extraction_date": ext.get("date"),
-                    "contigs": asm.get("contigs"),
-                    "total_bp": asm.get("total_bp"),
-                    "n50": asm.get("n50"),
-                    "assembly_date": asm.get("date"),
-                }
-            )
-    datasets = pd.DataFrame(rows).set_index("accession") if rows else pd.DataFrame()
-    extractions = pd.DataFrame(ext_rows)
-    return datasets, extractions

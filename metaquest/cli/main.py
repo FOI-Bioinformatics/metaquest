@@ -59,16 +59,10 @@ from metaquest.cli.commands.advanced_analysis import (
     TaxonomyValidationCommand,
     TaxonomicSummaryCommand,
 )
-from metaquest.cli.commands.sra_enhanced import (
-    SRAInfoCommand,
-    SRAStatsCommand,
-    SRAValidateCommand,
-)
-from metaquest.cli.commands.sra_intelligent import (
-    SRAQualityProfileCommand,
-    SRAInteractiveDashboardCommand,
-    SRAComparativeAnalysisCommand,
-)
+from metaquest.cli.commands.renamed import renamed_commands
+from metaquest.cli.commands.sra_enhanced import SRAInfoCommand, SRAValidateCommand
+from metaquest.cli.commands.sra_profile import SRAProfileCommand
+from metaquest.cli.commands.sra_report import SRAReportCommand
 
 
 def register_all_commands() -> None:
@@ -102,11 +96,9 @@ def register_all_commands() -> None:
         StatusCommand(),
         ResultsTableCommand(),
         SRAInfoCommand(),
-        SRAStatsCommand(),
         SRAValidateCommand(),
-        SRAQualityProfileCommand(),
-        SRAInteractiveDashboardCommand(),
-        SRAComparativeAnalysisCommand(),
+        SRAProfileCommand(),
+        SRAReportCommand(),
         ExtractTargetReadsCommand(),
         # Store commands
         StoreInitCommand(),
@@ -123,6 +115,8 @@ def register_all_commands() -> None:
         InteractivePlotCommand(),
         TaxonomyValidationCommand(),
         TaxonomicSummaryCommand(),
+        # Former names (0.5.0), hidden from the help
+        *renamed_commands(),
     ]
 
     for command in commands:
@@ -137,9 +131,11 @@ class _HelpFormatter(DefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter
 
 
 def _commands_epilog(commands: Dict[str, BaseCommand]) -> str:
-    """List commands under their pipeline step for the main --help."""
+    """List commands under their pipeline step for the main --help; hidden commands are left out."""
     by_group: Dict[str, List[BaseCommand]] = {}
     for command in commands.values():
+        if command.hidden:
+            continue
         by_group.setdefault(command.group, []).append(command)
     lines = ["commands by pipeline step:"]
     for group in GROUP_ORDER + sorted(set(by_group) - set(GROUP_ORDER)):

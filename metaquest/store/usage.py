@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.registry import Registry, load_registry
+from metaquest.data.registry_blocks import project_block, set_project_block
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import StorePaths
 
@@ -27,13 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 def _upsert_project_row(catalog, registry: Registry, project_id: str) -> None:
-    project = registry.project or {}
-    catalog.upsert_project(
-        project_id,
-        project.get("name", ""),
-        project.get("path", ""),
-        str(registry.path),
-    )
+    project = project_block(registry)
+    catalog.upsert_project(project_id, project.name or "", project.path or "", str(registry.path))
 
 
 def ensure_project_identity(registry: Registry) -> Dict[str, Any]:
@@ -50,22 +46,19 @@ def ensure_project_identity(registry: Registry) -> Dict[str, Any]:
     persists it with whatever else that transaction records, and the catalogue row follows from
     the next ``record_usage_safe``/``record_usage_many`` call.
     """
-    project = dict(registry.project or {})
-    if project.get("id"):
-        return project
+    project = project_block(registry)
+    if project.id:
+        return project.to_dict()
 
     cwd = Path.cwd()
     # Keys this function does not own (e.g. "exports" from results_table) are kept.
-    project = {
-        **project,
-        "id": str(uuid.uuid4()),
-        "name": project.get("name") or cwd.name,
-        "path": project.get("path") or str(cwd.resolve()),
-        "created": project.get("created") or datetime.now(timezone.utc).isoformat(),
-    }
-    registry.project = project
-    logger.info("Recorded this project's identity for the shared store: %s (%s)", project["id"], project["name"])
-    return project
+    project.id = str(uuid.uuid4())
+    project.name = project.name or cwd.name
+    project.path = project.path or str(cwd.resolve())
+    project.created = project.created or datetime.now(timezone.utc).isoformat()
+    set_project_block(registry, project)
+    logger.info("Recorded this project's identity for the shared store: %s (%s)", project.id, project.name)
+    return project.to_dict()
 
 
 def record_usage_safe(
@@ -88,8 +81,7 @@ def record_usage_safe(
     stage, and turned into False: the pipeline stage that triggered this call must never
     fail because the catalogue could not be written.
     """
-    project = registry.project or {}
-    project_id = project.get("id")
+    project_id = project_block(registry).id
     if paths is None or not project_id:
         return False
 
@@ -116,8 +108,7 @@ def record_usage_many(
     bound project returns False without writing anything; any exception during the write
     is caught, logged at warning, and turned into False.
     """
-    project = registry.project or {}
-    project_id = project.get("id")
+    project_id = project_block(registry).id
     if paths is None or not project_id:
         return False
 
@@ -172,7 +163,7 @@ def stale_projects(catalog: Catalog) -> List[Dict[str, Any]]:
             logger.warning("Could not check registry %s while checking staleness: %s", registry_path, e)
             stale.append({**row, "reason": "registry unreadable"})
             continue
-        if (registry.project or {}).get("id") != row["project_id"]:
+        if project_block(registry).id != row["project_id"]:
             stale.append({**row, "reason": "project id differs"})
     return stale
 

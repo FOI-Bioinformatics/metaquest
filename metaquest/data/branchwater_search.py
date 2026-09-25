@@ -14,7 +14,6 @@ import hashlib
 import io
 import json
 import logging
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -24,6 +23,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.core.optional import require
 
 logger = logging.getLogger(__name__)
 
@@ -47,18 +47,6 @@ BRANCHWATER_COLUMNS = [
 ]
 
 
-def sourmash_hint() -> str:
-    """Install hint naming the interpreter this process runs under, so a user with several
-    Python environments installs sourmash into the one metaquest actually uses."""
-    return (
-        "sourmash is required to sketch a genome. Install it into this interpreter with: "
-        f"{sys.executable} -m pip install 'metaquest[sourmash]'"
-    )
-
-
-SOURMASH_HINT = sourmash_hint()
-
-
 def sketch_fasta(fasta_path: Union[str, Path]) -> Dict[str, Any]:
     """Build the k=21, scaled=1000 sourmash signature Branchwater expects for one FASTA file.
 
@@ -66,20 +54,18 @@ def sketch_fasta(fasta_path: Union[str, Path]) -> Dict[str, Any]:
     ``.sig`` file), ready to be posted to the search API.
 
     Raises:
-        DataAccessError: If sourmash is not installed, the file is missing, or it holds no sequences.
+        ConfigurationError: If sourmash is not installed.
+        DataAccessError: If the file is missing or holds no sequences.
     """
-    try:
-        from sourmash import MinHash, SourmashSignature
-        from sourmash.signature import save_signatures_to_json
-    except ImportError as e:
-        raise DataAccessError(SOURMASH_HINT) from e
+    sourmash = require("sourmash", "sourmash", "Sketching a genome")
+    signature_module = require("sourmash.signature", "sourmash", "Sketching a genome")
     from Bio import SeqIO
 
     path = Path(fasta_path)
     if not path.exists():
         raise DataAccessError(f"Genome FASTA not found: {path}")
 
-    minhash = MinHash(n=0, ksize=KSIZE, scaled=SCALED)
+    minhash = sourmash.MinHash(n=0, ksize=KSIZE, scaled=SCALED)
     n_records = 0
     with open(path) as handle:
         for record in SeqIO.parse(handle, "fasta"):
@@ -88,9 +74,9 @@ def sketch_fasta(fasta_path: Union[str, Path]) -> Dict[str, Any]:
     if n_records == 0:
         raise DataAccessError(f"No sequences found in {path}")
 
-    signature = SourmashSignature(minhash, name=path.stem, filename=path.name)
+    signature = sourmash.SourmashSignature(minhash, name=path.stem, filename=path.name)
     buffer = io.BytesIO()
-    save_signatures_to_json([signature], buffer)
+    signature_module.save_signatures_to_json([signature], buffer)
     payload = json.loads(buffer.getvalue().decode("utf-8"))
     logger.info(
         "Sketched %s: %d sequence(s), %d hashes (k=%d, scaled=%d)",

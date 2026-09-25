@@ -8,6 +8,7 @@ output layout end to end.
 import gzip
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -18,8 +19,13 @@ pytestmark = pytest.mark.network
 TINY_RUN = "SRR2517620"
 TINY_RUN_SPOTS = 425
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SMOKE_CHAIN_SCRIPT = REPO_ROOT / "scripts" / "smoke_chain.sh"
+
 needs_fasterq_dump = pytest.mark.skipif(shutil.which("fasterq-dump") is None, reason="fasterq-dump not on PATH")
 needs_cli = pytest.mark.skipif(shutil.which("metaquest") is None, reason="metaquest CLI not on PATH")
+needs_minimap2 = pytest.mark.skipif(shutil.which("minimap2") is None, reason="minimap2 not on PATH")
+needs_samtools = pytest.mark.skipif(shutil.which("samtools") is None, reason="samtools not on PATH")
 
 
 def _read_count(path):
@@ -66,4 +72,33 @@ def test_download_sra_cli_round_trip(tmp_path):
     assert result.returncode == 0, result.stderr
     # Compression defaults to on, so the CLI writes the gzipped file, not the plain one.
     assert (tmp_path / "fastq" / TINY_RUN / f"{TINY_RUN}_1.fastq.gz").exists()
-    assert "Successfully downloaded: 1 datasets" in result.stderr + result.stdout
+    assert "Newly downloaded: 1" in result.stderr + result.stdout
+
+
+@needs_fasterq_dump
+@needs_minimap2
+@needs_samtools
+def test_smoke_chain_script(tmp_path):
+    """scripts/smoke_chain.sh end to end: the same chain the nightly workflow runs
+    (download_test_genome, download_sra, sra_validate, sra_profile,
+    extract_target_reads, results_table) against the real SRR2517620 run, so
+    `make test-network` exercises exactly what the nightly job does.
+
+    A mosquito metagenome maps almost nothing onto the bacterial reference genome
+    used here, so this only checks that every step exits 0 and results.tsv gets a
+    header plus one data row, not how many reads mapped.
+    """
+    result = subprocess.run(
+        ["bash", str(SMOKE_CHAIN_SCRIPT), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    results_path = tmp_path / "results.tsv"
+    assert results_path.exists(), result.stdout + result.stderr
+    lines = results_path.read_text().splitlines()
+    assert len(lines) == 2, f"expected a header plus one data row, got: {lines}"
+    assert lines[0].split("\t")[:2] == ["accession", "genome_id"]
+    assert lines[1].startswith(f"{TINY_RUN}\t")

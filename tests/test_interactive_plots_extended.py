@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for visualization/interactive.py (65% → 80%+ coverage)
+EXTENDED TESTS for visualization/interactive.py (65% -> 80%+ coverage)
 
 This file provides comprehensive testing for interactive visualization functions,
 focusing on uncovered code paths, error handling, and edge cases.
@@ -12,13 +12,16 @@ import pandas as pd
 import pytest
 from unittest.mock import patch
 
-from metaquest.visualization.interactive import (
+for _module in ("plotly", "sklearn", "scipy"):
+    pytest.importorskip(_module)
+
+from metaquest.visualization.interactive import (  # noqa: E402
     create_interactive_pca,
     create_interactive_tsne,
     create_interactive_heatmap,
     create_diversity_comparison_plot,
 )
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import VisualizationError  # noqa: E402
 
 
 @pytest.fixture
@@ -62,7 +65,7 @@ def sample_alpha_diversity():
 class TestInteractiveTSNE:
     """Test t-SNE plotting function."""
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_tsne_basic(self, mock_show, sample_data):
         """Test basic t-SNE plot creation."""
         fig = create_interactive_tsne(sample_data, perplexity=5.0, show_plot=False)  # Must be < n_samples (10)
@@ -71,7 +74,7 @@ class TestInteractiveTSNE:
         assert hasattr(fig, "data")
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_tsne_with_metadata(self, mock_show, sample_data, sample_metadata):
         """Test t-SNE with metadata coloring."""
         fig = create_interactive_tsne(
@@ -86,7 +89,7 @@ class TestInteractiveTSNE:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_tsne_with_numpy(self, mock_show, sample_data):
         """Test t-SNE with numpy array input."""
         fig = create_interactive_tsne(sample_data.values, perplexity=5.0, show_plot=False)  # Must be < n_samples (10)
@@ -94,7 +97,7 @@ class TestInteractiveTSNE:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_tsne_custom_parameters(self, mock_show, sample_data):
         """Test t-SNE with custom perplexity and iterations."""
         fig = create_interactive_tsne(sample_data, perplexity=5.0, n_iter=500, show_plot=False)
@@ -102,19 +105,19 @@ class TestInteractiveTSNE:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_tsne_save_file(self, mock_show, sample_data, tmp_path):
         """Test t-SNE plot saving to file."""
         output_file = tmp_path / "test_tsne.html"
 
-        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
+        with patch("plotly.graph_objects.Figure.write_html") as mock_write:
             create_interactive_tsne(
                 sample_data, output_file=output_file, perplexity=5.0, show_plot=False  # Must be < n_samples (10)
             )
 
             mock_write.assert_called_once_with(str(output_file))
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_create_tsne_missing_metadata_column(self, mock_show, sample_data, sample_metadata):
         """Test t-SNE with missing metadata column."""
         fig = create_interactive_tsne(
@@ -132,7 +135,7 @@ class TestInteractiveTSNE:
         """Test t-SNE error handling."""
         # Force an error by passing invalid data
         with pytest.raises(VisualizationError, match="Failed to create interactive t-SNE"):
-            with patch("metaquest.visualization.interactive.TSNE") as mock_tsne:
+            with patch("sklearn.manifold.TSNE") as mock_tsne:
                 mock_tsne.return_value.fit_transform.side_effect = ValueError("Test error")
                 create_interactive_tsne(sample_data, show_plot=False)
 
@@ -140,7 +143,7 @@ class TestInteractiveTSNE:
 class TestInteractivePCAExtended:
     """Extended tests for PCA plotting."""
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_pca_with_nan_size_values(self, mock_show, sample_data, sample_metadata):
         """Test PCA with NaN values in size_by column."""
         # Add NaN to size values
@@ -154,7 +157,7 @@ class TestInteractivePCAExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_pca_with_missing_size_column(self, mock_show, sample_data, sample_metadata):
         """Test PCA with missing size_by column."""
         fig = create_interactive_pca(
@@ -164,7 +167,7 @@ class TestInteractivePCAExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_pca_2d_explicit(self, mock_show, sample_data):
         """Test PCA with explicit 2D components."""
         fig = create_interactive_pca(sample_data, n_components=2, show_plot=False)
@@ -172,7 +175,7 @@ class TestInteractivePCAExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_pca_show_plot_true(self, mock_show, sample_data):
         """Test PCA with show_plot=True."""
         fig = create_interactive_pca(sample_data, show_plot=True)
@@ -190,7 +193,7 @@ class TestInteractivePCAExtended:
     def test_pca_error_in_computation(self, sample_data):
         """Test PCA error handling during computation."""
         with pytest.raises(VisualizationError, match="Failed to create interactive PCA"):
-            with patch("metaquest.visualization.interactive.PCA") as mock_pca:
+            with patch("sklearn.decomposition.PCA") as mock_pca:
                 mock_pca.return_value.fit_transform.side_effect = ValueError("PCA failed")
                 create_interactive_pca(sample_data, show_plot=False)
 
@@ -198,7 +201,7 @@ class TestInteractivePCAExtended:
 class TestInteractiveHeatmapExtended:
     """Extended tests for heatmap plotting."""
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_heatmap_with_numpy_input(self, mock_show):
         """Test heatmap with numpy array input."""
         data = np.random.randn(5, 4)
@@ -208,17 +211,17 @@ class TestInteractiveHeatmapExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_heatmap_save_file(self, mock_show, sample_data, tmp_path):
         """Test heatmap saving to file."""
         output_file = tmp_path / "test_heatmap.html"
 
-        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
+        with patch("plotly.graph_objects.Figure.write_html") as mock_write:
             create_interactive_heatmap(sample_data, output_file=output_file, show_plot=False)
 
             mock_write.assert_called_once_with(str(output_file))
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_heatmap_custom_clustering_parameters(self, mock_show, sample_data):
         """Test heatmap with custom clustering parameters."""
         fig = create_interactive_heatmap(
@@ -234,7 +237,7 @@ class TestInteractiveHeatmapExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_heatmap_show_plot_true(self, mock_show, sample_data):
         """Test heatmap with show_plot=True."""
         fig = create_interactive_heatmap(sample_data, show_plot=True)
@@ -245,7 +248,7 @@ class TestInteractiveHeatmapExtended:
     def test_heatmap_error_handling(self, sample_data):
         """Test heatmap error handling."""
         with pytest.raises(VisualizationError, match="Failed to create interactive heatmap"):
-            with patch("metaquest.visualization.interactive.linkage") as mock_linkage:
+            with patch("scipy.cluster.hierarchy.linkage") as mock_linkage:
                 mock_linkage.side_effect = ValueError("Clustering failed")
                 create_interactive_heatmap(sample_data, cluster_samples=True, show_plot=False)
 
@@ -253,7 +256,7 @@ class TestInteractiveHeatmapExtended:
 class TestDiversityComparisonExtended:
     """Extended tests for diversity comparison plots."""
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_diversity_strip_plot(self, mock_show, sample_alpha_diversity, sample_metadata):
         """Test diversity comparison with strip plot."""
         fig = create_diversity_comparison_plot(
@@ -268,12 +271,12 @@ class TestDiversityComparisonExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_diversity_save_file(self, mock_show, sample_alpha_diversity, sample_metadata, tmp_path):
         """Test diversity plot saving to file."""
         output_file = tmp_path / "test_diversity.html"
 
-        with patch("metaquest.visualization.interactive.go.Figure.write_html") as mock_write:
+        with patch("plotly.graph_objects.Figure.write_html") as mock_write:
             create_diversity_comparison_plot(
                 sample_alpha_diversity,
                 sample_metadata,
@@ -285,7 +288,7 @@ class TestDiversityComparisonExtended:
 
             mock_write.assert_called_once_with(str(output_file))
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_diversity_custom_title(self, mock_show, sample_alpha_diversity, sample_metadata):
         """Test diversity plot with custom title."""
         fig = create_diversity_comparison_plot(
@@ -300,7 +303,7 @@ class TestDiversityComparisonExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_diversity_show_plot_true(self, mock_show, sample_alpha_diversity, sample_metadata):
         """Test diversity plot with show_plot=True."""
         fig = create_diversity_comparison_plot(
@@ -313,7 +316,7 @@ class TestDiversityComparisonExtended:
     def test_diversity_error_handling(self, sample_alpha_diversity, sample_metadata):
         """Test diversity plot error handling."""
         with pytest.raises(VisualizationError, match="Failed to create diversity comparison plot"):
-            with patch("metaquest.visualization.interactive.px.box") as mock_box:
+            with patch("plotly.express.box") as mock_box:
                 mock_box.side_effect = ValueError("Plotting failed")
                 create_diversity_comparison_plot(
                     sample_alpha_diversity,
@@ -332,11 +335,11 @@ class TestEdgeCasesExtended:
         data = pd.DataFrame({"Feature_0": np.random.randn(5)})
 
         # Should work but only produce 1 component
-        with patch("metaquest.visualization.interactive.go.Figure.show"):
+        with patch("plotly.graph_objects.Figure.show"):
             fig = create_interactive_pca(data, n_components=2, show_plot=False)
             assert fig is not None
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_heatmap_small_dataset(self, mock_show):
         """Test heatmap with very small dataset."""
         small_data = pd.DataFrame([[1, 2], [3, 4]], columns=["A", "B"])
@@ -346,7 +349,7 @@ class TestEdgeCasesExtended:
         assert fig is not None
         mock_show.assert_not_called()
 
-    @patch("metaquest.visualization.interactive.go.Figure.show")
+    @patch("plotly.graph_objects.Figure.show")
     def test_pca_with_all_nan_size_values(self, mock_show, sample_data, sample_metadata):
         """Test PCA when all size values are NaN."""
         metadata_all_nan = sample_metadata.copy()
@@ -363,7 +366,7 @@ class TestEdgeCasesExtended:
 #
 # After running these extended tests:
 # - Expected: 37+ tests pass
-# - Coverage: 65% → 80%+ for visualization/interactive.py
+# - Coverage: 65% -> 80%+ for visualization/interactive.py
 # - All interactive functions comprehensively tested
 #
 # Run tests:

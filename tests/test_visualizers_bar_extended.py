@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for plugins/visualizers/bar.py (22% → 85%+ coverage)
+EXTENDED TESTS for plugins/visualizers/bar.py (22% -> 85%+ coverage)
 
 This file adds comprehensive tests for bar chart visualizations:
 - Data preparation with various configurations
@@ -313,7 +313,7 @@ class TestBarChartPluginMetadata:
 #
 # After running these tests:
 # - Expected: 30+ tests pass
-# - Coverage: 22% → 85%+ for plugins/visualizers/bar.py
+# - Coverage: 22% -> 85%+ for plugins/visualizers/bar.py
 # - All methods and edge cases covered
 #
 # Run tests:

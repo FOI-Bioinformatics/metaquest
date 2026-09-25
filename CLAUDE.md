@@ -26,18 +26,49 @@ MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic dat
 ### Installation
 - `make install` - Install package for development
 - `make dev-install` - Install with development dependencies
-- Legacy: `pip install -r requirements.txt` (still supported)
+- Legacy: `pip install -r requirements.txt` (core only) or `requirements-all.txt` (core plus every extra)
+
+### Dependencies and extras
+- Core runtime: pandas, numpy, matplotlib, biopython, lxml, requests. The CLI must import and build its
+  parser with only these (`tests/test_optional_imports.py` blocks every optional module and checks this).
+- Extras: `analysis` (scikit-learn, scipy), `interactive` (plotly, jinja2), `maps` (cartopy), `sourmash`;
+  `all` installs them all and `dev` depends on `all`.
+- Import an optional package at the point of use with `metaquest.core.optional.require(module, extra, purpose)`,
+  never at module top level and never behind a silent `*_AVAILABLE` flag: a missing package is a
+  `ConfigurationError` naming the extra, not a degraded output file. A command that catches broad exceptions
+  must re-raise `ConfigurationError` (see `cli/commands/advanced_analysis.py`).
+- A test that needs an extra is skipped when it is absent (`pytest.importorskip` or a `requires_*` skip mark),
+  so the suite also passes in a core-only install.
 
 ## Architecture
 
-MetaQuest follows a layered architecture with clear separation of concerns:
+MetaQuest follows a layered architecture with clear separation of concerns. As of 0.5.0,
+`metaquest --help` lists 41 commands across six pipeline-step groups (Containment, Metadata,
+Genomes, Reads, Store, Analysis); the four commands `sra_profile`/`sra_report` replaced
+(`sra_stats`, `sra_profile_quality`, `sra_dashboard`, `sra_compare`) still parse but are hidden
+from that listing (see "Advanced SRA Commands" below).
 
 ### Core Components
-- **CLI Layer** (`metaquest/cli/`): Command-line interface with modular command architecture using a registry pattern
-- **Core Logic** (`metaquest/core/`): Domain models, validation, exceptions, and constants
-- **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA operations
-- **Advanced SRA Package** (`metaquest/sra/`): Intelligent download management, quality profiling, interactive reporting
-- **Processing** (`metaquest/processing/`): Containment analysis, statistical processing, counting algorithms
+- **CLI Layer** (`metaquest/cli/`): Command-line interface with modular command architecture using a
+  registry pattern. Most commands are one module under `metaquest/cli/commands/`; the store and
+  status commands are packages instead (`metaquest/cli/commands/store/`, one module per command, and
+  `metaquest/cli/commands/status/`, split into `command.py`, `suggest.py`, `render_text.py`). Every
+  command writes to stdout through `BaseCommand.emit`/`emit_raw`/`emit_json` (`cli/base.py`); no
+  other module in `metaquest/` calls `print(`.
+- **Core Logic** (`metaquest/core/`): Domain models, validation, exceptions, and constants.
+  `core/optional.py` is the one place an optional dependency (scikit-learn, scipy, plotly, jinja2,
+  cartopy, sourmash) is imported, at the point of use, raising `ConfigurationError` naming its extra
+  when the package is missing.
+- **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA
+  operations. `data/sra/` is a package (`fastq`, `cleanup`, `accession`, `retry`, `store_handoff`,
+  `download`), not a single module. `data/registry.py` is the project journal;
+  `data/registry_blocks.py` holds the typed dataclass for each block the registry file stores, with
+  unknown-key preservation on a round trip.
+- **Advanced SRA Package** (`metaquest/sra/`): Quality profiling and interactive reporting, described
+  under "Advanced SRA Commands" below.
+- **Processing** (`metaquest/processing/`): Containment analysis, statistical processing, counting
+  algorithms, and `status_report.py` (builds the `status` command's report from the registry and the
+  filesystem, with no dependency on the CLI layer).
 - **Plugins** (`metaquest/plugins/`): Extensible plugin system for formats and visualizers
 - **Visualization** (`metaquest/visualization/`): Plotting and reporting functionality
 
@@ -71,14 +102,27 @@ New commands should:
 4. **CRITICAL**: Use dashes in CLI arguments (e.g., `--matches-folder`), not underscores
 
 ### Advanced SRA Commands
-The SRA package provides three analysis commands:
-- `sra_profile_quality` - Comprehensive quality analysis of downloaded datasets
-- `sra_dashboard` - Interactive HTML dashboard generation
-- `sra_compare` - Statistical comparison between dataset groups
+Two analysis commands, both in the "Reads" group, share one statistics path
+(`metaquest/sra/`: `dataset_stats` finds an accession's mate files and loads the cached statistics
+record, `quality` samples per-read figures, `analytics.SRADatasetAnalyzer.profile_dataset_quality`
+combines them, `profiles.profile_accession` is the one entry point both commands call):
+- `sra_profile` (`cli/commands/sra_profile.py`) - statistics table, one profile JSON per accession,
+  registry analysis `"profile"`. Totals and GC come from `store.stats.compute_dataset_stats`; GC is in
+  percent (`gc_percent`) everywhere.
+- `sra_report` (`cli/commands/sra_report.py`) - one HTML report (`sra_report.html`, figures in
+  `sra_report.json`); with `--groups-file` it adds the comparison and statistical tests. Each accession
+  is profiled once and the profiles are reused by both sections; registry analysis `"report"`.
+
+`sra_stats`, `sra_profile_quality`, `sra_dashboard` and `sra_compare` (and the dash aliases) were
+merged into these in 0.5.0; `cli/commands/renamed.py` keeps the old names as hidden commands that log
+the new name and exit 2. `results_table` and `status --export-tsv` read the `"profile"` analysis, or
+the old `"sra_stats"`/`"quality"` ones of a registry written before 0.5.0
+(`data/registry_blocks.profile_summary`). Shared CLI helpers `read_accessions_file`,
+`accessions_from_args` and `resolve_command_store` live in `cli/base.py`.
 
 ### Store Commands
 `metaquest/store/` (package: `resolve`, `layout`, `sidecar`, `catalog`, `link`, `adopt`, `usage`,
-`locks`, `stats`, `journal`) and `metaquest/cli/commands/store.py` implement a shared data store: one
+`locks`, `stats`, `journal`) and `metaquest/cli/commands/store/` implement a shared data store: one
 copy of each downloaded SRA accession, reused by every project that links into it. Nine commands,
 registered under the "Store" group in `cli/main.py`:
 - `store_init` - create a store at `--data-root`, record the project's use of it
@@ -150,7 +194,7 @@ The typical workflow involves:
 3. Parsing containment data (`parse_containment`) 
 4. Visualization and analysis (`plot_containment`, `count_metadata`)
 5. Excluding unwanted datasets (`blacklist`)
-6. Advanced SRA operations (`download_sra`, `sra_profile_quality`, `sra_dashboard`)
+6. Advanced SRA operations (`download_sra`, `sra_profile`, `sra_report`)
 7. Checking project state (`status`)
 
 Each step records its outcome in the project registry (`metaquest_registry.json`, see
@@ -167,11 +211,39 @@ Each step records its outcome in the project registry (`metaquest_registry.json`
 - **API compatibility maintained** - DataFrame deprecation warnings addressed
 
 #### Quality Requirements
-- **Line length**: 120 characters maximum (configured in pyproject.toml)
-- **Formatting**: Use Black for consistent code formatting
-- **Linting**: All code must pass flake8 without violations
-- **Type hints**: Encouraged (mypy checking enabled)
-- **Coverage**: Minimum 80% for new code, 60% project-wide target
+Every gate below runs as part of `make check`, in this order; each also runs alone with the
+command shown.
+
+- **Formatting**: Black, no reformatting needed; 120 character line length (pyproject.toml).
+  `python -m black --check --diff metaquest tests`
+- **Linting**: flake8 clean. `B902` (bare `except Exception`) and `D101`/`D102`/`D103` (a
+  docstring on every public class, method and function) are enforced only on the modules listed
+  in `setup.cfg`; every other module has D101-D103 switched off there rather than by a wildcard.
+  `python -m flake8 metaquest tests`
+- **Type hints**: mypy clean. `python -m mypy metaquest`
+- **No print**: no `print(` or `sys.stdout.write` outside `metaquest/cli/base.py`; commands write
+  their result through `self.emit`/`emit_raw`/`emit_json`, everything else logs.
+  `bash scripts/check_no_print.sh`
+- **Plotly CDN**: no reference to the frozen `cdn.plot.ly/plotly-latest` alias; use
+  `metaquest.utils.html.plotly_cdn_script()` instead.
+  `grep -rn "cdn.plot.ly/plotly-latest" metaquest --include='*.py'`
+- **Complexity**: no function at radon cyclomatic-complexity rank D or worse.
+  `python -m radon cc metaquest -n D -s`
+- **Module size and maintainability**: 800 lines and a maintainability index of 20 or higher per
+  module under `metaquest/`. `tests/test_module_sizes.py` holds a short, shrink-only
+  `KNOWN_EXCEPTIONS` list for modules that were already over a ceiling when the guard was added.
+  `python tests/test_module_sizes.py --check`
+- **ASCII only**: no non-ASCII byte in `metaquest/`, `tests/`, `scripts/`, `Makefile`,
+  `setup.cfg` or `pyproject.toml`, aside from the documented exemptions in
+  `scripts/check_ascii.sh`: single lines marked `# ascii-ok` with a reason (the package
+  author's name, Unicode test fixtures). `bash scripts/check_ascii.sh`
+- **Documented commands**: every command visible in `metaquest --help` is mentioned in
+  README.md, and README.md invokes no command the CLI registry does not have.
+  `python scripts/check_docs_commands.py`
+- **Coverage**: minimum 80% for new code, 60% project-wide target; checked by `make test`
+  (coverage report), not `make check`.
+- **Dependency audit**: `pip-audit --strict` clean; runs in CI (`ci.yml`, `audit.yml`), not in
+  `make check`. `pip-audit --strict .`
 
 #### Maintenance Standards
 1. **Continuous quality assurance** - Focus on maintaining clean codebase
@@ -283,6 +355,11 @@ Before committing code:
 3. `make pipeline` integration test must pass
 4. No decrease in overall coverage percentage
 
+### Continuous Integration
+Besides the pull-request checks, a nightly GitHub Actions workflow (`.github/workflows/smoke.yml`)
+runs `scripts/smoke_chain.sh` against real NCBI/SRA services with conda-installed tools, the only
+CI job that touches the network; the same chain runs locally via `make test-network`.
+
 ## Development Workflow & Implementation Priorities
 
 ### Recommended Development Approach
@@ -334,7 +411,7 @@ When working on MetaQuest, follow this priority order:
 
 #### Well-Tested Files (Reference Implementations)
 - `metaquest/cli/commands/*.py` - comprehensive CLI testing patterns
-- `metaquest/cli/commands/sra_intelligent.py` - intelligent SRA commands
+- `metaquest/cli/commands/sra_profile.py`, `sra_report.py` - SRA analysis commands
 - `metaquest/data/file_io.py` - robust file operations
 - `metaquest/data/branchwater.py` - format handling exemplar
 - `metaquest/data/metadata.py` - external API integration
@@ -363,7 +440,7 @@ When working on MetaQuest, follow this priority order:
 - [x] **Core processing tested** - Coverage raised from an untested baseline to comprehensive
 - [x] **Data layer testing completed** - Key modules thoroughly covered
 - [x] **Test coverage improvement session** - A large batch of tests added across multiple files
-- [x] **Critical modules improved** - sra_reporting, sra_intelligent, sra_metadata, bar visualizer, taxonomy
+- [x] **Critical modules improved** - sra_reporting, the SRA analysis commands, sra_metadata, bar visualizer, taxonomy
 - [x] **Integration test suite created** - End-to-end workflow tests added
 - [x] **Performance benchmarks established** - Benchmarked tests added with pytest-benchmark
 - [x] **Overall project coverage improved** - Raised substantially from an early baseline
@@ -372,7 +449,7 @@ When working on MetaQuest, follow this priority order:
 #### Advanced SRA Features Achievements
 - [x] **SRADatasetAnalyzer** - Quality profiling, comparative analysis, anomaly detection
 - [x] **SRAReportGenerator** - Interactive dashboards, Plotly visualizations
-- [x] **CLI Integration** - Three intelligent SRA commands (sra-profile-quality, sra-dashboard, sra-compare) fully functional
+- [x] **CLI Integration** - Two SRA analysis commands (sra_profile, sra_report) fully functional
 
 #### Current Development Priorities (Low Priority)
 - [ ] **Remaining visualization modules** - interactive.py, reporting.py, plots.py (currently 0%)

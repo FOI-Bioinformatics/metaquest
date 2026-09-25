@@ -1,5 +1,5 @@
 """
-EXTENDED TESTS for data/sra_metadata.py (45% → 75%+ coverage)
+EXTENDED TESTS for data/sra_metadata.py (45% -> 75%+ coverage)
 
 This file adds tests for untested methods:
 - get_sra_metadata (batch processing)
@@ -7,7 +7,7 @@ This file adds tests for untested methods:
 - _parse_sra_xml (XML parsing)
 - _extract_dataset_info (data extraction)
 - _get_text (XML helper)
-- generate_statistics_report
+- generate_statistics_report (the sra_profile table writer)
 - save_metadata_report
 - create_download_preview
 
@@ -27,8 +27,6 @@ from metaquest.data.sra_metadata import (
     generate_statistics_report,
 )
 from metaquest.core.exceptions import DataAccessError
-from metaquest.store.sidecar import Sidecar, write_sidecar
-from metaquest.store.stats import compute_dataset_stats
 
 # Mock XML responses for testing (real efetch shape: RUN carries its own accession and
 # numbers as attributes, not a nested Statistics child)
@@ -127,7 +125,7 @@ class TestSRAMetadataClientAPI:
         with patch.object(self.client, "_fetch_batch_metadata") as mock_fetch:
             # First batch fails, second succeeds
             mock_fetch.side_effect = [
-                Exception("API Error"),
+                DataAccessError("API Error"),
                 {"SRR000200": Mock(spec=SRADatasetInfo)},
             ]
 
@@ -583,304 +581,56 @@ class TestSaveMetadataReport:
 
 
 class TestGenerateStatisticsReport:
-    """Test generate_statistics_report function."""
+    """generate_statistics_report writes the sra_profile table from rows it is given.
 
-    def test_generate_statistics_nonexistent_folder(self):
-        """Test with non-existent folder."""
-        with pytest.raises(DataAccessError, match="does not exist"):
-            generate_statistics_report("/nonexistent/folder", "/tmp/report.csv")
+    Folder scanning, the statistics record and its cache moved to sra_profile in 0.5.0 and
+    are tested in tests/test_cli_sra_profile.py.
+    """
 
-    def test_generate_statistics_empty_folder(self, tmp_path, caplog):
-        """Test with empty folder (no accession directories)."""
-        # Create empty folder
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
+    @staticmethod
+    def _row(accession, layout="PAIRED", total_reads=10, gc_percent=45.0, sampled=False):
+        return {
+            "accession": accession,
+            "num_files": 2,
+            "layout": layout,
+            "total_reads": total_reads,
+            "total_bases": total_reads * 100,
+            "avg_read_length": 100.0,
+            "gc_percent": gc_percent,
+            "sampled": sampled,
+        }
 
-        # Create a file (not directory) to ensure it's ignored
-        (fastq_folder / "not_a_dir.txt").touch()
-
-        output_file = tmp_path / "report.csv"
-
-        generate_statistics_report(fastq_folder, output_file)
-
-        assert "No accession directories found" in caplog.text
-
-    def test_generate_statistics_no_fastq_files(self, tmp_path, caplog):
-        """Test with directories but no FASTQ files."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-
-        # Create accession directory with no FASTQ files
-        acc_dir = fastq_folder / "SRR001"
-        acc_dir.mkdir()
-        (acc_dir / "other_file.txt").touch()
-
-        output_file = tmp_path / "report.csv"
-
-        generate_statistics_report(fastq_folder, output_file)
-
-        assert "No FASTQ files found" in caplog.text
-
-    def test_generate_statistics_success(self, tmp_path):
-        """Test successful statistics report generation."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-
-        # Create accession directory with mock FASTQ
-        acc_dir = fastq_folder / "SRR001"
-        acc_dir.mkdir()
-
-        # Create simple FASTQ file
-        fastq_file = acc_dir / "SRR001_R1.fastq"
-        fastq_content = "@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n"
-        fastq_file.write_text(fastq_content)
-
-        output_file = tmp_path / "statistics_report.csv"
-
-        generate_statistics_report(fastq_folder, output_file)
-
-        assert output_file.exists()
-
-        # Check contents
+    def test_writes_one_row_per_accession_with_gc_in_percent(self, tmp_path):
         import pandas as pd
 
-        df = pd.read_csv(output_file)
-        assert len(df) == 1
-        assert "SRR001" in df["accession"].values
-        assert df.loc[0, "total_reads"] == 2
+        output = tmp_path / "sra_statistics.csv"
+        generate_statistics_report([self._row("SRR1"), self._row("SRR2", gc_percent=55.0)], output)
 
-    def test_generate_statistics_paired_end_detection(self, tmp_path):
-        """Test paired-end layout detection."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
+        df = pd.read_csv(output)
+        assert list(df["accession"]) == ["SRR1", "SRR2"]
+        assert list(df["gc_percent"]) == [45.0, 55.0]
+        assert "gc_content" not in df.columns
 
-        acc_dir = fastq_folder / "SRR002"
-        acc_dir.mkdir()
+    def test_returns_the_summary_lines_without_printing(self, tmp_path, capsys):
+        lines = generate_statistics_report(
+            [self._row("SRR1"), self._row("SRR2", layout="SINGLE", total_reads=20, gc_percent=55.0)],
+            tmp_path / "report.csv",
+        )
+        # total_reads counts mates, not NCBI spots; the summary says so.
+        assert "Total reads (mates counted): 30" in lines
+        assert "Average GC content: 50.0%" in lines
+        assert "  PAIRED: 1" in lines and "  SINGLE: 1" in lines
+        assert capsys.readouterr().out == ""
 
-        # Create paired-end files
-        for suffix in ["_R1.fastq", "_R2.fastq"]:
-            fastq_file = acc_dir / f"SRR002{suffix}"
-            fastq_content = "@read1\nATCG\n+\nIIII\n"
-            fastq_file.write_text(fastq_content)
+    def test_says_when_some_totals_are_sample_counts(self, tmp_path):
+        lines = generate_statistics_report([self._row("SRR1", sampled=True)], tmp_path / "report.csv")
+        assert "Total reads (mates counted): 10 (lower bound: some totals are sample counts)" in lines
 
-        output_file = tmp_path / "paired_report.csv"
-
-        generate_statistics_report(fastq_folder, output_file)
-
-        import pandas as pd
-
-        df = pd.read_csv(output_file)
-        assert df.loc[0, "layout"] == "PAIRED"
-
-    def test_generate_statistics_calculation_error(self, tmp_path, caplog):
-        """Test handling of calculation errors."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-
-        acc_dir = fastq_folder / "SRR003"
-        acc_dir.mkdir()
-
-        # Create invalid FASTQ file
-        fastq_file = acc_dir / "invalid.fastq"
-        fastq_file.write_text("invalid content")
-
-        output_file = tmp_path / "error_report.csv"
-
-        generate_statistics_report(fastq_folder, output_file)
-
-        # Check that error was logged (actual message: "Error processing {file}: {error}")
-        assert "Error processing" in caplog.text
-
-    def test_generate_statistics_reports_sampled_column(self, tmp_path):
-        """The CSV gains a 'sampled' column reflecting whether a file was read in full."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-
-        acc_dir = fastq_folder / "SRR001"
-        acc_dir.mkdir()
-        fastq_file = acc_dir / "SRR001.fastq"
-        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
-
-        output_file = tmp_path / "statistics_report.csv"
-        generate_statistics_report(fastq_folder, output_file)
-
-        import pandas as pd
-
-        df = pd.read_csv(output_file)
-        assert "sampled" in df.columns
-        assert bool(df.loc[0, "sampled"]) is False
-
-    def test_generate_statistics_reuses_cached_stats_for_store_link(self, tmp_path):
-        """An accession folder that is a store link with a matching sidecar reuses its cache
-        instead of re-parsing the FASTQ files."""
-        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
-        store_acc_dir.mkdir(parents=True)
-        fastq_file = store_acc_dir / "SRR001.fastq"
-        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
-
-        real_stats = compute_dataset_stats([fastq_file], use_seqkit=False)
-        # Deliberately different from the real file's read count, so a row that shows this
-        # value proves the cache was used rather than recomputed from the FASTQ.
-        cached_stats_record = dict(real_stats)
-        cached_stats_record["reads_total"] = 999999
-
-        sidecar_path = store_acc_dir / "SRR001.json"
-        write_sidecar(sidecar_path, Sidecar(accession="SRR001", stats=cached_stats_record))
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        acc_link = fastq_folder / "SRR001"
-        acc_link.symlink_to(store_acc_dir)
-
-        output_file = tmp_path / "statistics_report.csv"
-        generate_statistics_report(fastq_folder, output_file)
-
-        import pandas as pd
-
-        df = pd.read_csv(output_file)
-        assert df.loc[0, "total_reads"] == 999999
-
-    def test_generate_statistics_writes_back_computed_stats_to_sidecar(self, tmp_path):
-        """A linked accession whose sidecar has no cached stats yet gets one written back
-        after sra_stats runs, so a later command can reuse it without re-parsing the FASTQ
-        files."""
-        from metaquest.store.sidecar import read_sidecar
-
-        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
-        store_acc_dir.mkdir(parents=True)
-        fastq_file = store_acc_dir / "SRR001.fastq"
-        fastq_file.write_text("@read1\nATCG\n+\nIIII\n@read2\nGCTA\n+\nIIII\n")
-
-        sidecar_path = store_acc_dir / "SRR001.json"
-        write_sidecar(sidecar_path, Sidecar(accession="SRR001"))  # no stats recorded yet
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        acc_link = fastq_folder / "SRR001"
-        acc_link.symlink_to(store_acc_dir)
-
-        output_file = tmp_path / "statistics_report.csv"
-        generate_statistics_report(fastq_folder, output_file)
-
-        sidecar = read_sidecar(sidecar_path)
-        assert sidecar.stats
-        assert sidecar.stats["reads_total"] == 2
-        assert sidecar.stats_computed is not None
-
-    def test_generate_statistics_skips_hidden_accession_dirs(self, tmp_path):
-        """A hidden folder such as ``._SRR001`` is not reported as a dataset."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        for name in ("SRR001", "._SRR001"):
-            (fastq_folder / name).mkdir()
-            (fastq_folder / name / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
-
-        output_file = tmp_path / "statistics_report.csv"
-        generate_statistics_report(fastq_folder, output_file)
-
-        import pandas as pd
-
-        df = pd.read_csv(output_file)
-        assert len(df) == 1
-
-    def test_generate_statistics_reports_the_exact_total_when_sampling(self, tmp_path):
-        """A folder without a store reports every read, not just the sampled ones.
-
-        The per-read metrics still come from the sample (hence ``sampled``), but a user
-        reading "total reads" must see the dataset's size, not the sample cutoff.
-        """
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        acc_dir = fastq_folder / "SRR001"
-        acc_dir.mkdir()
-        for name in ("SRR001_1.fastq", "SRR001_2.fastq", "SRR001.fastq"):
-            (acc_dir / name).write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
-
-        output_file = tmp_path / "statistics_report.csv"
-        generate_statistics_report(fastq_folder, output_file, sample_size=2)
-
-        import pandas as pd
-
-        df = pd.read_csv(output_file)
-        assert df.loc[0, "total_reads"] == 15
-        assert bool(df.loc[0, "sampled"]) is True
-        # Bases are scaled from the sampled mean read length times the exact read count.
-        assert df.loc[0, "total_bases"] == 60
-
-    def test_generate_statistics_prints_that_metrics_are_sampled(self, tmp_path, capsys):
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        acc_dir = fastq_folder / "SRR001"
-        acc_dir.mkdir()
-        (acc_dir / "SRR001.fastq").write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
-
-        generate_statistics_report(fastq_folder, tmp_path / "report.csv", sample_size=2)
-
-        out = capsys.readouterr().out
-        # total_reads counts mates, not NCBI spots; sra_stats' summary says so.
-        assert "Total reads (mates counted): 5 (read-level metrics from a sample)" in out
-
-    def test_generate_statistics_cache_survives_a_zero_byte_extra_file(self, tmp_path):
-        """The signature written into the cache uses the same file list ``cached_stats``
-        checks it against, so a zero-byte mate does not force a recompute every run."""
-        from metaquest.store.stats import cached_stats
-
-        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
-        store_acc_dir.mkdir(parents=True)
-        (store_acc_dir / "SRR001_1.fastq").write_text("@read1\nATCG\n+\nIIII\n")
-        (store_acc_dir / "SRR001_2.fastq").write_text("")  # interrupted download left this
-        sidecar_path = store_acc_dir / "SRR001.json"
-        write_sidecar(sidecar_path, Sidecar(accession="SRR001"))
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        acc_link = fastq_folder / "SRR001"
-        acc_link.symlink_to(store_acc_dir)
-
-        generate_statistics_report(fastq_folder, tmp_path / "report.csv")
-
-        assert cached_stats(acc_link, sidecar_path) is not None
-
-        with patch("metaquest.data.sra_metadata.compute_dataset_stats") as recompute:
-            generate_statistics_report(fastq_folder, tmp_path / "report2.csv")
-        recompute.assert_not_called()
-
-    def test_generate_statistics_warns_when_the_cache_cannot_be_written(self, tmp_path, caplog):
-        """A sidecar that cannot be written costs every later command a recompute, so the
-        user is told once rather than only at debug level."""
-        import logging
-
-        store_acc_dir = tmp_path / "store" / "sra" / "SRR001"
-        store_acc_dir.mkdir(parents=True)
-        (store_acc_dir / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
-        write_sidecar(store_acc_dir / "SRR001.json", Sidecar(accession="SRR001"))
-
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        (fastq_folder / "SRR001").symlink_to(store_acc_dir)
-
-        output_file = tmp_path / "report.csv"
-        with caplog.at_level(logging.WARNING):
-            with patch("metaquest.data.sra_metadata.store_stats", side_effect=OSError("read-only store")):
-                generate_statistics_report(fastq_folder, output_file)
-
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Could not cache" in r.message]
-        assert len(warnings) == 1
-        assert "SRR001" in caplog.text and "read-only store" in caplog.text
-        assert output_file.exists()
-
-    def test_generate_statistics_without_a_store_writes_no_sidecar(self, tmp_path):
-        """A plain project folder (no store link) is unaffected: no sidecar is created."""
-        fastq_folder = tmp_path / "fastq"
-        fastq_folder.mkdir()
-        acc_dir = fastq_folder / "SRR001"
-        acc_dir.mkdir()
-        (acc_dir / "SRR001.fastq").write_text("@read1\nATCG\n+\nIIII\n")
-
-        output_file = tmp_path / "statistics_report.csv"
-        generate_statistics_report(fastq_folder, output_file)
-
-        assert not (acc_dir / "SRR001.json").exists()
+    def test_no_rows_writes_nothing(self, tmp_path, caplog):
+        output = tmp_path / "report.csv"
+        assert generate_statistics_report([], output) == []
+        assert not output.exists()
+        assert "No statistics to write" in caplog.text
 
 
 # ============================================================================
@@ -1220,7 +970,7 @@ def test_parse_falls_back_to_statistics_child_when_run_attributes_missing():
 #
 # After running these tests:
 # - Expected: 40+ additional tests pass
-# - Coverage: 45% → 75%+ for data/sra_metadata.py
+# - Coverage: 45% -> 75%+ for data/sra_metadata.py
 # - All untested methods now covered
 #
 # Run tests:
@@ -1230,3 +980,44 @@ def test_parse_falls_back_to_statistics_child_when_run_attributes_missing():
 #   pytest --cov=metaquest.data.sra_metadata --cov-report=term-missing \
 #          tests/test_sra_metadata_client.py tests/test_sra_metadata_extended.py
 # ============================================================================
+
+
+# ============================================================================
+# Narrow exception handling (tech debt): a programming error must not be swallowed
+# ============================================================================
+
+
+def test_unexpected_error_in_batch_metadata_propagates(monkeypatch):
+    """Kind (a): a bug in a batch fetch is no longer logged and skipped."""
+    client = SRAMetadataClient(email="a@b.c")
+
+    def buggy(batch):
+        raise TypeError("bug")
+
+    monkeypatch.setattr(client, "_fetch_batch_metadata", buggy)
+    with pytest.raises(TypeError):
+        client.get_sra_metadata(["SRR1"])
+
+
+def test_ncbi_error_in_batch_metadata_is_still_skipped(monkeypatch):
+    """Kind (a): an NCBI failure skips the batch and the call returns what it has."""
+    client = SRAMetadataClient(email="a@b.c")
+
+    def failing(batch):
+        raise DataAccessError("NCBI down")
+
+    monkeypatch.setattr(client, "_fetch_batch_metadata", failing)
+    assert client.get_sra_metadata(["SRR1"]) == {}
+
+
+def test_parse_sra_xml_returns_empty_for_malformed_xml_and_propagates_a_bug(monkeypatch):
+    """Kind (b): malformed XML yields the default; a bug in extraction propagates."""
+    client = SRAMetadataClient(email="a@b.c")
+    assert client._parse_sra_xml("<not xml") == {}
+
+    def buggy(package):
+        raise TypeError("bug")
+
+    monkeypatch.setattr(client, "_extract_dataset_info", buggy)
+    with pytest.raises(TypeError):
+        client._parse_sra_xml(MOCK_SRA_XML)

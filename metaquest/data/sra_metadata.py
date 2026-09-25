@@ -2,23 +2,21 @@
 SRA metadata and statistics handling for MetaQuest.
 
 This module provides comprehensive functionality for fetching SRA metadata,
-detecting sequencing technologies, and calculating dataset statistics.
+detecting sequencing technologies, and writing the dataset statistics table of sra_profile.
 """
 
 import json
 import logging
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import pandas as pd
 import requests
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.file_io import visible_files
-from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_records
-from metaquest.store.stats import DEFAULT_SAMPLE_SIZE, cached_stats, compute_dataset_stats, store_stats
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +41,6 @@ class SRADatasetInfo:
     biosample: str
     library_selection: str
     library_source: str
-
-
-@dataclass
-class ReadStatistics:
-    """Statistics for sequenced reads."""
-
-    total_reads: int
-    total_bases: int
-    avg_read_length: float
-    min_read_length: int
-    max_read_length: int
-    n50: int
-    gc_content: float
-    quality_scores: Optional[Dict[str, float]] = None
-    sampled: bool = False
 
 
 class SRAMetadataClient:
@@ -125,7 +108,7 @@ class SRAMetadataClient:
             try:
                 batch_results = self._fetch_batch_metadata(batch)
                 results.update(batch_results)
-            except Exception as e:
+            except (DataAccessError, json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to fetch metadata for batch: {e}")
                 # Continue with other batches
                 continue
@@ -187,45 +170,41 @@ class SRAMetadataClient:
         raw XML), every RUN in every package is returned, matching the historical behaviour.
         """
         try:
-            import xml.etree.ElementTree as ET
-
             root = ET.fromstring(xml_content)
-            results = {}
-            requested_upper = {r.upper() for r in requested} if requested is not None else None
-
-            packages = root.findall(".//EXPERIMENT_PACKAGE")
-
-            matched = []
-            uninspected = 0
-            for package in packages:
-                try:
-                    if requested_upper is None or self._package_matches_requested(package, requested_upper):
-                        matched.append(package)
-                except Exception as e:
-                    uninspected += 1
-                    logger.warning(f"Failed to inspect dataset package: {e}")
-            if requested_upper is not None and packages and not matched:
-                if uninspected:
-                    # At least one package could not be checked at all: falling back to "keep
-                    # everything" here would resurrect a package that was never confirmed to
-                    # match, so only the (empty) set of cleanly-inspected matches is kept.
-                    logger.warning("%d package(s) could not be inspected for the requested accessions", uninspected)
-                else:
-                    logger.warning("requested accessions matched no package in the reply; listing every run returned")
-                    matched = packages
-
-            for package in matched:
-                try:
-                    for info in self._extract_dataset_info(package):
-                        results[info.accession] = info
-                except Exception as e:
-                    logger.warning(f"Failed to parse dataset package: {e}")
-                    continue
-
-            return results
-        except Exception as e:
+        except ET.ParseError as e:
             logger.error(f"Failed to parse SRA XML: {e}")
             return {}
+
+        results = {}
+        requested_upper = {r.upper() for r in requested} if requested is not None else None
+
+        packages = root.findall(".//EXPERIMENT_PACKAGE")
+
+        matched = []
+        uninspected = 0
+        for package in packages:
+            try:
+                if requested_upper is None or self._package_matches_requested(package, requested_upper):
+                    matched.append(package)
+            except ValueError as e:
+                uninspected += 1
+                logger.warning(f"Failed to inspect dataset package: {e}")
+        if requested_upper is not None and packages and not matched:
+            if uninspected:
+                # At least one package could not be checked at all: falling back to "keep
+                # everything" here would resurrect a package that was never confirmed to
+                # match, so only the (empty) set of cleanly-inspected matches is kept.
+                logger.warning("%d package(s) could not be inspected for the requested accessions", uninspected)
+            else:
+                logger.warning("requested accessions matched no package in the reply; listing every run returned")
+                matched = packages
+
+        # _extract_dataset_info logs and skips a package whose values cannot be read.
+        for package in matched:
+            for info in self._extract_dataset_info(package):
+                results[info.accession] = info
+
+        return results
 
     @staticmethod
     def _package_matches_requested(package, requested_upper: Set[str]) -> bool:
@@ -358,7 +337,7 @@ class SRAMetadataClient:
                 )
             return infos
 
-        except Exception as e:
+        except ValueError as e:
             logger.warning(f"Failed to extract dataset info: {e}")
             return []
 
@@ -381,7 +360,8 @@ class SRAMetadataClient:
                 # Element text
                 elem = element.find(xpath)
                 return elem.text or default if elem is not None else default
-        except Exception:
+        except SyntaxError:
+            # ElementPath rejects a path it cannot evaluate with SyntaxError.
             return default
 
 
@@ -419,156 +399,6 @@ def detect_sequencing_technology(dataset_info: SRADatasetInfo) -> str:
 
     logger.warning(f"Unknown sequencing technology for {dataset_info.accession}: " f"{platform}/{instrument}")
     return "unknown"
-
-
-def _read_statistics_from_cache(cached: Dict[str, Any]) -> ReadStatistics:
-    """Build a ``ReadStatistics`` from a ``compute_dataset_stats``-shaped cache dict.
-
-    The cache's ``gc_content`` is a 0-1 fraction (the convention used across the shared
-    store and ``metaquest.sra.analytics``); ``ReadStatistics.gc_content`` is a percentage, so
-    it is converted here. ``quality_scores`` here holds mean/q25/q75 of the cache's flattened
-    per-base ``quality_summary`` as a best-effort stand-in for the legacy mean/min/max of
-    per-read average quality, since the cache does not keep per-read values.
-    """
-    quality_summary = cached.get("quality_summary") or {}
-    qual_stats = None
-    if quality_summary:
-        mean = quality_summary.get("mean", 0.0)
-        qual_stats = {
-            "mean": mean,
-            "min": quality_summary.get("q25", mean),
-            "max": quality_summary.get("q75", mean),
-        }
-    return ReadStatistics(
-        total_reads=cached.get("reads_total", 0),
-        total_bases=cached.get("bases_total", 0) or 0,
-        avg_read_length=cached.get("avg_read_length", 0.0) or 0.0,
-        min_read_length=cached.get("min_read_length", 0) or 0,
-        max_read_length=cached.get("max_read_length", 0) or 0,
-        n50=cached.get("n50", 0) or 0,
-        gc_content=(cached.get("gc_content", 0.0) or 0.0) * 100,
-        quality_scores=qual_stats,
-        sampled=bool(cached.get("sampled", False)),
-    )
-
-
-def calculate_read_statistics(
-    fastq_files: List[Path], max_reads: int = 100000, cached: Optional[Dict[str, Any]] = None
-) -> ReadStatistics:
-    """
-    Calculate statistics for FASTQ files, either from a supplied cache or by streaming.
-
-    When ``cached`` is given (typically ``metaquest.store.stats.cached_stats``'s result for
-    an accession backed by the shared store), the returned ``ReadStatistics`` is built
-    directly from it with no file I/O, and ``sampled`` reflects whatever the cache recorded.
-
-    Otherwise this streams at most ``max_reads`` records per file with a raw four-line FASTQ
-    reader (``metaquest.data.sra.iter_fastq_records``, no Biopython), so a large file is
-    never fully parsed record-by-record. ``max_reads=0`` means read every record exactly;
-    otherwise ``sampled`` is True when any file held more records than were read.
-
-    Args:
-        fastq_files: List of FASTQ file paths
-        max_reads: Maximum records read per file (0 = exact, read every record)
-        cached: A ``compute_dataset_stats``-shaped dict to build the result from directly
-
-    Returns:
-        ReadStatistics object with computed statistics
-    """
-    if cached is not None:
-        return _read_statistics_from_cache(cached)
-
-    total_reads = 0
-    total_bases = 0
-    read_lengths = []
-    gc_count = 0
-    quality_scores = []
-    sampled = False
-
-    logger.info(f"Calculating statistics for {len(fastq_files)} FASTQ files")
-
-    for fastq_file in fastq_files:
-        logger.debug(f"Processing {fastq_file.name}")
-
-        try:
-            file_reads = 0
-            for seq, qual in iter_fastq_records(fastq_file):
-                if max_reads and file_reads >= max_reads:
-                    # A further record exists beyond the cutoff: this file's stats are a
-                    # sample, not the exact total.
-                    sampled = True
-                    break
-                file_reads += 1
-                total_reads += 1
-                seq_len = len(seq)
-                total_bases += seq_len
-                read_lengths.append(seq_len)
-
-                # Calculate GC content
-                gc_count += seq.count("G") + seq.count("C")
-
-                # Calculate average quality score
-                if qual:
-                    quals = [ord(c) - 33 for c in qual]
-                    quality_scores.append(sum(quals) / len(quals))
-
-        except Exception as e:
-            logger.error(f"Error processing {fastq_file}: {e}")
-            continue
-
-    if total_reads == 0:
-        logger.warning("No reads found in FASTQ files")
-        return ReadStatistics(0, 0, 0.0, 0, 0, 0, 0.0, sampled=sampled)
-
-    # Calculate statistics
-    avg_read_length = total_bases / total_reads
-    min_read_length = min(read_lengths) if read_lengths else 0
-    max_read_length = max(read_lengths) if read_lengths else 0
-    n50 = _calculate_n50(read_lengths)
-    gc_content = (gc_count / total_bases) * 100 if total_bases > 0 else 0.0
-
-    # Quality score statistics
-    qual_stats = None
-    if quality_scores:
-        qual_stats = {
-            "mean": sum(quality_scores) / len(quality_scores),
-            "min": min(quality_scores),
-            "max": max(quality_scores),
-        }
-
-    logger.info(
-        f"Statistics calculated: {total_reads} reads, {total_bases} bases, " f"{avg_read_length:.1f} avg length"
-    )
-
-    return ReadStatistics(
-        total_reads=total_reads,
-        total_bases=total_bases,
-        avg_read_length=avg_read_length,
-        min_read_length=min_read_length,
-        max_read_length=max_read_length,
-        n50=n50,
-        gc_content=gc_content,
-        quality_scores=qual_stats,
-        sampled=sampled,
-    )
-
-
-def _calculate_n50(read_lengths: List[int]) -> int:
-    """Calculate N50 statistic for read lengths."""
-    if not read_lengths:
-        return 0
-
-    sorted_lengths = sorted(read_lengths, reverse=True)
-    total_length = sum(sorted_lengths)
-    target = total_length / 2
-
-    cumulative = 0
-    for length in sorted_lengths:
-        cumulative += length
-        if cumulative >= target:
-            return length
-
-    return 0
 
 
 def create_download_preview(
@@ -659,141 +489,41 @@ def _resolved_sidecar_path(acc_dir: Path) -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-def _cached_dataset_stats(acc_dir: Path, files: List[Path], sample_size: int) -> Optional[Dict[str, Any]]:
-    """The shared statistics record for ``acc_dir``, computing and caching it when needed.
+def format_statistics_summary(df: pd.DataFrame) -> List[str]:
+    """The aggregate statistics and layout distribution for a statistics table, as text lines.
 
-    Returns the sidecar's cached record when it still matches the files on disk. When the
-    accession is backed by a store sidecar whose cache is absent or stale (the dataset's
-    files changed since it was last computed), the record is computed once here so
-    ``sra_profile_quality`` and ``sra_compare`` do not have to re-parse the same files.
-    Returns None for a project without a store, which then uses the streaming path below.
-
-    A record that cannot be written back is only a lost cache, so it is reported as a
-    warning and the computed record is still returned; every later command will recompute
-    it until the sidecar becomes writable.
+    The caller decides where the lines go (``sra_profile`` writes them to stdout). Read totals
+    count mates (both ends of a pair), not NCBI spots.
     """
-    sidecar_path = _resolved_sidecar_path(acc_dir)
-    cached = cached_stats(acc_dir, sidecar_path)
-    if cached is not None or sidecar_path is None:
-        return cached
-    try:
-        files_for_stats: List[Union[str, Path]] = list(files)
-        cached = compute_dataset_stats(files_for_stats, sample_size=sample_size)
-    except Exception as e:
-        logger.debug("Could not compute dataset stats for %s: %s", acc_dir.name, e)
-        return None
-    try:
-        store_stats(sidecar_path, cached)
-    except Exception as e:
-        logger.warning("Could not cache statistics for %s: %s", acc_dir.name, e)
-    return cached
+    sampled = " (lower bound: some totals are sample counts)" if bool(df["sampled"].any()) else ""
+    lines = [
+        "\nDataset Statistics Summary:",
+        "==========================",
+        f"Total datasets: {len(df)}",
+        f"Total reads (mates counted): {df['total_reads'].sum():,}{sampled}",
+        f"Total bases: {df['total_bases'].sum():,}",
+        f"Average read length: {df['avg_read_length'].mean():.1f}",
+        f"Average GC content: {df['gc_percent'].mean():.1f}%",
+        "\nLayout distribution:",
+    ]
+    lines.extend(f"  {layout}: {count}" for layout, count in df["layout"].value_counts().items())
+    return lines
 
 
-def _exact_totals(files: List[Path], stats: ReadStatistics) -> Tuple[int, int]:
-    """Exact read total for ``files``, with a base total scaled from the sampled mean length.
+def generate_statistics_report(rows: Sequence[Dict[str, Any]], output_file: Union[str, Path]) -> List[str]:
+    """Write the ``sra_profile`` statistics table, one row per profiled accession.
 
-    ``count_fastq_reads`` is a chunked newline count, so the exact total costs one streaming
-    pass per file rather than a full parse. The base total cannot be exact without reading
-    every record, so it is the sampled mean read length times the exact read count, which is
-    what ``metaquest.store.stats.compute_dataset_stats`` does for the same situation.
+    ``rows`` come from ``metaquest.sra.profiles.statistics_row``; GC is in percent under
+    ``gc_percent``. Returns the summary lines from ``format_statistics_summary`` for the
+    caller to show, or an empty list (and no file) when there are no rows.
     """
-    total_reads = sum(count_fastq_reads(f) for f in files)
-    return total_reads, int(round(stats.avg_read_length * total_reads))
-
-
-def _dataset_stats_row(acc_dir: Path, sample_size: int = DEFAULT_SAMPLE_SIZE) -> Optional[Dict[str, Any]]:
-    """Compute a statistics row for one accession directory, or None if unavailable."""
-    logger.info(f"Processing {acc_dir.name}")
-
-    files = fastq_files(acc_dir)
-    if not files:
-        logger.warning(f"No FASTQ files found in {acc_dir}")
-        return None
-
-    cached = _cached_dataset_stats(acc_dir, files, sample_size)
-
-    try:
-        stats = calculate_read_statistics(files, max_reads=sample_size, cached=cached)
-    except Exception as e:
-        logger.error(f"Failed to calculate statistics for {acc_dir.name}: {e}")
-        return None
-
-    total_reads, total_bases = stats.total_reads, stats.total_bases
-    if cached is None and stats.sampled:
-        # The streaming pass stopped at the sample cutoff: report the exact dataset total
-        # rather than the number of records that happened to be read.
-        total_reads, total_bases = _exact_totals(files, stats)
-
-    layout = "PAIRED" if any("_2" in f.name or "_R2" in f.name for f in files) else "SINGLE"
-    return {
-        "accession": acc_dir.name,
-        "num_files": len(files),
-        "layout": layout,
-        "total_reads": total_reads,
-        "total_bases": total_bases,
-        "avg_read_length": stats.avg_read_length,
-        "min_read_length": stats.min_read_length,
-        "max_read_length": stats.max_read_length,
-        "n50": stats.n50,
-        "gc_content": stats.gc_content,
-        "avg_quality": (stats.quality_scores["mean"] if stats.quality_scores else None),
-        "sampled": stats.sampled,
-    }
-
-
-def _print_statistics_summary(df: pd.DataFrame) -> None:
-    """Print the aggregate statistics and layout distribution for a report DataFrame."""
-    print("\nDataset Statistics Summary:")
-    print("==========================")
-    print(f"Total datasets: {len(df)}")
-    # The read totals are exact counts; a sampled row's per-read metrics (and therefore its
-    # base total) come from a subset of the records, which the reader should know about.
-    sampled = " (read-level metrics from a sample)" if bool(df.get("sampled", pd.Series(dtype=bool)).any()) else ""
-    print(f"Total reads (mates counted): {df['total_reads'].sum():,}{sampled}")
-    print(f"Total bases: {df['total_bases'].sum():,}")
-    print(f"Average read length: {df['avg_read_length'].mean():.1f}")
-    print(f"Average GC content: {df['gc_content'].mean():.1f}%")
-
-    print("\nLayout distribution:")
-    for layout, count in df["layout"].value_counts().items():
-        print(f"  {layout}: {count}")
-
-
-def generate_statistics_report(
-    fastq_folder: Union[str, Path],
-    output_file: Union[str, Path],
-    sample_size: int = DEFAULT_SAMPLE_SIZE,
-) -> None:
-    """
-    Generate comprehensive statistics report for downloaded datasets.
-
-    Args:
-        fastq_folder: Folder containing FASTQ files
-        output_file: Output report file path
-        sample_size: Records sampled per dataset for the per-read metrics (GC, quality,
-            read length); read totals stay exact regardless of this value
-    """
-    fastq_path = Path(fastq_folder)
-    if not fastq_path.exists():
-        raise DataAccessError(f"FASTQ folder {fastq_folder} does not exist")
-
-    logger.info("Generating statistics report for downloaded datasets")
-
-    accession_dirs = visible_files(fastq_path, dirs=True)
-    if not accession_dirs:
-        logger.warning("No accession directories found")
-        return
-
-    report_data = [row for acc_dir in accession_dirs if (row := _dataset_stats_row(acc_dir, sample_size)) is not None]
-
-    if not report_data:
-        logger.error("No statistics could be calculated")
-        return
-
-    df = pd.DataFrame(report_data)
+    if not rows:
+        logger.warning("No statistics to write")
+        return []
+    df = pd.DataFrame(list(rows))
     df.to_csv(output_file, index=False)
-    logger.info(f"Statistics report saved to {output_file} ({len(report_data)} datasets)")
-    _print_statistics_summary(df)
+    logger.info(f"Statistics report saved to {output_file} ({len(df)} datasets)")
+    return format_statistics_summary(df)
 
 
 def estimate_download_time(total_size_gb: float, bandwidth_mbps: float = 100, num_parallel: int = 4) -> float:

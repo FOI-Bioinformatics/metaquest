@@ -114,7 +114,7 @@ Most commands in this workflow update the project registry (`metaquest_registry.
 - `blacklist`: exclusions, with a reason
 - `download_sra`: download outcomes, with file sizes and dates
 - `download_metadata` / `parse_metadata`: metadata
-- `sra_stats` / `sra_validate` / `sra_profile_quality`: analyses
+- `sra_validate` / `sra_profile` / `sra_report`: analyses (`validate`, `profile`, `report`)
 - `extract_target_reads`: extraction and assembly, per target genome
 
 See the README's "Project state" section and `metaquest status --help` for the full set of flags.

@@ -7,6 +7,7 @@ Tests for diversity analysis, interactive plotting, and taxonomy commands.
 import argparse
 from unittest.mock import patch, mock_open
 import pandas as pd
+import importlib.util
 import pytest
 
 from metaquest.cli.commands.advanced_analysis import (
@@ -14,6 +15,14 @@ from metaquest.cli.commands.advanced_analysis import (
     InteractivePlotCommand,
     TaxonomyValidationCommand,
     TaxonomicSummaryCommand,
+)
+
+requires_analysis = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("sklearn", "scipy")), reason="needs metaquest[analysis]"
+)
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
 )
 
 
@@ -69,8 +78,9 @@ class TestDiversityAnalysisCommand:
         assert args.beta_metric == "jaccard"
         assert args.permanova_formula == "treatment + site"
 
-    @patch("metaquest.cli.commands.advanced_analysis.calculate_alpha_diversity")
-    @patch("metaquest.cli.commands.advanced_analysis.calculate_beta_diversity")
+    @requires_analysis
+    @patch("metaquest.processing.diversity.calculate_alpha_diversity")
+    @patch("metaquest.processing.diversity.calculate_beta_diversity")
     @patch("metaquest.cli.commands.advanced_analysis.Path.mkdir")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     def test_execute_success_basic(self, mock_read_matrix, mock_mkdir, mock_beta_div, mock_alpha_div):
@@ -104,9 +114,10 @@ class TestDiversityAnalysisCommand:
         mock_beta_div.assert_called_once_with(mock_abundance_df, "bray_curtis")
         assert mock_to_csv.call_count == 2  # Alpha and beta results
 
-    @patch("metaquest.cli.commands.advanced_analysis.calculate_alpha_diversity")
-    @patch("metaquest.cli.commands.advanced_analysis.calculate_beta_diversity")
-    @patch("metaquest.cli.commands.advanced_analysis.perform_permanova")
+    @requires_analysis
+    @patch("metaquest.processing.diversity.calculate_alpha_diversity")
+    @patch("metaquest.processing.diversity.calculate_beta_diversity")
+    @patch("metaquest.processing.diversity.perform_permanova")
     @patch("metaquest.cli.commands.advanced_analysis.Path.mkdir")
     @patch("pandas.read_csv")
     def test_execute_success_with_permanova(
@@ -144,6 +155,7 @@ class TestDiversityAnalysisCommand:
         mock_permanova.assert_called_once()
         mock_file.assert_called()
 
+    @requires_analysis
     @patch("pandas.read_csv")
     def test_execute_failure(self, mock_read_csv):
         """Test execution failure."""
@@ -162,6 +174,7 @@ class TestDiversityAnalysisCommand:
         result = command.execute(args)
         assert result == 1
 
+    @requires_analysis
     def test_execute_permanova_with_text_metadata_column(self, tmp_path):
         """Regression test: a text metadata column must survive the metadata load.
 
@@ -269,9 +282,10 @@ class TestInteractivePlotCommand:
         assert args.title == "My Plot"
         assert args.no_show is True
 
+    @requires_interactive
     @patch("metaquest.cli.commands.advanced_analysis.read_table")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
-    @patch("metaquest.cli.commands.advanced_analysis.create_interactive_pca")
+    @patch("metaquest.visualization.interactive.create_interactive_pca")
     def test_execute_pca_plot(self, mock_create_pca, mock_read_matrix, mock_read_table):
         """Test PCA plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
@@ -304,8 +318,9 @@ class TestInteractivePlotCommand:
             show_plot=False,
         )
 
+    @requires_interactive
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
-    @patch("metaquest.cli.commands.advanced_analysis.create_interactive_heatmap")
+    @patch("metaquest.visualization.interactive.create_interactive_heatmap")
     def test_execute_heatmap_plot(self, mock_create_heatmap, mock_read_matrix):
         """Test heatmap plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
@@ -330,10 +345,11 @@ class TestInteractivePlotCommand:
             mock_data_df, sample_metadata=None, title="Interactive Heatmap", output_file=None, show_plot=True
         )
 
+    @requires_interactive
     @patch("metaquest.cli.commands.advanced_analysis.read_table")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
-    @patch("metaquest.cli.commands.advanced_analysis.calculate_alpha_diversity")
-    @patch("metaquest.cli.commands.advanced_analysis.create_diversity_comparison_plot")
+    @patch("metaquest.processing.diversity.calculate_alpha_diversity")
+    @patch("metaquest.visualization.interactive.create_diversity_comparison_plot")
     def test_execute_diversity_plot(self, mock_create_diversity, mock_calc_alpha, mock_read_matrix, mock_read_table):
         """Test diversity plot creation."""
         mock_data_df = pd.DataFrame({"gene1": [1, 2], "gene2": [3, 4]})
@@ -369,6 +385,7 @@ class TestInteractivePlotCommand:
             show_plot=True,
         )
 
+    @requires_interactive
     @patch("pandas.read_csv")
     def test_execute_diversity_plot_missing_color_by(self, mock_read_csv):
         """Test diversity plot with missing color_by parameter."""
@@ -390,7 +407,8 @@ class TestInteractivePlotCommand:
         result = command.execute(args)
         assert result == 1
 
-    @patch("metaquest.cli.commands.advanced_analysis.create_interactive_tsne")
+    @requires_interactive
+    @patch("metaquest.visualization.interactive.create_interactive_tsne")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     def test_execute_tsne_plot(self, mock_read, mock_tsne, tmp_path):
         import pandas as pd
@@ -434,7 +452,7 @@ class TestTaxonomyValidationCommand:
         assert args.cache_file == "taxonomy_cache.csv"
 
     @patch("metaquest.cli.commands.advanced_analysis.validate_taxonomic_assignments")
-    def test_execute_success_text_file(self, mock_validate):
+    def test_execute_success_text_file(self, mock_validate, capsys):
         """Test successful execution with text file."""
         mock_results = pd.DataFrame(
             {
@@ -456,16 +474,17 @@ class TestTaxonomyValidationCommand:
         )
 
         with patch("builtins.open", mock_open(read_data="Escherichia coli\nSalmonella enterica\n")):
-            with patch("builtins.print") as mock_print:
-                result = command.execute(args)
+            result = command.execute(args)
 
         assert result == 0
         mock_validate.assert_called_once()
-        mock_print.assert_called()
+        out = capsys.readouterr().out
+        assert "Taxonomy Validation Summary:" in out
+        assert "Total species: 2" in out
 
     @patch("pandas.read_csv")
     @patch("metaquest.cli.commands.advanced_analysis.validate_taxonomic_assignments")
-    def test_execute_success_csv_file_with_column(self, mock_validate, mock_read_csv):
+    def test_execute_success_csv_file_with_column(self, mock_validate, mock_read_csv, capsys):
         """Test successful execution with CSV file and specified column."""
         mock_df = pd.DataFrame({"species_name": ["Escherichia coli", "Salmonella enterica"], "abundance": [100, 50]})
         mock_read_csv.return_value = mock_df
@@ -489,10 +508,10 @@ class TestTaxonomyValidationCommand:
             cache_file="cache.csv",
         )
 
-        with patch("builtins.print"):
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
+        assert "Valid species: 1 (50.0%)" in capsys.readouterr().out
         mock_validate.assert_called_once_with(
             ["Escherichia coli", "Salmonella enterica"],
             email="test@example.com",
@@ -522,7 +541,7 @@ class TestTaxonomyValidationCommand:
 
     @patch("pandas.read_csv")
     @patch("metaquest.cli.commands.advanced_analysis.validate_taxonomic_assignments")
-    def test_execute_success_csv_first_column(self, mock_validate, mock_read_csv):
+    def test_execute_success_csv_first_column(self, mock_validate, mock_read_csv, capsys):
         """Test successful execution with CSV file using first column."""
         mock_df = pd.DataFrame(
             {"first_col": ["Escherichia coli", "Salmonella enterica"], "other_col": ["data1", "data2"]}
@@ -548,10 +567,10 @@ class TestTaxonomyValidationCommand:
             cache_file="cache.csv",
         )
 
-        with patch("builtins.print"):
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
+        assert "Total species: 2" in capsys.readouterr().out
 
 
 class TestTaxonomicSummaryCommand:
@@ -606,7 +625,7 @@ class TestTaxonomicSummaryCommand:
     @patch("metaquest.cli.commands.advanced_analysis.read_records")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.analyze_taxonomic_composition")
-    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_records):
+    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_records, capsys):
         """Test successful execution."""
         mock_abundance_df = pd.DataFrame({"sample1": [10, 20], "sample2": [15, 25]})
         mock_taxonomy_df = pd.DataFrame({"species": ["Species1", "Species2"], "phylum": ["Phylum1", "Phylum2"]})
@@ -628,14 +647,15 @@ class TestTaxonomicSummaryCommand:
             min_abundance=0.001,
         )
 
-        with patch("builtins.print") as mock_print:
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
         mock_analyze.assert_called_once_with(
             mock_abundance_df, mock_taxonomy_df, levels=["phylum", "genus"], output_dir="summaries"
         )
-        mock_print.assert_called()
+        out = capsys.readouterr().out
+        assert "Taxonomic Summary Results:" in out
+        assert "Phylum: 2 taxa across 2 samples" in out
 
     @patch("pandas.read_csv")
     def test_execute_failure(self, mock_read_csv):
@@ -702,6 +722,7 @@ class TestAdvancedAnalysisIntegration:
             # Should not raise exception
             command.configure_parser(parser)
 
+    @requires_analysis
     @patch("metaquest.cli.commands.advanced_analysis.logger")
     def test_logging_behavior(self, mock_logger):
         """Test that commands use logging appropriately."""

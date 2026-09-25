@@ -7,6 +7,8 @@ the several HTML generators do not each carry their own copy.
 
 from typing import Any, Dict, List
 
+from metaquest.core.optional import require
+
 # --- Design system palette ----------------------------------------------------
 # Categorical hues (validated as a set, worst adjacent CVD dE 24.2), assigned in
 # fixed order; used for taxonomy families, dataset groups, and quality grades.
@@ -92,16 +94,14 @@ def plotly_js_script() -> str:
     Uses the plotly.js bundled with the installed plotly.py, so the runtime
     always matches the figures it renders and the report renders with no
     network access (the individual figures are emitted with
-    ``include_plotlyjs=False`` and share this single embedded copy). Returns an
-    empty string if plotly is unavailable, in which case no figures are
-    generated either.
-    """
-    try:
-        from plotly.offline import get_plotlyjs
+    ``include_plotlyjs=False`` and share this single embedded copy).
 
-        return f'<script type="text/javascript">{get_plotlyjs()}</script>'
-    except Exception:
-        return ""
+    Raises:
+        ConfigurationError: If plotly is not installed; the callers check for it
+            before drawing any figure, so this is reached only by a direct call.
+    """
+    offline = require("plotly.offline", "interactive", "Embedding plotly.js in a report")
+    return f'<script type="text/javascript">{offline.get_plotlyjs()}</script>'
 
 
 # The shared "assay readout" stylesheet. Data (accessions, containment values,

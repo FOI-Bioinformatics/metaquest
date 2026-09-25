@@ -1,5 +1,5 @@
 """
-STARTER TESTS for visualization/reporting.py (0% → 20% coverage)
+STARTER TESTS for visualization/reporting.py (0% -> 20% coverage)
 
 This file provides a working foundation to start testing the reporting module.
 Run: pytest tests/test_visualization_reporting_starter.py -v
@@ -7,11 +7,12 @@ Run: pytest tests/test_visualization_reporting_starter.py -v
 After running these tests, coverage for reporting.py will increase from 0% to ~20%.
 """
 
+import sys
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from metaquest.visualization.reporting import generate_report
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import ConfigurationError, VisualizationError
 
 
 @pytest.fixture
@@ -72,8 +73,8 @@ class TestReportingErrorPaths:
 
     def test_html_without_jinja2_raises_error(self, sample_summary_data, tmp_path):
         """Test that HTML generation without jinja2 raises error."""
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="requires jinja2"):
+        with patch.dict(sys.modules, {"jinja2": None}):
+            with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
                 generate_report(
                     title="Test Report",
                     summary_file=str(sample_summary_data),
@@ -86,7 +87,7 @@ class TestPDFReportGeneration:
     """Test PDF report generation.
 
     These tests verify the PDF generation workflow with proper mocking.
-    Tests lines 68-92 (generate_report → _generate_pdf_report)
+    Tests lines 68-92 (generate_report -> _generate_pdf_report)
     """
 
     def test_generate_pdf_report_minimal(self, sample_summary_data, tmp_path):

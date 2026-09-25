@@ -7,6 +7,8 @@ _generate_html_report, _get_genome_columns, error handling paths,
 and deeper coverage of _prepare_template_data and _generate_plots_for_html.
 """
 
+import sys
+import importlib.util
 import pytest
 import pandas as pd
 from pathlib import Path
@@ -25,7 +27,11 @@ from metaquest.visualization.reporting import (
     _generate_html_report,
     _get_genome_columns,
 )
-from metaquest.core.exceptions import ProcessingError, VisualizationError
+from metaquest.core.exceptions import ConfigurationError, ProcessingError, VisualizationError
+
+requires_interactive = pytest.mark.skipif(
+    not all(importlib.util.find_spec(m) for m in ("plotly", "jinja2")), reason="needs metaquest[interactive]"
+)
 
 
 @pytest.fixture
@@ -272,7 +278,7 @@ class TestAddCorrelationHeatmapEdgeCases:
 
         with patch(
             "metaquest.visualization.reporting.plot_correlation_matrix",
-            side_effect=Exception("Plot error"),
+            side_effect=VisualizationError("Plot error"),
         ):
             with patch("metaquest.visualization.reporting.logger") as mock_logger:
                 _add_correlation_heatmap(mock_pdf, df, threshold=0.1)
@@ -408,7 +414,7 @@ class TestGeneratePlotsForHtmlComprehensive:
 
         with patch(
             "metaquest.visualization.reporting.plot_containment",
-            side_effect=Exception("Rendering error"),
+            side_effect=VisualizationError("Rendering error"),
         ):
             with patch("metaquest.visualization.reporting.logger") as mock_logger:
                 result = _generate_plots_for_html(summary_df, None, threshold=0.1, images_dir=images_dir)
@@ -427,7 +433,7 @@ class TestGeneratePlotsForHtmlComprehensive:
         with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
             with patch(
                 "metaquest.visualization.reporting.plot_metadata_counts",
-                side_effect=Exception("Counts error"),
+                side_effect=VisualizationError("Counts error"),
             ):
                 with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
                     with patch("matplotlib.pyplot.close"):
@@ -450,7 +456,7 @@ class TestGeneratePlotsForHtmlComprehensive:
         with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
             with patch(
                 "metaquest.visualization.reporting.plot_correlation_matrix",
-                side_effect=Exception("Heatmap error"),
+                side_effect=VisualizationError("Heatmap error"),
             ):
                 with patch("matplotlib.pyplot.close"):
                     result = _generate_plots_for_html(summary_df, None, threshold=0.1, images_dir=images_dir)
@@ -529,7 +535,7 @@ class TestGeneratePdfReportComprehensive:
                     with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
                         with patch(
                             "metaquest.visualization.reporting.plot_metadata_counts",
-                            side_effect=Exception("Counts error"),
+                            side_effect=VisualizationError("Counts error"),
                         ):
                             with patch(
                                 "metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig
@@ -578,6 +584,7 @@ class TestGeneratePdfReportComprehensive:
 class TestGenerateHtmlReportComprehensive:
     """Comprehensive tests for _generate_html_report."""
 
+    @requires_interactive
     def test_full_html_report(self, tmp_path, summary_df, metadata_df, counts_df):
         """Test HTML report with all features."""
         output_file = tmp_path / "report.html"
@@ -591,30 +598,28 @@ class TestGenerateHtmlReportComprehensive:
         mock_fig = Mock()
         mock_fig.savefig = Mock()
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2") as mock_jinja2:
-                mock_jinja2.FileSystemLoader = Mock()
-                mock_jinja2.Environment.return_value = mock_env
-                with patch("metaquest.visualization.reporting._create_default_template"):
-                    with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
-                        with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
-                            with patch("metaquest.visualization.reporting.plot_metadata_counts", return_value=mock_fig):
-                                with patch("matplotlib.pyplot.close"):
-                                    result = _generate_html_report(
-                                        title="Full HTML Report",
-                                        summary_data=summary_df,
-                                        metadata_data=metadata_df,
-                                        counts_data=counts_df,
-                                        output_file=str(output_file),
-                                        threshold=0.1,
-                                        include_plots=True,
-                                        include_tables=True,
-                                    )
+        with patch("jinja2.FileSystemLoader"), patch("jinja2.Environment", return_value=mock_env):
+            with patch("metaquest.visualization.reporting._create_default_template"):
+                with patch("metaquest.visualization.reporting.plot_containment", return_value=mock_fig):
+                    with patch("metaquest.visualization.reporting.plot_correlation_matrix", return_value=mock_fig):
+                        with patch("metaquest.visualization.reporting.plot_metadata_counts", return_value=mock_fig):
+                            with patch("matplotlib.pyplot.close"):
+                                result = _generate_html_report(
+                                    title="Full HTML Report",
+                                    summary_data=summary_df,
+                                    metadata_data=metadata_df,
+                                    counts_data=counts_df,
+                                    output_file=str(output_file),
+                                    threshold=0.1,
+                                    include_plots=True,
+                                    include_tables=True,
+                                )
 
         assert result == output_file
         assert output_file.exists()
         mock_template.render.assert_called_once()
 
+    @requires_interactive
     def test_html_without_plots(self, tmp_path, summary_df):
         """Test HTML report with plots disabled."""
         output_file = tmp_path / "report.html"
@@ -625,22 +630,19 @@ class TestGenerateHtmlReportComprehensive:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2") as mock_jinja2:
-                mock_jinja2.FileSystemLoader = Mock()
-                mock_jinja2.Environment.return_value = mock_env
-                with patch("metaquest.visualization.reporting._create_default_template"):
-                    with patch("metaquest.visualization.reporting._generate_plots_for_html") as mock_plots:
-                        result = _generate_html_report(
-                            title="No Plots",
-                            summary_data=summary_df,
-                            metadata_data=None,
-                            counts_data=None,
-                            output_file=str(output_file),
-                            threshold=0.1,
-                            include_plots=False,
-                            include_tables=True,
-                        )
+        with patch("jinja2.FileSystemLoader"), patch("jinja2.Environment", return_value=mock_env):
+            with patch("metaquest.visualization.reporting._create_default_template"):
+                with patch("metaquest.visualization.reporting._generate_plots_for_html") as mock_plots:
+                    result = _generate_html_report(
+                        title="No Plots",
+                        summary_data=summary_df,
+                        metadata_data=None,
+                        counts_data=None,
+                        output_file=str(output_file),
+                        threshold=0.1,
+                        include_plots=False,
+                        include_tables=True,
+                    )
 
         assert result == output_file
         mock_plots.assert_not_called()
@@ -649,8 +651,8 @@ class TestGenerateHtmlReportComprehensive:
         """Test that HTML generation without jinja2 raises error."""
         output_file = tmp_path / "report.html"
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", False):
-            with pytest.raises(VisualizationError, match="requires jinja2"):
+        with patch.dict(sys.modules, {"jinja2": None}):
+            with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
                 _generate_html_report(
                     title="Test",
                     summary_data=summary_df,
@@ -662,6 +664,7 @@ class TestGenerateHtmlReportComprehensive:
                     include_tables=False,
                 )
 
+    @requires_interactive
     def test_html_report_writes_rendered_content(self, tmp_path, summary_df):
         """Test that HTML report writes rendered template to file."""
         output_file = tmp_path / "report.html"
@@ -673,21 +676,18 @@ class TestGenerateHtmlReportComprehensive:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2") as mock_jinja2:
-                mock_jinja2.FileSystemLoader = Mock()
-                mock_jinja2.Environment.return_value = mock_env
-                with patch("metaquest.visualization.reporting._create_default_template"):
-                    _generate_html_report(
-                        title="Content Test",
-                        summary_data=summary_df,
-                        metadata_data=None,
-                        counts_data=None,
-                        output_file=str(output_file),
-                        threshold=0.1,
-                        include_plots=False,
-                        include_tables=True,
-                    )
+        with patch("jinja2.FileSystemLoader"), patch("jinja2.Environment", return_value=mock_env):
+            with patch("metaquest.visualization.reporting._create_default_template"):
+                _generate_html_report(
+                    title="Content Test",
+                    summary_data=summary_df,
+                    metadata_data=None,
+                    counts_data=None,
+                    output_file=str(output_file),
+                    threshold=0.1,
+                    include_plots=False,
+                    include_tables=True,
+                )
 
         assert output_file.read_text() == expected_content
 
@@ -738,6 +738,7 @@ class TestGenerateReportIntegration:
                 format="pdf",
             )
 
+    @requires_interactive
     def test_html_report_end_to_end(self, summary_file, tmp_path):
         """Test HTML report generation end-to-end."""
         output_file = tmp_path / "report.html"
@@ -748,18 +749,15 @@ class TestGenerateReportIntegration:
         mock_env = Mock()
         mock_env.get_template.return_value = mock_template
 
-        with patch("metaquest.visualization.reporting.JINJA2_AVAILABLE", True):
-            with patch("metaquest.visualization.reporting.jinja2") as mock_jinja2:
-                mock_jinja2.FileSystemLoader = Mock()
-                mock_jinja2.Environment.return_value = mock_env
-                with patch("metaquest.visualization.reporting._create_default_template"):
-                    result = generate_report(
-                        title="HTML E2E",
-                        summary_file=str(summary_file),
-                        output_file=str(output_file),
-                        format="html",
-                        include_plots=False,
-                    )
+        with patch("jinja2.FileSystemLoader"), patch("jinja2.Environment", return_value=mock_env):
+            with patch("metaquest.visualization.reporting._create_default_template"):
+                result = generate_report(
+                    title="HTML E2E",
+                    summary_file=str(summary_file),
+                    output_file=str(output_file),
+                    format="html",
+                    include_plots=False,
+                )
 
         assert result == output_file
         assert output_file.exists()

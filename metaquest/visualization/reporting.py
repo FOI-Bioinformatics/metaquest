@@ -13,7 +13,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from metaquest.core.exceptions import VisualizationError
+from metaquest.core.exceptions import MetaQuestError, VisualizationError
+from metaquest.core.optional import require
 from metaquest.core.utils import get_genome_columns as _get_genome_columns
 from metaquest.visualization.plots import (
     plot_containment,
@@ -24,14 +25,14 @@ from metaquest.visualization.plots import (
 logger = logging.getLogger(__name__)
 
 
-# Check if jinja2 is available for HTML reports
-try:
-    import jinja2
+# What drawing or saving one optional figure raises: the plot helpers raise VisualizationError,
+# the genome-column helper ProcessingError, savefig OSError or ValueError, and pandas ValueError or
+# KeyError on data it cannot correlate. The figure is then left out of the report.
+_PLOT_ERRORS = (MetaQuestError, OSError, ValueError, KeyError)
 
-    JINJA2_AVAILABLE = True
-except ImportError:
-    JINJA2_AVAILABLE = False
-    logger.warning("jinja2 not available. HTML report generation will be limited.")
+# The correlation heatmap also compares every genome column against the threshold, which raises
+# TypeError for a column holding text; the heatmap is then left out, as before.
+_HEATMAP_ERRORS = (*_PLOT_ERRORS, TypeError)
 
 
 def generate_report(
@@ -45,15 +46,13 @@ def generate_report(
     include_plots: bool = True,
     include_tables: bool = True,
 ) -> Union[str, Path]:
+    # An HTML report needs jinja2 (interactive extra); check before reading or writing anything.
+    if format == "html":
+        require("jinja2", "interactive", "An HTML report")
     try:
         # Check format
         if format not in ("pdf", "html"):
             raise VisualizationError(f"Unsupported report format: {format}")
-
-        if format == "html" and not JINJA2_AVAILABLE:
-            raise VisualizationError(
-                "HTML report generation requires jinja2. " "Please install with 'pip install jinja2'"
-            )
 
         # Load data files
         summary_data = pd.read_csv(summary_file, sep="\t", index_col=0)
@@ -93,10 +92,11 @@ def generate_report(
         # Add a default return to satisfy the type checker
         return Path(output_file)  # This ensures a value is always returned
 
-    except Exception as e:
-        if isinstance(e, VisualizationError):
-            raise
-        raise VisualizationError(f"Error generating report: {e}")
+    except VisualizationError:
+        raise
+    # pandas' ParserError and EmptyDataError are ValueErrors.
+    except (OSError, ValueError, KeyError, MetaQuestError) as e:
+        raise VisualizationError(f"Error generating report: {e}") from e
 
 
 def _create_title_page(title, summary_data, metadata_data):
@@ -268,7 +268,7 @@ def _add_correlation_heatmap(pdf, summary_data, threshold):
             correlation_matrix = summary_data[top_genome_cols].corr()
             fig = plot_correlation_matrix(correlation_matrix, title="Genome Correlation Matrix")
             pdf.savefig(fig)
-    except Exception as e:
+    except _HEATMAP_ERRORS as e:
         logger.warning(f"Error generating heatmap: {e}")
     finally:
         if fig is not None:
@@ -358,7 +358,7 @@ def _generate_pdf_report(
                 )
                 pdf.savefig(fig)
                 plt.close(fig)
-            except Exception as e:
+            except _PLOT_ERRORS as e:
                 logger.warning(f"Error generating metadata count plots: {e}")
 
         # Heatmap of top genomes
@@ -512,7 +512,7 @@ def _add_metadata_count_plot_files(counts_data, images_dir, plot_files):
         rel = _save_report_fig(fig, images_dir, "metadata_pie.png")
         if rel:
             plot_files["pie_plot"] = rel
-    except Exception as e:
+    except _PLOT_ERRORS as e:
         logger.warning(f"Error generating metadata count plots: {e}")
 
 
@@ -526,7 +526,7 @@ def _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files):
             rel = _save_report_fig(fig, images_dir, "genome_correlation.png")
             if rel:
                 plot_files["heatmap_plot"] = rel
-    except Exception as e:
+    except _HEATMAP_ERRORS as e:
         logger.warning(f"Error generating heatmap: {e}")
 
 
@@ -550,7 +550,7 @@ def _generate_plots_for_html(summary_data, counts_data, threshold, images_dir):
         if counts_data is not None:
             _add_metadata_count_plot_files(counts_data, images_dir, plot_files)
         _add_correlation_plot_file(summary_data, threshold, images_dir, plot_files)
-    except Exception as e:
+    except _PLOT_ERRORS as e:
         logger.warning(f"Error generating plots: {e}")
 
     return plot_files
@@ -763,8 +763,7 @@ def _generate_html_report(
     Returns:
         Path to the generated HTML report
     """
-    if not JINJA2_AVAILABLE:
-        raise VisualizationError("HTML report generation requires jinja2. " "Please install with 'pip install jinja2'")
+    jinja2 = require("jinja2", "interactive", "An HTML report")
 
     # Create output directory
     output_path = Path(output_file)
@@ -800,11 +799,12 @@ def _generate_html_report(
     template_loader = jinja2.FileSystemLoader(searchpath=str(Path(__file__).parent))
     template_env = jinja2.Environment(loader=template_loader)
 
-    # Get template
-    template = template_env.get_template("templates/report_template.html")
-
-    # Render template
-    output_html = template.render(**template_data)
+    # Get and render the template
+    try:
+        template = template_env.get_template("templates/report_template.html")
+        output_html = template.render(**template_data)
+    except jinja2.TemplateError as e:
+        raise VisualizationError(f"Error rendering HTML report template: {e}") from e
 
     # Write to file
     with open(output_path, "w") as f:

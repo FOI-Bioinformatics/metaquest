@@ -318,7 +318,7 @@ class TestStringEncodingEdgeCases:
         """Test handling of unicode characters."""
         df = pd.DataFrame(
             {
-                "category": ["Français", "中文", "Русский"],
+                "category": ["Français", "中文", "Русский"],  # ascii-ok: non-Latin labels
                 "value": [10, 20, 30],
             }
         )
@@ -331,7 +331,7 @@ class TestStringEncodingEdgeCases:
         """Test handling of emoji characters."""
         df = pd.DataFrame(
             {
-                "category": ["Test 🦠", "Sample 🧬", "Data 📊"],
+                "category": ["Test 🦠", "Sample 🧬", "Data 📊"],  # ascii-ok: emoji labels
                 "value": [10, 20, 30],
             }
         )
