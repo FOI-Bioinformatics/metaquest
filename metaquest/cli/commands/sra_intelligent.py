@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from metaquest.cli.base import BaseCommand
-from metaquest.core.exceptions import ValidationError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError, ValidationError
 from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
 from metaquest.data.sra import fastq_files
 from metaquest.data.sra_metadata import _resolved_sidecar_path
@@ -29,6 +29,10 @@ from metaquest.store.usage import record_usage_safe
 from metaquest.utils.browser import open_in_browser
 
 logger = logging.getLogger(__name__)
+
+# What reading a dataset's FASTQ files raises for a file that is missing, unreadable,
+# truncated or malformed; MetaQuestError covers the store and analyzer layers.
+_DATASET_READ_ERRORS = (OSError, EOFError, ValueError, MetaQuestError)
 
 
 def _resolve_command_store(args, registry: Registry) -> Optional[StorePaths]:
@@ -250,9 +254,8 @@ class SRAQualityProfileCommand(BaseCommand):
         a write that fails is a lost cache, not a failed profile, so it is reported as a
         warning and the record is still used.
 
-        Returns None when the directory holds no FASTQ files or cannot be read at all (e.g.
-        a test double standing in for a path), in which case the profile falls back to its
-        own sample totals.
+        Returns None when the directory holds no FASTQ files or cannot be read at all, in
+        which case the profile falls back to its own sample totals.
         """
         try:
             acc_dir = Path(accession_file).parent
@@ -264,13 +267,13 @@ class SRAQualityProfileCommand(BaseCommand):
             if not files:
                 return None
             stats = compute_dataset_stats(files)
-        except Exception as e:
+        except _DATASET_READ_ERRORS as e:
             logger.debug("Could not compute dataset stats for %s: %s", accession_file, e)
             return None
         if sidecar_path is not None:
             try:
                 store_stats(sidecar_path, stats)
-            except Exception as e:
+            except (OSError, DataAccessError) as e:
                 logger.warning("Could not cache statistics for %s: %s", acc_dir.name, e)
         return stats
 
@@ -330,7 +333,7 @@ class SRAQualityProfileCommand(BaseCommand):
                 print(f"[{i}/{len(accessions)}] Analyzing {accession}...")
                 try:
                     profile = self._profile_accession(analyzer, args, accession, output_dir)
-                except Exception as e:
+                except _DATASET_READ_ERRORS as e:
                     logger.warning(f"Failed to profile {accession}: {e}")
                     profile = None
                 if profile is None:
@@ -383,8 +386,11 @@ class SRAQualityProfileCommand(BaseCommand):
 
             return 0
 
-        except Exception as e:
+        except (MetaQuestError, OSError) as e:
             logger.error(f"Quality profiling failed: {e}")
+            return 1
+        except Exception as e:  # noqa: B902 - top-level catch: keep the traceback, return 1
+            self.logger.exception(f"Quality profiling failed: {e}")
             return 1
 
 
@@ -527,8 +533,11 @@ class SRAInteractiveDashboardCommand(BaseCommand):
                 print("No dashboard was generated")
                 return 1
 
-        except Exception as e:
+        except (MetaQuestError, OSError) as e:
             logger.error(f"Dashboard generation failed: {e}")
+            return 1
+        except Exception as e:  # noqa: B902 - top-level catch: keep the traceback, return 1
+            self.logger.exception(f"Dashboard generation failed: {e}")
             return 1
 
 
@@ -715,6 +724,9 @@ class SRAComparativeAnalysisCommand(BaseCommand):
 
             return 0
 
-        except Exception as e:
+        except (MetaQuestError, OSError) as e:
             logger.error(f"Comparative analysis failed: {e}")
+            return 1
+        except Exception as e:  # noqa: B902 - top-level catch: keep the traceback, return 1
+            self.logger.exception(f"Comparative analysis failed: {e}")
             return 1

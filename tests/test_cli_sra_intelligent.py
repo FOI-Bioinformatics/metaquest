@@ -122,6 +122,7 @@ class TestSRAQualityProfileCommand:
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.side_effect = lambda acc: fastq_dir / f"{acc}.fastq.gz"
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
 
@@ -169,6 +170,7 @@ class TestSRAQualityProfileCommand:
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.side_effect = lambda acc: fastq_dir / f"{acc}.fastq.gz"
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
 
@@ -385,6 +387,7 @@ class TestSRAQualityProfileCommand:
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.side_effect = lambda acc: fastq_dir / f"{acc}.fastq.gz"
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
 
@@ -426,6 +429,7 @@ class TestSRAQualityProfileCommand:
 
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.side_effect = lambda acc: fastq_dir / f"{acc}.fastq.gz"
             mock_analyzer.profile_dataset_quality.side_effect = profile_for
             mock_analyzer_class.return_value = mock_analyzer
 
@@ -483,6 +487,7 @@ class TestSRAQualityProfileCommand:
         mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.side_effect = lambda acc: fastq_dir / f"{acc}.fastq.gz"
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
             result = cmd.execute(args)
@@ -528,6 +533,7 @@ class TestSRAQualityProfileCommand:
         mock_profile = make_profile("SRR001", n_content=0.01, duplication_rate=0.15, adapter=0.02)
         with patch("metaquest.cli.commands.sra_intelligent.SRADatasetAnalyzer") as mock_analyzer_class:
             mock_analyzer = Mock()
+            mock_analyzer.find_fastq.side_effect = lambda acc: fastq_dir / f"{acc}.fastq.gz"
             mock_analyzer.profile_dataset_quality.return_value = mock_profile
             mock_analyzer_class.return_value = mock_analyzer
             with patch("metaquest.store.usage.catalog_write", side_effect=RuntimeError("locked")):
@@ -1521,3 +1527,95 @@ class TestAccessionsFileOptional:
 #   pytest --cov=metaquest.cli.commands.sra_intelligent --cov-report=term-missing \
 #          tests/test_cli_sra_intelligent.py
 # ============================================================================
+
+
+# ============================================================================
+# Narrow exception handling (tech debt): a programming error must not be swallowed
+# ============================================================================
+
+
+def _profile_args(tmp_path, **overrides):
+    """Arguments for SRAQualityProfileCommand.execute with a single accession."""
+    values = dict(
+        accession="SRR1",
+        accessions_file=None,
+        fastq_dir=str(tmp_path / "fastq"),
+        output_dir=str(tmp_path / "output"),
+        detailed_reports=False,
+        include_contamination=False,
+        summary_only=True,
+        registry=str(tmp_path / "metaquest_registry.json"),
+        data_root=None,
+    )
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_cli_execute_logs_traceback_for_unexpected_error(caplog, monkeypatch, tmp_path):
+    """Kind (d): an unexpected error still returns 1, and its traceback is logged."""
+    cmd = SRAQualityProfileCommand()
+
+    def buggy(*args, **kwargs):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(cmd, "_resolve_accessions", buggy)
+    with caplog.at_level("ERROR"):
+        assert cmd.execute(_profile_args(tmp_path)) == 1
+    assert any(r.exc_info for r in caplog.records)
+
+
+def test_cli_execute_logs_a_metaquest_error_without_traceback(caplog, monkeypatch, tmp_path):
+    """Kind (d): an expected error is reported as one line and returns 1."""
+    cmd = SRAQualityProfileCommand()
+    # With neither --accession nor --accessions-file, _resolve_accessions raises ValidationError.
+    with caplog.at_level("ERROR"):
+        assert cmd.execute(_profile_args(tmp_path, accession=None)) == 1
+    assert any("Quality profiling failed" in r.message for r in caplog.records)
+    assert not any(r.exc_info for r in caplog.records)
+
+
+def test_unexpected_error_while_profiling_one_accession_propagates(monkeypatch, tmp_path):
+    """Kind (a): a bug in one accession's profile is no longer counted as a failed accession."""
+    cmd = SRAQualityProfileCommand()
+
+    def buggy(*args, **kwargs):
+        raise TypeError("bug")
+
+    monkeypatch.setattr(cmd, "_profile_accession", buggy)
+    with patch("metaquest.cli.commands.sra_intelligent.logger") as mock_logger:
+        assert cmd.execute(_profile_args(tmp_path)) == 1
+    mock_logger.warning.assert_not_called()
+
+
+def test_dataset_stats_default_on_unreadable_fastq_and_propagate_a_bug(tmp_path):
+    """Kind (b): a FASTQ file that cannot be read yields None; a TypeError propagates."""
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    fastq = acc_dir / "SRR1.fastq"
+    fastq.write_text("@r\nACGT\n+\nIIII\n")
+    target = "metaquest.cli.commands.sra_intelligent.compute_dataset_stats"
+    with patch(target, side_effect=ValueError("Truncated FASTQ record")):
+        assert SRAQualityProfileCommand._dataset_stats(fastq) is None
+    with patch(target, side_effect=TypeError("bug")):
+        with pytest.raises(TypeError):
+            SRAQualityProfileCommand._dataset_stats(fastq)
+
+
+def test_dataset_stats_cache_write_failure_is_logged_and_a_bug_propagates(tmp_path, caplog):
+    """Kind (e): a sidecar that cannot be written loses only the cache; a TypeError propagates."""
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    fastq = acc_dir / "SRR1.fastq"
+    fastq.write_text("@r\nACGT\n+\nIIII\n")
+    module = "metaquest.cli.commands.sra_intelligent"
+    with (
+        patch(f"{module}._resolved_sidecar_path", return_value=tmp_path / "SRR1.json"),
+        patch(f"{module}.cached_stats", return_value=None),
+    ):
+        with patch(f"{module}.store_stats", side_effect=PermissionError("read-only")):
+            with caplog.at_level("WARNING"):
+                assert SRAQualityProfileCommand._dataset_stats(fastq) is not None
+        assert "Could not cache statistics" in caplog.text
+        with patch(f"{module}.store_stats", side_effect=TypeError("bug")):
+            with pytest.raises(TypeError):
+                SRAQualityProfileCommand._dataset_stats(fastq)
