@@ -146,14 +146,14 @@ registry (`validate`, `profile`, `report`). All three take `--accessions-file`, 
 `sra_validate` also take repeated `--accession` flags; without either, every accession folder is used.
 
 Each dataset is profiled by one path. Read and base totals, mean read length and GC content come from
-the dataset's statistics record: exact read counts, and GC from a uniform sample. GC content is computed from a sample of the first mate file; per-read quality from a sample of all mates. Per-read quality,
-complexity and adapter figures come from a sample of `--sample-size` reads per dataset (default
-10000) drawn from every mate file (uniformly across each file by default, or `--sampler head`). For a
-dataset held in the shared data store, the statistics record is cached in the store sidecar (the
-`stats` block, invalidated when a FASTQ file's size or modification time changes), so `sra_profile`,
-`sra_report` and `sra_validate --check-pairs` compute it once and reuse it rather than re-reading the
-files each time. GC is reported in percent (0 to 100) under `gc_percent` in the table, the profile
-JSON and the registry.
+the dataset's statistics record: exact read counts, and GC from a uniform sample of the first mate
+file's reads. Per-read quality, complexity and adapter figures come from a sample of `--sample-size`
+reads per dataset (default 10000) drawn from every mate file (uniformly across each file by default,
+or `--sampler head`). For a dataset held in the shared data store, the statistics record is cached in
+the store sidecar (the `stats` block, invalidated when a FASTQ file's size or modification time
+changes), so `sra_profile`, `sra_report` and `sra_validate --check-pairs` compute it once and reuse it
+rather than re-reading the files each time. GC is reported in percent (0 to 100) under `gc_percent` in
+the table, the profile JSON and the registry.
 
 `sra_profile` and `sra_report` label every printed read total "(mates counted)", since a paired-end
 run's two mate files are counted separately. Before 0.5.0 these steps were four commands,

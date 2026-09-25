@@ -616,12 +616,12 @@ metaquest sra_profile \
 
 Each dataset is profiled once, by one path. Read and base totals, mean read length and GC content
 come from the dataset's statistics record: exact read counts (from `seqkit stats` when it is
-installed, otherwise a streaming count) and GC from a uniform sample of the reads. GC content is computed from a sample of the first mate file; per-read quality from a sample of all mates. The record is
-cached in the store sidecar and reused by `sra_profile`, `sra_report` and `sra_validate --check-pairs`
-until a file's size or modification time changes. The per-read quality, complexity, duplication and
-adapter figures come from a sample of `--sample-size` reads per dataset (default 10000) drawn from
-every mate file, uniformly across each file by default or from the start of each file with
-`--sampler head`.
+installed, otherwise a streaming count) and GC from a uniform sample of the first mate file's reads.
+The record is cached in the store sidecar and reused by `sra_profile`, `sra_report` and
+`sra_validate --check-pairs` until a file's size or modification time changes. The per-read quality,
+complexity, duplication and adapter figures come from a sample of `--sample-size` reads per dataset
+(default 10000) drawn from every mate file, uniformly across each file by default or from the start
+of each file with `--sampler head`.
 
 The command writes three things: the table `--output-report` (default `sra_statistics.csv`, one
 row per accession), one `<accession>_quality_profile.json` per accession in `--output-dir` (default
