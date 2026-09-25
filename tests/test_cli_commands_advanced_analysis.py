@@ -452,7 +452,7 @@ class TestTaxonomyValidationCommand:
         assert args.cache_file == "taxonomy_cache.csv"
 
     @patch("metaquest.cli.commands.advanced_analysis.validate_taxonomic_assignments")
-    def test_execute_success_text_file(self, mock_validate):
+    def test_execute_success_text_file(self, mock_validate, capsys):
         """Test successful execution with text file."""
         mock_results = pd.DataFrame(
             {
@@ -474,16 +474,17 @@ class TestTaxonomyValidationCommand:
         )
 
         with patch("builtins.open", mock_open(read_data="Escherichia coli\nSalmonella enterica\n")):
-            with patch("builtins.print") as mock_print:
-                result = command.execute(args)
+            result = command.execute(args)
 
         assert result == 0
         mock_validate.assert_called_once()
-        mock_print.assert_called()
+        out = capsys.readouterr().out
+        assert "Taxonomy Validation Summary:" in out
+        assert "Total species: 2" in out
 
     @patch("pandas.read_csv")
     @patch("metaquest.cli.commands.advanced_analysis.validate_taxonomic_assignments")
-    def test_execute_success_csv_file_with_column(self, mock_validate, mock_read_csv):
+    def test_execute_success_csv_file_with_column(self, mock_validate, mock_read_csv, capsys):
         """Test successful execution with CSV file and specified column."""
         mock_df = pd.DataFrame({"species_name": ["Escherichia coli", "Salmonella enterica"], "abundance": [100, 50]})
         mock_read_csv.return_value = mock_df
@@ -507,10 +508,10 @@ class TestTaxonomyValidationCommand:
             cache_file="cache.csv",
         )
 
-        with patch("builtins.print"):
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
+        assert "Valid species: 1 (50.0%)" in capsys.readouterr().out
         mock_validate.assert_called_once_with(
             ["Escherichia coli", "Salmonella enterica"],
             email="test@example.com",
@@ -540,7 +541,7 @@ class TestTaxonomyValidationCommand:
 
     @patch("pandas.read_csv")
     @patch("metaquest.cli.commands.advanced_analysis.validate_taxonomic_assignments")
-    def test_execute_success_csv_first_column(self, mock_validate, mock_read_csv):
+    def test_execute_success_csv_first_column(self, mock_validate, mock_read_csv, capsys):
         """Test successful execution with CSV file using first column."""
         mock_df = pd.DataFrame(
             {"first_col": ["Escherichia coli", "Salmonella enterica"], "other_col": ["data1", "data2"]}
@@ -566,10 +567,10 @@ class TestTaxonomyValidationCommand:
             cache_file="cache.csv",
         )
 
-        with patch("builtins.print"):
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
+        assert "Total species: 2" in capsys.readouterr().out
 
 
 class TestTaxonomicSummaryCommand:
@@ -624,7 +625,7 @@ class TestTaxonomicSummaryCommand:
     @patch("metaquest.cli.commands.advanced_analysis.read_records")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
     @patch("metaquest.cli.commands.advanced_analysis.analyze_taxonomic_composition")
-    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_records):
+    def test_execute_success(self, mock_analyze, mock_read_matrix, mock_read_records, capsys):
         """Test successful execution."""
         mock_abundance_df = pd.DataFrame({"sample1": [10, 20], "sample2": [15, 25]})
         mock_taxonomy_df = pd.DataFrame({"species": ["Species1", "Species2"], "phylum": ["Phylum1", "Phylum2"]})
@@ -646,14 +647,15 @@ class TestTaxonomicSummaryCommand:
             min_abundance=0.001,
         )
 
-        with patch("builtins.print") as mock_print:
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
         mock_analyze.assert_called_once_with(
             mock_abundance_df, mock_taxonomy_df, levels=["phylum", "genus"], output_dir="summaries"
         )
-        mock_print.assert_called()
+        out = capsys.readouterr().out
+        assert "Taxonomic Summary Results:" in out
+        assert "Phylum: 2 taxa across 2 samples" in out
 
     @patch("pandas.read_csv")
     def test_execute_failure(self, mock_read_csv):
