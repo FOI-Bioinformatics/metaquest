@@ -883,7 +883,7 @@ installs (fasterq-dump, prefetch, minimap2, samtools). Run the same chain locall
 
 ## Releases
 
-Pushing a tag of the form `vX.Y.Z` (for example `v0.4.0`) triggers the release workflow
+Pushing a tag of the form `vX.Y.Z` (for example `v0.5.0`) triggers the release workflow
 (`.github/workflows/release.yml`), which builds the sdist and wheel, checks them with `twine` and
 `check-wheel-contents`, and publishes a GitHub release with the built packages attached. See
 [CHANGELOG.md](CHANGELOG.md) for the changes in each release.

@@ -43,6 +43,15 @@ The CLI layer provides the command-line interface for the application. It's resp
 - Routing commands to the appropriate handlers
 - Formatting output for the user
 
+Most commands are one module each under `metaquest/cli/commands/`. Two command groups are large
+enough to be their own packages instead: `metaquest/cli/commands/store/` (one module per store
+command: `init`, `status`, `reindex`, `adopt`, `verify`, `link`, `usage`, `gc`, plus a shared
+`_shared.py`) and `metaquest/cli/commands/status/` (`command.py` for the `StatusCommand` class,
+`suggest.py` for the `--next` suggestions, `render_text.py` for the text-output formatters). Every
+command writes to stdout through exactly one channel, `BaseCommand.emit`/`emit_raw`/`emit_json`
+(`metaquest/cli/base.py`); library modules log or return their output instead of printing, and a
+`make check` gate fails on any other `print(` call in `metaquest/`.
+
 #### Core Logic Layer
 The core logic layer contains the business logic of the application. It includes:
 - Data models and domain objects
@@ -70,7 +79,8 @@ genome is capped (`--registry-max-screened`). Presence is never taken from the r
 `status` and the scanning functions (`scan_downloads`, `scan_metadata`, `scan_extractions`,
 `scan_assemblies`) re-check the filesystem, so a file removed by hand is reported as missing rather
 than done. Writes are atomic (a temporary file renamed into place) and serialized with a lock file
-to avoid concurrent corruption.
+to avoid concurrent corruption. `update_linked` (add or remove one accession from the project's
+`store.linked` list) also lives here, next to the other writers.
 
 The registry file carries a `version` field, currently 2. A schema 1 file loads unchanged; any key the
 newer schema added is absent and defaults to an empty value. Schema 2 adds two top-level keys: `project`
@@ -78,6 +88,23 @@ newer schema added is absent and defaults to an empty value. Schema 2 adds two t
 and `store` (`root`, `mode`, `linked[]`), which records the shared data store this project uses, if any.
 Every path a project registry stores is written relative to the project root when it lies inside that
 root, and absolute otherwise, so moving the project directory does not break the registry.
+
+`metaquest/data/registry_blocks.py` defines every block the registry file holds (screening,
+selection, exclusion, download, metadata, analysis, extraction, assembly, plus the `project` and
+`store` blocks above) as a dataclass derived from a common `RegistryBlock`: `from_dict`/`to_dict`
+round-trip any key the block does not itself declare, so a field this version of MetaQuest does not
+know about survives a load-and-save cycle unchanged. `registry.py` reads and writes these typed
+blocks rather than raw dictionaries; the on-disk JSON layout is unchanged.
+
+#### Optional dependencies
+`metaquest/core/optional.py` is the single point where an optional package is imported. Core
+runtime dependencies (pandas, numpy, matplotlib, biopython, lxml, requests) are always available;
+everything else (scikit-learn and scipy behind the `analysis` extra, plotly and jinja2 behind
+`interactive`, cartopy behind `maps`, sourmash behind `sourmash`) is imported at the point of use
+with `optional.require(module, extra, purpose)`, never at module import time and never behind a
+silent availability flag. A missing package raises `ConfigurationError`, naming the extra and the
+interpreter to install it into; a command that catches broad exceptions re-raises
+`ConfigurationError` rather than reporting a degraded result.
 
 #### Shared data store
 `metaquest/store` is a package, not a single module, because the store's concerns are independent of
@@ -138,9 +165,16 @@ The plugin system enables extensibility:
 - **file_io**: Abstract file operations for reading/writing various file formats
 - **branchwater**: Functionality for working with Branchwater data
 - **metadata**: Functions for downloading and processing metadata
-- **sra**: Functions for downloading and working with SRA data
+- **sra** (`metaquest/data/sra/`): A package, not a single module, for downloading and working with
+  SRA data: `fastq` (finding and reading FASTQ files, verifying a download), `cleanup` (transient
+  folder handling), `accession` (running `prefetch`/`fasterq-dump` for one accession), `retry`
+  (parallel download with retries), `store_handoff` (linking a download into the shared store), and
+  `download` (the CLI-facing entry point); the package's `__init__.py` re-exports the public
+  functions other layers import, so `from metaquest.data.sra import download_accession` still works
 - **registry**: The project journal (`metaquest_registry.json`); records dataset state and
   re-checks presence against the filesystem
+- **registry_blocks**: Typed dataclasses for every block the registry file holds, described in
+  "Project registry" above
 - **store** (`metaquest/store/`): The shared data store package, described in "Shared data store"
   below; a project that never runs `store_init` never touches it
 
@@ -148,7 +182,12 @@ The plugin system enables extensibility:
 
 - **containment**: Algorithms for analyzing containment data
 - **counts**: Functions for counting and summarizing metadata
-- **statistics**: Statistical analysis utilities
+- **statistics**: Statistical analysis utilities, including `compare_group_means` (t-test for two
+  groups, one-way ANOVA for more; used by `sra_report --groups-file`)
+- **status_report**: Builds the `status` command's report (present/missing reconciliation, stage
+  filtering, store link status) from the registry and the filesystem; kept in `processing/` rather
+  than `cli/` so it has no dependency on the CLI layer, and returns data that `cli/commands/status/`
+  formats for text or JSON output
 
 #### Visualization Components
 

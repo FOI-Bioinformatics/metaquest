@@ -42,14 +42,33 @@ MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic dat
 
 ## Architecture
 
-MetaQuest follows a layered architecture with clear separation of concerns:
+MetaQuest follows a layered architecture with clear separation of concerns. As of 0.5.0,
+`metaquest --help` lists 41 commands across six pipeline-step groups (Containment, Metadata,
+Genomes, Reads, Store, Analysis); the four commands `sra_profile`/`sra_report` replaced
+(`sra_stats`, `sra_profile_quality`, `sra_dashboard`, `sra_compare`) still parse but are hidden
+from that listing (see "Advanced SRA Commands" below).
 
 ### Core Components
-- **CLI Layer** (`metaquest/cli/`): Command-line interface with modular command architecture using a registry pattern
-- **Core Logic** (`metaquest/core/`): Domain models, validation, exceptions, and constants
-- **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA operations
-- **Advanced SRA Package** (`metaquest/sra/`): Intelligent download management, quality profiling, interactive reporting
-- **Processing** (`metaquest/processing/`): Containment analysis, statistical processing, counting algorithms
+- **CLI Layer** (`metaquest/cli/`): Command-line interface with modular command architecture using a
+  registry pattern. Most commands are one module under `metaquest/cli/commands/`; the store and
+  status commands are packages instead (`metaquest/cli/commands/store/`, one module per command, and
+  `metaquest/cli/commands/status/`, split into `command.py`, `suggest.py`, `render_text.py`). Every
+  command writes to stdout through `BaseCommand.emit`/`emit_raw`/`emit_json` (`cli/base.py`); no
+  other module in `metaquest/` calls `print(`.
+- **Core Logic** (`metaquest/core/`): Domain models, validation, exceptions, and constants.
+  `core/optional.py` is the one place an optional dependency (scikit-learn, scipy, plotly, jinja2,
+  cartopy, sourmash) is imported, at the point of use, raising `ConfigurationError` naming its extra
+  when the package is missing.
+- **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA
+  operations. `data/sra/` is a package (`fastq`, `cleanup`, `accession`, `retry`, `store_handoff`,
+  `download`), not a single module. `data/registry.py` is the project journal;
+  `data/registry_blocks.py` holds the typed dataclass for each block the registry file stores, with
+  unknown-key preservation on a round trip.
+- **Advanced SRA Package** (`metaquest/sra/`): Quality profiling and interactive reporting, described
+  under "Advanced SRA Commands" below.
+- **Processing** (`metaquest/processing/`): Containment analysis, statistical processing, counting
+  algorithms, and `status_report.py` (builds the `status` command's report from the registry and the
+  filesystem, with no dependency on the CLI layer).
 - **Plugins** (`metaquest/plugins/`): Extensible plugin system for formats and visualizers
 - **Visualization** (`metaquest/visualization/`): Plotting and reporting functionality
 
