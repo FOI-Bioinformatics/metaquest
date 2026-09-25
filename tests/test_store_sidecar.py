@@ -7,6 +7,9 @@ import hashlib
 import json
 import logging
 
+import pytest
+
+from metaquest.core.exceptions import DataAccessError
 from metaquest.store.sidecar import (
     SIDECAR_SCHEMA,
     Sidecar,
@@ -120,6 +123,14 @@ def test_read_sidecar_invalid_json_returns_none(tmp_path, caplog):
         result = read_sidecar(path)
     assert result is None
     assert "bad.json" in caplog.text
+
+
+def test_read_sidecar_json_list_raises_data_access_error(tmp_path):
+    """A sidecar holding a JSON list is reported as a store error, not an AttributeError."""
+    path = tmp_path / "SRR1.json"
+    path.write_text(json.dumps([{"accession": "SRR1"}]))
+    with pytest.raises(DataAccessError, match=r"SRR1\.json: sidecar is not a JSON object"):
+        read_sidecar(path)
 
 
 def test_sidecar_from_dict_tolerant_of_missing_keys():

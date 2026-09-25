@@ -1794,6 +1794,20 @@ class TestStoreReindexNeverLosesHistory:
         with Catalog(paths) as catalog:
             assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
 
+    def test_a_sidecar_holding_a_json_list_aborts_the_reindex_as_unreadable(self, tmp_path, caplog):
+        import logging
+
+        root, paths = self._store_with_dataset(tmp_path)
+        sidecar_path(paths, "SRR1").write_text('[{"accession": "SRR1"}]')
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 1
+        assert any("SRR1" in record.message for record in caplog.records)
+        with Catalog(paths) as catalog:
+            assert catalog.conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == 1
+
     def test_reindex_after_catalog_loss_restores_projects_and_usage(self, tmp_path, monkeypatch):
         paths = init_store(tmp_path / "store")
         monkeypatch.chdir(tmp_path)

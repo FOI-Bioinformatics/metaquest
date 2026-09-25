@@ -233,7 +233,11 @@ def write_sidecar(path: Union[str, Path], sidecar: Sidecar) -> Path:
 
 
 def read_sidecar(path: Union[str, Path]) -> Optional[Sidecar]:
-    """Read the sidecar at ``path``, returning None with a logged warning when missing or invalid."""
+    """Read the sidecar at ``path``, returning None with a logged warning when missing or unparseable.
+
+    Raises ``DataAccessError`` when the file parses but holds something other than a JSON object,
+    so the caller reports a store error rather than failing with an ``AttributeError``.
+    """
     sidecar_path = Path(path)
     if not sidecar_path.is_file():
         logger.warning(f"Sidecar file not found: {sidecar_path}")
@@ -243,6 +247,8 @@ def read_sidecar(path: Union[str, Path]) -> Optional[Sidecar]:
     except (OSError, json.JSONDecodeError) as e:
         logger.warning(f"Could not read sidecar {sidecar_path}: {e}")
         return None
+    if not isinstance(data, dict):
+        raise DataAccessError(f"{sidecar_path}: sidecar is not a JSON object")
     return Sidecar.from_dict(data)
 
 
