@@ -77,7 +77,7 @@ Requires Python 3.12 or newer.
 `make test-network` downloads one 425-spot SRA run (SRR2517620) with fasterq-dump and
 checks the files MetaQuest writes. It needs `fasterq-dump` on the PATH and internet
 access, so it is excluded from `make test`. Run it before releasing any change to
-`metaquest/data/sra.py` or `metaquest/utils/security.py`.
+the `metaquest/data/sra/` package or `metaquest/utils/security.py`.
 
 ## Submitting Changes
 

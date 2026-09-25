@@ -23,7 +23,8 @@ import time
 
 import pytest
 
-import metaquest.data.sra as sra_mod
+import metaquest.data.sra.accession as accession_mod
+import metaquest.data.sra.retry as retry_mod
 from metaquest.store.layout import init_store
 from metaquest.store.locks import dataset_lock
 from metaquest.utils.security import SecureSubprocess
@@ -38,11 +39,11 @@ def _clean_security_state():
     """Every test in this module starts and ends with STOP cleared and no tracked children,
     so a failure here cannot leave a later, unrelated test believing an interrupt is already
     under way or tracking a stale child process."""
-    sra_mod.STOP.clear()
+    accession_mod.STOP.clear()
     SecureSubprocess.clear_stopping()
     yield
     SecureSubprocess.terminate_children(grace=1.0)
-    sra_mod.STOP.clear()
+    accession_mod.STOP.clear()
     SecureSubprocess.clear_stopping()
 
 
@@ -63,14 +64,14 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
     cancel = threading.Event()
 
     def worker(acc, *args, **kwargs):
-        with dataset_lock(paths, acc, should_stop=sra_mod.STOP.is_set):
+        with dataset_lock(paths, acc, should_stop=accession_mod.STOP.is_set):
             with count_lock:
                 running_count["n"] += 1
                 if running_count["n"] == len(ACCESSIONS):
                     both_running.set()
             try:
-                sra_mod._run_download_tool("sleep", ["30"])
-            except sra_mod._DownloadInterrupted:
+                accession_mod._run_download_tool("sleep", ["30"])
+            except accession_mod._DownloadInterrupted:
                 return False, "interrupted"
             return True, "ok"
 
@@ -93,7 +94,7 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
     try:
         t0 = time.monotonic()
         with pytest.raises(KeyboardInterrupt):
-            sra_mod._execute_parallel_downloads(
+            retry_mod._execute_parallel_downloads(
                 ACCESSIONS,
                 fastq_dir,
                 1,
