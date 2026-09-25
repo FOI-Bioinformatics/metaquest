@@ -42,7 +42,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `metaquest.data.sra_metadata.generate_statistics_report` now takes a sequence of statistics rows
   and an output path instead of a FASTQ folder and a sample size. `SequenceQualityAnalyzer` moved to
   `metaquest/sra/quality.py`; it is still importable from `metaquest.sra` and
-  `metaquest.sra.analytics`.
+  `metaquest.sra.analytics`. `metaquest.data.branchwater_search.sourmash_hint` and
+  `SOURMASH_HINT` are removed; a missing sourmash is reported through
+  `metaquest.core.optional.require` like every other extra.
 - Error lines that end a command with exit status 1 (for example "No accessions found in file" and
   "FASTQ folder ... does not exist") are now written to the log on stderr instead of stdout. A
   script that parsed those lines from stdout must read stderr or check the exit status instead. The

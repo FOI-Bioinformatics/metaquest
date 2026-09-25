@@ -50,8 +50,3 @@ def require(module: str, extra: str, purpose: str) -> ModuleType:
         raise ConfigurationError(
             f"{purpose} needs the '{name}' package. Install it into this interpreter with: {install_hint(extra)}"
         ) from e
-
-
-def sourmash_hint() -> str:
-    """Install hint for sourmash, naming the interpreter this process runs under."""
-    return f"sourmash is required to sketch a genome. Install it into this interpreter with: {install_hint('sourmash')}"
