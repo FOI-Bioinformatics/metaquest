@@ -150,6 +150,12 @@ module = [
 ]
 ignore_missing_imports = true
 
+# Modules held to fully annotated definitions.
+[[tool.mypy.overrides]]
+module = ["metaquest.data.registry_blocks"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q --strict-markers -m 'not network'"
