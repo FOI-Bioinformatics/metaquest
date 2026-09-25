@@ -60,6 +60,17 @@ class ProjectPaths:
 
 @dataclass
 class Registry:
+    """In-memory form of one project's registry file: schema version, timestamps, and state.
+
+    Holds the per-genome screening thresholds (``genomes``), the per-accession dataset records
+    (``datasets``, keyed by accession, each carrying its stage history and provenance), this
+    project's own identity (``project``) once bound by ``store_init``, and the shared data store
+    it is linked to, if any (``store``). ``path`` is set once the registry is bound to a file on
+    disk (by ``load_registry`` or the first ``save_registry``); it is ``None`` for a registry
+    built only in memory, e.g. mid-``bootstrap_from_disk``, and callers that need a project root
+    from it should go through ``project_root`` rather than reading ``path`` directly.
+    """
+
     version: int = SCHEMA_VERSION
     created: str = field(default_factory=_now)
     updated: str = field(default_factory=_now)
@@ -120,6 +131,17 @@ def resolve_project_path(registry: Registry, value: Union[str, Path]) -> Path:
 
 @dataclass
 class ReconcileReport:
+    """Differences ``reconcile`` found between the registry and the project's filesystem.
+
+    ``recorded_missing`` lists accessions the registry marks downloaded whose FASTQ files are no
+    longer present; ``untracked_fastq`` lists accessions with FASTQ on disk that the registry does
+    not yet record as downloaded. ``untracked_extractions`` and ``empty_assembly_dirs`` are lists
+    of ``(accession, genome_id)`` pairs found on disk but missing from, respectively, the
+    registry's extraction and assembly records. ``dangling_links`` holds accessions whose project
+    folder is a symlink into a shared data store that is unmounted or has lost its copy, so the
+    link resolves to nothing.
+    """
+
     recorded_missing: List[str] = field(default_factory=list)
     untracked_fastq: List[str] = field(default_factory=list)
     untracked_extractions: List[Tuple[str, str]] = field(default_factory=list)
@@ -264,6 +286,7 @@ def registry_transaction(path: Optional[Union[str, Path]] = None) -> Iterator[Re
 
 
 def upsert_dataset(registry: Registry, accession: str) -> Dict[str, Any]:
+    """Return ``accession``'s dataset record, creating an empty one in ``registry.datasets`` first if absent."""
     return registry.datasets.setdefault(accession, {})
 
 
@@ -277,6 +300,13 @@ def record_screening(
     query_threshold: float,
     csv_path: Optional[Union[str, Path]],
 ) -> None:
+    """Record one genome's containment (and, when available, cANI) screening result for one accession.
+
+    Rounds ``containment`` and ``cani`` to four decimal places, clears any earlier "inferred"
+    flag on the accession's screening block (a real screening result supersedes one carried over
+    from another run), and registers ``genome_id`` in ``registry.genomes`` if it is not already
+    known. Returns nothing; raises nothing of its own.
+    """
     screening = upsert_dataset(registry, accession).setdefault("screening", {})
     screening["date"] = _now()
     screening.pop("inferred", None)
@@ -419,6 +449,7 @@ def record_screening_from_table(
 
 
 def record_exclusion(registry: Registry, accession: str, reason: str, source: str = "user") -> None:
+    """Mark ``accession`` excluded with ``reason`` and ``source``, timestamped; overwrites any earlier exclusion."""
     upsert_dataset(registry, accession)["exclusion"] = {
         "excluded": True,
         "reason": reason,
@@ -428,6 +459,11 @@ def record_exclusion(registry: Registry, accession: str, reason: str, source: st
 
 
 def clear_exclusion(registry: Registry, accession: str) -> None:
+    """Reverse a recorded exclusion for ``accession``, if any; a no-op when none was recorded.
+
+    Sets the exclusion block's ``excluded`` flag to ``False`` and blanks its reason rather than
+    deleting the block, so the accession keeps a record of having once been excluded.
+    """
     record = registry.datasets.get(accession)
     if record and "exclusion" in record:
         record["exclusion"] = {"excluded": False, "reason": "", "source": "user", "date": _now()}
@@ -559,6 +595,13 @@ to_int_or_none = _to_int_or_none
 
 
 def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
+    """Record ``accession``'s downloaded NCBI metadata under its dataset entry, replacing any earlier record.
+
+    Copies a fixed set of fields out of ``fields`` (run size and md5, assay type, organism,
+    collection date, library layout, platform, library strategy, and the total spot/base counts,
+    coerced to ``int`` or ``None``), alongside the project-relative path to the metadata XML and
+    a timestamp. Fields absent from ``fields`` are recorded as ``None`` rather than omitted.
+    """
     record: Dict[str, Any] = {"xml": _project_relative(xml_path, project_root(registry)), "date": _now()}
     for key in (
         "run_size",
@@ -579,6 +622,12 @@ def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Pat
 def record_analysis(
     registry: Registry, accession: str, analysis: str, output: Union[str, Path], summary: Dict[str, Any]
 ) -> None:
+    """Record one named analysis's output path, summary and timestamp for ``accession``.
+
+    Stored under the dataset entry's ``analyses`` mapping, keyed by ``analysis``, so a second
+    call with the same name overwrites that analysis's previous run rather than accumulating a
+    history of runs.
+    """
     upsert_dataset(registry, accession).setdefault("analyses", {})[analysis] = {
         "date": _now(),
         "output": _project_relative(output, project_root(registry)),
@@ -697,6 +746,7 @@ def clear_assembly(registry: Registry, accession: str, genome_id: str) -> None:
 
 
 def extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
+    """Return the recorded extraction block for ``accession`` against ``genome_id``, or ``None`` if there is none."""
     return registry.datasets.get(accession, {}).get("extractions", {}).get(genome_id)
 
 
@@ -740,6 +790,13 @@ def query(registry: Registry, stage: str, genome_id: Optional[str] = None) -> Li
 
 
 def stage_counts(registry: Registry) -> Dict[str, Any]:
+    """Return per-stage and per-genome accession counts for the registry.
+
+    The result has a ``"stages"`` mapping of each entry in ``STAGES`` to the number of
+    accessions currently in it, and a ``"genomes"`` mapping of each known genome id to its
+    extracted and assembled accession counts plus the list of accessions extracted against it
+    with zero mapped reads.
+    """
     stages = {stage: len(query(registry, stage)) for stage in STAGES}
     genomes: Dict[str, Dict[str, Any]] = {}
     for genome_id in sorted(known_genome_ids(registry)):
@@ -758,6 +815,7 @@ def stage_counts(registry: Registry) -> Dict[str, Any]:
 
 
 def known_genome_ids(registry: Registry) -> Set[str]:
+    """Return every genome id the registry knows about: recorded genomes plus any seen only in a dataset entry."""
     ids: Set[str] = set(registry.genomes)
     for record in registry.datasets.values():
         ids.update(record.get("screening", {}).get("genomes", {}))
@@ -809,6 +867,7 @@ def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
 
 
 def scan_metadata(metadata_folder: Path) -> Set[str]:
+    """Return the accessions with an ``<accession>_metadata.xml`` file directly under ``metadata_folder``."""
     return {p.name[: -len("_metadata.xml")] for p in visible_files(metadata_folder, "*_metadata.xml")}
 
 
@@ -825,6 +884,13 @@ def _genome_ids_on_disk(paths: ProjectPaths, registry: Optional[Registry]) -> Se
 
 
 def scan_extractions(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[str, Dict[str, List[Path]]]:
+    """Return the extracted read files found on disk, as accession -> genome id -> list of file paths.
+
+    Walks each per-accession folder under ``targeted_folder`` and classifies its files with
+    ``split_extract_filename`` against ``genome_ids``; files that do not match a known genome id
+    or mate suffix pattern are skipped. Returns an empty mapping if ``targeted_folder`` does not
+    exist as a directory.
+    """
     found: Dict[str, Dict[str, List[Path]]] = {}
     if not targeted_folder.is_dir():
         return found
@@ -837,6 +903,13 @@ def scan_extractions(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[s
 
 
 def scan_assemblies(targeted_folder: Path, genome_ids: Sequence[str]) -> Dict[str, Dict[str, Path]]:
+    """Return the assembly directories found on disk, as accession -> genome id -> assembly directory path.
+
+    Walks each per-accession folder under ``targeted_folder`` for subfolders named
+    ``<genome_id>_assembly``; ``genome_ids`` is accepted for symmetry with ``scan_extractions``
+    but not otherwise used, since the assembly suffix alone identifies the genome id. Returns an
+    empty mapping if ``targeted_folder`` does not exist as a directory.
+    """
     found: Dict[str, Dict[str, Path]] = {}
     if not targeted_folder.is_dir():
         return found

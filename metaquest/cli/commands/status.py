@@ -142,17 +142,21 @@ class StatusCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "status"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Report which SRA reads, metadata, and genomes are already available locally"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Reads"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
         parser.add_argument("--metadata-folder", default="metadata", help="Folder holding NCBI metadata XML")
         parser.add_argument("--genomes-folder", default="genomes", help="Folder holding genome FASTA files")
@@ -711,6 +715,16 @@ class StatusCommand(BaseCommand):
     # ------------------------------------------------------------------ execute
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Build and emit the status report; return 0 on success or 1 on a handled error.
+
+        Loads the registry (or bootstraps and, with ``--init``, writes one from what is on disk),
+        optionally reconciles it against the filesystem with ``--reconcile``, and assembles a
+        report of registry stages, downloads, genomes, store usage, and drift, emitted as JSON or
+        as text depending on ``args.json``. Returns 1 rather than raising when ``--init`` is asked
+        for an already-existing registry, when ``--reconcile`` is asked with no registry yet, or
+        when report assembly raises a :class:`~metaquest.core.exceptions.MetaQuestError` (logged
+        and swallowed here so the CLI exits cleanly instead of printing a traceback).
+        """
         try:
             paths = ProjectPaths(
                 Path(args.fastq_folder),

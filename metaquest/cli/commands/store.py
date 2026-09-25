@@ -143,17 +143,21 @@ class StoreInitCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_init"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Initialize the shared data store and record this project's use of it"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument(
             "--data-root",
             required=True,
@@ -194,6 +198,7 @@ class StoreInitCommand(BaseCommand):
             )
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             root = Path(args.data_root)
             _refuse_unusable_root(root)
@@ -253,17 +258,21 @@ class StoreStatusCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_status"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Report dataset counts, bytes and stale projects for the shared data store"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
             "--registry",
@@ -353,6 +362,7 @@ class StoreStatusCommand(BaseCommand):
                 )
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -382,10 +392,12 @@ class StoreReindexCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_reindex"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return (
             "Rebuild the store catalogue from every dataset's sidecar file "
             "(refuses to run when any sidecar cannot be read)"
@@ -393,9 +405,11 @@ class StoreReindexCommand(BaseCommand):
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
             "--registry",
@@ -422,6 +436,7 @@ class StoreReindexCommand(BaseCommand):
         return sidecars, unreadable
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -498,10 +513,12 @@ class StoreAdoptCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_adopt"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return (
             "Move or copy project-owned FASTQ folders into the shared store, then link them back "
             "(each accession is locked, so this is safe to run concurrently from several projects)"
@@ -509,9 +526,11 @@ class StoreAdoptCommand(BaseCommand):
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
@@ -563,6 +582,7 @@ class StoreAdoptCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -692,17 +712,21 @@ class StoreVerifyCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_verify"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Verify store datasets against their sidecars (bytes, optionally md5 and NCBI spot counts)"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("accessions", nargs="*", help="Accessions to verify (default: every dataset in the store)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
@@ -1017,6 +1041,7 @@ class StoreVerifyCommand(BaseCommand):
             self.emit(f"{r['accession']:<15s} {r['state']:<10s} {str(r['bytes_ok']):<9s} {md5_col:<7s} {r['verdict']}")
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -1056,17 +1081,21 @@ class StoreLinkCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_link"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Link project accessions to the shared store's copies (complete datasets only, unless --accept-partial)"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("accessions", nargs="+", help="Accessions to link from the store")
         parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
         parser.add_argument(
@@ -1120,6 +1149,7 @@ class StoreLinkCommand(BaseCommand):
         return True
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -1177,17 +1207,21 @@ class StoreUnlinkCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_unlink"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Remove a project's link to the store (never removes a real directory)"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("accessions", nargs="+", help="Accessions to unlink")
         parser.add_argument("--fastq-folder", default="fastq", help="Folder holding per-accession FASTQ downloads")
         parser.add_argument(
@@ -1197,6 +1231,7 @@ class StoreUnlinkCommand(BaseCommand):
         )
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         removed: List[str] = []
         refused: List[str] = []
         for accession in args.accessions:
@@ -1251,17 +1286,21 @@ class StoreUsageCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_usage"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return "Report catalogue usage by accession, project, organism, or store-wide"
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
             "--registry",
@@ -1382,6 +1421,7 @@ class StoreUsageCommand(BaseCommand):
     # --------------------------------------------------------------- execute
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         try:
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, registry.store.get("root"))
@@ -1478,10 +1518,12 @@ class StoreGcCommand(BaseCommand):
 
     @property
     def name(self) -> str:
+        """Return the command name."""
         return "store_gc"
 
     @property
     def help(self) -> str:
+        """Return the command's help text."""
         return (
             "Report, and with --yes remove, unused datasets and leftover temp files from the store "
             "(datasets a project links, or another run is working on, are always kept)"
@@ -1489,9 +1531,11 @@ class StoreGcCommand(BaseCommand):
 
     @property
     def group(self) -> str:
+        """Return the pipeline-step group this command is listed under."""
         return "Store"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add the command's arguments."""
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
         parser.add_argument(
             "--registry",
@@ -1751,6 +1795,7 @@ class StoreGcCommand(BaseCommand):
     # --------------------------------------------------------------- execute
 
     def execute(self, args: argparse.Namespace) -> int:
+        """Run the command; return the exit code."""
         if args.dry_run and args.yes:
             self.logger.error("--dry-run and --yes cannot be combined")
             return 1
