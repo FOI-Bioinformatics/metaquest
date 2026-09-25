@@ -24,6 +24,18 @@ Requires Python 3.12 or newer.
    make test
    ```
 
+### Several worktrees and one environment
+
+An editable install (`pip install -e .`) points the environment at the one checkout it was run
+from. With several git worktrees sharing the `metaquest` environment, `python -m pytest` or
+`python -c "import metaquest"` run from a worktree's root still imports that worktree's code,
+because the current directory comes first on `sys.path`. A script run from anywhere else, or the
+`metaquest` console script, imports whichever checkout the editable install points at, which may
+be a different branch. This is why `scripts/smoke_chain.sh` sets `PYTHONPATH` to its own
+repository root before it changes into the scratch project directory. Do the same
+(`PYTHONPATH=/path/to/worktree`) when running a helper script from outside a worktree, or
+re-run `pip install -e .` in the worktree you are working in.
+
 ## Development Workflow
 
 1. **Code Quality**: Before submitting changes, ensure your code passes all quality checks:

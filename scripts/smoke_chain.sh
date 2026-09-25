@@ -11,15 +11,20 @@
 # not how many reads mapped.
 #
 # Usage: bash scripts/smoke_chain.sh [PROJECT_DIR]
-#   PROJECT_DIR defaults to a fresh temporary directory, which is left behind for
-#   inspection; the caller (or CI, via the failure-only artifact upload) is responsible
-#   for cleaning it up. Run from a "metaquest" environment that has fasterq-dump,
-#   prefetch, minimap2, and samtools on PATH (e.g. "conda run -n metaquest bash
-#   scripts/smoke_chain.sh").
+#   PROJECT_DIR defaults to a fresh temporary directory under $TMPDIR (or /tmp). The
+#   script removes that directory after a successful run outside CI, and keeps it after a
+#   failure (for inspection) or when CI is set. A PROJECT_DIR the caller names is always
+#   kept; in CI the failure-only artifact upload reads it. Run from a "metaquest"
+#   environment that has fasterq-dump, prefetch, minimap2, and samtools on PATH (e.g.
+#   "conda run -n metaquest bash scripts/smoke_chain.sh").
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_DIR="${1:-$(mktemp -d -t metaquest-smoke-XXXXXX)}"
+CREATED_PROJECT_DIR=""
+if [ -z "${1:-}" ]; then
+    CREATED_PROJECT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/metaquest-smoke-XXXXXX")"
+fi
+PROJECT_DIR="${1:-$CREATED_PROJECT_DIR}"
 mkdir -p "$PROJECT_DIR"
 echo "Smoke chain project directory: $PROJECT_DIR"
 
@@ -85,3 +90,11 @@ fi
 echo "results.tsv: $lines line(s) (header + $((lines - 1)) data row(s))"
 
 echo "Smoke chain completed successfully."
+
+# Only a directory this script created, and only outside CI: a failed run has already
+# exited above (set -e), so its directory is still there to inspect.
+if [ -n "$CREATED_PROJECT_DIR" ] && [ -z "${CI:-}" ]; then
+    cd /
+    rm -rf "$CREATED_PROJECT_DIR"
+    echo "Removed the scratch project directory $CREATED_PROJECT_DIR"
+fi
