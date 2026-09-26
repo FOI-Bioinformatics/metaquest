@@ -5,6 +5,7 @@ Tests for metaquest.store.sidecar: the per-dataset JSON sidecar
 
 import hashlib
 import json
+import os
 import logging
 
 import pytest
@@ -273,3 +274,65 @@ def test_build_sidecar_records_a_corrupt_gzip_as_failed(tmp_path):
     sidecar = build_sidecar("SRR1", acc_dir, {"spots": 10}, "3.0.0", "gzip")
     assert sidecar.state == "failed"
     assert "SRR1.fastq.gz" in sidecar.error
+
+
+def _count_fastq_opens(monkeypatch):
+    """Record every FASTQ path opened through ``builtins.open`` (``gzip.open`` goes through it too)."""
+    import builtins
+    from collections import Counter
+
+    opened = Counter()
+    real_open = builtins.open
+
+    def spy(file, *args, **kwargs):
+        name = str(file)
+        if ".fastq" in name or ".fq" in name:
+            opened[os.path.basename(name)] += 1
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", spy)
+    return opened
+
+
+@pytest.mark.parametrize("gz", [False, True])
+def test_build_sidecar_reads_each_fastq_exactly_once(tmp_path, monkeypatch, gz):
+    """Size, md5, read count and the completeness verdict all come from one pass per file."""
+    import gzip
+
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    suffix = ".fastq.gz" if gz else ".fastq"
+    for name, n_records in (("SRR1_1", 10), ("SRR1_2", 10), ("SRR1", 3)):
+        text = "".join(f"@read{i}\nACGT\n+\nIIII\n" for i in range(n_records))
+        path = acc_dir / f"{name}{suffix}"
+        if gz:
+            path.write_bytes(gzip.compress(text.encode()))
+        else:
+            path.write_text(text)
+
+    opened = _count_fastq_opens(monkeypatch)
+    sidecar = build_sidecar("SRR1", acc_dir, {"spots": 13}, "3.0.0", "gzip" if gz else "none")
+    monkeypatch.undo()
+
+    assert dict(opened) == {f"SRR1_1{suffix}": 1, f"SRR1_2{suffix}": 1, f"SRR1{suffix}": 1}
+    assert sidecar.reads_per_mate == 13
+    assert sidecar.state == "complete"
+    by_name = {f["name"]: f for f in sidecar.files}
+    mate1 = acc_dir / f"SRR1_1{suffix}"
+    assert by_name[mate1.name]["md5"] == hashlib.md5(mate1.read_bytes()).hexdigest()
+    assert by_name[mate1.name]["bytes"] == mate1.stat().st_size
+    assert by_name[mate1.name]["reads"] == 10
+
+
+def test_build_sidecar_corrupt_gzip_still_records_the_stored_md5(tmp_path):
+    """A file that cannot be decompressed keeps the md5 of its stored bytes, as before."""
+    acc_dir = tmp_path / "SRR1"
+    acc_dir.mkdir()
+    bad = acc_dir / "SRR1.fastq.gz"
+    bad.write_bytes(b"not a real gzip stream")
+
+    sidecar = build_sidecar("SRR1", acc_dir, {"spots": 10}, "3.0.0", "gzip")
+
+    assert sidecar.state == "failed"
+    assert sidecar.files[0]["md5"] == hashlib.md5(bad.read_bytes()).hexdigest()
+    assert sidecar.files[0]["reads"] is None

@@ -4,12 +4,15 @@ Every function here reads or rewrites files already on disk; none of them starts
 """
 
 import gzip
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import zlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -147,6 +150,129 @@ def count_fastq_reads(path: Union[str, Path]) -> int:
     return total_newlines // 4
 
 
+# Block size for streaming reads of FASTQ files, and the buffer size of the file handle
+# underneath; large sequential reads suit an external or network volume.
+_BLOCK_SIZE = 1024 * 1024
+_READ_BUFFER = 8 * 1024 * 1024
+# Upper bound on decompressed output per decompress call, so one highly compressible block
+# never expands into an unbounded buffer.
+_MAX_INFLATE = 4 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class FastqDigest:
+    """What one pass over a stored FASTQ file yields.
+
+    ``records`` follows ``count_fastq_reads``; ``md5`` is the digest of the file as stored (the
+    compressed bytes for a ``.gz`` file), matching ``metaquest.store.sidecar.md5_file``; ``size``
+    is the number of bytes read. ``content_md5`` is the digest of the decompressed content, and
+    is only computed when asked for.
+    """
+
+    records: int
+    md5: str
+    size: int
+    content_md5: Optional[str] = None
+
+
+class _NewlineCounter:
+    """Counts newlines in a byte stream fed in pieces and remembers its last byte."""
+
+    def __init__(self, content_digest: Optional[Any]) -> None:
+        self.newlines = 0
+        self.last_byte = b""
+        self._content_digest = content_digest
+
+    def feed(self, data: bytes) -> None:
+        """Account for one piece of (decompressed) content."""
+        if not data:
+            return
+        self.newlines += data.count(b"\n")
+        self.last_byte = data[-1:]
+        if self._content_digest is not None:
+            self._content_digest.update(data)
+
+    def content_md5(self) -> Optional[str]:
+        """Hex md5 of the content fed so far, or None when it was not asked for."""
+        return self._content_digest.hexdigest() if self._content_digest is not None else None
+
+    def records(self) -> int:
+        """Records under the rule ``count_fastq_reads`` uses: an unterminated last line still counts."""
+        newlines = self.newlines
+        if self.last_byte and self.last_byte != b"\n":
+            newlines += 1
+        return newlines // 4
+
+
+class _GzipInflater:
+    """Inflates a gzip stream fed in pieces, including files of several concatenated members."""
+
+    def __init__(self, sink: _NewlineCounter) -> None:
+        self._sink = sink
+        self._inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        self._in_member = False
+
+    def feed(self, data: bytes) -> None:
+        """Inflate ``data``, starting a new member whenever the previous one has ended."""
+        while data:
+            if self._inflater.eof:
+                # Zero bytes after a member are padding, as gzip.open also accepts.
+                data = data.lstrip(b"\x00")
+                if not data:
+                    return
+                self._inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            self._in_member = True
+            self._sink.feed(self._inflater.decompress(data, _MAX_INFLATE))
+            while self._inflater.unconsumed_tail and not self._inflater.eof:
+                self._sink.feed(self._inflater.decompress(self._inflater.unconsumed_tail, _MAX_INFLATE))
+            if self._inflater.eof:
+                self._in_member = False
+                data = self._inflater.unused_data
+            else:
+                data = b""
+
+    def finish(self) -> None:
+        """Raise ``EOFError`` when the stream stopped inside a member, as ``gzip.open`` does."""
+        self._sink.feed(self._inflater.flush())
+        if self._in_member and not self._inflater.eof:
+            raise EOFError("Compressed file ended before the end-of-stream marker was reached")
+
+
+def fastq_digest(path: Union[str, Path], content_md5: bool = False) -> FastqDigest:
+    """Record count, md5 and size of the FASTQ file at ``path`` from a single read of its bytes.
+
+    The stored bytes are read once in 1 MiB blocks; each block updates the md5 and, for a
+    ``.gz`` file, is inflated on the fly (several concatenated gzip members are handled) so
+    newlines are counted in the decompressed content. A plain file counts newlines in the
+    blocks directly. The result equals ``count_fastq_reads(path)``, ``md5_file(path)`` and the
+    file size, at the cost of one pass instead of two. A truncated gzip stream raises
+    ``EOFError`` and a corrupt one ``zlib.error``, as ``count_fastq_reads`` would.
+
+    With ``content_md5`` the md5 of the decompressed content is also computed, so a plain and
+    a gzipped copy of the same reads can be compared without a second pass.
+    """
+    raw_digest = hashlib.md5()
+    counter = _NewlineCounter(hashlib.md5() if content_md5 else None)
+    inflater = _GzipInflater(counter) if str(path).endswith(".gz") else None
+    size = 0
+    with open(path, "rb", buffering=_READ_BUFFER) as handle:
+        while True:
+            block = handle.read(_BLOCK_SIZE)
+            if not block:
+                break
+            size += len(block)
+            raw_digest.update(block)
+            if inflater is not None:
+                inflater.feed(block)
+            else:
+                counter.feed(block)
+    if inflater is not None:
+        inflater.finish()
+    return FastqDigest(
+        records=counter.records(), md5=raw_digest.hexdigest(), size=size, content_md5=counter.content_md5()
+    )
+
+
 def iter_fastq_records(path: Union[str, Path]):
     """Yield ``(sequence, quality)`` string pairs for each record in ``path``, streaming.
 
@@ -183,6 +309,8 @@ def verify_download(
     accession: str,
     acc_dir: Union[str, Path],
     expected_spots: Optional[int],
+    reads_r1: Optional[int] = None,
+    reads_orphan: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compare what actually downloaded for ``accession`` against NCBI's recorded spot count.
 
@@ -192,13 +320,17 @@ def verify_download(
     ``"complete"`` when the ratio of downloaded reads to ``expected_spots`` is at least
     ``COMPLETE_RATIO_THRESHOLD``, ``"truncated"`` below that, and ``"unverified"`` when
     ``expected_spots`` is unknown (e.g. NCBI metadata was never fetched for this accession).
+
+    A caller that has already counted the records of the primary file (``reads_r1``) or of the
+    orphan file (``reads_orphan``) passes them in, and that file is then not read again.
     """
     files = fastq_files(acc_dir)
     primary = primary_fastq(acc_dir)
     orphan = orphan_fastq(acc_dir)
-    reads_r1 = count_fastq_reads(primary) if primary is not None else 0
+    if reads_r1 is None:
+        reads_r1 = count_fastq_reads(primary) if primary is not None else 0
     if orphan is not None:
-        reads_r1 += count_fastq_reads(orphan)
+        reads_r1 += reads_orphan if reads_orphan is not None else count_fastq_reads(orphan)
     bytes_total = sum(p.stat().st_size for p in files)
 
     ratio: Optional[float]

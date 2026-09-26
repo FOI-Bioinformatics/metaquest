@@ -698,3 +698,34 @@ class TestAdoptSafety:
         assert report.deduplicated == ["SRR1"]
         assert not (project / "SRR1").is_symlink()
         assert (project / "SRR1" / "SRR1_1.fastq.gz").exists()
+
+
+class TestContentComparisonPasses:
+    """The decompressed comparison reads each side once and takes the read count from that pass."""
+
+    def test_content_matches_reads_each_side_once(self, tmp_path, monkeypatch):
+        import builtins
+        from collections import Counter
+
+        from metaquest.store.adopt import _content_matches
+
+        text = "@r\nACGT\n+\nIIII\n" * 50
+        project = tmp_path / "project" / "SRR1.fastq.gz"
+        store = tmp_path / "store" / "SRR1.fastq.gz"
+        _write_fastq_gz(project, text=text, mtime=1)
+        _write_fastq_gz(store, text=text, mtime=2)
+
+        opened = Counter()
+        real_open = builtins.open
+
+        def spy(file, *args, **kwargs):
+            opened[str(file)] += 1
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", spy)
+        assert _content_matches(project, store, {"reads": 50}) is True
+        assert _content_matches(project, store, {"reads": 49}) is False
+        monkeypatch.undo()
+
+        assert opened[str(project)] == 2
+        assert opened[str(store)] == 2

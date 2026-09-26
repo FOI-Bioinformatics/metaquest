@@ -35,8 +35,6 @@ and is reported rather than blessed with a sidecar and linked here.
 """
 
 import fnmatch
-import gzip
-import hashlib
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -48,7 +46,7 @@ from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.sra import (
     STORE_READY_STATES,
     compress_fastq,
-    count_fastq_reads,
+    fastq_digest,
     fastq_files,
     fastq_stem,
     is_transient_folder,
@@ -135,28 +133,19 @@ def _notify(on_progress: Optional[Callable[[str, str], None]], accession: str, e
         logger.warning("Progress callback failed for %s: %s", accession, e)
 
 
-def _decompressed_md5(path: Union[str, Path]) -> str:
-    """MD5 of ``path``'s decompressed content: gunzips on the fly for a ``.gz`` path, else reads
-    plain bytes, so a plain file and a gzipped file holding the same reads compare equal."""
-    digest = hashlib.md5()
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _content_matches(path: Path, store_path: Path, record: Dict[str, Any]) -> bool:
     """True when ``path`` and the store copy hold the same reads, whatever their raw bytes.
 
-    Decompresses both sides, so it costs a full pass over each file; the callers use it only
-    when the cheap byte comparison cannot settle the question.
+    Compares the md5 of the decompressed content of both sides, and ``path``'s read count with
+    the sidecar's; ``fastq_digest`` yields both from one pass over each file, so the callers
+    use this only when the cheap byte comparison cannot settle the question.
     """
     if not store_path.is_file():
         return False
-    if _decompressed_md5(path) != _decompressed_md5(store_path):
+    project_digest = fastq_digest(path, content_md5=True)
+    if project_digest.content_md5 != fastq_digest(store_path, content_md5=True).content_md5:
         return False
-    return count_fastq_reads(path) == record.get("reads")
+    return project_digest.records == record.get("reads")
 
 
 def _files_match(project_dir: Path, store_dir: Path, sidecar: Sidecar) -> bool:

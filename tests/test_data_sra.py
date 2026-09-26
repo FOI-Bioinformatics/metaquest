@@ -19,6 +19,7 @@ from metaquest.data.sra.fastq import (
     accession_has_fastq,
     compress_fastq,
     count_fastq_reads,
+    fastq_digest,
     fastq_files,
     iter_fastq_records,
     orphan_fastq,
@@ -385,6 +386,103 @@ class TestCountFastqReads:
         assert count_fastq_reads(path) == 0
 
 
+class TestFastqDigest:
+    """fastq_digest: one pass over the stored bytes yields the record count, md5 and size."""
+
+    @staticmethod
+    def _expected(path):
+        from metaquest.store.sidecar import md5_file
+
+        return (count_fastq_reads(path), md5_file(path), path.stat().st_size)
+
+    @staticmethod
+    def _as_tuple(digest):
+        return (digest.records, digest.md5, digest.size)
+
+    def test_plain(self, tmp_path):
+        path = tmp_path / "a.fastq"
+        path.write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(3)))
+        assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+        assert fastq_digest(path).records == 3
+
+    def test_gz_single_member(self, tmp_path):
+        path = tmp_path / "a.fastq.gz"
+        with gzip.open(path, "wt") as handle:
+            handle.write("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(5)))
+        assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+        assert fastq_digest(path).records == 5
+
+    def test_gz_multi_member(self, tmp_path):
+        """Concatenated gzip members (as pigz or ``cat a.gz b.gz`` produce) are all counted."""
+        path = tmp_path / "multi.fastq.gz"
+        members = [gzip.compress("".join(f"@m{m}r{i}\nACGT\n+\nIIII\n" for i in range(4)).encode()) for m in range(3)]
+        path.write_bytes(b"".join(members))
+        assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+        assert fastq_digest(path).records == 12
+
+    def test_large_gz_spans_many_blocks(self, tmp_path):
+        """Random sequence keeps the compressed file over 1 MiB, so blocks and members split mid-record."""
+        import random
+
+        rng = random.Random(7)
+        path = tmp_path / "big.fastq.gz"
+        members = []
+        for member in range(2):
+            records = []
+            for i in range(30000):
+                seq = "".join(rng.choices("ACGT", k=80))
+                records.append(f"@m{member}r{i}\n{seq}\n+\n{'I' * 80}\n")
+            members.append(gzip.compress("".join(records).encode()))
+        path.write_bytes(b"".join(members))
+        assert path.stat().st_size > 1024 * 1024
+        assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+        assert fastq_digest(path).records == 60000
+
+    def test_empty_plain(self, tmp_path):
+        path = tmp_path / "empty.fastq"
+        path.write_text("")
+        assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+
+    def test_empty_gz(self, tmp_path):
+        path = tmp_path / "empty.fastq.gz"
+        with gzip.open(path, "wt"):
+            pass
+        assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+
+    def test_missing_final_newline_plain_and_gz(self, tmp_path):
+        content = "".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(2))[:-1]
+        plain = tmp_path / "a.fastq"
+        plain.write_text(content)
+        gz = tmp_path / "a.fastq.gz"
+        with gzip.open(gz, "wt") as handle:
+            handle.write(content)
+        for path in (plain, gz):
+            assert self._as_tuple(fastq_digest(path)) == self._expected(path)
+            assert fastq_digest(path).records == 2
+
+    def test_truncated_gz_raises_like_count_fastq_reads(self, tmp_path):
+        path = tmp_path / "cut.fastq.gz"
+        data = gzip.compress(b"@r\nACGT\n+\nIIII\n" * 1000)
+        path.write_bytes(data[: len(data) // 2])
+        with pytest.raises(EOFError):
+            count_fastq_reads(path)
+        with pytest.raises(EOFError):
+            fastq_digest(path)
+
+    def test_content_md5_is_md5_of_decompressed_bytes(self, tmp_path):
+        import hashlib
+
+        text = b"@r\nACGT\n+\nIIII\n" * 3
+        gz = tmp_path / "a.fastq.gz"
+        gz.write_bytes(gzip.compress(text))
+        plain = tmp_path / "b.fastq"
+        plain.write_bytes(text)
+        expected = hashlib.md5(text).hexdigest()
+        assert fastq_digest(gz, content_md5=True).content_md5 == expected
+        assert fastq_digest(plain, content_md5=True).content_md5 == expected
+        assert fastq_digest(gz).content_md5 is None
+
+
 class TestIterFastqRecords:
     """iter_fastq_records: the shared raw four-line reader."""
 
@@ -564,6 +662,43 @@ class TestVerifyDownload:
         result = verify_download("SRR1", acc_dir, expected_spots=None)
 
         assert result["bytes_total"] == expected_bytes
+
+
+class TestVerifyDownloadPrecomputedCounts:
+    """verify_download takes read counts a caller already has and then reads no FASTQ file."""
+
+    def test_precomputed_counts_open_no_file(self, tmp_path, monkeypatch):
+        import builtins
+
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        record = "@r\nACGT\n+\nIIII\n"
+        (acc_dir / "SRR1_1.fastq").write_text(record * 1000)
+        (acc_dir / "SRR1_2.fastq").write_text(record * 1000)
+        (acc_dir / "SRR1.fastq").write_text(record * 7)
+
+        def no_open(*args, **kwargs):
+            raise AssertionError(f"verify_download opened {args[0]}")
+
+        monkeypatch.setattr(builtins, "open", no_open)
+        monkeypatch.setattr(gzip, "open", no_open)
+        result = verify_download("SRR1", acc_dir, expected_spots=1007, reads_r1=1000, reads_orphan=7)
+        monkeypatch.undo()
+
+        assert result["reads_r1"] == 1007
+        assert result["verdict"] == "complete"
+
+    def test_orphan_is_counted_when_only_mate_one_is_given(self, tmp_path):
+        acc_dir = tmp_path / "SRR1"
+        acc_dir.mkdir()
+        record = "@r\nACGT\n+\nIIII\n"
+        (acc_dir / "SRR1_1.fastq").write_text(record * 1000)
+        (acc_dir / "SRR1_2.fastq").write_text(record * 1000)
+        (acc_dir / "SRR1.fastq").write_text(record * 7)
+
+        result = verify_download("SRR1", acc_dir, expected_spots=None, reads_r1=1000)
+
+        assert result["reads_r1"] == 1007
 
 
 class TestCachedSraArchive:

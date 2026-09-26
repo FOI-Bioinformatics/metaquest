@@ -25,9 +25,11 @@ from metaquest.data.metadata import parse_metadata_xml
 from metaquest.data.sra import (
     MATE1_SUFFIXES,
     MATE_SUFFIXES,
-    count_fastq_reads,
+    fastq_digest,
     fastq_files,
     fastq_stem,
+    orphan_fastq,
+    primary_fastq,
     verify_download,
 )
 
@@ -111,12 +113,14 @@ def build_sidecar(
 ) -> Sidecar:
     """Build a sidecar describing the files already downloaded for ``accession`` in ``acc_dir``.
 
-    Stats every FASTQ file present (size, md5, read count via ``count_fastq_reads``); the
-    layout comes from the file names, and completeness reuses
-    ``metaquest.data.sra.verify_download`` against ``ncbi.get("spots")``. A truncated gzip
-    file makes ``count_fastq_reads`` raise ``EOFError`` (or plain garbage raise ``OSError``);
+    Reads every FASTQ file present once, through ``metaquest.data.sra.fastq_digest``, which
+    yields its size, md5 (of the bytes as stored) and read count together; the layout comes
+    from the file names, and completeness reuses ``metaquest.data.sra.verify_download`` against
+    ``ncbi.get("spots")`` with those read counts, so no file is read a second time. A truncated
+    gzip file raises ``EOFError`` (or a corrupt one ``zlib.error``, plain garbage ``OSError``);
     either is caught per file and turns the whole result into ``state="failed"`` with the
-    error recorded, since a corrupt file cannot be verified against NCBI's spot count.
+    error recorded, since a corrupt file cannot be verified against NCBI's spot count. Such a
+    file still records the md5 of its stored bytes, which takes a second read of that file only.
 
     ``tool`` and ``downloaded`` default to a fresh fasterq-dump download happening now;
     adoption passes ``tool="adopted"`` and the files' own age instead, since it did not
@@ -127,24 +131,22 @@ def build_sidecar(
     layout = _detect_layout(files)
 
     reads_by_path: Dict[Path, Optional[int]] = {}
+    file_records = []
     error: Optional[str] = None
     for file_path in files:
         try:
-            reads_by_path[file_path] = count_fastq_reads(file_path)
+            digest = fastq_digest(file_path)
+            reads_by_path[file_path] = digest.records
+            file_records.append(
+                {"name": file_path.name, "bytes": digest.size, "md5": digest.md5, "reads": digest.records}
+            )
         # A corrupt gzip stream raises zlib.error, which is not an OSError.
         except (EOFError, OSError, zlib.error) as exc:
             reads_by_path[file_path] = None
             error = f"{file_path.name}: {exc}"
-
-    file_records = [
-        {
-            "name": file_path.name,
-            "bytes": file_path.stat().st_size,
-            "md5": md5_file(file_path),
-            "reads": reads_by_path[file_path],
-        }
-        for file_path in files
-    ]
+            file_records.append(
+                {"name": file_path.name, "bytes": file_path.stat().st_size, "md5": md5_file(file_path), "reads": None}
+            )
 
     reads_per_mate: Optional[int]
     if error is not None:
@@ -152,7 +154,15 @@ def build_sidecar(
         reads_per_mate = None
         state = "failed"
     else:
-        verify = verify_download(accession, acc_path, ncbi.get("spots"))
+        primary = primary_fastq(acc_path)
+        orphan = orphan_fastq(acc_path)
+        verify = verify_download(
+            accession,
+            acc_path,
+            ncbi.get("spots"),
+            reads_r1=reads_by_path.get(primary, 0) if primary is not None else 0,
+            reads_orphan=reads_by_path.get(orphan) if orphan is not None else None,
+        )
         reads_per_mate = verify["reads_r1"]
         method = "spots" if ncbi.get("spots") else "unverified"
         completeness = {"method": method, "ratio": verify["ratio"], "verdict": verify["verdict"]}
