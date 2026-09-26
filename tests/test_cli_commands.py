@@ -3104,6 +3104,34 @@ class TestDownloadSraRegistryWrites:
         assert rb.download_block(registry, "SRR900").message == "blacklisted"
         assert rb.download_block(registry, "SRR901").message == "--max-downloads"
 
+    def test_store_sidecars_are_read_outside_the_registry_lock(self, tmp_path):
+        """Sidecar verdicts for store-linked accessions are read before the one registry write takes its lock."""
+        from metaquest.store.layout import init_store
+
+        args = self._args(tmp_path)
+        fastq_dir = tmp_path / "fastq"
+        store = init_store(tmp_path / "store")
+        lock = tmp_path / "metaquest_registry.json.lock"
+        reads_under_lock = []
+
+        def sidecar(_store, accession):
+            reads_under_lock.append(lock.exists())
+            return {"verdict": "complete", "ratio": 1.0}
+
+        accessions = [f"SRR{i}" for i in range(5)]
+        with (
+            patch("metaquest.cli.commands.sra.is_store_link", return_value=True),
+            patch.object(DownloadSraCommand, "_sidecar_completeness", staticmethod(sidecar)),
+            patch("metaquest.cli.commands.sra.record_usage_many"),
+        ):
+            DownloadSraCommand()._record_run_outcomes(
+                args, {"already_downloaded_accessions": accessions}, fastq_dir, store=store
+            )
+        assert reads_under_lock == [False] * 5
+        registry = load_registry(args.registry)
+        assert rb.download_block(registry, "SRR4").complete.verdict == "complete"
+        assert rb.download_block(registry, "SRR4").source == "store"
+
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_download_results_are_batched(self, mock_download, _which, tmp_path):

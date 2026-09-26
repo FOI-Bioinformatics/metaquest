@@ -7,7 +7,9 @@ regression by comparing against the figure in the docstring.
 """
 
 import argparse
+import shutil
 import time
+from pathlib import Path
 
 import pytest
 
@@ -52,13 +54,14 @@ def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_
     assert elapsed < 1.1, f"_record_run_outcomes took {elapsed:.2f} s for 5,000 skipped accessions"
 
 
-def test_write_registry_on_20000_datasets_is_fast(registry_20k):
+def test_write_registry_on_20000_datasets_is_fast(registry_20k, tmp_path):
     """Serialising and writing the 20,000-dataset registry.
 
     Measured 2026-09-26 under coverage: 0.09 s compact (0.33 s with the earlier indented output). Bound: 0.3 s,
     the best of three writes so a single slow disk flush does not fail the test.
     """
-    path, _ = registry_20k
+    # A copy of its own: the module-scoped registry is changed by the other test in this module.
+    path = Path(shutil.copy(registry_20k[0], tmp_path / registry_mod.REGISTRY_FILENAME))
     registry = registry_mod.load_registry(path)
     timings = []
     for _ in range(3):

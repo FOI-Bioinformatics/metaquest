@@ -1212,6 +1212,39 @@ class TestRegistryBatch:
                     raise KeyboardInterrupt
         assert "disk gone" in caplog.text
 
+    def test_a_failing_mutation_is_logged_and_dropped(self, tmp_path, caplog):
+        """The mutations around a failing one are written, the queue empties, and one error names the label."""
+        path = tmp_path / reg.REGISTRY_FILENAME
+
+        def broken(registry):
+            raise KeyError("no such block")
+
+        with patch.object(reg, "_write_registry", wraps=reg._write_registry) as spy:
+            with batch_mod.registry_batch(path) as batch:
+                batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"), label="SRR1")
+                batch.apply(broken, label="SRR2")
+                batch.apply(lambda r: reg.record_exclusion(r, "SRR3", "test"), label="SRR3")
+                batch.flush()
+                assert len(batch) == 0
+                # A later mutation does not retry the dropped one.
+                batch.apply(lambda r: reg.record_exclusion(r, "SRR4", "test"), label="SRR4")
+        assert spy.call_count == 2
+        assert sorted(reg.load_registry(path).datasets) == ["SRR1", "SRR3", "SRR4"]
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1
+        assert "SRR2" in errors[0].getMessage() and "no such block" in errors[0].getMessage()
+
+    def test_a_failed_transaction_keeps_the_queue(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        batch = batch_mod.registry_batch(path)
+        batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"))
+        with patch.object(reg, "_write_registry", side_effect=DataAccessError("disk gone")):
+            with pytest.raises(DataAccessError):
+                batch.flush()
+        assert len(batch) == 1
+        batch.flush()
+        assert "SRR1" in reg.load_registry(path).datasets
+
     def test_an_empty_batch_writes_nothing(self, tmp_path):
         path = tmp_path / reg.REGISTRY_FILENAME
         with batch_mod.registry_batch(path):

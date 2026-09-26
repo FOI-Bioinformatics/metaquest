@@ -277,35 +277,41 @@ class DownloadSraCommand(BaseCommand):
         that write produced.
         """
         usage_rows = []
+        # Store links and sidecar verdicts are read here, before the batch writes, so the one
+        # registry lock is never held across thousands of reads on a slow filesystem.
+        present = []
+        for acc in stats.get("already_downloaded_accessions", []):
+            from_store = store is not None and is_store_link(fastq_dir / acc, store)
+            present.append((acc, from_store, self._sidecar_completeness(store, acc) if from_store else None))
+            if from_store:
+                usage_rows.append((acc, "", "linked", "already downloaded"))
         with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
-            for acc in stats.get("already_downloaded_accessions", []):
-                from_store = store is not None and is_store_link(fastq_dir / acc, store)
-                batch.apply(
-                    functools.partial(
-                        self._record_present, acc=acc, fastq_dir=fastq_dir, store=store, from_store=from_store
-                    )
+            for acc, from_store, complete in present:
+                mutation = functools.partial(
+                    self._record_present, acc=acc, fastq_dir=fastq_dir, from_store=from_store, complete=complete
                 )
-                if from_store:
-                    usage_rows.append((acc, "", "linked", "already downloaded"))
+                batch.apply(mutation, label=acc)
             for acc in stats.get("blacklisted_accessions", []):
-                batch.apply(functools.partial(self._record_skip, acc=acc, message="blacklisted", fastq_dir=fastq_dir))
+                mutation = functools.partial(self._record_skip, acc=acc, message="blacklisted", fastq_dir=fastq_dir)
+                batch.apply(mutation, label=acc)
             for acc in stats.get("skipped_accessions", []):
-                batch.apply(
-                    functools.partial(self._record_skip, acc=acc, message="--max-downloads", fastq_dir=fastq_dir)
-                )
+                mutation = functools.partial(self._record_skip, acc=acc, message="--max-downloads", fastq_dir=fastq_dir)
+                batch.apply(mutation, label=acc)
         if usage_rows:
             usage_registry = batch.registry if batch.registry is not None else load_registry(args.registry)
             record_usage_many(store, usage_registry, usage_rows)
 
-    def _record_present(
-        self, reg: Registry, acc: str, fastq_dir: Path, store: Optional[StorePaths], from_store: bool
-    ) -> None:
-        """Record an accession found already downloaded, unless its record already says so."""
+    @staticmethod
+    def _record_present(reg: Registry, acc: str, fastq_dir: Path, from_store: bool, complete: Optional[dict]) -> None:
+        """Record an accession found already downloaded, unless its record already says so.
+
+        ``complete`` is the store sidecar's completeness verdict for a store-linked accession,
+        read by the caller before the registry lock is taken.
+        """
         if from_store:
             ensure_project_identity(reg)
         if (rb.download_block(reg, acc) or rb.DownloadBlock()).state == "downloaded":
             return
-        complete = self._sidecar_completeness(store, acc) if from_store else None
         record_download(
             reg,
             acc,
@@ -380,16 +386,16 @@ class DownloadSraCommand(BaseCommand):
             from_store = linked or (bool(success) and message.endswith(STORE_SAVED_SUFFIX))
             if from_store:
                 usage_rows.append((accession, "", "linked" if linked else "downloaded", message))
+            complete = parse_verdict_message(message) if success else None
+            if complete is None and from_store:
+                # "linked from store" carries no verify-download message of its own; the store's
+                # sidecar already has the completeness verdict from when the dataset was
+                # originally downloaded. Read here, outside the registry lock a flush takes.
+                complete = self._sidecar_completeness(store, accession)
 
             def _mutation(reg: Registry) -> None:
                 if from_store:
                     ensure_project_identity(reg)
-                complete = parse_verdict_message(message) if success else None
-                if complete is None and from_store:
-                    # "linked from store" carries no verify-download message of its own; the
-                    # store's sidecar already has the completeness verdict from when the
-                    # dataset was originally downloaded.
-                    complete = self._sidecar_completeness(store, accession)
                 record_download(
                     reg,
                     accession,
@@ -404,7 +410,7 @@ class DownloadSraCommand(BaseCommand):
                 if from_store:
                     update_linked(reg, accession, add=True)
 
-            batch.apply(_mutation)
+            batch.apply(_mutation, label=accession)
 
         return _record_result
 

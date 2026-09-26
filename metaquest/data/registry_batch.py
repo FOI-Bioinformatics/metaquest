@@ -10,7 +10,7 @@ mutations and applies them in a few transactions instead. It lives in its own mo
 import logging
 import time
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 from metaquest.data.registry import Registry, registry_path, registry_transaction
 
@@ -54,7 +54,7 @@ class RegistryBatch:
         self.flush_every = flush_every
         self.flush_seconds = flush_seconds
         self.registry: Optional[Registry] = None
-        self._queue: List[RegistryMutation] = []
+        self._queue: List[Tuple[RegistryMutation, str]] = []
         self._hooks: List[Callable[[Registry], None]] = []
         self._last_flush = _monotonic()
 
@@ -66,9 +66,13 @@ class RegistryBatch:
         """Call ``hook(registry)`` after every flush that wrote something, once the lock is released."""
         self._hooks.append(hook)
 
-    def apply(self, mutation: RegistryMutation) -> None:
-        """Queue ``mutation(registry)``; flush first if the size or time limit has been reached."""
-        self._queue.append(mutation)
+    def apply(self, mutation: RegistryMutation, label: str = "") -> None:
+        """Queue ``mutation(registry)``; flush if the size or time limit has been reached.
+
+        ``label`` (typically the accession the mutation records) names the mutation in the
+        error logged if it raises.
+        """
+        self._queue.append((mutation, label))
         if self.flush_every is not None and len(self._queue) >= self.flush_every:
             self.flush()
         elif self.flush_seconds is not None and _monotonic() - self._last_flush >= self.flush_seconds:
@@ -77,16 +81,23 @@ class RegistryBatch:
     def flush(self) -> Optional[Registry]:
         """Apply every queued mutation in one transaction and return the written registry.
 
-        Returns None, writing nothing, when the queue is empty. The queue is cleared only once
-        the transaction has written the file, so a flush that fails (a lock timeout, a disk
-        error, a mutation that raises) keeps the queued mutations for a later attempt.
+        Returns None, writing nothing, when the queue is empty. A mutation that raises is
+        logged at error, with its label, and dropped; the others are still applied and written,
+        so one faulty record neither blocks the rest nor fails every later flush. A failure of
+        the transaction itself (a lock timeout, a disk error) raises and keeps the whole queue
+        for a later attempt, since the queue is cleared only once the file has been written.
         """
         if not self._queue:
             return None
         pending = list(self._queue)
         with registry_transaction(self.path) as registry:
-            for mutation in pending:
-                mutation(registry)
+            for mutation, label in pending:
+                try:
+                    mutation(registry)
+                except Exception as e:  # noqa: B902 - one faulty record must not stop the others
+                    logger.error(
+                        "Dropped a registry update for %s: %s", label or "an unlabelled entry", e, exc_info=True
+                    )
         del self._queue[: len(pending)]
         self._last_flush = _monotonic()
         self.registry = registry
