@@ -212,3 +212,71 @@ def test_profile_columns_read_an_old_registrys_sra_stats_summary(tmp_path):
     reg.record_analysis(r, "SRR1", "sra_stats", tmp_path / "s.csv", {"total_reads": 900, "gc_content": 52.0})
     row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
     assert (row["total_reads"], row["gc_percent"], row["quality_grade"]) == (900, 52.0, None)
+
+
+def _reference_row(r, accession, genome_id, containment):
+    """One row as the earlier implementation built it, every block converted afresh for each pair."""
+    from metaquest.data import registry_blocks as rb
+
+    exclusion = rb.exclusion_block(r, accession) or rb.ExclusionBlock()
+    metadata = rb.metadata_block(r, accession) or rb.MetadataBlock()
+    download = rb.download_block(r, accession)
+    extraction = rb.extraction_block(r, accession, genome_id) or rb.ExtractionBlock()
+    assembly = extraction.assembly.to_dict() if extraction.assembly is not None else {}
+    spots = reg.to_int_or_none(metadata.run_total_spots)
+    mapped = reg.to_int_or_none(extraction.mapped_reads)
+    profile = rb.profile_summary(r, accession)
+    excluded = bool(exclusion.excluded)
+    return {
+        "accession": accession,
+        "genome_id": genome_id,
+        "containment": containment,
+        "selected": bool((rb.selection_block(r, accession) or rb.SelectionBlock()).selected),
+        "excluded": excluded,
+        "exclusion_reason": (exclusion.reason or None) if excluded else None,
+        "download_state": (download.state or None) if download is not None else None,
+        "run_total_spots": spots,
+        "run_size": reg.to_int_or_none(metadata.run_size),
+        "total_reads": reg.to_int_or_none(profile["total_reads"]),
+        "gc_percent": profile["gc_percent"],
+        "quality_grade": profile["quality_grade"],
+        "mapped_reads": mapped,
+        "mapping_rate_to_reference": (
+            round(mapped / spots, 4) if mapped and spots and mapped > 0 and spots > 0 else None
+        ),
+        "breadth": extraction.breadth,
+        "mean_depth": extraction.mean_depth,
+        "contigs": assembly.get("contigs"),
+        "total_bp": assembly.get("total_bp"),
+        "n50": assembly.get("n50"),
+        "genome_fraction_estimate": assembly.get("genome_fraction_estimate"),
+        "assembly_mapping_rate": assembly.get("mapping_rate"),
+    }
+
+
+def _sort_key(row):
+    return (row["containment"] is None, -(row["containment"] or 0.0), row["accession"], row["genome_id"])
+
+
+def test_rows_match_rows_built_afresh_for_each_pair(tmp_path):
+    """Per-accession columns built once and shared across genomes give the same rows as before."""
+    r = _registry(tmp_path)
+    reg.record_screening(r, "SRR1", "GCF_C", 0.4, None, "matches", 0.0, None)
+    reg.record_extraction(r, "SRR1", "GCF_B", [], 40, False, {})
+    reg.record_analysis(r, "SRR1", "profile", tmp_path / "p.json", {"total_reads": 10, "gc_percent": 40.0})
+    reg.record_extraction(r, "SRR9", "GCF_C", [], 7, False, {})
+    table = pd.DataFrame(
+        {"GCF_A": [0.91234567, 0.0, float("nan")], "GCF_D": ["0.3", "x", 0.2], "max_containment": [0.9, 0.1, 0.2]},
+        index=["SRR1", "SRR2", "SRR3"],
+    )
+    for parsed in (None, table):
+        pairs = screened_pairs(r, parsed)
+        expected = sorted(
+            (_reference_row(r, acc, genome, value) for (acc, genome), value in pairs.items()), key=_sort_key
+        )
+        assert results_rows(r, parsed_table=parsed) == expected
+    pairs = screened_pairs(r, table)
+    assert pairs[("SRR1", "GCF_A")] == 0.91234567
+    assert pairs[("SRR1", "GCF_D")] == 0.3
+    assert ("SRR2", "GCF_D") not in pairs and ("SRR3", "GCF_A") not in pairs
+    assert pairs[("SRR3", "GCF_D")] == 0.2

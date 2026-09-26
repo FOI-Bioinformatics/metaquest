@@ -71,3 +71,64 @@ def test_write_registry_on_20000_datasets_is_fast(registry_20k, tmp_path):
     best = min(timings)
     assert "\n  " not in path.read_text()[:10000]
     assert best < 0.3, f"_write_registry took {best:.2f} s on 20,000 datasets"
+
+
+def _best_of_three(call):
+    """The shortest of three timed runs of ``call``, with the result of the last run."""
+    timings = []
+    for _ in range(3):
+        start = time.perf_counter()
+        result = call()
+        timings.append(time.perf_counter() - start)
+    return min(timings), result
+
+
+def test_status_report_on_20000_datasets_is_fast(registry_20k):
+    """``build_report``, the dict ``status --json`` prints, on the 20,000-dataset registry.
+
+    Measured 2026-09-26 under coverage: 0.19 s after the fix (0.55 s before it, when the stages
+    were counted with one pass over the registry per stage and genome and then listed again). Bound: 0.6 s,
+    the best of three runs.
+    """
+    from metaquest.processing.status_report import build_report
+
+    path, names = registry_20k
+    root = path.parent
+    registry = registry_mod.load_registry(path)
+    args = argparse.Namespace(
+        fastq_folder=str(root / "fastq"),
+        metadata_folder=str(root / "metadata"),
+        genomes_folder=str(root / "genomes"),
+        accessions_file=None,
+        parsed_containment=None,
+        data_root=None,
+        genome=None,
+        init=False,
+    )
+    paths = registry_mod.ProjectPaths(fastq=root / "fastq", targeted=root / "targeted")
+    best, report = _best_of_three(lambda: build_report(registry, args, paths, path, True))
+    assert report["wanted"]["total"] == len(names["selected"])
+    assert report["stages"]["screened"]["count"] == len(names["all"])
+    assert best < 0.6, f"build_report took {best:.2f} s on 20,000 datasets"
+
+
+def test_results_rows_on_20000_datasets_by_3_genomes_is_fast(registry_20k):
+    """``results_rows`` for 60,000 (accession, genome) pairs, with a parsed containment table of 20,000 rows.
+
+    Measured 2026-09-26 under coverage: 0.36 s after the fix (1.80 s before it, when every pair
+    converted about six registry blocks and every table row became a pandas Series). Bound: 1.1 s, the
+    best of three runs.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from metaquest.processing.results import results_rows
+
+    path, names = registry_20k
+    registry = registry_mod.load_registry(path)
+    values = np.random.default_rng(0).random((len(names["all"]), 3))
+    table = pd.DataFrame(values, index=names["all"], columns=["G1", "G2", "G3"])
+    table["max_containment"] = table.max(axis=1)
+    best, rows = _best_of_three(lambda: results_rows(registry, parsed_table=table))
+    assert len(rows) == 3 * len(names["all"])
+    assert best < 1.1, f"results_rows took {best:.2f} s for 60,000 pairs"

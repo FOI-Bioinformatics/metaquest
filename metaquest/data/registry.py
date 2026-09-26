@@ -737,6 +737,16 @@ def query(registry: Registry, stage: str, genome_id: Optional[str] = None) -> Li
     return [acc for acc in registry.datasets if _in_stage(registry, acc, stage, genome_id)]
 
 
+def stage_members(registry: Registry) -> Dict[str, List[str]]:
+    """Accessions in each of ``STAGES`` (insertion order), as ``query`` returns them, in one pass."""
+    members: Dict[str, List[str]] = {stage: [] for stage in STAGES}
+    for acc in registry.datasets:
+        for stage in STAGES:
+            if _in_stage(registry, acc, stage, None):
+                members[stage].append(acc)
+    return members
+
+
 def stage_counts(registry: Registry) -> Dict[str, Any]:
     """Return per-stage and per-genome accession counts for the registry.
 

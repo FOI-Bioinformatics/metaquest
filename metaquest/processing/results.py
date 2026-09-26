@@ -40,6 +40,13 @@ RESULTS_COLUMNS = [
 
 Pair = Tuple[str, str]
 
+# Empty blocks for datasets that lack one, built once and only read: most pairs have no
+# extraction, and a fresh block per pair costs more than the rest of the row together.
+_NO_EXCLUSION = rb.ExclusionBlock()
+_NO_METADATA = rb.MetadataBlock()
+_NO_SELECTION = rb.SelectionBlock()
+_NO_EXTRACTION = rb.ExtractionBlock()
+
 
 def _positive_float(value: Any) -> Optional[float]:
     try:
@@ -68,11 +75,13 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
             pairs[(accession, genome_id)] = float(value) if value is not None else None
     if parsed_table is not None:
         genome_columns = [c for c in parsed_table.columns if c not in _KNOWN_METADATA_COLUMNS]
-        for accession, row in parsed_table.iterrows():
-            for genome_id in genome_columns:
-                value = _positive_float(row[genome_id])
+        # Plain column lists, walked row by row as before, instead of one pandas Series per row.
+        columns = [(str(genome_id), parsed_table[genome_id].tolist()) for genome_id in genome_columns]
+        for position, accession in enumerate(parsed_table.index):
+            for genome_id, values in columns:
+                value = _positive_float(values[position])
                 if value is not None:
-                    pairs[(str(accession), str(genome_id))] = value
+                    pairs[(str(accession), genome_id)] = value
     for accession in registry.datasets:
         for genome_id, entry in (registry.datasets[accession].get("extractions") or {}).items():
             if isinstance(entry, dict):
@@ -93,32 +102,40 @@ def _mapping_rate(mapped_reads: Optional[int], spots: Optional[int]) -> Optional
     return round(mapped_reads / spots, 4)
 
 
-def _row(registry: Registry, accession: str, genome_id: str, containment: Optional[float]) -> Dict[str, Any]:
-    exclusion = rb.exclusion_block(registry, accession) or rb.ExclusionBlock()
+def _dataset_fields(registry: Registry, accession: str) -> Dict[str, Any]:
+    """The columns of a results row that depend on the accession only, shared by all its genomes."""
+    exclusion = rb.exclusion_block(registry, accession) or _NO_EXCLUSION
     excluded = bool(exclusion.excluded)
-    metadata = rb.metadata_block(registry, accession) or rb.MetadataBlock()
+    metadata = rb.metadata_block(registry, accession) or _NO_METADATA
     download = rb.download_block(registry, accession)
-    extraction = rb.extraction_block(registry, accession, genome_id) or rb.ExtractionBlock()
-    # A missing assembly reads as None in every column, unlike a recorded one whose stats are 0.
-    assembly = extraction.assembly.to_dict() if extraction.assembly is not None else {}
-    spots = to_int_or_none(metadata.run_total_spots)
-    mapped_reads = to_int_or_none(extraction.mapped_reads)
     profile = rb.profile_summary(registry, accession)
     return {
-        "accession": accession,
-        "genome_id": genome_id,
-        "containment": containment,
-        "selected": bool((rb.selection_block(registry, accession) or rb.SelectionBlock()).selected),
+        "selected": bool((rb.selection_block(registry, accession) or _NO_SELECTION).selected),
         "excluded": excluded,
         "exclusion_reason": (exclusion.reason or None) if excluded else None,
         "download_state": (download.state or None) if download is not None else None,
-        "run_total_spots": spots,
+        "run_total_spots": to_int_or_none(metadata.run_total_spots),
         "run_size": to_int_or_none(metadata.run_size),
         "total_reads": to_int_or_none(profile["total_reads"]),
         "gc_percent": profile["gc_percent"],
         "quality_grade": profile["quality_grade"],
+    }
+
+
+def _row(
+    registry: Registry, accession: str, genome_id: str, containment: Optional[float], dataset: Dict[str, Any]
+) -> Dict[str, Any]:
+    extraction = rb.extraction_block(registry, accession, genome_id) or _NO_EXTRACTION
+    # A missing assembly reads as None in every column, unlike a recorded one whose stats are 0.
+    assembly = extraction.assembly.to_dict() if extraction.assembly is not None else {}
+    mapped_reads = to_int_or_none(extraction.mapped_reads)
+    return {
+        "accession": accession,
+        "genome_id": genome_id,
+        "containment": containment,
+        **dataset,
         "mapped_reads": mapped_reads,
-        "mapping_rate_to_reference": _mapping_rate(mapped_reads, spots),
+        "mapping_rate_to_reference": _mapping_rate(mapped_reads, dataset["run_total_spots"]),
         "breadth": extraction.breadth,
         "mean_depth": extraction.mean_depth,
         "contigs": assembly.get("contigs"),
@@ -143,12 +160,16 @@ def results_rows(
     by decreasing containment, with unknown containment last, then by accession and genome.
     """
     rows = []
+    # Built once per accession and reused for each of its genomes.
+    datasets: Dict[str, Dict[str, Any]] = {}
     for (accession, genome), containment in screened_pairs(registry, parsed_table).items():
         if genome_id is not None and genome != genome_id:
             continue
         if min_containment > 0 and (containment is None or containment < min_containment):
             continue
-        rows.append(_row(registry, accession, genome, containment))
+        if accession not in datasets:
+            datasets[accession] = _dataset_fields(registry, accession)
+        rows.append(_row(registry, accession, genome, containment, datasets[accession]))
     rows.sort(
         key=lambda row: (
             row["containment"] is None,

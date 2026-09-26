@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data import registry_blocks as rb
-from metaquest.data.file_io import visible_files
+from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import (
     ProjectPaths,
     ReconcileReport,
@@ -24,7 +24,7 @@ from metaquest.data.registry import (
     empty_assembly_dirs,
     known_genome_ids,
     query,
-    stage_counts,
+    stage_members,
 )
 from metaquest.data.sra import STORE_READY_STATES, accession_has_fastq, is_transient_folder
 from metaquest.store.catalog import Catalog
@@ -53,7 +53,8 @@ def _wanted_accessions(args: argparse.Namespace) -> List[str]:
         path = Path(args.parsed_containment)
         if not path.exists():
             raise MetaQuestError(f"Parsed containment file not found: {path}")
-        wanted += [str(i) for i in pd.read_csv(path, sep="\t", index_col=0).index]
+        # Only the index (accession) column is needed, so the genome columns are never parsed.
+        wanted += [str(i) for i in pd.read_csv(path, sep="\t", index_col=0, usecols=[0]).index]
     # de-duplicate, preserve order
     return list(dict.fromkeys(wanted))
 
@@ -71,6 +72,17 @@ def _reconcile_present_missing(wanted: List[str], present_fn) -> Tuple[List[str]
     present_set = set(present)
     missing = [a for a in wanted if a not in present_set]
     return present, missing
+
+
+def _listed_or_probed(listed: List[str], unlisted, probe):
+    """A presence test that looks ``name`` up in a folder listing already made.
+
+    ``unlisted(name)`` is True for a name the listing leaves out by design (a hidden or a
+    transient folder name); only such a name is checked with ``probe(name)`` on disk, so a
+    wanted list costs no filesystem call per accession.
+    """
+    names = set(listed)
+    return lambda name: name in names or (unlisted(name) and probe(name))
 
 
 def inventory_report(
@@ -99,9 +111,19 @@ def inventory_report(
 
     wanted = _resolve_wanted(args, registry)
     if wanted:
-        fastq_present, fastq_missing = _reconcile_present_missing(wanted, lambda a: accession_has_fastq(fastq_dir / a))
+        # Presence is read from the listings above: on_disk_fastq holds exactly the visible,
+        # non-transient folders for which accession_has_fastq is True.
+        fastq_present, fastq_missing = _reconcile_present_missing(
+            wanted,
+            _listed_or_probed(
+                on_disk_fastq,
+                lambda a: is_hidden_name(a) or is_transient_folder(a),
+                lambda a: accession_has_fastq(fastq_dir / a),
+            ),
+        )
         meta_present, meta_missing = _reconcile_present_missing(
-            wanted, lambda a: (meta_dir / f"{a}_metadata.xml").exists()
+            wanted,
+            _listed_or_probed(on_disk_meta, is_hidden_name, lambda a: (meta_dir / f"{a}_metadata.xml").exists()),
         )
         report["wanted"] = {
             "total": len(wanted),
@@ -138,19 +160,40 @@ def stage_filter_accessions(registry: Registry, stage: str, genomes: Optional[Li
     """Accessions at ``stage``, restricted to the given genomes when any are named, in first-seen order."""
     if not genomes:
         return query(registry, stage)
-    seen: List[str] = []
+    seen: Dict[str, None] = {}
     for genome_id in genomes:
-        for acc in query(registry, stage, genome_id):
-            if acc not in seen:
-                seen.append(acc)
-    return seen
+        seen.update(dict.fromkeys(query(registry, stage, genome_id)))
+    return list(seen)
+
+
+def genome_counts(registry: Registry) -> Dict[str, Dict[str, Any]]:
+    """The ``"genomes"`` part of ``stage_counts``, from one pass over the recorded extractions.
+
+    ``stage_counts`` runs three passes over every dataset for each genome; this reads each
+    dataset's extractions once and gives the same counts and the same ``zero_mapped`` order.
+    """
+    genomes: Dict[str, Dict[str, Any]] = {
+        g: {"extracted": 0, "assembled": 0, "zero_mapped": []} for g in sorted(known_genome_ids(registry))
+    }
+    for acc, record in registry.datasets.items():
+        for genome_id, extraction in (record.get("extractions") or {}).items():
+            if not isinstance(extraction, dict):
+                continue
+            info = genomes[genome_id]
+            mapped = extraction.get("mapped_reads") or 0
+            if mapped == 0:
+                info["zero_mapped"].append(acc)
+            info["extracted"] += int(mapped > 0)
+            assembly = extraction.get("assembly")
+            info["assembled"] += int(isinstance(assembly, dict) and (assembly.get("contigs") or 0) > 0)
+    return genomes
 
 
 def _genome_report(
     registry: Registry,
     paths: ProjectPaths,
     genome_filter: Optional[List[str]],
-    counts: Dict[str, Any],
+    counts: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
     genome_ids = sorted(known_genome_ids(registry))
     if genome_filter:
@@ -163,7 +206,7 @@ def _genome_report(
 
     report: Dict[str, Any] = {}
     for genome_id in genome_ids:
-        info = counts["genomes"].get(genome_id, {"extracted": 0, "assembled": 0, "zero_mapped": []})
+        info = counts.get(genome_id, {"extracted": 0, "assembled": 0, "zero_mapped": []})
         report[genome_id] = {
             "extracted": info.get("extracted", 0),
             "assembled": info.get("assembled", 0),
@@ -263,10 +306,11 @@ def build_report(
     }
     if store_root is not None:
         report["store"] = _store_block(store_root, store_available)
-    counts = stage_counts(registry)
-    report["stages"] = {s: {"count": counts["stages"][s], "accessions": query(registry, s)} for s in STAGES}
+    # One pass over the registry lists every stage; the counts are the lengths of those lists.
+    members = stage_members(registry)
+    report["stages"] = {s: {"count": len(members[s]), "accessions": members[s]} for s in STAGES}
     report["downloads"] = download_verdicts(registry)
-    report["genomes"] = _genome_report(registry, paths, args.genome, counts)
+    report["genomes"] = _genome_report(registry, paths, args.genome, genome_counts(registry))
     report["drift"] = _drift_report(drift) if drift else {}
     return report
 

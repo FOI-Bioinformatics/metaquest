@@ -1138,3 +1138,152 @@ class TestStatusWithoutAReachableStore:
 
         assert rc == 0
         assert out["store"]["available"] is False
+
+
+# ------------------------------------------- one pass over the registry and the folder listings
+
+
+def _inventory_tree(root):
+    """Folders covering each way an accession can read as present or missing on disk."""
+    fastq = root / "fastq"
+    for acc in ("SRR1", "SRR2", "SRR3", "SRR4", "SRR6"):
+        (fastq / acc).mkdir(parents=True)
+    (fastq / "SRR1" / "SRR1.fastq.gz").write_bytes(b"x" * 10)
+    (fastq / "SRR2" / "SRR2_1.fq").write_bytes(b"x" * 10)
+    (fastq / "SRR3" / "SRR3.fastq").write_bytes(b"")  # zero bytes: not present
+    # SRR4 is an empty folder; SRR6 holds reads but its sidecar says the download failed.
+    (fastq / "SRR6" / "SRR6.fastq").write_bytes(b"x" * 10)
+    (fastq / "SRR6" / "SRR6.json").write_text(json.dumps({"state": "failed"}))
+    # A transient folder is left out of the listing, but a wanted name equal to it is still probed.
+    (fastq / "SRR7_temp").mkdir()
+    (fastq / "SRR7_temp" / "SRR7.fastq").write_bytes(b"x" * 10)
+    (root / "metadata").mkdir()
+    for acc in ("SRR1", "SRR4"):
+        (root / "metadata" / f"{acc}_metadata.xml").write_text("<xml/>")
+    wanted = ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7_temp", "SRR1"]
+    (root / "accessions.txt").write_text("\n".join(wanted) + "\n")
+
+
+def _reference_inventory(root, wanted):
+    """The wanted block as the per-accession probes of the earlier implementation computed it."""
+    from metaquest.data.sra import accession_has_fastq
+
+    fastq_present = [a for a in wanted if accession_has_fastq(root / "fastq" / a)]
+    meta_present = [a for a in wanted if (root / "metadata" / f"{a}_metadata.xml").exists()]
+    return {
+        "total": len(wanted),
+        "fastq_present": len(fastq_present),
+        "fastq_missing": [a for a in wanted if a not in fastq_present],
+        "fastq_incomplete_store_links": [],
+        "metadata_present": len(meta_present),
+        "metadata_missing": [a for a in wanted if a not in meta_present],
+    }
+
+
+def test_inventory_wanted_block_matches_per_accession_probes(tmp_path):
+    _inventory_tree(tmp_path)
+    args = _status_args(tmp_path, accessions_file=str(tmp_path / "accessions.txt"))
+    report = inventory_report(args, Registry())
+    wanted = ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7_temp"]
+    assert report["wanted"] == _reference_inventory(tmp_path, wanted)
+    assert report["wanted"]["fastq_missing"] == ["SRR3", "SRR4", "SRR5", "SRR6"]
+    assert report["on_disk"]["fastq_accessions"] == 2
+
+
+def test_inventory_does_not_probe_the_disk_per_wanted_accession(tmp_path, monkeypatch):
+    import pathlib
+
+    from metaquest.processing import status_report
+
+    _inventory_tree(tmp_path)
+    with open(tmp_path / "accessions.txt", "a") as handle:
+        handle.write("\n".join(f"SRR{n}" for n in range(100, 400)) + "\n")
+    probed = []
+    real_has_fastq = status_report.accession_has_fastq
+
+    def counting_has_fastq(acc_dir):
+        probed.append(Path(acc_dir).name)
+        return real_has_fastq(acc_dir)
+
+    exists_calls = []
+    real_exists = pathlib.Path.exists
+
+    def counting_exists(self, *args, **kwargs):
+        exists_calls.append(self)
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(status_report, "accession_has_fastq", counting_has_fastq)
+    monkeypatch.setattr(pathlib.Path, "exists", counting_exists)
+
+    report = inventory_report(_status_args(tmp_path, accessions_file=str(tmp_path / "accessions.txt")), Registry())
+
+    assert report["wanted"]["total"] == 307
+    # Once per folder of the listing, plus the one wanted name the listing leaves out by design.
+    assert sorted(probed) == ["SRR1", "SRR2", "SRR3", "SRR4", "SRR6", "SRR7_temp"]
+    assert not [p for p in exists_calls if p.name.endswith("_metadata.xml")]
+    assert len(exists_calls) < 20
+
+
+def test_wanted_from_parsed_containment_reads_the_index_column(tmp_path):
+    table = tmp_path / "parsed.tsv"
+    table.write_text("accession\tGCF_A\tmax_containment\nSRR2\t0.5\t0.5\nSRR1\tnot-a-number\t0.1\nSRR2\t0.1\t0.1\n")
+    args = _status_args(tmp_path, parsed_containment=str(table))
+    assert inventory_report(args, Registry())["wanted"]["fastq_missing"] == ["SRR2", "SRR1"]
+
+
+def _mixed_registry(tmp_path):
+    from metaquest.data.registry import record_assembly, record_download, record_screening
+
+    r = Registry(path=tmp_path / "metaquest_registry.json")
+    for n in range(1, 9):
+        record_screening(r, f"SRR{n}", "G1", 0.1 * n, None, "matches", 0.0, None)
+    record_screening(r, "SRR2", "G2", 0.3, None, "matches", 0.0, None)
+    record_selection(r, ["SRR1", "SRR2", "SRR3", "SRR5"], {"min_containment": 0.1}, tmp_path / "sel.txt")
+    record_exclusion(r, "SRR3", "amplicon")
+    for acc in ("SRR1", "SRR2", "SRR4"):
+        record_download(r, acc, "downloaded", tmp_path / "fastq", attempt=False)
+    record_extraction(r, "SRR1", "G1", [], 50, False, {})
+    record_extraction(r, "SRR2", "G1", [], 0, False, {})
+    record_extraction(r, "SRR2", "G2", [], 9, False, {})
+    record_extraction(r, "SRR4", "G3", [], 0, False, {})
+    record_assembly(r, "SRR1", "G1", tmp_path / "asm", {"contigs": 4}, "v1", {})
+    record_assembly(r, "SRR2", "G2", tmp_path / "asm2", {"contigs": 0}, "v1", {})
+    r.datasets["SRR8"]["extractions"] = {"G1": None}
+    return r
+
+
+def test_stage_members_and_genome_counts_match_the_per_stage_queries(tmp_path):
+    from metaquest.data.registry import STAGES, query, stage_counts, stage_members
+    from metaquest.processing.status_report import genome_counts
+
+    r = _mixed_registry(tmp_path)
+    assert stage_members(r) == {s: query(r, s) for s in STAGES}
+    assert genome_counts(r) == stage_counts(r)["genomes"]
+    assert set(genome_counts(r)) == {"G1", "G2", "G3"}
+
+
+def test_build_report_stages_match_the_per_stage_queries(tmp_path):
+    from metaquest.data.registry import ProjectPaths, STAGES, query
+    from metaquest.processing.status_report import build_report
+
+    r = _mixed_registry(tmp_path)
+    paths = ProjectPaths(fastq=tmp_path / "fastq", targeted=tmp_path / "targeted")
+    report = build_report(r, _status_args(tmp_path), paths, tmp_path / "metaquest_registry.json", True)
+    assert report["stages"] == {s: {"count": len(query(r, s)), "accessions": query(r, s)} for s in STAGES}
+    assert report["genomes"]["G1"]["zero_mapped"] == ["SRR2"]
+    expected_g3 = {"extracted": 0, "assembled": 0, "zero_mapped": ["SRR4"], "empty_assembly_dirs": []}
+    assert report["genomes"]["G3"] == expected_g3
+
+
+def test_stage_filter_accessions_keeps_first_seen_order_without_duplicates(tmp_path):
+    from metaquest.processing.status_report import stage_filter_accessions
+
+    r = _mixed_registry(tmp_path)
+    screened = ["SRR2", "SRR1", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7", "SRR8"]
+    assert stage_filter_accessions(r, "screened", ["G2", "G1"]) == screened
+    assert stage_filter_accessions(r, "extracted", ["G2", "G1"]) == ["SRR2", "SRR1"]
+
+
+def test_download_next_steps_lists_selected_not_excluded_not_downloaded(tmp_path):
+    r = _mixed_registry(tmp_path)
+    assert [acc for step in download_next_steps(r) for acc in step["accessions"]] == ["SRR5"]

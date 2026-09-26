@@ -153,7 +153,8 @@ def reselect_command(criteria: Dict[str, Any], output: str) -> str:
 def download_next_steps(registry: Registry) -> List[Dict[str, Any]]:
     """Suggested commands for selected accessions that are neither excluded nor downloaded yet."""
     selected, excluded, downloaded = (set(query(registry, s)) for s in ("selected", "excluded", "downloaded"))
-    to_download = [acc for acc in registry.datasets if acc in selected - excluded - downloaded]
+    wanted = selected - excluded - downloaded
+    to_download = [acc for acc in registry.datasets if acc in wanted]
     if not to_download:
         return []
     # A selection recorded with --no-skip-excluded may still list an excluded
