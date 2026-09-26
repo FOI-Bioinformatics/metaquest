@@ -16,6 +16,8 @@ import pytest
 from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
 from metaquest.data.read_extraction import (
     ExtractionResult,
+    _map_and_extract,
+    _minimap2_map_args,
     _record_matches,
     _run_minimap2,
     _sample_reads,
@@ -480,6 +482,66 @@ class TestMapqAndSamLifetime:
             )
             assert list(temp_folder.glob("*.sam"))
             assert list((root / "targeted" / "SRR1").glob("*.sam")) == []
+
+
+class TestSamHitOnly:
+    """``--sam-hit-only`` regression: minimap2 must emit only aligned records, and every
+    count derived from the SAM/BAM afterwards must stay exactly what it was before the
+    flag was added. Two unmapped reads and three mapped (one of them secondary) pin
+    mapped_total (the ``-F 4`` SAM count, computed on the pre-change code) at 3 and the
+    kept count after the ``0x904`` filter at 2; since ``--sam-hit-only`` only removes the
+    unmapped records minimap2 itself would otherwise have written, both filters see the
+    same records either way and these numbers must not move.
+    """
+
+    RECORDS = [
+        ("read1", 4),  # unmapped
+        ("read2", 4),  # unmapped
+        ("read3", 0),  # mapped, primary
+        ("read4", 0),  # mapped, primary
+        ("read5", 256),  # mapped, secondary
+    ]
+
+    def test_builder_emits_the_flag(self):
+        args = _minimap2_map_args("sr", 4, Path("out.sam"), Path("ref.mmi"), [Path("r.fastq.gz")])
+        assert "--sam-hit-only" in args
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_mapped_total_and_kept_count_are_pinned(self, mock_run, tmp_path):
+        state = {"sam_records": self.RECORDS}
+        mock_run.side_effect = _fake_tools(state)
+
+        result = _map_and_extract(
+            accession="SRR1",
+            reads=[tmp_path / "SRR1_1.fastq.gz", tmp_path / "SRR1_2.fastq.gz"],
+            reference=tmp_path / "ref.mmi",
+            genome_fasta=tmp_path / "genome.fna",
+            out_dir=tmp_path / "out",
+            genome_id="GCF_1",
+            preset="sr",
+            threads=1,
+        )
+
+        assert result.mapped_total == 3
+        assert result.mapped_records == 2
+
+        align_call = next(c for c in state["calls"] if c[0] == "minimap2")
+        assert "--sam-hit-only" in align_call[1]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_assembly_coverage_mapping_rate_is_pinned(self, mock_run, tmp_path):
+        state = {"sam_records": self.RECORDS}
+        mock_run.side_effect = _fake_tools(state)
+        contigs = tmp_path / "final.contigs.fa"
+        contigs.write_text(">c1 len=10\nACGT\n")
+        reads_file = tmp_path / "r.fastq.gz"
+        with gzip.open(reads_file, "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+
+        result = assembly_coverage(contigs, [reads_file], "sr", 1, tmp_path, mapped_reads=2)
+
+        assert result["reads_mapped"] == 2
+        assert result["mapping_rate"] == 1.0
 
 
 class TestTruncatedDownloadSkip:

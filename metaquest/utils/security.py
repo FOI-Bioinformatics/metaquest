@@ -35,7 +35,7 @@ BOOLEAN_FLAGS: Dict[str, FrozenSet[str]] = {
     ),
     "prefetch": frozenset({"--progress", "--resume", "--version"}),
     "pigz": frozenset({"-f", "-k", "--version"}),
-    "minimap2": frozenset({"-a", "--version"}),
+    "minimap2": frozenset({"-a", "--sam-hit-only", "--version"}),
     "samtools": frozenset({"-b", "-c", "--version"}),
     "megahit": frozenset({"--no-mercy", "--version"}),
     "seqkit": frozenset({"-T", "--version"}),

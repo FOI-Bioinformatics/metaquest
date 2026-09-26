@@ -857,8 +857,24 @@ def _minimap2_map_args(
     preset: str, threads: int, sam_path: Path, reference: Union[str, Path], reads: Sequence[Union[str, Path]]
 ) -> List[str]:
     """Build the minimap2 mapping argument list shared by ``_run_minimap2`` (its prebuilt-
-    index call and the same-shaped FASTA-fallback retry) and ``assembly_coverage``."""
-    return ["-a", "-x", preset, "-t", str(threads), "-o", str(sam_path), str(reference), *(str(r) for r in reads)]
+    index call and the same-shaped FASTA-fallback retry) and ``assembly_coverage``.
+
+    ``--sam-hit-only`` skips read records with no alignment, so the SAM minimap2 writes
+    holds mapped reads only. Every downstream count and filter (``-F 4`` for the mapped
+    total, ``-F 0x904`` for the kept alignments) already drops unmapped records too, so
+    this changes nothing but how much unmapped data samtools has to read and discard."""
+    return [
+        "-a",
+        "-x",
+        preset,
+        "-t",
+        str(threads),
+        "-o",
+        str(sam_path),
+        str(reference),
+        *(str(r) for r in reads),
+        "--sam-hit-only",
+    ]
 
 
 def _samtools_count_args(filter_args: Sequence[str], path: Path) -> List[str]:

@@ -154,6 +154,7 @@ ALLOWED_BIOINFORMATICS_TOOLS = {
             "-o",
             "-d",
             "--secondary",
+            "--sam-hit-only",
             "--version",
         },
         "description": "Read-to-reference aligner (targeted read extraction)",

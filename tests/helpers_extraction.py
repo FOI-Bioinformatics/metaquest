@@ -23,6 +23,41 @@ COVERAGE_HEADER = "#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeand
 DEFAULT_COVERAGE_ROWS = [("contig1", 100, 50, 2.0), ("contig2", 300, 300, 10.0)]
 
 
+def sam_record(qname: str, flag: int, rname: str = "chr1", pos: int = 100) -> str:
+    """One minimal SAM alignment line for ``qname``/``flag``; the rest are placeholders."""
+    mapq = "0" if flag & 0x100 else "60"
+    return f"{qname}\t{flag}\t{rname}\t{pos}\t{mapq}\t4M\t*\t0\t0\tACGT\tIIII"
+
+
+def sam_text(records) -> str:
+    """SAM body text for ``(qname, flag)`` tuples, one ``sam_record`` line each."""
+    return "".join(sam_record(qname, flag) + "\n" for qname, flag in records)
+
+
+def _read_sam_records(path):
+    """Parse the ``(qname, flag)`` pairs back out of a SAM file ``sam_text`` wrote."""
+    records = []
+    for line in Path(path).read_text().splitlines():
+        if not line:
+            continue
+        fields = line.split("\t")
+        records.append((fields[0], int(fields[1])))
+    return records
+
+
+def _filter_mask(args) -> int:
+    """The bitmask a ``-F`` argument passes to ``samtools view``/``view -c``, or 0."""
+    if "-F" in args:
+        value = args[args.index("-F") + 1]
+        return int(value, 16) if value.lower().startswith("0x") else int(value)
+    return 0
+
+
+def _kept_count(records, mask: int) -> int:
+    """Count of ``(qname, flag)`` records samtools would keep after ``-F <mask>``."""
+    return sum(1 for _, flag in records if (flag & mask) == 0)
+
+
 def coverage_table(rows):
     """``samtools coverage`` output for ``rows`` of ``(rname, length, covbases, meandepth)``."""
     lines = [COVERAGE_HEADER]
@@ -67,6 +102,14 @@ def _fake_tools(state):
     default 4), coverage_rows (``(rname, length, covbases, meandepth)`` tuples written by
     ``samtools coverage``; defaults to ``DEFAULT_COVERAGE_ROWS``), coverage_fail (bool,
     ``samtools coverage`` exits non-zero).
+
+    sam_records (list of ``(qname, flag)``, default None): when given, minimap2 writes
+    real SAM lines for these records instead of an empty file, honouring ``--sam-hit-only``
+    (records with the unmapped flag, bit 0x4, are dropped before writing, as the real tool
+    does), and every later ``samtools view -c``/``view -b -F ...`` call counts or filters
+    them for real rather than reading ``mapped``/``mapped_total``/``coverage_mapped`` back
+    off the state dict. Set it to pin a mapped/kept count to real filter semantics instead
+    of a hard-coded number.
     """
 
     def run(executable, args, **kwargs):
@@ -82,12 +125,29 @@ def _fake_tools(state):
                 # Aligning: create the SAM output the real tool would write.
                 sam_path = Path(args[args.index("-o") + 1])
                 sam_path.parent.mkdir(parents=True, exist_ok=True)
-                sam_path.write_text("")
+                records = state.get("sam_records")
+                if records is not None:
+                    if "--sam-hit-only" in args:
+                        records = [r for r in records if not (r[1] & 0x4)]
+                    sam_path.write_text(sam_text(records))
+                else:
+                    sam_path.write_text("")
                 if state.get("unequal"):
                     result.stderr = UNEQUAL_WARNING
         if executable == "samtools" and args[:2] == ["view", "-c"]:
             target = args[-1]
-            if str(target).endswith(".sam"):
+            records = state.get("sam_records")
+            if records is not None and str(target).endswith(".sam"):
+                actual = _read_sam_records(target) if Path(target).exists() else []
+                result.stdout = f"{_kept_count(actual, _filter_mask(args))}\n"
+            elif (
+                records is not None
+                and str(target).endswith(".bam")
+                and Path(target).exists()
+                and Path(target).read_bytes().strip().isdigit()
+            ):
+                result.stdout = f"{int(Path(target).read_bytes())}\n"
+            elif str(target).endswith(".sam"):
                 result.stdout = f"{state.get('mapped_total', state.get('mapped', 10))}\n"
             elif Path(target).name == "coverage.bam":
                 result.stdout = f"{state.get('coverage_mapped', 5)}\n"
@@ -97,7 +157,13 @@ def _fake_tools(state):
             state.setdefault("view_filter_calls", []).append(list(args))
             out_path = Path(args[args.index("-o") + 1])
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_bytes(b"")
+            records = state.get("sam_records")
+            if records is not None:
+                in_path = Path(args[-1])
+                actual = _read_sam_records(in_path) if in_path.exists() else []
+                out_path.write_bytes(str(_kept_count(actual, _filter_mask(args))).encode())
+            else:
+                out_path.write_bytes(b"")
         if executable == "samtools" and args[0] == "cat":
             out_path = Path(args[args.index("-o") + 1])
             out_path.parent.mkdir(parents=True, exist_ok=True)

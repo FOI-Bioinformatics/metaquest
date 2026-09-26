@@ -260,6 +260,22 @@ class TestParameterValidation:
         missing = flags_emitted - SecureSubprocess.SAFE_PARAMETERS["minimap2"]
         assert not missing, f"minimap2 allow-list is missing: {sorted(missing)}"
 
+        # Every mapping call skips unmapped read records (less for samtools to read,
+        # filter and count downstream); the index build has no reads to skip.
+        index_args, *map_calls = calls
+        assert "--sam-hit-only" not in index_args
+        for args in map_calls:
+            assert "--sam-hit-only" in args
+
+    def test_minimap2_sam_hit_only_is_registered_as_boolean(self):
+        """``--sam-hit-only`` takes no value. Without this registration, a positional
+        placed right after it (minimap2's own parser permutes options freely, so this can
+        legitimately happen) would be swallowed as the flag's value instead of validated
+        as its own argument."""
+        from metaquest.utils.security import BOOLEAN_FLAGS
+
+        assert "--sam-hit-only" in BOOLEAN_FLAGS["minimap2"]
+
     def test_samtools_flags_used_by_read_extraction_pass_validation(self, tmp_path):
         """read_extraction.py's samtools calls go through ``_samtools_count_args``
         (``_count_records``), ``_samtools_view_args`` (``_filter_and_merge_bam``'s
