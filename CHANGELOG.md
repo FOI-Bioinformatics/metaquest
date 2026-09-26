@@ -2,6 +2,51 @@
 
 All notable changes to MetaQuest are documented in this file. Dates are in YYYY-MM-DD format.
 
+## [0.5.1] - 2026-09-26
+
+### Performance
+
+Measurements below are from a 14,146-dataset project (the crispatus Lactobacillus study) on an
+external USB volume on an Apple silicon laptop, unless marked synthetic.
+
+- `download_sra` now records its outcome in one registry transaction per run instead of one write
+  per accession: 549 accessions recorded in 184.7 s before, 0.8 s after. The registry file is also
+  written as compact JSON instead of indented JSON, with the same keys and values, so the file
+  shrank from 16.0 MB to 9.7 MB; a tool that reads the registry as JSON is unaffected.
+- `sra_profile --sample-size 10000` on one 11.3-million-spot paired run: 25.1 s and 279 MB peak RSS
+  before, 20.9 s and 219 MB after. The sampler now indexes records and reads the gzip stream in 1
+  MiB blocks, and keeps quality scores as histograms rather than per-read lists; the remaining time
+  is reading the compressed files from disk.
+- `extract_target_reads` now runs minimap2 with `--sam-hit-only`, so only mapped records reach the
+  SAM file: on SRR23946447 the SAM shrank from 4.09 GB to 742 MB and wall time fell from 79 s to 30
+  s, with the same `mapped_reads` count as before.
+- `parse_containment`: 2.29 s and 283 MB before, 0.92 s and 210 MB after on the same project; a
+  synthetic 20,000-by-5 table went from 4.34 s to 0.39 s. The summary and screening tables are now
+  built with numpy in one pass, and a screening run records one timestamp per run instead of one
+  per row; output tables are byte-identical to before.
+- Download and store adoption now compute md5 and read counts in one streaming pass
+  (`fastq_digest`) instead of reading each mate file several times; the store path now reads mate 1
+  twice instead of four times.
+- `parse_metadata`: each XML file is now parsed once into a sparse attribute table; 2,201 files went
+  from 0.74 s to 0.41 s with a warm cache, and RSS from 185 MB to 136 MB. The TSV output is
+  byte-identical to before.
+- `status` and `results_table` no longer make per-accession filesystem probes or quadratic passes
+  over the registry: `status --json` went from 1.27 s to 0.63 s, and `results_table` (29,190 rows)
+  from 1.15 s to 0.75 s. Both outputs are byte-identical to before.
+- The NCBI and GTDB taxonomy clients now reuse one HTTP session with retries, and write their caches
+  incrementally instead of once at the end of a run.
+
+### Changed
+
+- `find_by_taxonomy`'s containment/taxonomy annotation is now built with a `melt` instead of a
+  per-row loop, and drops rows whose containment is zero (or missing); the previous behaviour kept
+  those as zero-valued rows. A search with no zero-containment cells is unaffected.
+
+### Testing
+
+- Added `tests/test_performance_regressions.py` with timing and memory bounds covering the registry,
+  the FASTQ sampler, containment processing, metadata parsing, and `status`/`results_table`.
+
 ## [0.5.0] - 2026-09-25
 
 ### Breaking changes
