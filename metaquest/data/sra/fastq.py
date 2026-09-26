@@ -150,10 +150,10 @@ def count_fastq_reads(path: Union[str, Path]) -> int:
 def iter_fastq_records(path: Union[str, Path]):
     """Yield ``(sequence, quality)`` string pairs for each record in ``path``, streaming.
 
-    Works for both gzip-compressed and plain files. This is the one raw four-line reader
-    shared by every caller that needs read-level content without Biopython's slower
-    per-record parser: ``metaquest.store.stats.compute_dataset_stats``'s reservoir sampler,
-    and ``metaquest.sra.quality.SequenceQualityAnalyzer``'s uniform sampler.
+    Works for both gzip-compressed and plain files. A raw four-line reader for a caller that
+    needs every record without Biopython's slower per-record parser; a caller that needs only
+    a sample of records uses ``metaquest.data.sra.sampling.sample_records`` instead, which
+    does no per-record work for the records it skips.
 
     Raises ``ValueError`` when a header line is not followed by a complete
     sequence/plus/quality triplet, since a truncated trailing record cannot be trusted.

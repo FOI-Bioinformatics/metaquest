@@ -5,6 +5,7 @@ This package downloads SRA accessions and checks the FASTQ files they produce. I
 concern:
 
 - ``fastq``: finding, counting, compressing and verifying FASTQ files already on disk
+- ``sampling``: drawing a uniform sample of records from a dataset's FASTQ files
 - ``cleanup``: recognising, sizing, preparing and removing temporary download folders
 - ``accession``: downloading one accession with prefetch and fasterq-dump
 - ``store_handoff``: routing a download through the shared data store
@@ -31,6 +32,7 @@ from metaquest.data.sra.fastq import (
     primary_fastq,
     verify_download,
 )
+from metaquest.data.sra.sampling import sample_records
 from metaquest.data.sra.cleanup import is_transient_folder, transient_bytes
 from metaquest.data.sra.accession import STOP, classify_download_error, download_accession, fasterq_dump_version
 from metaquest.data.sra.store_handoff import STORE_LINKED_PREFIX, STORE_READY_STATES
@@ -58,6 +60,7 @@ __all__ = [
     "orphan_fastq",
     "parse_verdict_message",
     "primary_fastq",
+    "sample_records",
     "transient_bytes",
     "verify_download",
 ]

@@ -1,32 +1,39 @@
 """Per-read quality figures from a sample of a dataset's FASTQ files.
 
 ``SequenceQualityAnalyzer.analyze_fastq_quality`` samples reads from every mate file of a
-dataset (uniformly over the whole of each file by default) and returns their length, GC
-(in percent), base quality, N content, complexity, duplication and adapter figures. The
-dataset totals come from the shared statistics record instead; see
+dataset (uniformly over the whole of each file by default, with
+``metaquest.data.sra.sample_records``) and returns their length, GC (in percent), base
+quality, N content, complexity, duplication and adapter figures. Base qualities are kept as a
+histogram of Phred scores rather than a per-base list. The dataset totals come from the
+shared statistics record instead; see
 ``metaquest.sra.analytics.SRADatasetAnalyzer.profile_dataset_quality``.
 """
 
-import itertools
 import logging
-import random
 import statistics
 import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from Bio import SeqIO
 
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.sra import iter_fastq_records
+from metaquest.data.sra import sample_records
+from metaquest.data.sra.sampling import distribution_from_histogram, histogram_from_scores, quality_histogram
 
 logger = logging.getLogger(__name__)
 
 # What reading a FASTQ file raises for a file that is unreadable, truncated or malformed (a
 # corrupt gzip stream raises zlib.error, which is not an OSError); anything else is a bug.
 _FASTQ_READ_ERRORS = (OSError, EOFError, ValueError, UnicodeDecodeError, zlib.error)
+
+# One sample: per-read lengths, GC fractions, the Phred score histogram of all bases, per-read
+# N fractions, and the sequences.
+Sample = Tuple[List[int], List[float], np.ndarray, List[float], List[str]]
+
+_QUALITY_CLASSES = ("excellent_q30+", "good_q20-29", "fair_q10-19", "poor_q0-9")
 
 
 def _gc_histogram(gc_contents: List[float]) -> Dict[str, int]:
@@ -49,6 +56,7 @@ class SequenceQualityAnalyzer:
         fastq_path: Union[str, Path, Sequence[Union[str, Path]]],
         sample_size: int = 10000,
         sampler: str = "uniform",
+        total_records: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Analyze quality metrics from the FASTQ file(s) of one dataset.
@@ -57,11 +65,14 @@ class SequenceQualityAnalyzer:
             fastq_path: One FASTQ file, or every mate file of a dataset; the sample is then
                 drawn from all of them, so mate 2 is represented as well as mate 1
             sample_size: Number of reads to sample for analysis, across all files
-            sampler: ``"uniform"`` (default) reservoir-samples reads across the whole of
-                every file, so reads past the first ``sample_size`` are represented too, not
-                just the head. ``"head"`` takes the first reads of each file only (an equal
-                share of ``sample_size`` per file), for a caller that wants the cheapest
-                possible read of files it already knows to be homogeneous.
+            sampler: ``"uniform"`` (default) samples reads uniformly across the whole of
+                every file (``metaquest.data.sra.sample_records``), so reads past the first
+                ``sample_size`` are represented too, not just the head. ``"head"`` takes the
+                first reads of each file only (an equal share of ``sample_size`` per file),
+                for a caller that wants the cheapest possible read of files it already knows
+                to be homogeneous.
+            total_records: Reads across all the files, e.g. from the dataset's cached
+                statistics record; lets the uniform sampler skip its own counting pass.
 
         Returns:
             Dictionary of quality metrics; GC figures are in percent (0-100)
@@ -72,7 +83,7 @@ class SequenceQualityAnalyzer:
                 raise DataAccessError(f"FASTQ file not found: {path}")
 
         try:
-            sample = self._sample(paths, sample_size, sampler)
+            sample = self._sample(paths, sample_size, sampler, total_records)
         except _FASTQ_READ_ERRORS as e:
             logger.error(f"Error analyzing FASTQ file {paths[0] if paths else ''}: {e}")
             raise DataAccessError(f"Failed to analyze FASTQ file: {e}")
@@ -81,33 +92,36 @@ class SequenceQualityAnalyzer:
             raise DataAccessError("No valid reads found in FASTQ file")
         return self._summarise(*sample)
 
-    def _sample(
-        self, paths: List[Path], sample_size: int, sampler: str
-    ) -> Tuple[List[int], List[float], List[int], List[float], List[str]]:
-        """Per-read lengths, GC fractions, base qualities, N fractions and sequences of the sample."""
+    def _sample(self, paths: List[Path], sample_size: int, sampler: str, total_records: Optional[int] = None) -> Sample:
+        """Per-read lengths, GC fractions, base quality histogram, N fractions and sequences of the sample."""
         if sampler != "head":
-            return self._sample_uniform(paths, sample_size)
+            return self._sample_uniform(paths, sample_size, total_records)
         share = -(-sample_size // max(len(paths), 1))
-        merged: Tuple[List[int], List[float], List[int], List[float], List[str]] = ([], [], [], [], [])
+        lengths: List[int] = []
+        gc_fractions: List[float] = []
+        quality_hist = histogram_from_scores([])
+        n_fractions: List[float] = []
+        sequences: List[str] = []
         for path in paths:
-            lengths, gc_fractions, qualities, n_fractions, sequences = self._sample_head(path, share)
-            merged[0].extend(lengths)
-            merged[1].extend(gc_fractions)
-            merged[2].extend(qualities)
-            merged[3].extend(n_fractions)
-            merged[4].extend(sequences)
-        return merged
+            file_lengths, file_gc, file_hist, file_n, file_sequences = self._sample_head(path, share)
+            lengths.extend(file_lengths)
+            gc_fractions.extend(file_gc)
+            quality_hist = quality_hist + file_hist
+            n_fractions.extend(file_n)
+            sequences.extend(file_sequences)
+        return lengths, gc_fractions, quality_hist, n_fractions, sequences
 
     def _summarise(
         self,
         read_lengths: List[int],
         gc_contents: List[float],
-        quality_scores: List[int],
+        quality_hist: np.ndarray,
         n_contents: List[float],
         sequences: List[str],
     ) -> Dict[str, Any]:
         """The quality metrics of one sample; GC figures in percent."""
         gc_percents = [gc * 100 for gc in gc_contents]
+        quality = distribution_from_histogram(quality_hist)
         return {
             "total_reads_sampled": len(read_lengths),
             "read_length_stats": {
@@ -127,11 +141,11 @@ class SequenceQualityAnalyzer:
                 "histogram": _gc_histogram(gc_contents),
             },
             "quality_stats": {
-                "mean": statistics.mean(quality_scores),
-                "median": statistics.median(quality_scores),
-                "q25": np.percentile(quality_scores, 25),
-                "q75": np.percentile(quality_scores, 75),
-                "distribution": self._get_quality_distribution(quality_scores),
+                "mean": quality["mean"],
+                "median": quality["median"],
+                "q25": quality["q25"],
+                "q75": quality["q75"],
+                "distribution": {key: quality[key] for key in _QUALITY_CLASSES} if quality_hist.sum() else {},
             },
             "n_content_stats": {
                 "mean": statistics.mean(n_contents),
@@ -143,9 +157,7 @@ class SequenceQualityAnalyzer:
             "duplication_rate": self._calculate_duplication_rate(sequences),
         }
 
-    def _sample_head(
-        self, fastq_path: Path, sample_size: int
-    ) -> Tuple[List[int], List[float], List[int], List[float], List[str]]:
+    def _sample_head(self, fastq_path: Path, sample_size: int) -> Sample:
         """First ``sample_size`` reads of ``fastq_path`` (the original, head-only sampling)."""
         import gzip
 
@@ -173,45 +185,38 @@ class SequenceQualityAnalyzer:
 
                 read_count += 1
 
-        return read_lengths, gc_contents, quality_scores, n_contents, sequences
+        return read_lengths, gc_contents, histogram_from_scores(quality_scores), n_contents, sequences
 
     def _sample_uniform(
-        self, fastq_path: Union[Path, Sequence[Path]], sample_size: int
-    ) -> Tuple[List[int], List[float], List[int], List[float], List[str]]:
-        """Reservoir-sample ``sample_size`` reads uniformly over the whole of every file.
+        self,
+        fastq_path: Union[Path, Sequence[Path]],
+        sample_size: int,
+        total_records: Optional[int] = None,
+    ) -> Sample:
+        """Sample ``sample_size`` reads uniformly over the whole of every file.
 
         Unlike ``_sample_head``, a read from anywhere in the files has an equal chance of
         being included, so a dataset whose later reads (or second mates) differ from its
-        first ones is still represented in the quality metrics. Streams with
-        ``iter_fastq_records`` (no Biopython) so a large file is never fully parsed
-        record-by-record.
+        first ones is still represented in the quality metrics. The record indices are drawn
+        up front with a fixed seed (``metaquest.data.sra.sample_records``), and the files are
+        streamed once in binary blocks; ``total_records``, when known, spares the counting
+        pass that the draw otherwise needs.
         """
         paths = [fastq_path] if isinstance(fastq_path, (str, Path)) else list(fastq_path)
-        reservoir: List[Tuple[str, str]] = []
-        seen = 0
-        rng = random.Random(0)
-        for seq, qual in itertools.chain.from_iterable(iter_fastq_records(p) for p in paths):
-            seen += 1
-            if len(reservoir) < sample_size:
-                reservoir.append((seq, qual))
-            else:
-                j = rng.randint(0, seen - 1)
-                if j < sample_size:
-                    reservoir[j] = (seq, qual)
+        records = sample_records(paths, sample_size, total_records=total_records, seed=0)
 
         read_lengths: List[int] = []
         gc_contents: List[float] = []
-        quality_scores: List[int] = []
         n_contents: List[float] = []
         sequences: List[str] = []
-        for seq, qual in reservoir:
+        for seq_bytes, _qual in records:
+            seq = seq_bytes.decode("utf-8")
             read_lengths.append(len(seq))
             gc_contents.append(self._calculate_gc_content(seq))
-            quality_scores.extend(ord(c) - 33 for c in qual)
             n_contents.append((seq.count("N") / len(seq)) if seq else 0.0)
             sequences.append(seq)
 
-        return read_lengths, gc_contents, quality_scores, n_contents, sequences
+        return read_lengths, gc_contents, quality_histogram(q for _s, q in records), n_contents, sequences
 
     def _calculate_duplication_rate(self, sequences: List[str]) -> float:
         """Fraction of sampled reads that are exact duplicates of another read.
@@ -251,19 +256,11 @@ class SequenceQualityAnalyzer:
         return distribution
 
     def _get_quality_distribution(self, quality_scores: List[int]) -> Dict[str, float]:
-        """Get quality score distribution."""
-        total = len(quality_scores)
-        if total == 0:
+        """Fractions of ``quality_scores`` at Q30+, Q20-29, Q10-19 and below Q10; empty for no scores."""
+        if not quality_scores:
             return {}
-
-        distribution = {
-            "excellent_q30+": sum(1 for q in quality_scores if q >= 30) / total,
-            "good_q20-29": sum(1 for q in quality_scores if 20 <= q < 30) / total,
-            "fair_q10-19": sum(1 for q in quality_scores if 10 <= q < 20) / total,
-            "poor_q0-9": sum(1 for q in quality_scores if q < 10) / total,
-        }
-
-        return distribution
+        quality = distribution_from_histogram(histogram_from_scores(quality_scores))
+        return {key: quality[key] for key in _QUALITY_CLASSES}
 
     def _analyze_sequence_complexity(self, sequences: List[str]) -> Dict[str, float]:
         """Analyze sequence complexity indicators."""

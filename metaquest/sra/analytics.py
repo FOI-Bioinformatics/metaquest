@@ -178,6 +178,18 @@ def _actions_for_anomalies(tripped_types: set) -> List[str]:
     return actions
 
 
+def _record_total(dataset_stats: Optional[Dict[str, Any]], files: Sequence[Path]) -> Optional[int]:
+    """Reads across ``files`` from the statistics record's per-file counts, or None when any is missing.
+
+    Passed to the quality sampler so it does not count the files again; a record computed for
+    a different file set (a file added or renamed since) is not used.
+    """
+    per_file = (dataset_stats or {}).get("reads_per_file")
+    if not isinstance(per_file, dict) or not all(f.name in per_file for f in files):
+        return None
+    return sum(int(per_file[f.name]) for f in files)
+
+
 class SRADatasetAnalyzer:
     """Main analyzer for comprehensive SRA dataset analysis."""
 
@@ -227,11 +239,11 @@ class SRADatasetAnalyzer:
         files = [f for f in files if f.exists()]
 
         if files:
-            quality_metrics = self.quality_analyzer.analyze_fastq_quality(
-                files, sample_size=sample_size, sampler=sampler
-            )
             if dataset_stats is None:
                 dataset_stats = load_dataset_stats(files, sample_size=sample_size)
+            quality_metrics = self.quality_analyzer.analyze_fastq_quality(
+                files, sample_size=sample_size, sampler=sampler, total_records=_record_total(dataset_stats, files)
+            )
         else:
             logger.warning(f"FASTQ file not found for {accession}, using metadata only")
             quality_metrics = {}

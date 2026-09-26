@@ -10,21 +10,22 @@ dataset already profiled once is not re-read for the next command.
 Read counts and (when available) bases/min/max/avg length come from an exact pass: a
 streaming newline count (``metaquest.data.sra.count_fastq_reads``), or ``seqkit stats -T``
 when the tool is installed, which is both exact and faster. Everything that needs per-read
-content (GC, quality, complexity, length distribution, N50) comes from a uniform reservoir
-sample over the first file, so a large dataset is never fully parsed in Python.
+content (GC, quality, complexity, length distribution, N50) comes from a uniform sample over
+the first file (``metaquest.data.sra.sample_records``, which draws record indices from the
+exact count and slices only those records out of the stream), so a large dataset is never
+parsed record by record in Python.
 """
 
 import logging
-import random
 import shutil
-import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_NUM_THREADS
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.sra import count_fastq_reads, fastq_files, iter_fastq_records
+from metaquest.data.sra import count_fastq_reads, fastq_files, sample_records
+from metaquest.data.sra.sampling import distribution_from_histogram, quality_histogram
 from metaquest.store.layout import StorePaths, sidecar_path as dataset_sidecar_path, store_paths
 from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import read_sidecar, write_sidecar
@@ -32,7 +33,7 @@ from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
 
-# Default reservoir sample size for the quality/GC/complexity part of the stats record.
+# Default sample size for the quality/GC/complexity part of the stats record.
 DEFAULT_SAMPLE_SIZE = 10000
 
 # How long ``store_stats`` waits for the dataset lock before giving up on the cache. A
@@ -57,29 +58,17 @@ def _file_signature(files: List[Path]) -> Dict[str, List[Union[int, float]]]:
     return signature
 
 
-def _reservoir_sample(path: Path, sample_size: int) -> Tuple[List[str], List[str], int]:
-    """Reservoir-sample up to ``sample_size`` (sequence, quality) pairs uniformly from ``path``.
+def _sample_reads(path: Path, sample_size: int, reads_in_file: Optional[int]) -> Tuple[List[str], List[bytes], int]:
+    """Sample up to ``sample_size`` (sequence, quality) pairs uniformly from ``path``.
 
-    Returns ``(sequences, qualities, reads_seen)``. Streams the file once with
-    ``iter_fastq_records``; every read past ``sample_size`` has an equal chance of replacing
-    an already-sampled read, so the sample is not biased toward the file's head. Seeded for
-    reproducibility across repeated runs on the same file.
+    Returns ``(sequences, qualities, reads_in_file)``. ``reads_in_file`` is the count the
+    caller already has (counted here when None); the record indices are drawn from it with a
+    fixed seed, so repeated runs on the same file give the same sample.
     """
-    sequences: List[str] = []
-    qualities: List[str] = []
-    seen = 0
-    rng = random.Random(0)
-    for seq, qual in iter_fastq_records(path):
-        seen += 1
-        if len(sequences) < sample_size:
-            sequences.append(seq)
-            qualities.append(qual)
-        else:
-            j = rng.randint(0, seen - 1)
-            if j < sample_size:
-                sequences[j] = seq
-                qualities[j] = qual
-    return sequences, qualities, seen
+    if reads_in_file is None:
+        reads_in_file = count_fastq_reads(path)
+    records = sample_records([path], sample_size, total_records=reads_in_file, seed=0)
+    return [seq.decode("utf-8") for seq, _qual in records], [qual for _seq, qual in records], reads_in_file
 
 
 def _gc_fraction(seq: str) -> float:
@@ -121,29 +110,13 @@ def _length_histogram(lengths: List[int]) -> Dict[str, int]:
     return histogram
 
 
-def _percentile(ordered: List[int], pct: float) -> float:
-    """Linear-interpolated percentile of an already-sorted list; 0.0 for an empty list."""
-    if not ordered:
-        return 0.0
-    k = (len(ordered) - 1) * (pct / 100)
-    lo = int(k)
-    hi = min(lo + 1, len(ordered) - 1)
-    if lo == hi:
-        return float(ordered[lo])
-    return float(ordered[lo] * (hi - k) + ordered[hi] * (k - lo))
+def _quality_summary(qualities: List[bytes]) -> Dict[str, float]:
+    """Mean/median/q25/q75 of the per-base Phred+33 quality scores of the sampled reads.
 
-
-def _quality_summary(scores: List[int]) -> Dict[str, float]:
-    """Mean/median/q25/q75 of flattened per-base Phred quality scores."""
-    if not scores:
-        return {"mean": 0.0, "median": 0.0, "q25": 0.0, "q75": 0.0}
-    ordered = sorted(scores)
-    return {
-        "mean": statistics.mean(scores),
-        "median": statistics.median(scores),
-        "q25": _percentile(ordered, 25),
-        "q75": _percentile(ordered, 75),
-    }
+    Computed from a histogram of the scores (``quality_histogram``), not a per-base list.
+    """
+    figures = distribution_from_histogram(quality_histogram(qualities))
+    return {key: figures[key] for key in ("mean", "median", "q25", "q75")}
 
 
 def _parse_seqkit_table(stdout: str, files: List[Path]) -> Dict[str, Dict[str, Any]]:
@@ -222,7 +195,7 @@ def _counts_from_seqkit(seqkit_rows: Dict[str, Dict[str, Any]]) -> Dict[str, Any
 
 def _counts_from_streaming(file_paths: List[Path]) -> Dict[str, Any]:
     """Exact read counts from a streaming newline count; length/base figures filled in later
-    from the reservoir sample, since a full pass just to measure lengths would defeat the
+    from the sample, since a full pass just to measure lengths would defeat the
     point of not using seqkit."""
     reads_per_file = {f.name: count_fastq_reads(f) for f in file_paths}
     return {
@@ -236,7 +209,7 @@ def _counts_from_streaming(file_paths: List[Path]) -> Dict[str, Any]:
 
 
 def _approximate_lengths_from_sample(counts: Dict[str, Any], sample_lengths: List[int]) -> Dict[str, Any]:
-    """Fill in length/base figures from the reservoir sample when there is no exact count."""
+    """Fill in length/base figures from the sample when there is no exact count."""
     avg_read_length = _mean(sample_lengths)
     counts["avg_read_length"] = avg_read_length
     counts["min_read_length"] = min(sample_lengths) if sample_lengths else 0
@@ -256,8 +229,9 @@ def compute_dataset_stats(
     rather than raising), otherwise from a streaming newline count, with the length figures
     then approximated from the sample below. Everything that needs per-read content
     (``gc_content``, ``n_content``, ``length_histogram``, ``n50``, ``quality_summary``,
-    ``duplication_rate``) comes from a uniform reservoir sample of ``sample_size`` reads over
-    the first file; ``sampled`` is True when that file holds more reads than the sample.
+    ``duplication_rate``) comes from a uniform sample of ``sample_size`` reads over the first
+    file, drawn by record index from the count above; ``sampled`` is True when that file holds
+    more reads than the sample.
 
     ``signature`` records each file's size and mtime so ``cached_stats`` can tell whether the
     dataset on disk still matches a cached copy of this result.
@@ -270,7 +244,9 @@ def compute_dataset_stats(
     seqkit_rows = _try_seqkit_stats(file_paths, use_seqkit)
     counts = _counts_from_seqkit(seqkit_rows) if seqkit_rows is not None else _counts_from_streaming(file_paths)
 
-    sequences, qualities, seen_in_sample_file = _reservoir_sample(file_paths[0], sample_size)
+    sequences, qualities, seen_in_sample_file = _sample_reads(
+        file_paths[0], sample_size, counts["reads_per_file"].get(file_paths[0].name)
+    )
     sampled = seen_in_sample_file > sample_size
     sample_lengths = [len(s) for s in sequences]
 
@@ -282,7 +258,7 @@ def compute_dataset_stats(
         "n50": _n50(sample_lengths),
         "gc_content": _mean([_gc_fraction(s) for s in sequences]),
         "length_histogram": _length_histogram(sample_lengths),
-        "quality_summary": _quality_summary([ord(c) - 33 for q in qualities for c in q]),
+        "quality_summary": _quality_summary(qualities),
         "duplication_rate": (1.0 - len(set(sequences)) / len(sequences)) if sequences else 0.0,
         "n_content": _mean([(s.count("N") / len(s)) if s else 0.0 for s in sequences]),
         "sample_size": sample_size,
