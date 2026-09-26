@@ -265,9 +265,14 @@ def test_rows_match_rows_built_afresh_for_each_pair(tmp_path):
     reg.record_extraction(r, "SRR1", "GCF_B", [], 40, False, {})
     reg.record_analysis(r, "SRR1", "profile", tmp_path / "p.json", {"total_reads": 10, "gc_percent": 40.0})
     reg.record_extraction(r, "SRR9", "GCF_C", [], 7, False, {})
+    # SRR3 appears twice: a positive value in the later row replaces the earlier one, as before.
     table = pd.DataFrame(
-        {"GCF_A": [0.91234567, 0.0, float("nan")], "GCF_D": ["0.3", "x", 0.2], "max_containment": [0.9, 0.1, 0.2]},
-        index=["SRR1", "SRR2", "SRR3"],
+        {
+            "GCF_A": [0.91234567, 0.0, float("nan"), 0.7],
+            "GCF_D": ["0.3", "x", 0.2, 0.0],
+            "max_containment": [0.9, 0.1, 0.2, 0.7],
+        },
+        index=["SRR1", "SRR2", "SRR3", "SRR3"],
     )
     for parsed in (None, table):
         pairs = screened_pairs(r, parsed)
@@ -278,5 +283,15 @@ def test_rows_match_rows_built_afresh_for_each_pair(tmp_path):
     pairs = screened_pairs(r, table)
     assert pairs[("SRR1", "GCF_A")] == 0.91234567
     assert pairs[("SRR1", "GCF_D")] == 0.3
-    assert ("SRR2", "GCF_D") not in pairs and ("SRR3", "GCF_A") not in pairs
+    assert ("SRR2", "GCF_D") not in pairs
+    assert pairs[("SRR3", "GCF_A")] == 0.7
     assert pairs[("SRR3", "GCF_D")] == 0.2
+
+
+def test_screened_pairs_reads_a_repeated_genome_column_once(tmp_path):
+    """A hand-built table with a repeated column name uses the first column of that name."""
+    r = _registry(tmp_path)
+    table = pd.DataFrame([[0.5, 0.9, 0.2]], index=["SRR1"], columns=["GCF_A", "GCF_A", "GCF_B"])
+    pairs = screened_pairs(r, table)
+    assert pairs[("SRR1", "GCF_A")] == 0.5
+    assert pairs[("SRR1", "GCF_B")] == 0.2

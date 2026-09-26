@@ -117,7 +117,7 @@ def build_sidecar(
     yields its size, md5 (of the bytes as stored) and read count together; the layout comes
     from the file names, and completeness reuses ``metaquest.data.sra.verify_download`` against
     ``ncbi.get("spots")`` with those read counts, so no file is read a second time. A truncated
-    gzip file raises ``EOFError`` (or a corrupt one ``zlib.error``, plain garbage ``OSError``);
+    gzip file raises ``EOFError`` (a corrupt or non-gzip one ``gzip.BadGzipFile``, an ``OSError``);
     either is caught per file and turns the whole result into ``state="failed"`` with the
     error recorded, since a corrupt file cannot be verified against NCBI's spot count. Such a
     file still records the md5 of its stored bytes, which takes a second read of that file only.

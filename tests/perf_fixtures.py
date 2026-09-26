@@ -1,13 +1,11 @@
 """Synthetic data builders for the performance regression tests.
 
-Kept in one module so every fixture used by a timing or memory bound in
-``tests/test_performance_regressions.py`` is easy to find: a 20,000-dataset project registry built
-through the real ``record_*`` writers (screening, selection, download, extraction and assembly), a
-gzip FASTQ writer for the sampler test, a folder of NCBI efetch metadata XML files for the metadata
-parser test, and a containment table for the summary and screening test. A few of these functions are
-also used by ordinary (non-performance) tests as a quick way to write realistic-looking fixture data;
-see ``tests/test_cli_metadata.py``, ``tests/test_containment_pin.py``, ``tests/test_data_metadata.py``
-and ``tests/test_sra_sampling.py``.
+Kept in one module so every fixture used by a timing or memory bound (the tests marked ``perf``) is
+easy to find: a 20,000-dataset project registry built through the real ``record_*`` writers
+(screening, selection, download, extraction and assembly), a gzip FASTQ writer for the sampler test,
+a folder of NCBI efetch metadata XML files for the metadata parser test, and a containment table for
+the summary and screening test. Ordinary (non-performance) tests also use some of these functions as
+a quick way to write realistic-looking fixture data.
 """
 
 import gzip

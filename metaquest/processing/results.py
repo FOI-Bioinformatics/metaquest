@@ -74,9 +74,14 @@ def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = No
             value = entry.get("containment") if isinstance(entry, dict) else None
             pairs[(accession, genome_id)] = float(value) if value is not None else None
     if parsed_table is not None:
-        genome_columns = [c for c in parsed_table.columns if c not in _KNOWN_METADATA_COLUMNS]
+        # Genome column name -> position of its first column: a repeated name is read once, by
+        # position, since selecting it by name would return a frame rather than one column.
+        genome_columns: Dict[Any, int] = {}
+        for index, name in enumerate(parsed_table.columns):
+            if name not in _KNOWN_METADATA_COLUMNS:
+                genome_columns.setdefault(name, index)
         # Plain column lists, walked row by row as before, instead of one pandas Series per row.
-        columns = [(str(genome_id), parsed_table[genome_id].tolist()) for genome_id in genome_columns]
+        columns = [(str(name), parsed_table.iloc[:, index].tolist()) for name, index in genome_columns.items()]
         for position, accession in enumerate(parsed_table.index):
             for genome_id, values in columns:
                 value = _positive_float(values[position])

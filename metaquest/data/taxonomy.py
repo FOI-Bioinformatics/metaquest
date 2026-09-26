@@ -87,6 +87,18 @@ class NCBITaxonomyClient:
         self.request_delay = 1.0 / 3 if api_key else 1.0 / 10  # Rate limiting
         self.session = _build_retrying_session()
 
+    def close(self) -> None:
+        """Close the client's HTTP session and its pooled connections."""
+        self.session.close()
+
+    def __enter__(self) -> "NCBITaxonomyClient":
+        """Return the client itself; the session is closed when the block exits."""
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Close the session."""
+        self.close()
+
     def _make_request(self, url: str, params: Dict[str, str]) -> str:
         """Make rate-limited request to NCBI API."""
         # Rate limiting
@@ -315,34 +327,36 @@ def validate_taxonomic_assignments(
                 # instead of appending after its corrupt content.
                 cache_needs_reset = True
 
-        # Initialize client
+        # One client, and so one HTTP session, for the whole list; closed when done.
         client = NCBITaxonomyClient(email, api_key)
+        try:
+            # Validate species
+            results = []
+            unique_species = list(set(species_list))
 
-        # Validate species
-        results = []
-        unique_species = list(set(species_list))
+            logger.info(f"Validating {len(unique_species)} unique species names")
 
-        logger.info(f"Validating {len(unique_species)} unique species names")
+            for i, species in enumerate(unique_species, 1):
+                if species in cached_results:
+                    results.append(cached_results[species])
+                    logger.debug(f"Using cached result for {species}")
+                else:
+                    logger.info(f"Validating {i}/{len(unique_species)}: {species}")
+                    result = client.validate_species_name(species)
+                    results.append(result)
 
-        for i, species in enumerate(unique_species, 1):
-            if species in cached_results:
-                results.append(cached_results[species])
-                logger.debug(f"Using cached result for {species}")
-            else:
-                logger.info(f"Validating {i}/{len(unique_species)}: {species}")
-                result = client.validate_species_name(species)
-                results.append(result)
+                    # A confidence of "error" means the lookup itself failed (e.g. a network
+                    # error); leave it out of the cache so a later run retries it, instead of
+                    # caching the failure forever.
+                    if cache_file and result.get("confidence") != "error":
+                        _append_validation_cache_row(cache_file, result, reset=cache_needs_reset)
+                        cache_needs_reset = False
 
-                # A confidence of "error" means the lookup itself failed (e.g. a network
-                # error); leave it out of the cache so a later run retries it, instead of
-                # caching the failure forever.
-                if cache_file and result.get("confidence") != "error":
-                    _append_validation_cache_row(cache_file, result, reset=cache_needs_reset)
-                    cache_needs_reset = False
-
-                # Rate limiting for API calls
-                if i % 10 == 0:
-                    logger.info(f"Progress: {i}/{len(unique_species)} species validated")
+                    # Rate limiting for API calls
+                    if i % 10 == 0:
+                        logger.info(f"Progress: {i}/{len(unique_species)} species validated")
+        finally:
+            client.close()
 
         # Create results DataFrame
         if results:

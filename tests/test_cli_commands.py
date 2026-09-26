@@ -2571,6 +2571,23 @@ class TestParseMetadataCommand:
         assert result == 0
         mock_command.assert_called_once_with("metadata", "metadata_table.txt")
 
+    @patch("metaquest.cli.commands.metadata.parse_metadata")
+    def test_execute_resolves_the_project_root_once(self, mock_parse, tmp_path):
+        """record_metadata gets the root from the command, not one project_root call per row."""
+        import metaquest.data.registry as registry_mod
+
+        mock_parse.return_value = pd.DataFrame({"Run_ID": [f"SRR{i}" for i in range(50)]})
+        args = argparse.Namespace(
+            metadata_folder=str(tmp_path / "metadata"),
+            metadata_table_file=str(tmp_path / "metadata_table.txt"),
+            registry=str(tmp_path / "metaquest_registry.json"),
+        )
+        with patch.object(registry_mod, "project_root", wraps=registry_mod.project_root) as spy:
+            assert ParseMetadataCommand().execute(args) == 0
+        assert spy.call_count == 0
+        registry = load_registry(args.registry)
+        assert registry.datasets["SRR49"]["metadata"]["xml"] == "metadata/SRR49_metadata.xml"
+
     def test_execute_records_metadata_in_registry(self, tmp_path):
         """Parsing a metadata folder records run_size/run_md5 for each accession."""
         metadata_folder = tmp_path / "metadata"
@@ -3286,3 +3303,23 @@ class TestDownloadSraTerminationAndFinalFlush:
         errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
         assert any("3 queued download outcome(s)" in m and "SRR0, SRR1, SRR2" in m for m in errors)
         assert not Path(args.registry).exists()
+
+
+class TestDownloadSraMaxDownloadsArgument:
+    """--max-downloads takes a positive integer; 0 is refused rather than read as no limit."""
+
+    @staticmethod
+    def _parser():
+        parser = argparse.ArgumentParser()
+        DownloadSraCommand().configure_parser(parser)
+        return parser
+
+    @pytest.mark.parametrize("value", ["0", "-3"])
+    def test_zero_or_negative_is_rejected(self, value, capsys):
+        with pytest.raises(SystemExit):
+            self._parser().parse_args(["--accessions-file", "a.txt", "--max-downloads", value])
+        assert "--max-downloads must be a positive integer" in capsys.readouterr().err
+
+    def test_positive_value_is_accepted(self):
+        assert self._parser().parse_args(["--accessions-file", "a.txt", "--max-downloads", "5"]).max_downloads == 5
+        assert self._parser().parse_args(["--accessions-file", "a.txt"]).max_downloads is None

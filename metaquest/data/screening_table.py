@@ -97,14 +97,24 @@ def _apply_cap(
     return dropped_cells, dropped_earlier
 
 
-def _drop_screening(registry: reg.Registry, accession: str, genome: str) -> None:
-    """Remove one genome's screening entry, then the block and the record if they are left empty."""
-    record = registry.datasets[accession]
-    record["screening"]["genomes"].pop(genome, None)
-    if not record["screening"]["genomes"]:
-        del record["screening"]
+def _store_screening(registry: reg.Registry, accession: str, screening: rb.ScreeningBlock) -> None:
+    """Write ``screening`` back; with no genome left, remove the block, and the record if that empties it."""
+    if screening.genomes:
+        rb.set_screening_block(registry, accession, screening)
+        return
+    record = registry.datasets.get(accession)
+    if record is None:
+        return
+    record.pop("screening", None)
     if not record:
         del registry.datasets[accession]
+
+
+def _drop_screening(registry: reg.Registry, accession: str, genome: str) -> None:
+    """Remove one genome's screening entry, through the typed block."""
+    screening = rb.screening_block(registry, accession) or rb.ScreeningBlock()
+    screening.genomes.pop(genome, None)
+    _store_screening(registry, accession, screening)
 
 
 def _write_row(
@@ -128,29 +138,28 @@ def _write_row(
             )
         else:
             screening.genomes.pop(genome, None)
-    if screening.genomes:
-        rb.set_screening_block(registry, accession, screening)
-        return
-    if not existing:
-        return
-    record = registry.datasets[accession]
-    record.pop("screening", None)
-    if not record:
-        del registry.datasets[accession]
+    _store_screening(registry, accession, screening)
 
 
 def record_screening_table(
     registry: reg.Registry,
-    table: pd.DataFrame,
+    table: Union[pd.DataFrame, str, Path],
     matches_folder: Union[str, Path],
     max_screened: int,
 ) -> int:
     """Record every positive cell of ``table`` as a screening entry; return how many were recorded.
 
-    Keeps at most ``max_screened`` accessions per genome, counting entries already in the
-    registry. The count returned includes the cells the cap then dropped, as recording them one
-    by one did. Every block written gets the same timestamp.
+    ``table`` is the parsed containment DataFrame, or the path it was written to, read here (a
+    path that does not exist is logged at debug level and records nothing). Keeps at most
+    ``max_screened`` accessions per genome, counting entries already in the registry. The count
+    returned includes the cells the cap then dropped, as recording them one by one did. Every
+    block written gets the same timestamp.
     """
+    if not isinstance(table, pd.DataFrame):
+        if not Path(table).exists():
+            logger.debug("Parsed containment table %s does not exist; nothing to record", table)
+            return 0
+        table = pd.read_csv(Path(table), sep="\t", index_col=0)
     accessions, genomes, rows, cols, rounded = _positive_cells(table)
     if not len(rows):
         return 0

@@ -13,10 +13,12 @@ The sampler assumes the four-line FASTQ layout that ``fasterq-dump`` and ``count
 assume: header, sequence, ``+`` separator and quality, each on exactly one line.
 """
 
+import contextlib
 import gzip
+import io
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -27,6 +29,10 @@ from metaquest.data.sra.fastq import count_fastq_reads
 # decompressed pieces, and on a real 427 MB mate file 4 MiB blocks spent most of the time copying.
 CHUNK_SIZE = 1024 * 1024
 
+# Read buffer for the compressed input of a ``.gz`` file. gzip.GzipFile otherwise reads its input
+# in pieces of about 128 KiB, which on a real run's external volume meant thousands of small reads.
+COMPRESSED_READ_BUFFER = 8 * 1024 * 1024
+
 # Phred scores 0-93 (``!`` to ``~`` in Phred+33), the range of the quality histograms.
 QUALITY_BINS = 94
 PHRED_OFFSET = 33
@@ -34,9 +40,15 @@ PHRED_OFFSET = 33
 Record = Tuple[bytes, bytes]
 
 
-def _open_binary(path: Path):
-    """Open ``path`` for binary reading, decompressing a ``.gz`` file."""
-    return gzip.open(path, "rb") if str(path).endswith(".gz") else open(path, "rb")
+@contextlib.contextmanager
+def _open_binary(path: Path) -> Iterator[io.BufferedIOBase]:
+    """Open ``path`` for binary reading, decompressing a ``.gz`` file read through a large buffer."""
+    if not str(path).endswith(".gz"):
+        with open(path, "rb") as handle:
+            yield handle
+        return
+    with open(path, "rb", buffering=COMPRESSED_READ_BUFFER) as raw, gzip.GzipFile(fileobj=raw, mode="rb") as handle:
+        yield handle
 
 
 def _strip_cr(line: bytes) -> bytes:
@@ -136,7 +148,8 @@ def sample_records(
         total_records: Records across all ``paths``, e.g. from the cached statistics
             record; counted here with ``count_fastq_reads`` (one extra pass) when None. A
             total larger than the files hold is tolerated: indices past the end are
-            dropped and fewer records are returned. A total smaller than the true count
+            dropped, so fewer records are returned, and with a much overstated total
+            possibly none at all. A total smaller than the true count
             makes only the first ``total_records`` records eligible, so the later ones are
             never sampled.
         seed: Seed of the index draw

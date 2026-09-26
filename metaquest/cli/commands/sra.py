@@ -57,6 +57,14 @@ TRANSIENT_BYTES_WARN_THRESHOLD = 1024**3
 FINAL_FLUSH_RETRY_SECONDS = 1.0
 
 
+def _max_downloads(value: str) -> int:
+    """argparse type for --max-downloads: rejects zero and negative values with a clear message."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"--max-downloads must be a positive integer, got {value!r}")
+    return parsed
+
+
 @contextlib.contextmanager
 def _termination_raises_interrupt() -> Iterator[None]:
     """Turn SIGTERM and SIGHUP into ``KeyboardInterrupt`` for the duration of the block.
@@ -111,7 +119,7 @@ class DownloadSraCommand(BaseCommand):
         )
         parser.add_argument(
             "--max-downloads",
-            type=int,
+            type=_max_downloads,
             default=None,
             help="Maximum number of datasets to download",
         )
@@ -252,7 +260,7 @@ class DownloadSraCommand(BaseCommand):
             self.logger.info(f"  {stats['blacklisted']} datasets would be skipped (blacklisted)")
         if stats.get("to_download", 0) > 0:
             self.logger.info(f"  Output folder would be: {args.fastq_folder}")
-            if args.max_downloads:
+            if args.max_downloads is not None:
                 self.logger.info(f"  Limited to {args.max_downloads} downloads")
 
     def _report_failed_downloads(self, args: argparse.Namespace, stats: dict) -> None:

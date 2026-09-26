@@ -623,6 +623,14 @@ class TestRecords:
         assert metadata["platform"] == "ILLUMINA"
         assert metadata["library_strategy"] == "WGS"
 
+    def test_record_metadata_with_a_given_root_records_the_same_path(self, tmp_path):
+        r = reg.load_registry(tmp_path / "metaquest_registry.json")
+        xml = tmp_path / "metadata" / "SRR1_metadata.xml"
+        reg.record_metadata(r, "SRR1", xml, {})
+        reg.record_metadata(r, "SRR2", xml, {}, root=reg.project_root(r))
+        assert r.datasets["SRR1"]["metadata"]["xml"] == r.datasets["SRR2"]["metadata"]["xml"]
+        assert r.datasets["SRR2"]["metadata"]["xml"] == "metadata/SRR1_metadata.xml"
+
     def test_record_metadata_spots_none_when_not_numeric(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_metadata(r, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {})

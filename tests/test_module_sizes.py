@@ -24,7 +24,7 @@ MIN_MAINTAINABILITY = 20.0
 # split in 0.5.0, and drop its entry here once every resulting module meets the ceilings.
 KNOWN_EXCEPTIONS: Dict[str, Tuple[int, float]] = {
     "metaquest/data/read_extraction.py": (1210, MIN_MAINTAINABILITY),
-    "metaquest/data/registry.py": (1117, 15.3),
+    "metaquest/data/registry.py": (1110, 16.1),
     "metaquest/visualization/reporting.py": (826, MIN_MAINTAINABILITY),
 }
 

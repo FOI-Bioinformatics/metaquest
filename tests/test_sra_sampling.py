@@ -171,3 +171,36 @@ def test_profile_passes_the_cached_record_count_to_the_sampler(tmp_path):
     with patch("metaquest.sra.quality.sample_records", wraps=sample_records) as sampler:
         analyzer.profile_dataset_quality("SRR1", fastq_path=[r1, r2], dataset_stats=partial, sample_size=10)
     assert sampler.call_args.kwargs["total_records"] is None
+
+
+def test_compressed_input_is_read_through_a_large_buffer(tmp_path, monkeypatch):
+    """A .gz file's compressed bytes are read with the COMPRESSED_READ_BUFFER buffer size."""
+    import builtins
+    import gzip
+
+    from metaquest.data.sra import sampling
+
+    path = tmp_path / "SRR1_1.fastq.gz"
+    with gzip.open(path, "wt") as handle:
+        handle.write("@r1\nACGT\n+\nIIII\n@r2\nGGGG\n+\nIIII\n")
+    buffers = []
+    real_open = builtins.open
+
+    def spy_open(file, mode="r", buffering=-1, *args, **kwargs):
+        if str(file) == str(path):
+            buffers.append(buffering)
+        return real_open(file, mode, buffering, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    got = sampling.sample_records([path], 2, total_records=2)
+    assert got == [(b"ACGT", b"IIII"), (b"GGGG", b"IIII")]
+    assert buffers == [sampling.COMPRESSED_READ_BUFFER]
+
+
+def test_a_much_overstated_total_can_return_no_records(tmp_path):
+    """As the docstring says: indices past the end are dropped, possibly all of them."""
+    from metaquest.data.sra import sampling
+
+    path = tmp_path / "reads.fastq"
+    path.write_text("".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(7)))
+    assert sampling.sample_records([path], 3, total_records=1000, seed=0) == []

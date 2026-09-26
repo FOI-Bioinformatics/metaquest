@@ -469,6 +469,24 @@ class TestFastqDigest:
         with pytest.raises(EOFError):
             fastq_digest(path)
 
+    def test_non_gzip_file_raises_like_gzip_open(self, tmp_path):
+        """Same class (an OSError, as store adoption expects) and wording as count_fastq_reads."""
+        path = tmp_path / "plain_named.fastq.gz"
+        path.write_bytes(b"@r\nACGT\n+\nIIII\n")
+        with pytest.raises(gzip.BadGzipFile) as expected:
+            count_fastq_reads(path)
+        with pytest.raises(gzip.BadGzipFile) as got:
+            fastq_digest(path)
+        assert str(got.value) == str(expected.value)
+
+    def test_corrupt_deflate_stream_raises_bad_gzip_file(self, tmp_path):
+        path = tmp_path / "corrupt.fastq.gz"
+        data = bytearray(gzip.compress(b"".join(b"@r%d\nACGT\n+\nIIII\n" % i for i in range(200))))
+        data[20] ^= 0xFF
+        path.write_bytes(bytes(data))
+        with pytest.raises(gzip.BadGzipFile):
+            fastq_digest(path)
+
     def test_content_md5_is_md5_of_decompressed_bytes(self, tmp_path):
         import hashlib
 

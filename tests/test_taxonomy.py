@@ -343,3 +343,41 @@ class TestNCBIRetriesReturnTheFinalResponse:
             client._make_request(client.base_url + "esearch.fcgi", {"db": "taxonomy"})
         assert "Max retries" not in str(caught.value)
         assert len(requested) == 4
+
+
+class TestNCBIClientSessionIsClosed:
+    """The client's HTTP session is closed once the client is done with."""
+
+    def test_close_and_context_manager_close_the_session(self):
+        client = NCBITaxonomyClient("test@example.com")
+        with patch.object(client.session, "close") as closed:
+            client.close()
+        assert closed.call_count == 1
+        spied = NCBITaxonomyClient("test@example.com")
+        with patch.object(spied.session, "close") as closed:
+            with spied:
+                pass
+        assert closed.call_count == 1
+
+    @patch("metaquest.data.taxonomy.NCBITaxonomyClient")
+    def test_validate_taxonomic_assignments_closes_its_client(self, mock_client_class):
+        client = mock_client_class.return_value
+        client.validate_species_name.return_value = {
+            "original_name": "E. coli",
+            "validated_name": "Escherichia coli",
+            "is_valid": True,
+            "tax_id": "562",
+            "rank": "species",
+            "lineage": "",
+            "confidence": "high",
+        }
+        validate_taxonomic_assignments(["E. coli"], "test@example.com")
+        assert client.close.call_count == 1
+
+    @patch("metaquest.data.taxonomy.NCBITaxonomyClient")
+    def test_client_is_closed_when_a_lookup_raises(self, mock_client_class):
+        client = mock_client_class.return_value
+        client.validate_species_name.side_effect = RuntimeError("boom")
+        with pytest.raises(ProcessingError):
+            validate_taxonomic_assignments(["E. coli"], "test@example.com")
+        assert client.close.call_count == 1

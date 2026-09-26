@@ -126,6 +126,10 @@ def accession_has_fastq(acc_dir: Union[str, Path]) -> bool:
     return True
 
 
+# Block size for streaming reads of FASTQ files (``count_fastq_reads`` and ``fastq_digest``).
+_BLOCK_SIZE = 1024 * 1024
+
+
 def count_fastq_reads(path: Union[str, Path]) -> int:
     """Count FASTQ records in ``path`` via a chunked binary newline count (4 lines/record).
 
@@ -134,12 +138,11 @@ def count_fastq_reads(path: Union[str, Path]) -> int:
     encoding errors in a corrupted file. Works for both gzip-compressed and plain files.
     """
     opener = gzip.open if str(path).endswith(".gz") else open
-    block_size = 1024 * 1024
     total_newlines = 0
     last_byte = b""
     with opener(path, "rb") as handle:
         while True:
-            block = handle.read(block_size)
+            block = handle.read(_BLOCK_SIZE)
             if not block:
                 break
             total_newlines += block.count(b"\n")
@@ -150,9 +153,8 @@ def count_fastq_reads(path: Union[str, Path]) -> int:
     return total_newlines // 4
 
 
-# Block size for streaming reads of FASTQ files, and the buffer size of the file handle
-# underneath; large sequential reads suit an external or network volume.
-_BLOCK_SIZE = 1024 * 1024
+# Buffer size of the file handle under ``fastq_digest``'s block reads; large sequential reads
+# suit an external or network volume.
 _READ_BUFFER = 8 * 1024 * 1024
 # Upper bound on decompressed output per decompress call, so one highly compressible block
 # never expands into an unbounded buffer.
@@ -205,7 +207,12 @@ class _NewlineCounter:
 
 
 class _GzipInflater:
-    """Inflates a gzip stream fed in pieces, including files of several concatenated members."""
+    """Inflates a gzip stream fed in pieces, including files of several concatenated members.
+
+    Errors are raised as ``gzip.open`` raises them: ``gzip.BadGzipFile`` (an ``OSError``) for a
+    member that does not start with the gzip magic bytes, with gzip's own wording, or for a
+    corrupt deflate stream, and ``EOFError`` from ``finish`` for a stream cut short.
+    """
 
     def __init__(self, sink: _NewlineCounter) -> None:
         self._sink = sink
@@ -214,6 +221,13 @@ class _GzipInflater:
 
     def feed(self, data: bytes) -> None:
         """Inflate ``data``, starting a new member whenever the previous one has ended."""
+        try:
+            self._feed(data)
+        except zlib.error as exc:
+            raise gzip.BadGzipFile(str(exc)) from exc
+
+    def _feed(self, data: bytes) -> None:
+        """``feed`` without the translation of ``zlib.error``."""
         while data:
             if self._inflater.eof:
                 # Zero bytes after a member are padding, as gzip.open also accepts.
@@ -221,6 +235,8 @@ class _GzipInflater:
                 if not data:
                     return
                 self._inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            if not self._in_member and len(data) >= 2 and data[:2] != b"\x1f\x8b":
+                raise gzip.BadGzipFile(f"Not a gzipped file ({data[:2]!r})")
             self._in_member = True
             self._sink.feed(self._inflater.decompress(data, _MAX_INFLATE))
             while self._inflater.unconsumed_tail and not self._inflater.eof:
@@ -246,7 +262,8 @@ def fastq_digest(path: Union[str, Path], content_md5: bool = False) -> FastqDige
     newlines are counted in the decompressed content. A plain file counts newlines in the
     blocks directly. The result equals ``count_fastq_reads(path)``, ``md5_file(path)`` and the
     file size, at the cost of one pass instead of two. A truncated gzip stream raises
-    ``EOFError`` and a corrupt one ``zlib.error``, as ``count_fastq_reads`` would.
+    ``EOFError``, and a corrupt one or a file that is not gzip ``gzip.BadGzipFile``, as
+    ``count_fastq_reads`` would for the latter.
 
     With ``content_md5`` the md5 of the decompressed content is also computed, so a plain and
     a gzipped copy of the same reads can be compared without a second pass.

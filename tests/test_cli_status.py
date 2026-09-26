@@ -1157,10 +1157,18 @@ def _inventory_tree(root):
     # A transient folder is left out of the listing, but a wanted name equal to it is still probed.
     (fastq / "SRR7_temp").mkdir()
     (fastq / "SRR7_temp" / "SRR7.fastq").write_bytes(b"x" * 10)
+    # A hidden folder is left out of the listing too; a wanted hidden name is probed on disk.
+    (fastq / ".SRR8").mkdir()
+    (fastq / ".SRR8" / "SRR8.fastq").write_bytes(b"x" * 10)
+    # A fastq/<ACC> symlink to a folder outside fastq/ (a store link) is listed through the link.
+    outside = root / "elsewhere" / "SRR10"
+    outside.mkdir(parents=True)
+    (outside / "SRR10.fastq.gz").write_bytes(b"x" * 10)
+    (fastq / "SRR10").symlink_to(outside, target_is_directory=True)
     (root / "metadata").mkdir()
     for acc in ("SRR1", "SRR4"):
         (root / "metadata" / f"{acc}_metadata.xml").write_text("<xml/>")
-    wanted = ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7_temp", "SRR1"]
+    wanted = ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7_temp", "SRR1", ".SRR8", "SRR10"]
     (root / "accessions.txt").write_text("\n".join(wanted) + "\n")
 
 
@@ -1184,10 +1192,10 @@ def test_inventory_wanted_block_matches_per_accession_probes(tmp_path):
     _inventory_tree(tmp_path)
     args = _status_args(tmp_path, accessions_file=str(tmp_path / "accessions.txt"))
     report = inventory_report(args, Registry())
-    wanted = ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7_temp"]
+    wanted = ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5", "SRR6", "SRR7_temp", ".SRR8", "SRR10"]
     assert report["wanted"] == _reference_inventory(tmp_path, wanted)
     assert report["wanted"]["fastq_missing"] == ["SRR3", "SRR4", "SRR5", "SRR6"]
-    assert report["on_disk"]["fastq_accessions"] == 2
+    assert report["on_disk"]["fastq_accessions"] == 3
 
 
 def test_inventory_does_not_probe_the_disk_per_wanted_accession(tmp_path, monkeypatch):
@@ -1217,10 +1225,10 @@ def test_inventory_does_not_probe_the_disk_per_wanted_accession(tmp_path, monkey
 
     report = inventory_report(_status_args(tmp_path, accessions_file=str(tmp_path / "accessions.txt")), Registry())
 
-    assert report["wanted"]["total"] == 307
-    # Once per folder of the listing, plus the one wanted name the listing leaves out by design.
-    assert sorted(probed) == ["SRR1", "SRR2", "SRR3", "SRR4", "SRR6", "SRR7_temp"]
-    assert not [p for p in exists_calls if p.name.endswith("_metadata.xml")]
+    assert report["wanted"]["total"] == 309
+    # Once per folder of the listing, plus the two wanted names the listing leaves out by design.
+    assert sorted(probed) == [".SRR8", "SRR1", "SRR10", "SRR2", "SRR3", "SRR4", "SRR6", "SRR7_temp"]
+    assert [p.name for p in exists_calls if p.name.endswith("_metadata.xml")] == [".SRR8_metadata.xml"]
     assert len(exists_calls) < 20
 
 

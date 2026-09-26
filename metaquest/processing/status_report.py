@@ -10,7 +10,7 @@ prints; the text rendering and the suggested next steps live in `metaquest.cli.c
 import argparse
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
@@ -74,12 +74,15 @@ def _reconcile_present_missing(wanted: List[str], present_fn) -> Tuple[List[str]
     return present, missing
 
 
-def _listed_or_probed(listed: List[str], unlisted, probe):
+def _listed_or_probed(
+    listed: List[str], unlisted: Callable[[str], bool], probe: Callable[[str], bool]
+) -> Callable[[str], bool]:
     """A presence test that looks ``name`` up in a folder listing already made.
 
     ``unlisted(name)`` is True for a name the listing leaves out by design (a hidden or a
     transient folder name); only such a name is checked with ``probe(name)`` on disk, so a
-    wanted list costs no filesystem call per accession.
+    wanted list costs no filesystem call per accession. Names are compared exactly, so a name
+    that differs from a listed one only in case reads as missing, on every filesystem.
     """
     names = set(listed)
     return lambda name: name in names or (unlisted(name) and probe(name))

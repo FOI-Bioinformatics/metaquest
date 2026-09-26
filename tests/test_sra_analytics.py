@@ -11,7 +11,7 @@ Tests cover:
 """
 
 from pathlib import Path
-from unittest.mock import Mock, patch, mock_open
+from unittest.mock import Mock, patch
 import importlib.util
 import pytest
 import pandas as pd
@@ -23,8 +23,7 @@ import pandas as pd
 # silently unregistering every module imported for the first time inside the block
 # (including numpy/scipy, transitively). A later fresh import of anything under metaquest.sra
 # in the same process then hits numpy's C extensions with "ImportError: cannot load module
-# more than once per process". Individual tests below still patch
-# metaquest.sra.quality.SeqIO directly where they need to avoid touching real FASTQ files.
+# more than once per process". Tests below that read FASTQ records write small files to tmp_path.
 from metaquest.sra.analytics import (
     SRADatasetAnalyzer,
     SequenceQualityAnalyzer,
@@ -128,23 +127,13 @@ class TestSequenceQualityAnalyzer:
         assert "overrepresented_sequences" in indicators
         assert indicators["adapter_contamination"] > 0
 
-    @patch("builtins.open", new_callable=mock_open, read_data="@seq1\nATGCGTACGT\n+\nIIIIIIIIII\n")
-    @patch("metaquest.sra.quality.SeqIO")
-    def test_analyze_fastq_quality_success(self, mock_seqio, mock_file):
-        """Test successful FASTQ quality analysis."""
-        # Mock SeqIO.parse to return mock records
-        mock_record1 = Mock()
-        mock_record1.seq = "ATGCGTACGT"
-        mock_record1.letter_annotations = {"phred_quality": [30, 35, 40, 35, 30, 25, 30, 35, 40, 35]}
+    def test_analyze_fastq_quality_success(self, tmp_path):
+        """Head sampling of a two-record file: every section present, quality from the histogram."""
+        fastq = tmp_path / "test.fastq"
+        # Phred+33: '?' is 30, 'D' is 35, 'I' is 40, ':' is 25, '5' is 20.
+        fastq.write_text("@seq1\nATGCGTACGT\n+\n?DIDN:?DID\n@seq2\nCGTACGTAGC\n+\n:?D?:5:?D?\n")
 
-        mock_record2 = Mock()
-        mock_record2.seq = "CGTACGTAGC"
-        mock_record2.letter_annotations = {"phred_quality": [25, 30, 35, 30, 25, 20, 25, 30, 35, 30]}
-
-        mock_seqio.parse.return_value = [mock_record1, mock_record2]
-
-        with patch("pathlib.Path.exists", return_value=True):
-            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100, sampler="head")
+        result = self.analyzer.analyze_fastq_quality(fastq, sample_size=100, sampler="head")
 
         assert "total_reads_sampled" in result
         assert "read_length_stats" in result
@@ -152,6 +141,17 @@ class TestSequenceQualityAnalyzer:
         assert "quality_stats" in result
         assert "complexity_metrics" in result
         assert result["total_reads_sampled"] == 2
+        assert result["quality_stats"]["median"] == 30.0
+
+    def test_head_sampler_takes_only_the_first_reads(self, tmp_path):
+        fastq = tmp_path / "reads.fastq"
+        fastq.write_text("".join(f"@r{i}\n{'G' if i < 3 else 'A'}AAA\n+\nIIII\n" for i in range(10)))
+
+        result = self.analyzer.analyze_fastq_quality(fastq, sample_size=3, sampler="head")
+
+        assert result["total_reads_sampled"] == 3
+        assert result["gc_content_stats"]["mean"] == 25.0
+        assert result["quality_stats"]["mean"] == 40.0
 
     def test_analyze_fastq_quality_file_not_found(self):
         """Test FASTQ analysis with missing file."""
@@ -189,20 +189,13 @@ class TestSequenceQualityAnalyzer:
         assert self.analyzer._calculate_duplication_rate(["A", "A", "C", "G"]) == 0.25
         assert self.analyzer._calculate_duplication_rate(["A", "A", "A", "A"]) == 0.75
 
-    @patch("metaquest.sra.quality.SeqIO")
-    @patch("builtins.open", new_callable=mock_open, read_data="")
-    def test_analyze_fastq_quality_reports_duplication(self, mock_file, mock_seqio):
+    def test_analyze_fastq_quality_reports_duplication(self, tmp_path):
         """analyze_fastq_quality includes a real duplication_rate for duplicate reads."""
-        rec = Mock()
-        rec.seq = "ATGCATGCAT"
-        rec.letter_annotations = {"phred_quality": [30] * 10}
-        dup = Mock()
-        dup.seq = "ATGCATGCAT"  # identical to rec
-        dup.letter_annotations = {"phred_quality": [30] * 10}
-        mock_seqio.parse.return_value = [rec, dup]
+        fastq = tmp_path / "test.fastq"
+        # The second read is identical to the first.
+        fastq.write_text("@r1\nATGCATGCAT\n+\n??????????\n@r2\nATGCATGCAT\n+\n??????????\n")
 
-        with patch("pathlib.Path.exists", return_value=True):
-            result = self.analyzer.analyze_fastq_quality("test.fastq", sample_size=100, sampler="head")
+        result = self.analyzer.analyze_fastq_quality(fastq, sample_size=100, sampler="head")
 
         assert result["duplication_rate"] == 0.5  # one of two reads is a duplicate
 

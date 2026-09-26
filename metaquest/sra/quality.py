@@ -9,6 +9,7 @@ shared statistics record instead; see
 ``metaquest.sra.analytics.SRADatasetAnalyzer.profile_dataset_quality``.
 """
 
+import itertools
 import logging
 import statistics
 import zlib
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from Bio import SeqIO
+from Bio.SeqIO.QualityIO import FastqGeneralIterator
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.sra import sample_records
@@ -158,34 +159,29 @@ class SequenceQualityAnalyzer:
         }
 
     def _sample_head(self, fastq_path: Path, sample_size: int) -> Sample:
-        """First ``sample_size`` reads of ``fastq_path`` (the original, head-only sampling)."""
+        """First ``sample_size`` reads of ``fastq_path`` (the original, head-only sampling).
+
+        Quality strings are counted into a histogram (``quality_histogram``) rather than
+        decoded into one Phred score per base.
+        """
         import gzip
 
         read_lengths: List[int] = []
         gc_contents: List[float] = []
-        quality_scores: List[int] = []
+        qualities: List[bytes] = []
         n_contents: List[float] = []
         sequences: List[str] = []
 
         opener = gzip.open if fastq_path.suffix.endswith(".gz") else open
         with opener(fastq_path, "rt") as handle:
-            read_count = 0
-            for record in SeqIO.parse(handle, "fastq"):
-                if read_count >= sample_size:
-                    break
-
-                sequence = str(record.seq)
-                qualities = record.letter_annotations["phred_quality"]
-
+            for _title, sequence, quality in itertools.islice(FastqGeneralIterator(handle), sample_size):
                 read_lengths.append(len(sequence))
                 gc_contents.append(self._calculate_gc_content(sequence))
-                quality_scores.extend(qualities)
+                qualities.append(quality.encode("ascii"))
                 n_contents.append(sequence.count("N") / len(sequence))
                 sequences.append(sequence)
 
-                read_count += 1
-
-        return read_lengths, gc_contents, histogram_from_scores(quality_scores), n_contents, sequences
+        return read_lengths, gc_contents, quality_histogram(qualities), n_contents, sequences
 
     def _sample_uniform(
         self,

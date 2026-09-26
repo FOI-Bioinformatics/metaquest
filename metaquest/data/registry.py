@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import DataAccessError
@@ -24,6 +24,9 @@ from metaquest.data.file_io import visible_files
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +402,7 @@ def cap_screening(registry: Registry, genome_id: str, max_screened: int = DEFAUL
 
 def record_screening_from_table(
     registry: Registry,
-    table: Any,
+    table: Union["pd.DataFrame", str, Path],
     matches_folder: Union[str, Path],
     max_screened: int = DEFAULT_REGISTRY_MAX_SCREENED,
 ) -> int:
@@ -412,15 +415,8 @@ def record_screening_from_table(
     not hold a number are skipped; every block written gets one timestamp. Returns the number of
     entries recorded. If a table path does not exist, logs at debug level and returns 0.
     """
-    import pandas as pd
-
     from metaquest.data.screening_table import record_screening_table
 
-    if not isinstance(table, pd.DataFrame):
-        if not Path(table).exists():
-            logger.debug("Parsed containment table %s does not exist; nothing to record", table)
-            return 0
-        table = pd.read_csv(Path(table), sep="\t", index_col=0)
     return record_screening_table(registry, table, matches_folder, max_screened)
 
 
@@ -551,15 +547,19 @@ def _to_int_or_none(value: Any) -> Optional[int]:
 to_int_or_none = _to_int_or_none
 
 
-def record_metadata(registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any]) -> None:
+def record_metadata(
+    registry: Registry, accession: str, xml_path: Union[str, Path], fields: Dict[str, Any], root: Optional[Path] = None
+) -> None:
     """Record ``accession``'s downloaded NCBI metadata under its dataset entry, replacing any earlier record.
 
     Copies a fixed set of fields out of ``fields`` (run size and md5, assay type, organism,
     collection date, library layout, platform, library strategy, and the total spot/base counts,
     coerced to ``int`` or ``None``), alongside the project-relative path to the metadata XML and
     a timestamp. Fields absent from ``fields`` are recorded as ``None`` rather than omitted.
+    ``root`` defaults to ``project_root(registry)``; a caller recording many accessions passes it.
     """
-    block = rb.MetadataBlock(xml=_project_relative(xml_path, project_root(registry)), date=_now())
+    root = project_root(registry) if root is None else root
+    block = rb.MetadataBlock(xml=_project_relative(xml_path, root), date=_now())
     for key in (
         "run_size",
         "run_md5",
@@ -754,6 +754,9 @@ def stage_counts(registry: Registry) -> Dict[str, Any]:
     accessions currently in it, and a ``"genomes"`` mapping of each known genome id to its
     extracted and assembled accession counts plus the list of accessions extracted against it
     with zero mapped reads.
+
+    ``status`` uses ``processing.status_report.stage_members`` and ``genome_counts`` instead (one
+    pass); this function is kept as the reference those two are tested against.
     """
     stages = {stage: len(query(registry, stage)) for stage in STAGES}
     genomes: Dict[str, Dict[str, Any]] = {}
@@ -935,8 +938,9 @@ def _bootstrap_downloads_and_metadata(registry: Registry, paths: ProjectPaths) -
     for acc in scan_downloads(paths.fastq):
         record_download(registry, acc, "downloaded", paths.fastq)
         rb.mark_inferred(registry, acc, "download", attempts=0)
+    root = project_root(registry)
     for acc in sorted(scan_metadata(paths.metadata)):
-        record_metadata(registry, acc, paths.metadata / f"{acc}_metadata.xml", {})
+        record_metadata(registry, acc, paths.metadata / f"{acc}_metadata.xml", {}, root=root)
         rb.mark_inferred(registry, acc, "metadata")
 
 

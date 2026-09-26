@@ -22,7 +22,7 @@ from metaquest.data.metadata import (
     parse_metadata,
     parse_metadata_xml,
 )
-from metaquest.data.registry import load_registry, nan_to_none, record_metadata, save_registry
+from metaquest.data.registry import load_registry, nan_to_none, project_root, record_metadata, save_registry
 from metaquest.processing.counts import count_metadata
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.visualization.plots import plot_metadata_counts
@@ -157,6 +157,7 @@ class DownloadMetadataCommand(BaseCommand):
             )
             if not args.dry_run and downloaded:
                 registry = load_registry(args.registry)
+                root = project_root(registry)
                 for accession, xml_path in downloaded.items():
                     # Parse the metadata XML and record parsed fields right away
                     try:
@@ -167,7 +168,7 @@ class DownloadMetadataCommand(BaseCommand):
                             f"Could not parse metadata for {accession}: {e}; recorded the file path only"
                         )
                         fields = {}
-                    record_metadata(registry, accession, xml_path, fields)
+                    record_metadata(registry, accession, xml_path, fields, root=root)
                 save_registry(registry)
                 self._share_with_store(args, registry, downloaded)
             return 0
@@ -204,12 +205,12 @@ class ParseMetadataCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
-    def _record_row(self, registry, metadata_folder: Path, row: Mapping[str, Any]) -> None:
+    def _record_row(self, registry, metadata_folder: Path, row: Mapping[str, Any], root: Path) -> None:
         accession = row.get("Run_ID")
         if accession is None or pd.isna(accession):
             return
         fields = _metadata_fields(row)
-        record_metadata(registry, str(accession), metadata_folder / f"{accession}_metadata.xml", fields)
+        record_metadata(registry, str(accession), metadata_folder / f"{accession}_metadata.xml", fields, root=root)
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
@@ -219,8 +220,9 @@ class ParseMetadataCommand(BaseCommand):
             # Only the columns the registry records, as plain dicts: a wide table (one column per
             # sample attribute) makes a pandas Series per row costly.
             columns = [column for column in _ROW_COLUMNS if column in df.columns]
+            root = project_root(registry)
             for row in df[columns].to_dict("records"):
-                self._record_row(registry, metadata_folder, row)
+                self._record_row(registry, metadata_folder, row, root)
             save_registry(registry)
             return 0
         except MetaQuestError as e:

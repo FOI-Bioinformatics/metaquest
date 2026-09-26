@@ -717,40 +717,6 @@ def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Pa
         raise DataAccessError(f"Error parsing metadata: {e}") from e
 
 
-def get_unique_sample_attributes(metadata_folder: Union[str, Path]) -> List[str]:
-    """
-    Get unique sample attribute tags from all metadata files.
-
-    Args:
-        metadata_folder: Folder containing metadata XML files
-
-    Returns:
-        List of unique sample attribute tags
-    """
-    unique_attributes = set()
-
-    try:
-        # Find all XML files
-        xml_files = list_files(Path(metadata_folder), "*.xml")
-
-        for xml_file in xml_files:
-            try:
-                tree = etree.parse(str(xml_file))
-
-                # Extract attribute tags
-                for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"):
-                    unique_attributes.add(attribute.text)
-
-            except (OSError, etree.XMLSyntaxError) as e:
-                logger.warning(f"Error reading attributes from {xml_file}: {e}")
-
-        return sorted(list(unique_attributes))
-
-    except (OSError, MetaQuestError) as e:
-        logger.warning(f"Error getting unique sample attributes: {e}")
-        return []
-
-
 def check_metadata_attributes(file_path: Union[str, Path], output_file: Union[str, Path]) -> Dict[str, int]:
     """
     Count occurrences of metadata attributes and save to file.

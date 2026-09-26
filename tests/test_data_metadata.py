@@ -24,7 +24,6 @@ from metaquest.data.metadata import (
     _extract_sample_attributes,
     parse_metadata,
     parse_metadata_xml,
-    get_unique_sample_attributes,
     check_metadata_attributes,
 )
 
@@ -935,46 +934,6 @@ class TestParseMetadata:
             parse_metadata("/nonexistent/folder", "/tmp/output.tsv")
 
 
-class TestGetUniqueSampleAttributes:
-    """Test get_unique_sample_attributes function."""
-
-    def test_get_unique_sample_attributes_success(self, tmp_path):
-        """Test successful unique attributes extraction."""
-        metadata_dir = tmp_path / "metadata"
-        metadata_dir.mkdir()
-
-        xml_content = """<?xml version="1.0"?>
-        <root>
-            <SAMPLE_ATTRIBUTES>
-                <SAMPLE_ATTRIBUTE>
-                    <TAG>organism</TAG>
-                    <VALUE>E. coli</VALUE>
-                </SAMPLE_ATTRIBUTE>
-                <SAMPLE_ATTRIBUTE>
-                    <TAG>isolation_source</TAG>
-                    <VALUE>clinical</VALUE>
-                </SAMPLE_ATTRIBUTE>
-            </SAMPLE_ATTRIBUTES>
-        </root>"""
-
-        (metadata_dir / "SRR123_metadata.xml").write_text(xml_content)
-
-        result = get_unique_sample_attributes(metadata_dir)
-
-        assert isinstance(result, list)
-        assert "organism" in result
-        assert "isolation_source" in result
-
-    def test_get_unique_sample_attributes_no_files(self, tmp_path):
-        """Test when no XML files are found."""
-        metadata_dir = tmp_path / "metadata"
-        metadata_dir.mkdir()
-
-        result = get_unique_sample_attributes(metadata_dir)
-
-        assert result == []
-
-
 class TestCheckMetadataAttributes:
     """Test check_metadata_attributes function."""
 
@@ -1134,15 +1093,6 @@ def test_malformed_metadata_file_is_still_skipped(tmp_path):
     """Kind (a): an XML syntax error skips that file only."""
     (tmp_path / "SRR1_metadata.xml").write_text("<not xml")
     assert parse_metadata(tmp_path, tmp_path / "out.tsv").empty
-
-
-def test_unique_sample_attributes_default_on_os_error_and_propagate_a_bug(tmp_path):
-    """Kind (b): a listing failure yields the default; a TypeError propagates."""
-    with patch("metaquest.data.metadata.list_files", side_effect=PermissionError("denied")):
-        assert get_unique_sample_attributes(tmp_path) == []
-    with patch("metaquest.data.metadata.list_files", side_effect=TypeError("bug")):
-        with pytest.raises(TypeError):
-            get_unique_sample_attributes(tmp_path)
 
 
 def test_incomplete_read_in_a_batch_is_retried_then_reported_as_failed(tmp_path):
