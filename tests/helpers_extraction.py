@@ -110,6 +110,9 @@ def _fake_tools(state):
     them for real rather than reading ``mapped``/``mapped_total``/``coverage_mapped`` back
     off the state dict. Set it to pin a mapped/kept count to real filter semantics instead
     of a hard-coded number.
+
+    minimap2_fail_stderr (str, default None): when given, every minimap2 alignment exits
+    non-zero (``CalledProcessError``) with this text on stderr, as an old or broken minimap2 would.
     """
 
     def run(executable, args, **kwargs):
@@ -121,6 +124,8 @@ def _fake_tools(state):
                 index_path = Path(args[args.index("-d") + 1])
                 index_path.parent.mkdir(parents=True, exist_ok=True)
                 index_path.write_bytes(b"")
+            elif "-o" in args and state.get("minimap2_fail_stderr") is not None:
+                raise subprocess.CalledProcessError(1, ["minimap2", *args], stderr=state["minimap2_fail_stderr"])
             elif "-o" in args:
                 # Aligning: create the SAM output the real tool would write.
                 sam_path = Path(args[args.index("-o") + 1])

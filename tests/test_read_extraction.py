@@ -1429,3 +1429,33 @@ class TestReferenceCoverage:
         results = self._extract(root, table, genome)
         assert results["SRR1"].coverage is None
         assert not tsv.exists()
+
+
+class TestOldMinimap2WithoutSamHitOnly:
+    """A minimap2 older than 2.17 rejects --sam-hit-only; the error names the minimum version."""
+
+    OLD_STDERR = '[ERROR] unknown option in "--sam-hit-only"\n'
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_unknown_option_is_a_configuration_error(self, mock_run, tmp_path):
+        from metaquest.core.exceptions import ConfigurationError
+
+        state = {"minimap2_fail_stderr": self.OLD_STDERR}
+        mock_run.side_effect = _fake_tools(state)
+        with pytest.raises(ConfigurationError, match="minimap2 2.17 or later") as caught:
+            _run_minimap2(
+                "SRR1", "sr", 4, tmp_path / "out.sam", tmp_path / "g.sr.mmi", tmp_path / "g.fna", [tmp_path / "r.fq"]
+            )
+        assert "unknown option" in str(caught.value)
+        # No retry against the FASTA: the same option would be rejected again.
+        assert [call[0] for call in state["calls"]] == ["minimap2"]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_other_failures_still_fall_back_to_the_fasta(self, mock_run, tmp_path):
+        state = {"minimap2_fail_stderr": "[ERROR] failed to open file 'g.sr.mmi'\n"}
+        mock_run.side_effect = _fake_tools(state)
+        with pytest.raises(subprocess.CalledProcessError):
+            _run_minimap2(
+                "SRR1", "sr", 4, tmp_path / "out.sam", tmp_path / "g.sr.mmi", tmp_path / "g.fna", [tmp_path / "r.fq"]
+            )
+        assert len(state["calls"]) == 2

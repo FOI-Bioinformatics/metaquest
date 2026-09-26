@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Un
 
 import pandas as pd
 
-from metaquest.core.exceptions import DataAccessError, ProcessingError, SecurityError
+from metaquest.core.exceptions import ConfigurationError, DataAccessError, ProcessingError, SecurityError
 from metaquest.data.file_io import ensure_directory
 from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
@@ -45,6 +45,8 @@ UNEQUAL_MATES_MARKER = "different number of records"
 # samtools -F flags dropped by the alignment filter: unmapped (0x4), secondary (0x100)
 # and supplementary (0x800) alignments.
 FILTER_FLAGS = "0x904"
+
+MINIMAP2_MIN_VERSION = "2.17"  # the first minimap2 release with --sam-hit-only (minimap2 NEWS.md)
 
 
 @dataclass
@@ -99,11 +101,7 @@ def resolve_index_path(genome_fasta: Union[str, Path], preset: str, index_dir: U
 def _index_source(genome_path: Path) -> Dict[str, Any]:
     """The identity of the FASTA an index was built from: resolved path, size and mtime."""
     stat = genome_path.stat()
-    return {
-        "fasta": str(genome_path.resolve()),
-        "bytes": stat.st_size,
-        "mtime": stat.st_mtime,
-    }
+    return {"fasta": str(genome_path.resolve()), "bytes": stat.st_size, "mtime": stat.st_mtime}
 
 
 def _index_is_current(index_path: Path, source: Dict[str, Any]) -> bool:
@@ -174,6 +172,7 @@ def _run_minimap2(
     try:
         return SecureSubprocess.run_secure("minimap2", args)
     except (subprocess.CalledProcessError, SecurityError, DataAccessError, OSError) as exc:
+        _refuse_old_minimap2(exc)
         logger.warning(
             "%s: minimap2 failed against the prebuilt index %s (%s); retrying against the FASTA directly",
             accession,
@@ -182,6 +181,14 @@ def _run_minimap2(
         )
         fallback_args = _minimap2_map_args(preset, threads, sam_path, genome_fasta, reads)
         return SecureSubprocess.run_secure("minimap2", fallback_args)
+
+
+def _refuse_old_minimap2(exc: Exception) -> None:
+    """Raise ConfigurationError when minimap2's stderr rejects ``--sam-hit-only`` as an unknown option."""
+    stderr = str(getattr(exc, "stderr", None) or "")
+    if "sam-hit-only" in stderr and re.search(r"unknown|unrecogni[sz]ed|invalid", stderr, re.IGNORECASE):
+        message = f"minimap2 does not support --sam-hit-only; install minimap2 {MINIMAP2_MIN_VERSION} or later"
+        raise ConfigurationError(f"{message} ({stderr.strip()})") from exc
 
 
 def _fastq_is_empty(path: Path) -> bool:
@@ -903,20 +910,8 @@ def _samtools_fastq_paired_args(
 ) -> List[str]:
     """Build the ``samtools fastq`` argument list ``_export_mapped_fastq`` uses for paired
     output."""
-    return [
-        "fastq",
-        "-@",
-        str(threads),
-        "-1",
-        str(out1),
-        "-2",
-        str(out2),
-        "-s",
-        str(singles),
-        "-0",
-        str(orphans),
-        str(bam_path),
-    ]
+    args = ["fastq", "-@", str(threads), "-1", str(out1), "-2", str(out2)]
+    return args + ["-s", str(singles), "-0", str(orphans), str(bam_path)]
 
 
 def _megahit_args(

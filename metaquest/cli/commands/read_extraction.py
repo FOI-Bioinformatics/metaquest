@@ -117,7 +117,8 @@ class ExtractTargetReadsCommand(BaseCommand):
         parser.add_argument(
             "--debug-keep-sam",
             action="store_true",
-            help="Keep the intermediate SAM alignment(s) instead of removing them once the BAM exists",
+            help="Keep the intermediate SAM alignment(s) instead of removing them once the BAM exists "
+            "(mapped records only)",
         )
         parser.add_argument(
             "--assemble", action="store_true", help="Assemble each sample's extracted reads with megahit"

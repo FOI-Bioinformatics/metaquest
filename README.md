@@ -82,7 +82,7 @@ Download and assembly steps call command-line tools that are not Python packages
 | `fasterq-dump`, `prefetch` (sra-tools) | `download_sra` (prefetch first, then fasterq-dump; `--no-prefetch` skips prefetch) |
 | `pigz` (optional) | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
 | `datasets` (ncbi-datasets-cli) | `genome_download`, `genome_prepare`, `download_test_genome` |
-| `minimap2`, `samtools` | `extract_target_reads` |
+| `minimap2` (2.17 or later, for `--sam-hit-only`), `samtools` | `extract_target_reads` |
 | `megahit` | `extract_target_reads --assemble` |
 | `seqkit` (optional) | `sra_profile`, `sra_report` (faster read statistics; falls back to a plain Python reader when absent) |
 
