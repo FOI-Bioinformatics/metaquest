@@ -2,6 +2,8 @@
 Tests for metaquest.data.metadata module.
 """
 
+import os
+
 import pytest
 import pandas as pd
 from pathlib import Path
@@ -1175,3 +1177,238 @@ def test_incomplete_read_for_one_accession_is_retried_then_reported_as_failed(tm
     assert success is False
     assert "IncompleteRead" in message
     assert mock_sleep.call_count == 3
+
+
+# --- Single-pass metadata parsing (performance plan, task 6) ---
+
+
+def _reference_fields(tree):
+    """``_extract_metadata_fields`` as it was before the single-pass change, copied as the reference."""
+
+    def run_attr(element, name):
+        return None if element is None else element.get(name)
+
+    def first_srafile(elements):
+        for element in elements:
+            if element.get("semantic_name") == "run":
+                return element
+        return elements[0] if elements else None
+
+    def first_child_tag(element):
+        if element is None:
+            return None
+        children = list(element)
+        return children[0].tag if children else None
+
+    def spot_length():
+        averages = []
+        for read in tree.findall(".//RUN/Statistics/Read"):
+            average = read.get("average")
+            if average is None:
+                continue
+            try:
+                averages.append(float(average))
+            except ValueError:
+                continue
+        if not averages:
+            return None
+        total = sum(averages)
+        return str(int(total)) if total.is_integer() else str(total)
+
+    t = tree.findtext
+    run_element = tree.find(".//RUN")
+    srafiles = tree.findall(".//RUN/SRAFiles/SRAFile")
+    srafile = first_srafile(srafiles)
+    return {
+        "Run_ID": t(".//RUN/IDENTIFIERS/PRIMARY_ID"),
+        "Run_Total_Spots": run_attr(run_element, "total_spots") or t(".//RUN/Total_spots"),
+        "Run_Total_Bases": run_attr(run_element, "total_bases") or t(".//RUN/Total_bases"),
+        "Run_Size": run_attr(run_element, "size") or t(".//RUN/size"),
+        "Run_Download_Path": t(".//RUN/download_path"),
+        "Run_MD5": (srafile.get("md5") if srafile is not None else None) or t(".//RUN/md5"),
+        "Run_Filename": (srafile.get("filename") if srafile is not None else None) or t(".//RUN/filename"),
+        "Run_Spot_Length": spot_length() or t(".//RUN/spot_length"),
+        "Run_Reads": t(".//RUN/reads"),
+        "Run_FTP": t(".//RUN/ftp"),
+        "Run_Aspera": t(".//RUN/aspera"),
+        "Run_Galaxy": t(".//RUN/galaxy"),
+        "Project_ID": t(".//STUDY/IDENTIFIERS/PRIMARY_ID"),
+        "Project_Title": t(".//STUDY/DESCRIPTOR/STUDY_TITLE"),
+        "Project_Abstract": t(".//STUDY/DESCRIPTOR/STUDY_ABSTRACT"),
+        "Sample_ID": t(".//SAMPLE/IDENTIFIERS/PRIMARY_ID"),
+        "Sample_External_ID": t(".//SAMPLE/IDENTIFIERS/EXTERNAL_ID"),
+        "Sample_Name": t(".//SAMPLE/SAMPLE_NAME/TAXON_ID"),
+        "Sample_Scientific_Name": t(".//SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME"),
+        "Sample_Title": t(".//SAMPLE/TITLE"),
+        "Experiment_ID": t(".//EXPERIMENT/IDENTIFIERS/PRIMARY_ID"),
+        "Experiment_Title": t(".//EXPERIMENT/TITLE"),
+        "Experiment_Design": t(".//EXPERIMENT/DESIGN/DESIGN_DESCRIPTION"),
+        "Experiment_Library_Name": t(".//EXPERIMENT//LIBRARY_DESCRIPTOR/LIBRARY_NAME"),
+        "Experiment_Library_Strategy": t(".//EXPERIMENT//LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY"),
+        "Experiment_Library_Source": t(".//EXPERIMENT//LIBRARY_DESCRIPTOR/LIBRARY_SOURCE"),
+        "Experiment_Library_Selection": t(".//EXPERIMENT//LIBRARY_DESCRIPTOR/LIBRARY_SELECTION"),
+        "Experiment_Library_Layout": first_child_tag(tree.find(".//LIBRARY_LAYOUT")),
+        "Platform": first_child_tag(tree.find(".//PLATFORM")),
+        "SRA_Normalized_URL": srafiles[1].get("url") if len(srafiles) > 1 else None,
+    }
+
+
+def _reference_parse_metadata(folder):
+    """``parse_metadata`` as it was before the single-pass change (two parses per file, dense rows)."""
+    from lxml import etree
+
+    files = sorted(p for p in Path(folder).glob("*.xml") if not p.name.startswith("."))
+    unique = set()
+    for xml_file in files:
+        try:
+            tree = etree.parse(str(xml_file))
+        except etree.XMLSyntaxError:
+            continue
+        for tag in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE/TAG"):
+            unique.add(tag.text)
+    unique_attributes = sorted(unique)
+    records = []
+    for xml_file in files:
+        try:
+            tree = etree.parse(str(xml_file))
+        except etree.XMLSyntaxError:
+            continue
+        record = _reference_fields(tree)
+        attributes = {}
+        for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE"):
+            tag = attribute.findtext("TAG")
+            if tag in unique_attributes:
+                attributes[tag] = attribute.findtext("VALUE")
+        for name in unique_attributes:
+            record[name] = attributes.get(name, None)
+        records.append(record)
+    return pd.DataFrame(records)
+
+
+_EDGE_CASE_XML = {
+    # Only a run identifier: every other fixed field is None.
+    "SRR900001": "<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE><RUN_SET><RUN><IDENTIFIERS>"
+    "<PRIMARY_ID>SRR900001</PRIMARY_ID></IDENTIFIERS></RUN></RUN_SET></EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>",
+    # Empty elements read as "" (not None); child-element fallbacks for size/md5/spots; a duplicated tag
+    # (the later value wins); an attribute without VALUE; a tag equal to a fixed column name.
+    "SRR900002": "<EXPERIMENT_PACKAGE_SET><EXPERIMENT_PACKAGE><EXPERIMENT><TITLE/><PLATFORM><OXFORD_NANOPORE/>"
+    "</PLATFORM></EXPERIMENT><SAMPLE><TITLE></TITLE><SAMPLE_ATTRIBUTES>"
+    "<SAMPLE_ATTRIBUTE><TAG>host</TAG><VALUE>first</VALUE></SAMPLE_ATTRIBUTE>"
+    "<SAMPLE_ATTRIBUTE><TAG>host</TAG><VALUE>second</VALUE></SAMPLE_ATTRIBUTE>"
+    "<SAMPLE_ATTRIBUTE><TAG>no_value</TAG></SAMPLE_ATTRIBUTE>"
+    "<SAMPLE_ATTRIBUTE><TAG>Platform</TAG><VALUE>from attribute</VALUE></SAMPLE_ATTRIBUTE>"
+    "<SAMPLE_ATTRIBUTE><TAG>empty_value</TAG><VALUE/></SAMPLE_ATTRIBUTE>"
+    "</SAMPLE_ATTRIBUTES></SAMPLE><RUN_SET><RUN><IDENTIFIERS><PRIMARY_ID>SRR900002</PRIMARY_ID></IDENTIFIERS>"
+    "<size>77</size><md5>m5</md5><Total_spots>9</Total_spots><spot_length>150</spot_length>"
+    "<Statistics><Read average='75.5'/><Read average='x'/><Read/></Statistics>"
+    "</RUN></RUN_SET></EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>",
+    # Two packages: every field comes from the first match in document order.
+    "SRR900003": "<EXPERIMENT_PACKAGE_SET>"
+    "<EXPERIMENT_PACKAGE><STUDY><DESCRIPTOR><STUDY_TITLE>first study</STUDY_TITLE></DESCRIPTOR></STUDY>"
+    "<RUN_SET><RUN accession='SRR900003' total_spots='5'><IDENTIFIERS><PRIMARY_ID>SRR900003</PRIMARY_ID>"
+    "</IDENTIFIERS><SRAFiles><SRAFile filename='a' md5='1' url='u1'/><SRAFile filename='b' md5='2' url='u2'/>"
+    "</SRAFiles></RUN></RUN_SET></EXPERIMENT_PACKAGE>"
+    "<EXPERIMENT_PACKAGE><STUDY><IDENTIFIERS><PRIMARY_ID>SRP2</PRIMARY_ID></IDENTIFIERS><DESCRIPTOR>"
+    "<STUDY_TITLE>second study</STUDY_TITLE></DESCRIPTOR></STUDY><SAMPLE><SAMPLE_ATTRIBUTES><SAMPLE_ATTRIBUTE>"
+    "<TAG>strain</TAG><VALUE>K-12</VALUE></SAMPLE_ATTRIBUTE></SAMPLE_ATTRIBUTES></SAMPLE>"
+    "<RUN_SET><RUN accession='SRR900004'><IDENTIFIERS><PRIMARY_ID>SRR900004</PRIMARY_ID></IDENTIFIERS></RUN>"
+    "</RUN_SET></EXPERIMENT_PACKAGE></EXPERIMENT_PACKAGE_SET>",
+    # Malformed: skipped by both.
+    "SRR900005": "<EXPERIMENT_PACKAGE_SET><unclosed>",
+}
+
+
+@pytest.fixture
+def mixed_metadata_folder(tmp_path):
+    """Synthetic NCBI-like files with overlapping and disjoint attribute sets, plus the edge cases above."""
+    from tests.perf_metadata import write_metadata_folder
+
+    folder = tmp_path / "metadata"
+    write_metadata_folder(folder, count=25, per_file=14, pool=30)
+    for accession, xml in _EDGE_CASE_XML.items():
+        (folder / f"{accession}_metadata.xml").write_text(xml)
+    return folder
+
+
+def _rows(df):
+    """The table's cells as plain lists, so None and "" are compared exactly."""
+    return [list(row) for row in df.itertuples(index=False, name=None)]
+
+
+def test_parse_metadata_output_matches_the_two_pass_reference(mixed_metadata_folder, tmp_path):
+    """The single-pass table has the same columns, order, dtypes and cell values as the earlier two-pass one."""
+    expected = _reference_parse_metadata(mixed_metadata_folder)
+    result = parse_metadata(mixed_metadata_folder, tmp_path / "out.tsv")
+
+    assert list(result.columns) == list(expected.columns)
+    assert list(result.dtypes) == list(expected.dtypes)
+    assert _rows(result) == _rows(expected)
+    expected.to_csv(tmp_path / "expected.tsv", sep="\t", index=False)
+    assert (tmp_path / "out.tsv").read_text() == (tmp_path / "expected.tsv").read_text()
+    # Checks on the fixture itself, so the comparison above covers what it is meant to.
+    assert len(result) == 28
+    assert result.columns[:2].tolist() == ["Run_ID", "Run_Total_Spots"]
+    assert result.columns[29] == "SRA_Normalized_URL"
+    assert list(result.columns[30:]) == sorted(result.columns[30:])
+    row = result.set_index("Run_ID").loc["SRR900002"]
+    assert row["Sample_Title"] == "" and row["Experiment_Title"] == ""
+    assert row["host"] == "second" and row["no_value"] is None and row["Platform"] == "from attribute"
+
+
+def test_parse_metadata_parses_each_file_once(mixed_metadata_folder, tmp_path):
+    """Each XML file is parsed by lxml exactly once (the attribute scan no longer re-reads the folder)."""
+    import metaquest.data.metadata as metadata_module
+
+    real_parse = metadata_module.etree.parse
+    with patch.object(metadata_module.etree, "parse", side_effect=real_parse) as spy:
+        parse_metadata(mixed_metadata_folder, tmp_path / "out.tsv")
+
+    parsed = sorted(Path(call_args.args[0]).name for call_args in spy.call_args_list)
+    assert parsed == sorted(p.name for p in mixed_metadata_folder.glob("*.xml"))
+
+
+def test_parse_metadata_xml_matches_the_folder_row(tmp_path):
+    """The single-file parse returns the folder table's row for that file, minus attributes it lacks.
+
+    The folder holds no attribute named like a fixed column (the SRR900002 case), since such a tag
+    replaces that column for every row of the folder table but only for its own file here.
+    """
+    from tests.perf_metadata import write_metadata_folder
+
+    def missing_as_none(value):
+        return None if not isinstance(value, str) and pd.isna(value) else value
+
+    folder = tmp_path / "metadata"
+    paths = write_metadata_folder(folder, count=8, per_file=14, pool=30)
+    for accession in ("SRR900001", "SRR900003"):
+        paths.append(folder / f"{accession}_metadata.xml")
+        paths[-1].write_text(_EDGE_CASE_XML[accession])
+    table = parse_metadata(folder, tmp_path / "out.tsv").set_index("Run_ID", drop=False)
+    for path in paths:
+        single = parse_metadata_xml(path)
+        row = {key: missing_as_none(value) for key, value in table.loc[single["Run_ID"]].items()}
+        assert single == {key: row[key] for key in single}
+        assert all(value is None for key, value in row.items() if key not in single)
+
+
+def test_download_metadata_lists_the_metadata_folder_once(tmp_path):
+    """Already-downloaded accessions are found with one directory listing, not one stat per accession."""
+    import metaquest.data.metadata as metadata_module
+
+    metadata_dir = tmp_path / "metadata"
+    metadata_dir.mkdir()
+    (metadata_dir / "SRR2_metadata.xml").write_text("<x/>")
+    accessions = tmp_path / "accessions.txt"
+    accessions.write_text("SRR1\nSRR2\nSRR3\n")
+
+    real_listdir = os.listdir
+    with (
+        patch.object(metadata_module.os, "listdir", side_effect=real_listdir) as listdir_spy,
+        patch.object(metadata_module, "_download_accessions_metadata", return_value={}) as download,
+    ):
+        download_metadata(
+            email="a@b.c", matches_folder=tmp_path, metadata_folder=metadata_dir, accessions_file=accessions
+        )
+
+    assert sorted(download.call_args.args[0]) == ["SRR1", "SRR3"]
+    assert [Path(c.args[0]) for c in listdir_spy.call_args_list] == [metadata_dir]

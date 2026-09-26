@@ -260,12 +260,11 @@ def download_metadata(
         total_accessions = len(unique_accessions)
         logger.info(f"Found {total_accessions} unique accessions")
 
-        # Check which accessions need downloading
-        accessions_to_download = []
-        for accession in unique_accessions:
-            metadata_file = metadata_path / f"{accession}_metadata.xml"
-            if not metadata_file.exists():
-                accessions_to_download.append(accession)
+        # Check which accessions need downloading, from one listing of the folder
+        existing = set(os.listdir(metadata_path))
+        accessions_to_download = [
+            accession for accession in unique_accessions if f"{accession}_metadata.xml" not in existing
+        ]
 
         to_download_count = len(accessions_to_download)
         logger.info(f"Need to download {to_download_count} accessions")
@@ -429,6 +428,16 @@ def _first_child_tag(element):
     return children[0].tag if children else None
 
 
+# The fixed columns of the metadata table, in table order; sample attribute columns follow them.
+METADATA_FIXED_COLUMNS = tuple(
+    "Run_ID Run_Total_Spots Run_Total_Bases Run_Size Run_Download_Path Run_MD5 Run_Filename Run_Spot_Length"
+    " Run_Reads Run_FTP Run_Aspera Run_Galaxy Project_ID Project_Title Project_Abstract Sample_ID Sample_External_ID"
+    " Sample_Name Sample_Scientific_Name Sample_Title Experiment_ID Experiment_Title Experiment_Design"
+    " Experiment_Library_Name Experiment_Library_Strategy Experiment_Library_Source Experiment_Library_Selection"
+    " Experiment_Library_Layout Platform SRA_Normalized_URL".split()
+)
+
+
 def _run_spot_length(tree):
     """Sum the ``average`` read length reported for each read in ``Statistics/Read``.
 
@@ -554,25 +563,45 @@ def _extract_metadata_fields(tree, xml_file):
         return {}
 
 
-def _extract_sample_attributes(tree, unique_attributes):
+def _extract_sample_attributes(tree, unique_attributes=None):
     """
-    Extract sample attributes from an XML tree.
+    Extract sample attributes (SAMPLE_ATTRIBUTE TAG/VALUE pairs) from an XML tree.
+
+    Each attribute's tag and value are the text of its first TAG and first VALUE child (``""``
+    for an empty element, as ``findtext`` gives). A tag repeated within one file keeps its last
+    value; an attribute without VALUE maps to ``None``, and one without a TAG text is skipped.
 
     Args:
-        tree: XML tree to extract data from
-        unique_attributes: List of unique attribute names
+        tree: XML tree or element (lxml or stdlib ElementTree) to extract data from
+        unique_attributes: Attribute names to keep (any container supporting ``in``), or ``None``
+            to keep every attribute in the file
 
     Returns:
         Dictionary with extracted attributes
     """
     sample_attributes = {}
     for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE"):
-        tag = attribute.findtext("TAG")
-        value = attribute.findtext("VALUE")
-        if tag in unique_attributes:
+        # One pass over the children instead of two findtext calls: several times faster in lxml.
+        tag = value = None
+        for child in attribute:
+            if child.tag == "TAG":
+                if tag is None:
+                    tag = child.text or ""
+            elif child.tag == "VALUE" and value is None:
+                value = child.text or ""
+        if tag and (unique_attributes is None or tag in unique_attributes):
             sample_attributes[tag] = value
 
     return sample_attributes
+
+
+def _parse_metadata_file(xml_file: Union[str, Path]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Parse one metadata XML file once, returning its fixed fields and its own sample attributes.
+
+    Raises OSError when the file cannot be read and ``lxml.etree.XMLSyntaxError`` on malformed XML.
+    """
+    root = etree.parse(str(xml_file)).getroot()
+    return _extract_metadata_fields(root, xml_file), _extract_sample_attributes(root)
 
 
 def parse_metadata_xml(path: Union[str, Path]) -> Dict[str, Any]:
@@ -587,20 +616,48 @@ def parse_metadata_xml(path: Union[str, Path]) -> Dict[str, Any]:
     xml_path = Path(path)
     if not xml_path.is_file():
         raise OSError(f"Metadata XML file not found: {xml_path}")
-    tree = ET.parse(str(xml_path))
-    metadata_dict = _extract_metadata_fields(tree, xml_path)
-    attribute_tags = [
-        tag
-        for tag in (attribute.findtext("TAG") for attribute in tree.findall(".//SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE"))
-        if tag is not None
-    ]
-    metadata_dict.update(_extract_sample_attributes(tree, attribute_tags))
+    try:
+        metadata_dict, sample_attributes = _parse_metadata_file(xml_path)
+    except etree.XMLSyntaxError as e:
+        raise ET.ParseError(f"{xml_path}: {e}") from e
+    metadata_dict.update(sample_attributes)
     return metadata_dict
+
+
+def _metadata_table(field_rows: List[Dict[str, Any]], attribute_rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Build the metadata table from per-file fixed fields and per-file (sparse) sample attributes.
+
+    Columns are the fixed fields in ``METADATA_FIXED_COLUMNS`` order, then every attribute tag seen
+    in any file, sorted. A file without a given attribute gets ``None`` in that column. An attribute
+    tag equal to a fixed column name replaces that column's values for every row (with ``None`` for
+    files lacking the attribute), as the table has always done.
+    """
+    row_count = len(field_rows)
+    # Attribute columns start as all None and only the cells a file actually has are filled in,
+    # so the work grows with the number of attributes present rather than rows times tags.
+    attribute_columns: Dict[str, List[Any]] = {}
+    for index, attributes in enumerate(attribute_rows):
+        for tag, value in attributes.items():
+            column = attribute_columns.get(tag)
+            if column is None:
+                column = attribute_columns[tag] = [None] * row_count
+            column[index] = value
+
+    columns: Dict[str, List[Any]] = {}
+    for name in METADATA_FIXED_COLUMNS:
+        replaced = attribute_columns.get(name)
+        columns[name] = replaced if replaced is not None else [row.get(name) for row in field_rows]
+    for tag in sorted(attribute_columns.keys() - set(METADATA_FIXED_COLUMNS)):
+        columns[tag] = attribute_columns[tag]
+    logger.info(f"Found {len(attribute_columns)} unique sample attributes")
+    return pd.DataFrame(columns)
 
 
 def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Path]) -> pd.DataFrame:
     """
     Parse metadata XML files and create a consolidated table.
+
+    Each file is parsed once; its fixed fields and sample attributes are read from the same tree.
 
     Args:
         metadata_folder: Folder containing metadata XML files
@@ -614,16 +671,11 @@ def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Pa
     """
     metadata_path = validate_folder(metadata_folder)
 
-    metadata_records = []
-    processed_count = 0
+    field_rows: List[Dict[str, Any]] = []
+    attribute_rows: List[Dict[str, Any]] = []
     error_count = 0
 
     try:
-        # Get unique sample attributes
-        unique_attributes = get_unique_sample_attributes(metadata_path)
-        logger.info(f"Found {len(unique_attributes)} unique sample attributes")
-
-        # Process each XML file
         xml_files = list_files(metadata_path, "*.xml")
 
         if not xml_files:
@@ -634,38 +686,29 @@ def parse_metadata(metadata_folder: Union[str, Path], output_file: Union[str, Pa
 
         for xml_file in xml_files:
             try:
-                tree = etree.parse(str(xml_file))
-
-                # Extract standard metadata fields
-                metadata_dict = _extract_metadata_fields(tree, xml_file)
-
-                # Extract sample attributes
-                sample_attributes = _extract_sample_attributes(tree, unique_attributes)
-
-                # Add sample attributes to metadata
-                for attribute in unique_attributes:
-                    metadata_dict[attribute] = sample_attributes.get(attribute, None)
-
-                metadata_records.append(metadata_dict)
-                processed_count += 1
-
-                # Log progress periodically
-                if processed_count % 100 == 0:
-                    logger.info(f"Processed {processed_count} metadata files")
-
+                fields, sample_attributes = _parse_metadata_file(xml_file)
             except (OSError, etree.XMLSyntaxError, ValueError) as e:
                 error_count += 1
                 logger.error(f"Error parsing {xml_file}: {e}")
+                continue
 
-        # Create DataFrame
-        if not metadata_records:
+            field_rows.append(fields)
+            attribute_rows.append(sample_attributes)
+
+            # Log progress periodically
+            if len(field_rows) % 100 == 0:
+                logger.info(f"Processed {len(field_rows)} metadata files")
+
+        if not field_rows:
             logger.warning("No metadata records created")
             return pd.DataFrame()
 
-        metadata_df = pd.DataFrame(metadata_records)
+        metadata_df = _metadata_table(field_rows, attribute_rows)
 
         # Save to file
-        write_csv(metadata_df, output_file, sep="\t", index=False)
+        # One chunk: pandas' default chunk size shrinks with the column count, and with one column
+        # per sample attribute its per-chunk, per-column conversion dominated the write time.
+        write_csv(metadata_df, output_file, sep="\t", index=False, chunksize=len(metadata_df))
         logger.info(f"Saved metadata table with {len(metadata_df)} records to {output_file}")
 
         return metadata_df

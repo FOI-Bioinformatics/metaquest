@@ -30,6 +30,24 @@ from metaquest.visualization.plots import plot_metadata_counts
 logger = logging.getLogger(__name__)
 
 
+# Registry field name and the metadata table column it is read from, as used by _metadata_fields.
+_FIELD_COLUMNS = (
+    ("run_size", "Run_Size"),
+    ("run_md5", "Run_MD5"),
+    ("run_total_spots", "Run_Total_Spots"),
+    ("run_total_bases", "Run_Total_Bases"),
+    ("assay_type", "Experiment_Library_Strategy"),
+    ("organism", "Sample_Scientific_Name"),
+    ("collection_date", "collection_date"),
+    ("library_layout", "Experiment_Library_Layout"),
+    ("platform", "Platform"),
+    ("library_strategy", "Experiment_Library_Strategy"),
+)
+
+# The table columns ParseMetadataCommand reads per row: the accession and the _FIELD_COLUMNS sources.
+_ROW_COLUMNS = tuple(dict.fromkeys(("Run_ID",) + tuple(column for _, column in _FIELD_COLUMNS)))
+
+
 def _metadata_fields(row: Mapping[str, Any]) -> Dict[str, Any]:
     """Extract metadata fields from a parsed metadata dict or pandas row.
 
@@ -45,18 +63,7 @@ def _metadata_fields(row: Mapping[str, Any]) -> Dict[str, Any]:
         Dict with registry field names like "run_total_spots", "run_md5", etc.
     """
     fields: Dict[str, Any] = {}
-    for field, column in (
-        ("run_size", "Run_Size"),
-        ("run_md5", "Run_MD5"),
-        ("run_total_spots", "Run_Total_Spots"),
-        ("run_total_bases", "Run_Total_Bases"),
-        ("assay_type", "Experiment_Library_Strategy"),
-        ("organism", "Sample_Scientific_Name"),
-        ("collection_date", "collection_date"),
-        ("library_layout", "Experiment_Library_Layout"),
-        ("platform", "Platform"),
-        ("library_strategy", "Experiment_Library_Strategy"),
-    ):
+    for field, column in _FIELD_COLUMNS:
         value = row.get(column)
         if value is not None:
             fields[field] = nan_to_none(value)
@@ -197,7 +204,7 @@ class ParseMetadataCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
-    def _record_row(self, registry, metadata_folder: Path, row: "pd.Series") -> None:
+    def _record_row(self, registry, metadata_folder: Path, row: Mapping[str, Any]) -> None:
         accession = row.get("Run_ID")
         if accession is None or pd.isna(accession):
             return
@@ -209,7 +216,10 @@ class ParseMetadataCommand(BaseCommand):
             df = parse_metadata(args.metadata_folder, args.metadata_table_file)
             registry = load_registry(args.registry)
             metadata_folder = Path(args.metadata_folder)
-            for _, row in df.iterrows():
+            # Only the columns the registry records, as plain dicts: a wide table (one column per
+            # sample attribute) makes a pandas Series per row costly.
+            columns = [column for column in _ROW_COLUMNS if column in df.columns]
+            for row in df[columns].to_dict("records"):
                 self._record_row(registry, metadata_folder, row)
             save_registry(registry)
             return 0
