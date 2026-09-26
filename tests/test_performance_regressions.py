@@ -181,9 +181,11 @@ def test_results_rows_on_20000_datasets_by_3_genomes_is_fast(registry_20k):
 def test_stage_counts_on_5000_datasets_is_fast(tmp_path):
     """``stage_counts`` on 5,000 datasets, reading single registry fields rather than typed blocks.
 
-    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.05 s after the fix
-    (about 8x slower before it, when every dataset was converted into a typed ``RegistryBlock``).
-    Bound: 0.2 s, about three times the measured time, a single run.
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.05 s, the best of
+    three runs (about 8x slower before the fix, when every dataset was converted into a typed
+    ``RegistryBlock``). Bound: 0.5 s, well above 3x the measured time, to hold up against the
+    slowdown a busier or shared machine can add (a fix-round-1 review measured this same call at a
+    stable 0.13-0.14 s on such a machine; see the task-9 report's fix-round-1 section).
     """
     r = registry_mod.Registry()
     for i in range(5000):
@@ -207,14 +209,12 @@ def test_stage_counts_on_5000_datasets_is_fast(tmp_path):
         conversions.append(cls.__name__)
         return original(cls, data)
 
-    start = time.perf_counter()
     with patch.object(rb.RegistryBlock, "from_dict", classmethod(counting)):
-        counts = registry_mod.stage_counts(r)
-    elapsed = time.perf_counter() - start
+        best, counts = _best_of(lambda: registry_mod.stage_counts(r))
     assert counts["stages"]["downloaded"] == 5000 and counts["genomes"]["G1"]["extracted"] == 250
     assert len(counts["genomes"]["G1"]["zero_mapped"]) == 250
     assert conversions == []
-    assert elapsed < 0.2, f"stage_counts took {elapsed:.2f} s on 5000 datasets"
+    assert best < 0.5, f"stage_counts took {best:.2f} s on 5000 datasets"
 
 
 @pytest.mark.perf
