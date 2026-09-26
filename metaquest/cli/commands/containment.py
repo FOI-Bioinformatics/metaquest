@@ -6,6 +6,8 @@ import argparse
 import shlex
 from typing import List
 
+import pandas as pd
+
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater import parse_containment_data
@@ -76,10 +78,12 @@ class ParseContainmentCommand(BaseCommand):
                 details_file=args.details_file,
                 errors=errors,
             )
+            # The table just built, so it is not read back from disk; the file when there is none.
+            table = getattr(summary, "table", None)
             with registry_transaction(args.registry) as registry:
                 record_screening_from_table(
                     registry,
-                    args.parsed_containment_file,
+                    table if isinstance(table, pd.DataFrame) else args.parsed_containment_file,
                     args.matches_folder,
                     max_screened=args.registry_max_screened,
                 )

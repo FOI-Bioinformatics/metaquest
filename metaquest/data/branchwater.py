@@ -7,8 +7,9 @@ This module provides functions for processing Branchwater containment files.
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, List, Optional, Union
+from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import pandas as pd
 
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
@@ -368,6 +369,30 @@ def _process_genome_containments(csv_file, genome_id, containment_data, details_
         raise DataAccessError(f"Error processing {csv_file}: {e}") from e
 
 
+def _threshold_counts(max_values: np.ndarray, step_size: float) -> Tuple[List[float], List[int]]:
+    """Thresholds from 1.0 down to 0.0 in ``step_size`` steps, and how many rows reach each.
+
+    A row counts at a threshold when its maximum containment is at or above it. One sorted copy
+    of the maxima answers every threshold with a binary search.
+    """
+    raw = np.arange(int(1 / step_size), -1, -1) * step_size
+    ordered = np.sort(max_values)
+    reached = len(ordered) - np.searchsorted(ordered, raw, side="left")
+    return [round(float(threshold), 2) for threshold in raw], [int(count) for count in reached]
+
+
+def _positive_mappings(df: pd.DataFrame) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+    """Genome -> accessions and accession -> genomes for every cell above 0, both in table order."""
+    genomes = [column for column in df.columns if column not in ("max_containment", "max_containment_annotation")]
+    accessions = df.index.to_numpy(dtype=object)
+    positive = df[genomes].to_numpy(dtype=float) > 0
+    genome_to_samples = {genome: accessions[positive[:, j]].tolist() for j, genome in enumerate(genomes)}
+    rows, cols = np.nonzero(positive)
+    per_row = np.split(np.asarray(genomes, dtype=object)[cols], np.searchsorted(rows, np.arange(1, len(df))))
+    sample_to_genomes = {accession: names.tolist() for accession, names in zip(accessions.tolist(), per_row)}
+    return genome_to_samples, sample_to_genomes
+
+
 def _generate_containment_summary(containment_data, output_file, summary_file, step_size):
     """
     Generate summary data from containment data.
@@ -409,46 +434,22 @@ def _generate_containment_summary(containment_data, output_file, summary_file, s
         write_csv(df, output_file, sep="\t")
         logger.info(f"Parsed containment data saved to {output_file}")
 
-        # Generate summary data
-        thresholds = []
-        counts = []
-
-        for i in range(int(1 / step_size), -1, -1):
-            threshold = i * step_size
-            rounded_threshold = round(threshold, 2)
-            count = len(df[df["max_containment"] >= threshold])
-
-            thresholds.append(rounded_threshold)
-            counts.append(count)
+        thresholds, counts = _threshold_counts(df["max_containment"].to_numpy(dtype=float), step_size)
 
         # Save summary data
         summary_df = pd.DataFrame({"Threshold": thresholds, "Count": counts})
         write_csv(summary_df, summary_file, sep="\t", index=False)
         logger.info(f"Containment summary saved to {summary_file}")
 
-        # Create and return ContainmentSummary object
-        summary = ContainmentSummary(
+        genome_to_samples, sample_to_genomes = _positive_mappings(df)
+        return ContainmentSummary(
             thresholds=thresholds,
             counts=counts,
-            max_containment={acc: val for acc, val in df["max_containment"].items()},
+            max_containment=dict(zip(df.index, df["max_containment"].tolist())),
+            genome_to_samples=genome_to_samples,
+            sample_to_genomes=sample_to_genomes,
+            table=df,
         )
-
-        # Populate genome_to_samples mapping
-        for genome_id in df.columns:
-            if genome_id not in ("max_containment", "max_containment_annotation"):
-                accessions = df[df[genome_id] > 0].index.tolist()
-                summary.genome_to_samples[genome_id] = accessions
-
-        # Populate sample_to_genomes mapping
-        for accession, row in df.iterrows():
-            genomes = [
-                genome
-                for genome in df.columns
-                if genome not in ("max_containment", "max_containment_annotation") and row[genome] > 0
-            ]
-            summary.sample_to_genomes[accession] = genomes
-
-        return summary
 
     except (OSError, ValueError, MetaQuestError) as e:
         raise DataAccessError(f"Error generating containment summary: {e}") from e

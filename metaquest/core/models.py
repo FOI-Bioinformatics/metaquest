@@ -6,7 +6,7 @@ the application.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 import datetime
 
@@ -79,3 +79,6 @@ class ContainmentSummary:
     max_containment: Dict[str, float] = field(default_factory=dict)
     genome_to_samples: Dict[str, List[str]] = field(default_factory=dict)
     sample_to_genomes: Dict[str, List[str]] = field(default_factory=dict)
+    # The parsed containment table (a pandas DataFrame) the summary was built from, so a caller can
+    # record it without reading the written file back. Left out of comparisons and repr.
+    table: Optional[Any] = field(default=None, compare=False, repr=False)

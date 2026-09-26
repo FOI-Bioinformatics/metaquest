@@ -399,50 +399,29 @@ def cap_screening(registry: Registry, genome_id: str, max_screened: int = DEFAUL
 
 def record_screening_from_table(
     registry: Registry,
-    table_path: Union[str, Path],
+    table: Any,
     matches_folder: Union[str, Path],
     max_screened: int = DEFAULT_REGISTRY_MAX_SCREENED,
 ) -> int:
     """Record a screening entry for every positive containment in a parsed containment table.
 
-    Reads the table written by ``parse_containment_data`` and, for every column except
-    ``max_containment`` and ``max_containment_annotation`` (each a genome), records one
-    screening entry per row with a value greater than 0, keeping at most ``max_screened``
-    accessions per genome. Cells that do not hold a number are skipped. Returns the number
-    of entries recorded. If the table does not exist, logs at debug level and returns 0
-    without raising.
+    ``table`` is the table ``parse_containment_data`` built (a DataFrame, as its summary's
+    ``table``) or the path it was written to. For every column except ``max_containment`` and
+    ``max_containment_annotation`` (each a genome), records one screening entry per row with a
+    value greater than 0, keeping at most ``max_screened`` accessions per genome. Cells that do
+    not hold a number are skipped; every block written gets one timestamp. Returns the number of
+    entries recorded. If a table path does not exist, logs at debug level and returns 0.
     """
-    table_path = Path(table_path)
-    if not table_path.exists():
-        logger.debug("Parsed containment table %s does not exist; nothing to record", table_path)
-        return 0
-
     import pandas as pd
 
-    table = pd.read_csv(table_path, sep="\t", index_col=0)
-    genome_columns = [c for c in table.columns if c not in ("max_containment", "max_containment_annotation")]
-    recorded = 0
-    for accession, row in table.iterrows():
-        for column in genome_columns:
-            try:
-                value = float(row[column])
-            except (ValueError, TypeError):
-                continue
-            if pd.notna(value) and value > 0:
-                record_screening(
-                    registry,
-                    str(accession),
-                    column,
-                    value,
-                    None,
-                    "matches",
-                    0.0,
-                    Path(matches_folder) / f"{column}.csv",
-                )
-                recorded += 1
-    for column in genome_columns:
-        cap_screening(registry, column, max_screened)
-    return recorded
+    from metaquest.data.screening_table import record_screening_table
+
+    if not isinstance(table, pd.DataFrame):
+        if not Path(table).exists():
+            logger.debug("Parsed containment table %s does not exist; nothing to record", table)
+            return 0
+        table = pd.read_csv(Path(table), sep="\t", index_col=0)
+    return record_screening_table(registry, table, matches_folder, max_screened)
 
 
 def record_exclusion(registry: Registry, accession: str, reason: str, source: str = "user") -> None:
