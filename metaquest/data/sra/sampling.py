@@ -22,9 +22,10 @@ import numpy as np
 
 from metaquest.data.sra.fastq import count_fastq_reads
 
-# Bytes decompressed per read call. Large enough that the per-block Python overhead is small
-# next to decompression, small enough that a block and its newline index stay a few MiB.
-CHUNK_SIZE = 4 * 1024 * 1024
+# Bytes decompressed per read call. 1 MiB was the fastest of 256 KiB to 4 MiB on synthetic
+# files. Larger reads from gzip.GzipFile are slower because CPython assembles them from smaller
+# decompressed pieces, and on a real 427 MB mate file 4 MiB blocks spent most of the time copying.
+CHUNK_SIZE = 1024 * 1024
 
 # Phred scores 0-93 (``!`` to ``~`` in Phred+33), the range of the quality histograms.
 QUALITY_BINS = 94
@@ -44,12 +45,21 @@ def _strip_cr(line: bytes) -> bytes:
 
 
 def _take_records(
-    buf: bytes, newline_at: np.ndarray, wanted: List[int], pos: int, base: int, out: List[Record], path: Path
+    buf: bytes,
+    newline_at: np.ndarray,
+    wanted: List[int],
+    pos: int,
+    base: int,
+    out: List[Record],
+    path: Path,
+    file_start: int,
 ) -> int:
     """Append the selected complete records in ``buf`` to ``out``; return the next ``wanted`` position.
 
     ``base`` is the dataset-wide index of the first record in ``buf``, which starts on a record
-    boundary, and ``newline_at`` holds the offsets of every newline in ``buf``.
+    boundary, and ``newline_at`` holds the offsets of every newline in ``buf``. ``file_start`` is
+    the dataset-wide index of the first record of ``path``, used to report a malformed record by
+    its 1-based number within the file.
     """
     last = base + len(newline_at) // 4
     while pos < len(wanted) and wanted[pos] < last:
@@ -59,7 +69,8 @@ def _take_records(
         qual_start, qual_end = int(newline_at[line + 2]) + 1, int(newline_at[line + 3])
         if buf[header_start : header_start + 1] != b"@" or buf[seq_end + 1 : seq_end + 2] != b"+":
             header = buf[header_start : seq_start - 1].strip()
-            raise ValueError(f"Malformed FASTQ record in {path} at record {wanted[pos] - base}: {header!r}")
+            number = wanted[pos] - file_start + 1
+            raise ValueError(f"Malformed FASTQ record {number} of {path}: {header!r}")
         out.append((_strip_cr(buf[seq_start:seq_end]), _strip_cr(buf[qual_start:qual_end])))
         pos += 1
     return pos
@@ -76,6 +87,7 @@ def _sample_file(path: Path, wanted: List[int], pos: int, base: int, out: List[R
     """
     carry = b""
     checked_first = False
+    file_start = base
     with _open_binary(path) as handle:
         while pos < len(wanted):
             chunk = handle.read(CHUNK_SIZE)
@@ -93,7 +105,7 @@ def _sample_file(path: Path, wanted: List[int], pos: int, base: int, out: List[R
             complete = len(newline_at) // 4
             cut = int(newline_at[4 * complete - 1]) + 1 if complete else 0
             if complete and wanted[pos] < base + complete:
-                pos = _take_records(buf, newline_at, wanted, pos, base, out, path)
+                pos = _take_records(buf, newline_at, wanted, pos, base, out, path, file_start)
             base += complete
             carry = buf[cut:]
             if at_eof:
@@ -124,7 +136,9 @@ def sample_records(
         total_records: Records across all ``paths``, e.g. from the cached statistics
             record; counted here with ``count_fastq_reads`` (one extra pass) when None. A
             total larger than the files hold is tolerated: indices past the end are
-            dropped and fewer records are returned.
+            dropped and fewer records are returned. A total smaller than the true count
+            makes only the first ``total_records`` records eligible, so the later ones are
+            never sampled.
         seed: Seed of the index draw
 
     Raises:

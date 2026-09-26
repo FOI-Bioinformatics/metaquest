@@ -55,14 +55,17 @@ def test_sample_records_handles_zero_length_reads_crlf_and_no_final_newline(tmp_
     assert sample_records([path], 10) == [(b"ACGT", b"IIII"), (b"", b""), (b"GG", b"#I")]
 
 
-def test_sample_records_record_across_a_chunk_boundary(tmp_path, monkeypatch):
+@pytest.mark.parametrize("chunk_size", [1, 7, 64, 1000, 1 << 20])
+@pytest.mark.parametrize("suffix", [".fastq", ".fastq.gz"])
+def test_sample_records_record_across_a_chunk_boundary(tmp_path, monkeypatch, chunk_size, suffix):
     from metaquest.data.sra import sampling
 
-    monkeypatch.setattr(sampling, "CHUNK_SIZE", 7)
-    path = write_fastq(tmp_path / "r.fastq", n=200)
-    got = sample_records([path], 40, seed=2)
-    idx = sorted(random.Random(2).sample(range(200), 40))
-    assert [s.decode() for s, _ in got] == [f"A{i}" for i in idx]
+    monkeypatch.setattr(sampling, "CHUNK_SIZE", chunk_size)
+    r1 = write_fastq(tmp_path / f"S_1{suffix}", n=200)
+    r2 = write_fastq(tmp_path / f"S_2{suffix}", n=50, seq_for=lambda i: f"C{i}")
+    got = sample_records([r1, r2], 60, seed=2)
+    idx = sorted(random.Random(2).sample(range(250), 60))
+    assert [s.decode() for s, _ in got] == [f"A{i}" if i < 200 else f"C{i - 200}" for i in idx]
 
 
 def test_sample_records_rejects_a_file_that_is_not_fastq(tmp_path):
@@ -82,8 +85,16 @@ def test_sample_records_rejects_a_truncated_selected_record(tmp_path):
 def test_sample_records_rejects_a_malformed_selected_record(tmp_path):
     path = tmp_path / "r.fastq"
     path.write_text("@r1\nACGT\n+\nIIII\n@r2\nACGT\nIIII\nACGT\n")
-    with pytest.raises(ValueError, match="Malformed FASTQ record"):
+    with pytest.raises(ValueError, match="Malformed FASTQ record 2 of"):
         sample_records([path], 2, total_records=2)
+
+
+def test_a_malformed_record_in_mate_2_is_numbered_within_its_file(tmp_path):
+    r1 = write_fastq(tmp_path / "S_1.fastq", n=5)
+    r2 = tmp_path / "S_2.fastq"
+    r2.write_text("@r1\nACGT\n+\nIIII\n@r2\nACGT\n+\nIIII\n@r3\nACGT\nIIII\nACGT\n")
+    with pytest.raises(ValueError, match=r"Malformed FASTQ record 3 of .*S_2\.fastq"):
+        sample_records([r1, r2], 8, total_records=8)
 
 
 def test_sample_records_empty_inputs(tmp_path):
