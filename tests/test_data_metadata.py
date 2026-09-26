@@ -1321,7 +1321,7 @@ _EDGE_CASE_XML = {
 @pytest.fixture
 def mixed_metadata_folder(tmp_path):
     """Synthetic NCBI-like files with overlapping and disjoint attribute sets, plus the edge cases above."""
-    from tests.perf_metadata import write_metadata_folder
+    from tests.perf_fixtures import write_metadata_folder
 
     folder = tmp_path / "metadata"
     write_metadata_folder(folder, count=25, per_file=14, pool=30)
@@ -1373,7 +1373,7 @@ def test_parse_metadata_xml_matches_the_folder_row(tmp_path):
     The folder holds no attribute named like a fixed column (the SRR900002 case), since such a tag
     replaces that column for every row of the folder table but only for its own file here.
     """
-    from tests.perf_metadata import write_metadata_folder
+    from tests.perf_fixtures import write_metadata_folder
 
     def missing_as_none(value):
         return None if not isinstance(value, str) and pd.isna(value) else value

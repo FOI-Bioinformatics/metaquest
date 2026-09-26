@@ -8,7 +8,7 @@ import pandas as pd
 
 import metaquest.data.metadata as metadata_module
 from metaquest.cli.commands.metadata import DownloadMetadataCommand, ParseMetadataCommand
-from tests.perf_metadata import write_metadata_folder
+from tests.perf_fixtures import write_metadata_folder
 
 
 def _parse_args(tmp_path, folder):

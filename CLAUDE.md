@@ -279,6 +279,13 @@ command shown.
 - `make pipeline` - Integration test via `local_test.sh`
 - `make check` - Full quality check (format, lint, type check)
 
+`tests/test_performance_regressions.py` holds the project's timing and memory bounds, built on the
+synthetic fixtures in `tests/perf_fixtures.py` (a 20,000-dataset registry, a large FASTQ file, a
+folder of metadata XML files, and a containment table). Each bound was set to about three times
+the time measured on the development machine when the fix it guards landed, so a failure means
+either a real regression or a slower machine, not a fixed threshold that was guessed in advance.
+Run just these checks with `python -m pytest -m perf`.
+
 ### Test Infrastructure Components
 
 #### Core Testing Achievements 

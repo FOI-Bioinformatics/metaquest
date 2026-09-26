@@ -10,7 +10,7 @@ import pytest
 
 from metaquest.data.sra import sample_records
 from metaquest.data.sra.sampling import distribution_from_histogram, quality_histogram
-from tests.perf_fastq import write_fastq
+from tests.perf_fixtures import write_fastq
 
 
 def test_sample_records_matches_brute_force_selection(tmp_path):

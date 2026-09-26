@@ -1,22 +1,48 @@
-"""Performance regression tests with time bounds, on a synthetic 20,000-dataset registry.
+"""Performance regression tests with time and memory bounds.
 
-Each bound is about three times the time measured after the corresponding fix, under
-``make test`` (coverage on), on the development machine (Apple silicon laptop, 2026-09-26).
-A test that fails reports the measured time, so a slower machine can be told apart from a
-regression by comparing against the figure in the docstring.
+Every test here guards one of the performance fixes made across this project (registry batching
+and serialisation, the FASTQ sampler, the containment summary and screening step, metadata XML
+parsing, and the status/results report builders); each replaces a slower implementation that a
+docstring below describes. Bounds are built the same way throughout: run the fixed code, take the
+best of several timed runs on the development machine (Apple silicon laptop, macOS, 2026-09-26)
+under ``make test``'s coverage instrumentation, and set the bound to about three times that
+measurement, so normal machine and coverage variance does not make the test flaky while an actual
+regression (an accidentally reintroduced quadratic pass, for example) still fails it. A failing
+test reports the measured time in its assertion message, so a slower machine can be told apart
+from a real regression by comparing that figure with the one in the docstring.
+
+Fixtures live in ``tests/perf_fixtures.py``: a synthetic 20,000-dataset project registry built
+through the real ``record_*`` writers, a 100,000-record gzip FASTQ file, 300 synthetic NCBI efetch
+metadata XML files, and a 20,000 x 5 containment table.
+
+Run only these tests with ``python -m pytest -m perf``.
 """
 
 import argparse
 import shutil
 import time
+import tracemalloc
 from pathlib import Path
+from unittest.mock import patch
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from metaquest.cli.commands.sra import DownloadSraCommand
 from metaquest.data import registry as registry_mod
 from metaquest.data import registry_blocks as rb
-from perf_fixtures import build_registry
+from metaquest.data.branchwater import _generate_containment_summary
+from metaquest.data.metadata import parse_metadata
+from metaquest.data.sra import sample_records
+from metaquest.processing.results import results_rows
+from metaquest.processing.status_report import build_report
+from tests.perf_fixtures import (
+    build_registry,
+    containment_data,
+    write_illumina_like_fastq_gz,
+    write_metadata_folder,
+)
 
 
 @pytest.fixture(scope="module")
@@ -28,11 +54,44 @@ def registry_20k(tmp_path_factory):
     return path, names
 
 
+@pytest.fixture(scope="module")
+def containment_20000x5():
+    """20,000 accessions by 5 genomes, about half the cells positive, the last genome all zeros."""
+    return containment_data(20000, 5)
+
+
+@pytest.fixture(scope="module")
+def metadata_folder_300(tmp_path_factory):
+    """300 synthetic metadata XML files, 40 sample attributes each, from overlapping tag sets."""
+    folder = tmp_path_factory.mktemp("perf_metadata") / "metadata"
+    write_metadata_folder(folder, count=300, per_file=40)
+    return folder
+
+
+@pytest.fixture(scope="module")
+def fastq_100k(tmp_path_factory):
+    """A 100,000-record gzip FASTQ file of 150 bp reads."""
+    return write_illumina_like_fastq_gz(tmp_path_factory.mktemp("perf_fastq") / "SRR0_1.fastq.gz", 100_000)
+
+
+def _best_of(call, repeats=3):
+    """The shortest of ``repeats`` timed runs of ``call``, with the result of the last run."""
+    timings = []
+    result = None
+    for _ in range(repeats):
+        start = time.perf_counter()
+        result = call()
+        timings.append(time.perf_counter() - start)
+    return min(timings), result
+
+
+@pytest.mark.perf
 def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_20k, monkeypatch):
     """5,000 skipped accessions are recorded in one registry write.
 
-    Measured 2026-09-26 under coverage: 0.37 s after the fix (about 0.4 s per accession, over 30 minutes in
-    total, before it). Bound: 1.1 s.
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.34 s after the fix
+    (about 0.4 s per accession, over 30 minutes in total, before it, when every accession wrote its
+    own transaction). Bound: 1.1 s, about three times the measured time.
     """
     path, names = registry_20k
     skipped = names["all"][-5000:]
@@ -54,44 +113,31 @@ def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_
     assert elapsed < 1.1, f"_record_run_outcomes took {elapsed:.2f} s for 5,000 skipped accessions"
 
 
+@pytest.mark.perf
 def test_write_registry_on_20000_datasets_is_fast(registry_20k, tmp_path):
     """Serialising and writing the 20,000-dataset registry.
 
-    Measured 2026-09-26 under coverage: 0.09 s compact (0.33 s with the earlier indented output). Bound: 0.3 s,
-    the best of three writes so a single slow disk flush does not fail the test.
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.08 s compact (0.33 s
+    with the earlier indented output). Bound: 0.3 s, about three times the measured time, the best
+    of three writes so a single slow disk flush does not fail the test.
     """
     # A copy of its own: the module-scoped registry is changed by the other test in this module.
     path = Path(shutil.copy(registry_20k[0], tmp_path / registry_mod.REGISTRY_FILENAME))
     registry = registry_mod.load_registry(path)
-    timings = []
-    for _ in range(3):
-        start = time.perf_counter()
-        registry_mod._write_registry(registry, path)
-        timings.append(time.perf_counter() - start)
-    best = min(timings)
+    best, _ = _best_of(lambda: registry_mod._write_registry(registry, path))
     assert "\n  " not in path.read_text()[:10000]
     assert best < 0.3, f"_write_registry took {best:.2f} s on 20,000 datasets"
 
 
-def _best_of_three(call):
-    """The shortest of three timed runs of ``call``, with the result of the last run."""
-    timings = []
-    for _ in range(3):
-        start = time.perf_counter()
-        result = call()
-        timings.append(time.perf_counter() - start)
-    return min(timings), result
-
-
+@pytest.mark.perf
 def test_status_report_on_20000_datasets_is_fast(registry_20k):
     """``build_report``, the dict ``status --json`` prints, on the 20,000-dataset registry.
 
-    Measured 2026-09-26 under coverage: 0.19 s after the fix (0.55 s before it, when the stages
-    were counted with one pass over the registry per stage and genome and then listed again). Bound: 0.6 s,
-    the best of three runs.
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.18 s after the fix
+    (0.55 s before it, when the stages were counted with one pass over the registry per stage and
+    genome and then listed again). Bound: 1.0 s, the best of three runs (the 3x figure would be
+    0.6 s; held at the 1.0 s floor the task-9 ruling set for this test instead).
     """
-    from metaquest.processing.status_report import build_report
-
     path, names = registry_20k
     root = path.parent
     registry = registry_mod.load_registry(path)
@@ -106,29 +152,141 @@ def test_status_report_on_20000_datasets_is_fast(registry_20k):
         init=False,
     )
     paths = registry_mod.ProjectPaths(fastq=root / "fastq", targeted=root / "targeted")
-    best, report = _best_of_three(lambda: build_report(registry, args, paths, path, True))
+    best, report = _best_of(lambda: build_report(registry, args, paths, path, True))
     assert report["wanted"]["total"] == len(names["selected"])
     assert report["stages"]["screened"]["count"] == len(names["all"])
-    assert best < 0.6, f"build_report took {best:.2f} s on 20,000 datasets"
+    assert best < 1.0, f"build_report took {best:.2f} s on 20,000 datasets"
 
 
+@pytest.mark.perf
 def test_results_rows_on_20000_datasets_by_3_genomes_is_fast(registry_20k):
     """``results_rows`` for 60,000 (accession, genome) pairs, with a parsed containment table of 20,000 rows.
 
-    Measured 2026-09-26 under coverage: 0.36 s after the fix (1.80 s before it, when every pair
-    converted about six registry blocks and every table row became a pandas Series). Bound: 1.1 s, the
-    best of three runs.
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.38 s after the fix
+    (1.80 s before it, when every pair converted about six registry blocks and every table row
+    became a pandas Series). Bound: 1.5 s, the best of three runs (the 3x figure would be 1.2 s;
+    held at the 1.5 s floor the task-9 ruling set for this test instead).
     """
-    import numpy as np
-    import pandas as pd
-
-    from metaquest.processing.results import results_rows
-
     path, names = registry_20k
     registry = registry_mod.load_registry(path)
     values = np.random.default_rng(0).random((len(names["all"]), 3))
     table = pd.DataFrame(values, index=names["all"], columns=["G1", "G2", "G3"])
     table["max_containment"] = table.max(axis=1)
-    best, rows = _best_of_three(lambda: results_rows(registry, parsed_table=table))
+    best, rows = _best_of(lambda: results_rows(registry, parsed_table=table))
     assert len(rows) == 3 * len(names["all"])
-    assert best < 1.1, f"results_rows took {best:.2f} s for 60,000 pairs"
+    assert best < 1.5, f"results_rows took {best:.2f} s for 60,000 pairs"
+
+
+@pytest.mark.perf
+def test_stage_counts_on_5000_datasets_is_fast(tmp_path):
+    """``stage_counts`` on 5,000 datasets, reading single registry fields rather than typed blocks.
+
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.05 s after the fix
+    (about 8x slower before it, when every dataset was converted into a typed ``RegistryBlock``).
+    Bound: 0.2 s, about three times the measured time, a single run.
+    """
+    r = registry_mod.Registry()
+    for i in range(5000):
+        accession = f"SRR{i:07d}"
+        registry_mod.record_screening(r, accession, "G1", 0.5, None, "matches", 0.0, None)
+        r.datasets[accession]["download"] = {
+            "attempts": 1,
+            "state": "downloaded",
+            "date": "d",
+            "files": [{"path": "p", "bytes": 1, "mtime": "m"}, {"path": "q", "bytes": 1, "mtime": "m"}],
+            "bytes_total": 2,
+            "message": "",
+            "complete": {"verdict": "complete", "ratio": 1.0},
+        }
+        if i % 10 == 0:
+            r.datasets[accession]["extractions"] = {"G1": {"mapped_reads": i % 20, "files": [], "assembly": None}}
+    conversions = []
+    original = rb.RegistryBlock.from_dict.__func__
+
+    def counting(cls, data):
+        conversions.append(cls.__name__)
+        return original(cls, data)
+
+    start = time.perf_counter()
+    with patch.object(rb.RegistryBlock, "from_dict", classmethod(counting)):
+        counts = registry_mod.stage_counts(r)
+    elapsed = time.perf_counter() - start
+    assert counts["stages"]["downloaded"] == 5000 and counts["genomes"]["G1"]["extracted"] == 250
+    assert len(counts["genomes"]["G1"]["zero_mapped"]) == 250
+    assert conversions == []
+    assert elapsed < 0.2, f"stage_counts took {elapsed:.2f} s on 5000 datasets"
+
+
+@pytest.mark.perf
+def test_sample_records_100k_to_10k_is_fast(fastq_100k):
+    """Sampling 10,000 of 100,000 gzip records, record count included.
+
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.05 s; the reservoir
+    sampler this replaced took 0.11 s here (from the original Task 2 measurement) and scaled far
+    worse on a real run (25 s for ``sra_profile --sample-size 10000`` on an 11.3M-record mate
+    file). Bound: 0.2 s, about three times the measured time.
+    """
+    start = time.perf_counter()
+    got = sample_records([fastq_100k], 10_000, seed=0)
+    elapsed = time.perf_counter() - start
+    assert len(got) == 10_000
+    assert elapsed < 0.2, f"sample_records took {elapsed:.2f} s"
+
+
+@pytest.mark.perf
+def test_summary_and_screening_on_20000_rows_is_fast(containment_20000x5, tmp_path):
+    """Summary at step 0.001 plus screening into an empty registry, as ``parse_containment`` runs them.
+
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.37 s after the change
+    (4.34 s before it, with one frame copy per threshold, one ``iterrows`` pass, a re-read of the
+    written table and one screening block conversion and timestamp per positive cell). Bound: 1.2 s,
+    about three times the measured time, the best of two runs.
+    """
+    timings = []
+    for attempt in range(2):
+        registry = registry_mod.load_registry(tmp_path / f"registry_{attempt}.json")
+        start = time.perf_counter()
+        summary = _generate_containment_summary(
+            containment_20000x5, tmp_path / "parsed.txt", tmp_path / "summary.txt", 0.001
+        )
+        recorded = registry_mod.record_screening_from_table(registry, summary.table, tmp_path / "matches")
+        timings.append(time.perf_counter() - start)
+    best = min(timings)
+    assert len(summary.sample_to_genomes) == 20000
+    assert recorded > 0
+    assert best < 1.2, f"summary and screening took {best:.2f} s on 20,000 x 5"
+
+
+@pytest.mark.perf
+def test_parse_metadata_on_300_files_is_fast(metadata_folder_300, tmp_path):
+    """Parsing 300 files into a 300-row table with every distinct attribute as a column.
+
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.11 s after the change
+    (0.28 s before it, with two parses per file, list-based tag lookups, dense rows and pandas'
+    default CSV chunking). Bound: 0.4 s, about three times the measured time, the best of three
+    runs. The bound alone does not tell the two apart at this size; the one-parse-per-file spy test
+    in test_data_metadata.py guards the main change.
+    """
+    best, table = _best_of(lambda: parse_metadata(metadata_folder_300, tmp_path / "metadata_table.txt"))
+    assert table.shape[0] == 300
+    assert table.shape[1] > 30 + 40
+    assert best < 0.4, f"parse_metadata took {best:.2f} s on 300 files"
+
+
+@pytest.mark.perf
+def test_load_registry_peak_memory_on_20000_datasets_is_bounded(registry_20k):
+    """``tracemalloc`` peak while ``load_registry`` parses the 20,000-dataset registry file.
+
+    Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): about 60 MB, well under
+    the 250 MB bound the task-9 brief set, so that figure is kept rather than tightened, to leave
+    headroom for a slower machine's allocator overhead and coverage instrumentation.
+    """
+    path, _ = registry_20k
+    tracemalloc.start()
+    try:
+        registry_mod.load_registry(path)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    peak_mb = peak / (1024 * 1024)
+    assert peak_mb < 250, f"load_registry peak was {peak_mb:.1f} MB on 20,000 datasets"

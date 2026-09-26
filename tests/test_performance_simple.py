@@ -1,174 +1,31 @@
 """
-PERFORMANCE AND EDGE CASE TESTS for MetaQuest
+EDGE CASE TESTS for MetaQuest
 
-Tests performance and edge cases for validated components:
-- Large dataset handling
-- Memory efficiency
+Tests edge cases for validated components:
 - Boundary conditions
 - Numerical edge cases
 - String encoding edge cases
 
+The timed and memory-bounded performance checks that used to live in this module (a
+pytest-benchmark timing of technology detection, plot-data preparation and metadata-report
+writing, none of which asserted a threshold, and a memory-efficiency class whose tests asserted
+nothing about memory) moved to tests/test_performance_regressions.py, where every check has an
+explicit bound; see that module for the timing and memory guards, run with ``pytest -m perf``.
+
 Run: pytest tests/test_performance_simple.py -v
-Use pytest-benchmark for benchmarks: pytest-benchmark installed
 """
 
 import pandas as pd
 import numpy as np
-import gc
 
 from metaquest.data.sra_metadata import (
     detect_sequencing_technology,
     SRADatasetInfo,
-    save_metadata_report,
 )
 from metaquest.plugins.visualizers.bar import (
     BarChartPlugin,
     _prepare_plot_data,
 )
-
-# ============================================================================
-# TEST CLASS: Large Dataset Performance
-# ============================================================================
-
-
-class TestLargeDatasetPerformance:
-    """Test performance with large datasets."""
-
-    def test_process_large_metadata_dict(self, benchmark):
-        """Test processing large metadata dictionary (1,000 entries)."""
-        # Create large metadata dict
-        large_metadata = {}
-        for i in range(1000):
-            large_metadata[f"SRR{i:06d}"] = SRADatasetInfo(
-                accession=f"SRR{i:06d}",
-                title=f"Sample {i}",
-                organism="Escherichia coli",
-                platform="ILLUMINA",
-                instrument="HiSeq",
-                strategy="WGS",
-                layout="PAIRED",
-                spots=1000000,
-                bases=150000000,
-                avg_length=150.0,
-                size_mb=100.0,
-                release_date="2023-01-01",
-                bioproject="PRJNA001",
-                biosample="SAMN001",
-                library_selection="RANDOM",
-                library_source="GENOMIC",
-            )
-
-        # Benchmark technology detection on all
-        def detect_all_technologies():
-            results = {}
-            for acc, info in large_metadata.items():
-                results[acc] = detect_sequencing_technology(info)
-            return results
-
-        result = benchmark(detect_all_technologies)
-        assert len(result) == 1000
-
-    def test_prepare_large_plot_data(self, benchmark):
-        """Test preparing large dataset for plotting (10,000 rows)."""
-        large_df = pd.DataFrame(
-            {
-                "category": [f"Cat_{i}" for i in range(10000)],
-                "value": np.random.randint(1, 1000, 10000),
-            }
-        )
-
-        result_df, result_y = benchmark(_prepare_plot_data, large_df, "category", "value", 100)  # Limit to top 100
-
-        assert len(result_df) == 100
-
-    def test_save_large_metadata_report(self, tmp_path, benchmark):
-        """Test saving large metadata report (5,000 entries)."""
-        large_metadata = {}
-        for i in range(5000):
-            large_metadata[f"SRR{i:06d}"] = SRADatasetInfo(
-                accession=f"SRR{i:06d}",
-                title=f"Sample {i}",
-                organism="Species " + str(i % 10),
-                platform=["ILLUMINA", "OXFORD_NANOPORE", "PACBIO_SMRT"][i % 3],
-                instrument="Instrument",
-                strategy="WGS",
-                layout=["PAIRED", "SINGLE"][i % 2],
-                spots=1000000,
-                bases=150000000,
-                avg_length=150.0,
-                size_mb=100.0,
-                release_date="2023-01-01",
-                bioproject=f"PRJNA{i:06d}",
-                biosample=f"SAMN{i:06d}",
-                library_selection="RANDOM",
-                library_source="GENOMIC",
-            )
-
-        output_file = tmp_path / "large_metadata.csv"
-
-        benchmark(save_metadata_report, large_metadata, output_file)
-
-        assert output_file.exists()
-        df = pd.read_csv(output_file)
-        assert len(df) == 5000
-
-
-# ============================================================================
-# TEST CLASS: Memory Efficiency
-# ============================================================================
-
-
-class TestMemoryEfficiency:
-    """Test memory usage patterns."""
-
-    def test_memory_efficient_dataframe_processing(self):
-        """Test processing large DataFrame doesn't create excessive copies."""
-        gc.collect()
-
-        # Create large DataFrame
-        large_df = pd.DataFrame(
-            {
-                "category": [f"Cat_{i}" for i in range(50000)],
-                "value": np.random.uniform(0, 1, 50000),
-            }
-        )
-
-        # Process without creating copies
-        filtered_df = large_df[large_df["value"] > 0.5]
-
-        # Cleanup
-        del large_df
-        del filtered_df
-        gc.collect()
-
-        # Test passed if no memory error
-
-    def test_streaming_visualization_creation(self, tmp_path):
-        """Test creating visualization from chunked data."""
-        # Simulate processing data in chunks
-        all_data = []
-        chunk_size = 1000
-
-        for i in range(5):
-            chunk = pd.DataFrame(
-                {
-                    "category": [f"Cat_{j}" for j in range(i * chunk_size, (i + 1) * chunk_size)],
-                    "value": np.random.randint(1, 100, chunk_size),
-                }
-            )
-            all_data.append(chunk)
-
-        # Combine chunks
-        combined_df = pd.concat(all_data, ignore_index=True)
-
-        # Create visualization from combined data (with limit)
-        output_file = tmp_path / "chunked_viz.png"
-        BarChartPlugin.create_plot(
-            data=combined_df, x_column="category", y_column="value", limit=20, output_file=str(output_file)
-        )
-
-        assert output_file.exists()
-
 
 # ============================================================================
 # TEST CLASS: Numerical Edge Cases
@@ -518,9 +375,6 @@ class TestVisualizationEdgeCases:
 # SUCCESS METRICS:
 #
 # After running these tests:
-# - 30+ performance and edge case tests
-# - Large dataset handling (10,000+ rows)
-# - Memory efficiency validated
 # - Numerical edge cases (zero, large, small, negative)
 # - Boundary conditions (empty, single row, duplicates)
 # - String encoding (unicode, emoji, special chars)
@@ -528,7 +382,4 @@ class TestVisualizationEdgeCases:
 #
 # Run tests:
 #   pytest tests/test_performance_simple.py -v
-#
-# Run benchmarks:
-#   pytest tests/test_performance_simple.py -v --benchmark-only
 # ============================================================================

@@ -16,7 +16,7 @@ import pytest
 
 from metaquest.data import registry as reg
 from metaquest.data.branchwater import _generate_containment_summary
-from tests.perf_containment import containment_data
+from tests.perf_fixtures import containment_data
 
 PIN = Path(__file__).parent / "fixtures" / "containment_pin"
 

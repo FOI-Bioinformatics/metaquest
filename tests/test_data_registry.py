@@ -1100,13 +1100,16 @@ class TestUpdateLinked:
 
 
 class TestStageCountsSpeed:
-    """Stage checks read single fields rather than building typed blocks; catch a regression."""
+    """Stage checks read single fields rather than building typed blocks; catch a regression.
 
-    def test_stage_counts_on_5000_datasets_is_fast(self):
-        import time
+    The timing assertion for this moved to ``tests/test_performance_regressions.py`` (Task 9); this
+    class keeps the non-timing regression guard, that ``stage_counts`` never converts a dataset into
+    a typed ``RegistryBlock``.
+    """
 
+    def test_stage_counts_does_not_build_typed_blocks(self):
         r = reg.Registry()
-        for i in range(5000):
+        for i in range(100):
             accession = f"SRR{i:07d}"
             reg.record_screening(r, accession, "G1", 0.5, None, "matches", 0.0, None)
             r.datasets[accession]["download"] = {
@@ -1127,17 +1130,11 @@ class TestStageCountsSpeed:
             conversions.append(cls.__name__)
             return original(cls, data)
 
-        start = time.perf_counter()
         with patch.object(rb.RegistryBlock, "from_dict", classmethod(counting)):
             counts = reg.stage_counts(r)
-        elapsed = time.perf_counter() - start
-        assert counts["stages"]["downloaded"] == 5000 and counts["genomes"]["G1"]["extracted"] == 250
-        assert len(counts["genomes"]["G1"]["zero_mapped"]) == 250
-        # The time bound is generous; the conversion count is what catches a regression, since
-        # building typed blocks here made stage_counts about eight times slower but still fast
-        # enough on 5000 datasets to pass any bound that is safe on a slow machine.
+        assert counts["stages"]["downloaded"] == 100 and counts["genomes"]["G1"]["extracted"] == 5
+        assert len(counts["genomes"]["G1"]["zero_mapped"]) == 5
         assert conversions == []
-        assert elapsed < 0.5, f"stage_counts took {elapsed:.2f} s on 5000 datasets"
 
 
 class TestCompactRegistryFile:

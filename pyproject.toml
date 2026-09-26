@@ -171,6 +171,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "network: calls NCBI or SRA over the internet; run explicitly with 'pytest -m network'",
+    "perf: a timing or memory bound in tests/test_performance_regressions.py; runs by default",
 ]
 
 [tool.coverage.run]
