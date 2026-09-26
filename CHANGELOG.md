@@ -45,6 +45,11 @@ external USB volume on an Apple silicon laptop, unless marked synthetic.
   now lists only the samples with a positive containment for the requested taxon; a sample whose
   containment is zero for every genome of that taxon was previously listed with 0.0.
 
+### Removed
+
+- `metaquest.data.metadata.get_unique_sample_attributes`; `parse_metadata` collects the attribute
+  names in its single pass and no command called the function.
+
 ### Testing
 
 - Added `tests/test_performance_regressions.py` with timing and memory bounds covering the registry,
