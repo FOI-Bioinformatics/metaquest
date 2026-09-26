@@ -40,7 +40,10 @@ external USB volume on an Apple silicon laptop, unless marked synthetic.
 
 - `find_by_taxonomy`'s containment/taxonomy annotation is now built with a `melt` instead of a
   per-row loop, and drops rows whose containment is zero (or missing); the previous behaviour kept
-  those as zero-valued rows. A search with no zero-containment cells is unaffected.
+  those as zero-valued rows. Rows keep the previous order (sample by sample, genomes in column
+  order), so a table without zero or missing cells is the same as before. `--output-format summary`
+  now lists only the samples with a positive containment for the requested taxon; a sample whose
+  containment is zero for every genome of that taxon was previously listed with 0.0.
 
 ### Testing
 

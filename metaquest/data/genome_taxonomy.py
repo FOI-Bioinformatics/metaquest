@@ -257,14 +257,18 @@ def annotate_containment_with_taxonomy(
     Melts the genome columns instead of iterating row by row, and keeps only the sample/genome
     pairs with a positive containment value; a zero (or missing) containment cell is dropped
     rather than kept as a zero-valued row. This is a behaviour change from the previous
-    row-by-row implementation, which kept every cell including zeros.
+    row-by-row implementation, which kept every cell including zeros. Rows keep that
+    implementation's order: sample by sample, and within a sample in genome column order.
     """
     from metaquest.core.utils import get_genome_columns
 
     genome_cols = get_genome_columns(containment_df)
 
     melted = containment_df[genome_cols].melt(ignore_index=False, var_name="genome", value_name="containment")
-    melted = melted[melted["containment"] > 0].copy()
+    # melt is genome-major; a stable sort on the source row position restores sample-major order
+    # while keeping genome column order within each sample.
+    melted["_row"] = list(range(len(containment_df))) * len(genome_cols)
+    melted = melted[melted["containment"] > 0].sort_values("_row", kind="stable")
     if melted.empty:
         return pd.DataFrame(columns=_ANNOTATED_COLUMNS)
 

@@ -214,10 +214,37 @@ class TestAnnotateContainment:
             "genB": TaxonomyInfo(genome_id="genB", family="F2", genus="G2", species="Sp2"),
         }
 
-        old = _old_annotate(df, tax).sort_values(["sample", "genome"]).reset_index(drop=True)
-        new = annotate_containment_with_taxonomy(df, tax).sort_values(["sample", "genome"]).reset_index(drop=True)
+        old = _old_annotate(df, tax)
+        new = annotate_containment_with_taxonomy(df, tax)
 
-        pd.testing.assert_frame_equal(old, new[old.columns])
+        pd.testing.assert_frame_equal(old, new)
+
+    def test_rows_are_sample_major_in_genome_column_order(self):
+        """The 0.5.0 row order, written out by hand: all genomes of S2, then S1, in column order."""
+        df = pd.DataFrame({"genB": [0.8, 0.3], "genA": [0.5, 0.1]}, index=["S2", "S1"])
+
+        result = annotate_containment_with_taxonomy(df, {})
+
+        assert list(zip(result["sample"], result["genome"], result["containment"])) == [
+            ("S2", "genB", 0.8),
+            ("S2", "genA", 0.5),
+            ("S1", "genB", 0.3),
+            ("S1", "genA", 0.1),
+        ]
+        assert list(result.index) == [0, 1, 2, 3]
+
+    def test_order_is_kept_when_zero_cells_are_dropped(self):
+        df = pd.DataFrame({"genA": [0.0, 0.2, 0.4], "genB": [0.6, 0.0, 0.7]}, index=["S1", "S2", "S3"])
+
+        result = annotate_containment_with_taxonomy(df, {})
+
+        assert list(zip(result["sample"], result["genome"])) == [
+            ("S1", "genB"),
+            ("S2", "genA"),
+            ("S3", "genA"),
+            ("S3", "genB"),
+        ]
+        assert list(result.index) == [0, 1, 2, 3]
 
 
 # ============================================================================
