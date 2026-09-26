@@ -28,14 +28,21 @@ class RegistryBatch:
     A batch queues each mutation (a function that changes a loaded ``Registry`` in place) and
     applies the queue, in the order queued, inside one ``registry_transaction``: when
     ``flush_every`` mutations are waiting, when ``flush_seconds`` have passed since the last
-    flush (checked as each mutation is queued), on ``flush()``, and when the ``with`` block
-    exits, including by an exception or ``KeyboardInterrupt``.
+    flush, on ``flush()``, and when the ``with`` block exits, including by an exception or
+    ``KeyboardInterrupt``. ``flush_seconds`` is checked only when a mutation is queued, so it
+    bounds the delay per result, not in wall-clock time: mutations queued before a long quiet
+    period stay unwritten until the next one arrives or the batch exits.
 
     The registry lock is held only while a flush runs, so other writers (and other batches)
     are not blocked between flushes; because each flush loads the file inside the lock, their
     changes are never reverted. A mutation must therefore not assume the registry it receives
     is the one an earlier flush saw. ``flush_every`` or ``flush_seconds`` set to None disables
     that trigger, so a batch with both None writes once, on exit.
+
+    A mutation that raises partway through is dropped, but whatever it had already changed in
+    the registry is written with the rest of the flush: a mutation that records several fields
+    of one accession can leave that accession half-updated. Mutations should therefore do their
+    fallible work before they change the registry.
 
     Functions passed to ``add_flush_hook`` are called with the written registry after each
     flush has released the lock, so work that takes a different lock (the store catalogue)
@@ -61,6 +68,10 @@ class RegistryBatch:
     def __len__(self) -> int:
         """The number of mutations queued and not yet written."""
         return len(self._queue)
+
+    def pending_labels(self) -> List[str]:
+        """The labels of the mutations queued and not yet written, in the order queued."""
+        return [label or "an unlabelled entry" for _, label in self._queue]
 
     def add_flush_hook(self, hook: Callable[[Registry], None]) -> None:
         """Call ``hook(registry)`` after every flush that wrote something, once the lock is released."""

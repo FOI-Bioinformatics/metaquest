@@ -3166,3 +3166,123 @@ class TestDownloadSraRegistryWrites:
         assert DownloadSraCommand().execute(args) == 130
         assert rb.download_block(load_registry(args.registry), "SRR1").state == "downloaded"
         assert not (tmp_path / "metaquest_registry.json.lock").exists()
+
+
+class TestDownloadSraTerminationAndFinalFlush:
+    """SIGTERM/SIGHUP take the interrupt path, and a failed final registry flush is retried once."""
+
+    _args = staticmethod(TestDownloadSraRegistryWrites._args)
+
+    @staticmethod
+    def _failing_transactions(monkeypatch, failures):
+        """Make the first ``failures`` registry-batch transactions raise DataAccessError."""
+        import metaquest.data.registry_batch as batch_mod
+        from metaquest.core.exceptions import DataAccessError
+
+        real = batch_mod.registry_transaction
+        calls = []
+
+        def flaky(path):
+            calls.append(path)
+            if len(calls) <= failures:
+                raise DataAccessError(f"Registry is locked by another process: {path}.lock")
+            return real(path)
+
+        monkeypatch.setattr(batch_mod, "registry_transaction", flaky)
+        monkeypatch.setattr("metaquest.cli.commands.sra.FINAL_FLUSH_RETRY_SECONDS", 0)
+        return calls
+
+    @staticmethod
+    def _three_failed_results(**kwargs):
+        for index in range(3):
+            kwargs["on_result"](f"SRR{index}", False, "Download failed: t")
+        return {"total": 3, "successful": 0, "failed": 0, "failed_accessions": [], "skipped_accessions": ["SRR9"]}
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_handlers_are_installed_for_the_batch_and_restored(self, mock_download, _which, tmp_path):
+        import signal
+
+        import metaquest.cli.commands.sra as sra_mod
+
+        calls = []
+        real_signal = signal.signal
+
+        def spy(signum, handler):
+            calls.append((signum, handler))
+            return real_signal(signum, handler)
+
+        mock_download.side_effect = self._three_failed_results
+        before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+        with patch.object(sra_mod.signal, "signal", side_effect=spy):
+            assert DownloadSraCommand().execute(self._args(tmp_path)) == 0
+        assert [c[0] for c in calls] == [signal.SIGTERM, signal.SIGHUP, signal.SIGTERM, signal.SIGHUP]
+        installed = calls[0][1]
+        assert calls[1][1] is installed and callable(installed)
+        assert calls[2][1] is before[signal.SIGTERM] and calls[3][1] is before[signal.SIGHUP]
+        assert {s: signal.getsignal(s) for s in before} == before
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_sigterm_during_the_run_flushes_and_returns_130(self, mock_download, _which, tmp_path):
+        import signal
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", False, "Download failed: t")
+            handler = signal.getsignal(signal.SIGTERM)
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)
+            handler(signal.SIGTERM, None)
+
+        mock_download.side_effect = fake_download_sra
+        args = self._args(tmp_path)
+        assert DownloadSraCommand().execute(args) == 130
+        assert rb.download_block(load_registry(args.registry), "SRR1").state == "failed"
+
+    def test_handlers_are_not_installed_off_the_main_thread(self):
+        import threading
+
+        import metaquest.cli.commands.sra as sra_mod
+
+        errors = []
+
+        def run():
+            try:
+                with patch.object(sra_mod.signal, "signal") as spy:
+                    with sra_mod._termination_raises_interrupt():
+                        pass
+                    assert spy.call_count == 0
+            except BaseException as e:  # noqa: B902 - reported to the main thread below
+                errors.append(e)
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join()
+        assert errors == []
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_final_flush_failing_once_is_retried(self, mock_download, _which, tmp_path, monkeypatch):
+        calls = self._failing_transactions(monkeypatch, failures=1)
+        mock_download.side_effect = self._three_failed_results
+        args = self._args(tmp_path)
+        assert DownloadSraCommand().execute(args) == 0
+        registry = load_registry(args.registry)
+        assert all(rb.download_block(registry, f"SRR{i}").state == "failed" for i in range(3))
+        # The run outcomes (the skipped accession) were recorded after the retried flush.
+        assert rb.download_block(registry, "SRR9").message == "--max-downloads"
+        assert len(calls) == 3
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_final_flush_failing_twice_logs_the_queued_accessions(
+        self, mock_download, _which, tmp_path, monkeypatch, caplog
+    ):
+        self._failing_transactions(monkeypatch, failures=2)
+        mock_download.side_effect = self._three_failed_results
+        args = self._args(tmp_path)
+        with caplog.at_level(logging.ERROR):
+            assert DownloadSraCommand().execute(args) == 1
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("3 queued download outcome(s)" in m and "SRR0, SRR1, SRR2" in m for m in errors)
+        assert not Path(args.registry).exists()

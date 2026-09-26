@@ -3,17 +3,21 @@ SRA-related CLI commands.
 """
 
 import argparse
+import contextlib
 import csv
 import functools
 import os
 import shutil
-from typing import Callable, List, Optional, Set, Tuple
+import signal
+import threading
+import time
+from typing import Callable, Iterator, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
-from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import (
     Registry,
@@ -46,6 +50,37 @@ STORE_SAVED_SUFFIX = "; stored"
 # run's candidate folders, are worth a warning: they are easy to forget about and can
 # quietly use up a lot of disk.
 TRANSIENT_BYTES_WARN_THRESHOLD = 1024**3
+
+
+# Seconds to wait before retrying a final registry flush that failed (a lock held by another
+# process, for example); module-level so tests can set it to zero.
+FINAL_FLUSH_RETRY_SECONDS = 1.0
+
+
+@contextlib.contextmanager
+def _termination_raises_interrupt() -> Iterator[None]:
+    """Turn SIGTERM and SIGHUP into ``KeyboardInterrupt`` for the duration of the block.
+
+    A batch job's time limit, ``kill`` or a closed terminal would otherwise end the process
+    without running ``finally`` blocks, losing the download outcomes a registry batch still
+    holds. Raising ``KeyboardInterrupt`` sends these signals down the Ctrl-C path instead: the
+    batch is flushed and running tools are stopped. The previous handlers are restored on exit.
+    Signal handlers can only be installed from the main thread, so elsewhere nothing changes.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _raise_interrupt(signum, _frame):
+        raise KeyboardInterrupt(f"received signal {signal.Signals(signum).name}")
+
+    signals = [signal.SIGTERM] + ([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])
+    previous = {signum: signal.signal(signum, _raise_interrupt) for signum in signals}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 class DownloadSraCommand(BaseCommand):
@@ -507,6 +542,86 @@ class DownloadSraCommand(BaseCommand):
             }
         return excluded, expected_spots, truncated
 
+    def _download_batched(
+        self,
+        args: argparse.Namespace,
+        fastq_dir: Path,
+        store: Optional[StorePaths],
+        project_registry: Registry,
+        max_workers: int,
+    ) -> Optional[dict]:
+        """Run ``download_sra`` with its outcomes queued in a registry batch; return its statistics.
+
+        The batch is flushed when the download call returns or raises, a ``KeyboardInterrupt``
+        included (SIGTERM and SIGHUP are turned into one for the duration), before the error
+        propagates. A dry run records nothing, so its batch never writes. A final flush that fails
+        with ``DataAccessError`` is retried once; None means the retry failed too, after the
+        outcomes still queued have been logged.
+        """
+        verify_downloads = getattr(args, "verify_downloads", True)
+        excluded, expected_spots, truncated = self._registry_inputs(args, project_registry)
+        on_result = None
+        batch = registry_batch(args.registry)
+        body_done = False
+        try:
+            with _termination_raises_interrupt(), batch:
+                if not args.dry_run:
+                    on_result = self._result_recorder(args, fastq_dir, store, batch)
+                download_stats = download_sra(
+                    fastq_folder=args.fastq_folder,
+                    accessions_file=args.accessions_file,
+                    max_downloads=args.max_downloads,
+                    dry_run=args.dry_run,
+                    num_threads=args.num_threads,
+                    max_workers=max_workers,
+                    force=args.force,
+                    max_retries=args.max_retries,
+                    temp_folder=args.temp_folder,
+                    blacklist=args.blacklist,
+                    blacklist_accessions=excluded,
+                    on_result=on_result,
+                    expected_spots=expected_spots if verify_downloads else None,
+                    redownload_truncated=getattr(args, "redownload_truncated", False),
+                    truncated_accessions=truncated,
+                    sra_cache=getattr(args, "sra_cache", None),
+                    use_prefetch=getattr(args, "use_prefetch", True),
+                    keep_sra=getattr(args, "keep_sra", False),
+                    compress=getattr(args, "compress", True),
+                    **self._store_options(args, store, project_registry),
+                )
+                body_done = True
+        except DataAccessError as e:
+            if not body_done:
+                raise
+            if not self._retry_final_flush(batch, e):
+                return None
+        return download_stats
+
+    def _retry_final_flush(self, batch: RegistryBatch, error: DataAccessError) -> bool:
+        """Retry a failed final flush once, after a short wait; log what stays unwritten if it fails again."""
+        self.logger.warning(
+            "Could not write %d queued download outcome(s) to %s (%s); retrying in %.0f s",
+            len(batch),
+            batch.path,
+            error,
+            FINAL_FLUSH_RETRY_SECONDS,
+        )
+        time.sleep(FINAL_FLUSH_RETRY_SECONDS)
+        try:
+            batch.flush()
+        except DataAccessError as e:
+            labels = batch.pending_labels()
+            self.logger.error(
+                "Could not write %d queued download outcome(s) to %s after a retry (%s); "
+                "not recorded in the registry: %s",
+                len(labels),
+                batch.path,
+                e,
+                ", ".join(labels),
+            )
+            return False
+        return True
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             return self._run(args)
@@ -524,49 +639,13 @@ class DownloadSraCommand(BaseCommand):
                 )
                 return 1
 
-            verify_downloads = getattr(args, "verify_downloads", True)
-            redownload_truncated = getattr(args, "redownload_truncated", False)
-            sra_cache = getattr(args, "sra_cache", None)
-            use_prefetch = getattr(args, "use_prefetch", True)
-            keep_sra = getattr(args, "keep_sra", False)
-            compress = getattr(args, "compress", True)
             max_workers = self._resolve_max_workers(args)
-
-            on_result = None
             fastq_dir = Path(args.fastq_folder)
-
             project_registry = load_registry(args.registry)
             store = self._resolve_store(args, project_registry)
-            excluded, expected_spots, truncated = self._registry_inputs(args, project_registry)
-
-            # Download outcomes are queued and written in batches; the batch is flushed when the
-            # download call returns or raises, a KeyboardInterrupt included, before the error
-            # propagates. A dry run records nothing, so its batch never writes.
-            with registry_batch(args.registry) as batch:
-                if not args.dry_run:
-                    on_result = self._result_recorder(args, fastq_dir, store, batch)
-                download_stats = download_sra(
-                    fastq_folder=args.fastq_folder,
-                    accessions_file=args.accessions_file,
-                    max_downloads=args.max_downloads,
-                    dry_run=args.dry_run,
-                    num_threads=args.num_threads,
-                    max_workers=max_workers,
-                    force=args.force,
-                    max_retries=args.max_retries,
-                    temp_folder=args.temp_folder,
-                    blacklist=args.blacklist,
-                    blacklist_accessions=excluded,
-                    on_result=on_result,
-                    expected_spots=expected_spots if verify_downloads else None,
-                    redownload_truncated=redownload_truncated,
-                    truncated_accessions=truncated,
-                    sra_cache=sra_cache,
-                    use_prefetch=use_prefetch,
-                    keep_sra=keep_sra,
-                    compress=compress,
-                    **self._store_options(args, store, project_registry),
-                )
+            download_stats = self._download_batched(args, fastq_dir, store, project_registry, max_workers)
+            if download_stats is None:
+                return 1
             if args.dry_run:
                 self._log_dry_run_summary(args, download_stats)
             else:
