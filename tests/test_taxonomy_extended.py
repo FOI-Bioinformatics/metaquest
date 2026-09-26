@@ -133,7 +133,7 @@ class TestRateLimiting:
         """Set up test client."""
         self.client = NCBITaxonomyClient("test@example.com")
 
-    @patch("requests.get")
+    @patch("requests.Session.get")
     @patch("time.sleep")
     def test_rate_limiting_enforced(self, mock_sleep, mock_get):
         """Test that rate limiting is enforced between requests."""
@@ -158,7 +158,7 @@ class TestRateLimiting:
         # API key should allow MORE requests per second (shorter delay)
         assert client_with_key.request_delay > client_no_key.request_delay
 
-    @patch("requests.get")
+    @patch("requests.Session.get")
     def test_request_exception_handling(self, mock_get):
         """Test handling of request exceptions."""
         mock_get.side_effect = requests.RequestException("Network error")
@@ -253,6 +253,116 @@ class TestCacheFileHandling:
         validate_taxonomic_assignments(["Test species"], email="test@example.com", cache_file=cache_file)
 
         assert "Failed to load cache file" in caplog.text
+
+
+class TestIncrementalValidationCache:
+    """The cache is appended to after every successful lookup, not written once at the end."""
+
+    @patch("metaquest.data.taxonomy.NCBITaxonomyClient")
+    def test_only_successful_lookups_are_cached(self, mock_client_class, tmp_path):
+        """A lookup that comes back with confidence 'error' is not written, so it is retried later."""
+        cache_file = tmp_path / "cache.csv"
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.validate_species_name.side_effect = [
+            {
+                "original_name": "A",
+                "cleaned_name": "A",
+                "validated_name": "A",
+                "tax_id": "1",
+                "rank": "species",
+                "lineage": "",
+                "is_valid": True,
+                "confidence": "high",
+            },
+            {
+                "original_name": "B",
+                "cleaned_name": "B",
+                "validated_name": "B",
+                "tax_id": "2",
+                "rank": "species",
+                "lineage": "",
+                "is_valid": True,
+                "confidence": "high",
+            },
+            {
+                "original_name": "C",
+                "cleaned_name": "C",
+                "validated_name": "",
+                "tax_id": "",
+                "rank": "",
+                "lineage": "",
+                "is_valid": False,
+                "confidence": "error",
+            },
+        ]
+
+        validate_taxonomic_assignments(["A", "B", "C"], email="test@example.com", cache_file=cache_file)
+
+        cache_df = pd.read_csv(cache_file)
+        assert len(cache_df) == 2
+        assert set(cache_df["confidence"]) == {"high"}
+
+    @patch("metaquest.data.taxonomy.NCBITaxonomyClient")
+    def test_cache_grows_during_the_run(self, mock_client_class, tmp_path):
+        """Each successful lookup is on disk before the next one runs, not batched at the end."""
+        cache_file = tmp_path / "cache.csv"
+        rows_seen_before_each_call = []
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+
+        def side_effect(species):
+            rows_seen_before_each_call.append(len(pd.read_csv(cache_file)) if cache_file.exists() else 0)
+            return {
+                "original_name": species,
+                "cleaned_name": species,
+                "validated_name": species,
+                "tax_id": "1",
+                "rank": "species",
+                "lineage": "",
+                "is_valid": True,
+                "confidence": "high",
+            }
+
+        mock_client.validate_species_name.side_effect = side_effect
+
+        validate_taxonomic_assignments(["A", "B", "C"], email="test@example.com", cache_file=cache_file)
+
+        assert rows_seen_before_each_call == [0, 1, 2]
+
+    @patch("metaquest.data.taxonomy.NCBITaxonomyClient")
+    def test_corrupt_cache_is_replaced_on_first_successful_write(self, mock_client_class, tmp_path):
+        """A cache file that failed to load is discarded, not appended to, on the next write."""
+        cache_file = tmp_path / "cache.csv"
+        cache_file.write_text("not,a,valid,taxonomy,cache\n1,2,3,4,5")
+
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.validate_species_name.return_value = {
+            "original_name": "A",
+            "cleaned_name": "A",
+            "validated_name": "A",
+            "tax_id": "1",
+            "rank": "species",
+            "lineage": "",
+            "is_valid": True,
+            "confidence": "high",
+        }
+
+        validate_taxonomic_assignments(["A"], email="test@example.com", cache_file=cache_file)
+
+        cache_df = pd.read_csv(cache_file)
+        assert list(cache_df.columns) == [
+            "original_name",
+            "cleaned_name",
+            "validated_name",
+            "tax_id",
+            "rank",
+            "lineage",
+            "is_valid",
+            "confidence",
+        ]
+        assert len(cache_df) == 1
 
 
 # ============================================================================

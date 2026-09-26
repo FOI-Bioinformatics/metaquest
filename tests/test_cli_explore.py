@@ -102,6 +102,29 @@ class TestEnrichTaxonomyCommand:
         result = cmd.execute(args)
         assert result == 1
 
+    @patch("metaquest.cli.commands.explore.enrich_genomes_with_taxonomy")
+    @patch("metaquest.cli.commands.explore.save_taxonomy_cache")
+    @patch("metaquest.cli.commands.explore.pd.read_csv")
+    def test_execute_reads_only_the_header(self, mock_read_csv, mock_save, mock_enrich, tmp_path):
+        """Only the containment file's column names are needed, so the data rows are not read."""
+        containment = tmp_path / "containment.tsv"
+        _write_containment_tsv(containment)
+        mock_read_csv.return_value = pd.DataFrame(columns=["genA", "genB"])
+        mock_enrich.return_value = {}
+
+        cmd = EnrichTaxonomyCommand()
+        args = argparse.Namespace(
+            parsed_containment=str(containment),
+            output=str(tmp_path / "out.tsv"),
+            cache=str(tmp_path / "cache.tsv"),
+        )
+        result = cmd.execute(args)
+
+        assert result == 0
+        mock_read_csv.assert_called_once()
+        _, kwargs = mock_read_csv.call_args
+        assert kwargs.get("nrows") == 0
+
 
 # ============================================================================
 # ExploreContainmentCommand

@@ -157,7 +157,7 @@ class TestAnnotateContainment:
 
     def _make_df(self):
         return pd.DataFrame(
-            {"genA": [0.5, 0.1], "genB": [0.8, 0.0]},
+            {"genA": [0.5, 0.1], "genB": [0.8, 0.3]},
             index=["S1", "S2"],
         )
 
@@ -173,6 +173,51 @@ class TestAnnotateContainment:
     def test_missing_taxonomy_gives_none(self):
         result = annotate_containment_with_taxonomy(self._make_df(), {})
         assert result.iloc[0]["family"] is None
+
+    def test_zero_containment_rows_are_dropped(self):
+        """Behaviour change from the previous row-by-row version: a zero (or missing) containment
+        cell is excluded from the long-format table rather than kept as a zero-valued row."""
+        df = pd.DataFrame({"genA": [0.5, 0.0], "genB": [0.0, 0.3]}, index=["S1", "S2"])
+
+        result = annotate_containment_with_taxonomy(df, {})
+
+        assert len(result) == 2
+        assert set(zip(result["sample"], result["genome"])) == {("S1", "genA"), ("S2", "genB")}
+        assert (result["containment"] > 0).all()
+
+    def test_matches_the_old_row_by_row_output_when_there_are_no_zeros(self):
+        """Pin: on a fixture without zeros, the melt-based table equals the previous
+        iterrows-based implementation (kept here for comparison, not used by the module)."""
+
+        def _old_annotate(containment_df, taxonomy):
+            genome_cols = list(containment_df.columns)
+            records = []
+            for _, row in containment_df.iterrows():
+                sample = row.name if isinstance(row.name, str) else str(row.name)
+                for genome in genome_cols:
+                    info = taxonomy.get(genome, TaxonomyInfo(genome_id=genome))
+                    records.append(
+                        {
+                            "sample": sample,
+                            "genome": genome,
+                            "containment": float(row[genome]),
+                            "species": info.species,
+                            "genus": info.genus,
+                            "family": info.family,
+                        }
+                    )
+            return pd.DataFrame(records)
+
+        df = self._make_df()
+        tax = {
+            "genA": TaxonomyInfo(genome_id="genA", family="F1", genus="G1", species="Sp1"),
+            "genB": TaxonomyInfo(genome_id="genB", family="F2", genus="G2", species="Sp2"),
+        }
+
+        old = _old_annotate(df, tax).sort_values(["sample", "genome"]).reset_index(drop=True)
+        new = annotate_containment_with_taxonomy(df, tax).sort_values(["sample", "genome"]).reset_index(drop=True)
+
+        pd.testing.assert_frame_equal(old, new[old.columns])
 
 
 # ============================================================================
@@ -283,7 +328,7 @@ def _resp(status_code, json_data):
 
 class TestLookupGenomeTaxonomyGtdb:
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_genome_endpoint_success(self, mock_get):
         mock_get.return_value = _resp(
             200,
@@ -298,14 +343,14 @@ class TestLookupGenomeTaxonomyGtdb:
         # genome endpoint hit returns immediately -- no fallback call
         assert mock_get.call_count == 1
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_genome_endpoint_empty_taxid_becomes_none(self, mock_get):
         mock_get.return_value = _resp(200, {"gtdb_taxonomy": _GTDB_STRING})
         info = _lookup_genome_taxonomy_gtdb("GCF_001")
         assert info is not None
         assert info.tax_id is None
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_falls_back_to_search_endpoint(self, mock_get):
         # Genome endpoint misses (404), search endpoint returns a result dict.
         mock_get.side_effect = [
@@ -318,7 +363,7 @@ class TestLookupGenomeTaxonomyGtdb:
         assert info.tax_id == "1423"
         assert mock_get.call_count == 2
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_search_results_key_fallback(self, mock_get):
         mock_get.side_effect = [
             _resp(404, {}),
@@ -328,7 +373,7 @@ class TestLookupGenomeTaxonomyGtdb:
         assert info is not None
         assert info.species == "Bacillus subtilis"
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_no_taxonomy_returns_none(self, mock_get):
         mock_get.side_effect = [
             _resp(404, {}),
@@ -336,13 +381,13 @@ class TestLookupGenomeTaxonomyGtdb:
         ]
         assert _lookup_genome_taxonomy_gtdb("GCF_004") is None
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_request_exception_raises_dataaccesserror(self, mock_get):
         mock_get.side_effect = requests.exceptions.ConnectionError("boom")
         with pytest.raises(DataAccessError, match="GTDB API error"):
             _lookup_genome_taxonomy_gtdb("GCF_005")
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_search_endpoint_bare_list(self, mock_get):
         # GTDB search may return a bare JSON list of records.
         mock_get.side_effect = [
@@ -354,7 +399,7 @@ class TestLookupGenomeTaxonomyGtdb:
         assert info.genus == "Bacillus"
         assert info.tax_id == "1423"
 
-    @patch("metaquest.data.genome_taxonomy.requests.get")
+    @patch("requests.Session.get")
     def test_search_endpoint_rows_key(self, mock_get):
         # GTDB search may wrap records under a "rows" key.
         mock_get.side_effect = [
@@ -411,3 +456,52 @@ class TestCacheAndEnrichEdges:
         # missing genomes + cache_file => cache is written back
         assert cache_file.exists()
         assert "GCF_NEW" in cache_file.read_text()
+
+
+class TestIncrementalCacheWrites:
+    """The TSV cache is appended to after every successful lookup, not written once at the end."""
+
+    @patch("metaquest.data.genome_taxonomy._lookup_genome_taxonomy_gtdb")
+    def test_a_later_failure_does_not_lose_earlier_successes(self, mock_lookup, tmp_path):
+        cache_file = tmp_path / "cache.tsv"
+        mock_lookup.side_effect = [
+            TaxonomyInfo(genome_id="GCF_1", family="Fam1"),
+            TaxonomyInfo(genome_id="GCF_2", family="Fam2"),
+            DataAccessError("boom"),
+        ]
+
+        result = enrich_genomes_with_taxonomy(["GCF_1", "GCF_2", "GCF_3"], cache_file=cache_file)
+
+        # the failed lookup still gets an empty in-memory placeholder for this run
+        assert result["GCF_3"].family is None
+        # but only the two successful lookups are persisted, so a later run retries GCF_3
+        on_disk = load_taxonomy_cache(cache_file)
+        assert set(on_disk.keys()) == {"GCF_1", "GCF_2"}
+
+    @patch("metaquest.data.genome_taxonomy._lookup_genome_taxonomy_gtdb")
+    def test_a_genome_with_no_taxonomy_found_is_not_cached(self, mock_lookup, tmp_path):
+        cache_file = tmp_path / "cache.tsv"
+        mock_lookup.side_effect = [
+            TaxonomyInfo(genome_id="GCF_1", family="Fam1"),
+            None,
+        ]
+
+        enrich_genomes_with_taxonomy(["GCF_1", "GCF_2"], cache_file=cache_file)
+
+        on_disk = load_taxonomy_cache(cache_file)
+        assert set(on_disk.keys()) == {"GCF_1"}
+
+    @patch("metaquest.data.genome_taxonomy._lookup_genome_taxonomy_gtdb")
+    def test_cache_file_grows_during_the_run_not_only_at_the_end(self, mock_lookup, tmp_path):
+        cache_file = tmp_path / "cache.tsv"
+        rows_seen_before_each_call = []
+
+        def side_effect(accession):
+            rows_seen_before_each_call.append(len(load_taxonomy_cache(cache_file)))
+            return TaxonomyInfo(genome_id=accession, family=f"Fam_{accession}")
+
+        mock_lookup.side_effect = side_effect
+
+        enrich_genomes_with_taxonomy(["GCF_1", "GCF_2", "GCF_3"], cache_file=cache_file)
+
+        assert rows_seen_before_each_call == [0, 1, 2]

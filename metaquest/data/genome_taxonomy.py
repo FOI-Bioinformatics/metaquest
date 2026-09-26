@@ -15,7 +15,7 @@ import requests
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.core.models import TaxonomyInfo
-from metaquest.data.gtdb import GTDB_API_BASE, REQUEST_TIMEOUT
+from metaquest.data.gtdb import GTDB_API_BASE, REQUEST_TIMEOUT, get_session
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,8 @@ def _lookup_genome_taxonomy_gtdb(accession: str) -> Optional[TaxonomyInfo]:
     logger.debug("Querying GTDB genome endpoint: %s", genome_url)
 
     try:
-        response = requests.get(genome_url, timeout=REQUEST_TIMEOUT)
+        session = get_session()
+        response = session.get(genome_url, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             info = _taxonomy_from_record(response.json(), accession)
             if info:
@@ -111,7 +112,7 @@ def _lookup_genome_taxonomy_gtdb(accession: str) -> Optional[TaxonomyInfo]:
 
         # Fallback: search endpoint
         params: Dict[str, Union[str, int]] = {"search": accession, "page": 1, "itemsPerPage": 1}
-        response = requests.get(search_url, params=params, timeout=REQUEST_TIMEOUT)
+        response = session.get(search_url, params=params, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             rows = _extract_search_rows(response.json())
             if rows:
@@ -172,14 +173,45 @@ def save_taxonomy_cache(taxonomy: Dict[str, TaxonomyInfo], cache_file: Path) -> 
     logger.info("Saved %d entries to taxonomy cache %s", len(taxonomy), cache_file)
 
 
+def _append_taxonomy_cache_row(cache_file: Path, info: TaxonomyInfo) -> None:
+    """Append one genome's taxonomy to the TSV cache, writing the header only when the file is new.
+
+    Only a successfully resolved lookup reaches here; a miss or a failed API call is not written,
+    so a later run retries it instead of caching the gap forever.
+    """
+    cache_path = Path(cache_file)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not cache_path.exists() or cache_path.stat().st_size == 0
+    with open(cache_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_CACHE_COLUMNS, delimiter="\t")
+        if is_new:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "genome_id": info.genome_id,
+                "species": info.species or "",
+                "genus": info.genus or "",
+                "family": info.family or "",
+                "order": info.order or "",
+                "class_name": info.class_name or "",
+                "phylum": info.phylum or "",
+                "organism": info.organism or "",
+                "tax_id": info.tax_id or "",
+            }
+        )
+
+
 def enrich_genomes_with_taxonomy(
     genome_ids: List[str],
     cache_file: Optional[Path] = None,
 ) -> Dict[str, TaxonomyInfo]:
     """Map genome accessions to taxonomy via the GTDB API.
 
-    Loads cached results when available and saves new lookups back to the
-    cache file after completion.
+    Loads cached results when available. Each newly resolved genome is appended to the cache
+    file right after its lookup succeeds, so an interrupted run keeps every row it already
+    fetched; a genome with no taxonomy found, or whose lookup failed, is not written to the
+    cache and is retried on the next run (though this call still returns an empty TaxonomyInfo
+    for it, so the caller always gets one entry per requested genome).
     """
     taxonomy: Dict[str, TaxonomyInfo] = {}
 
@@ -198,6 +230,8 @@ def enrich_genomes_with_taxonomy(
                 info = _lookup_genome_taxonomy_gtdb(accession)
                 if info:
                     taxonomy[accession] = info
+                    if cache_file:
+                        _append_taxonomy_cache_row(cache_file, info)
                 else:
                     logger.warning("No taxonomy found for genome '%s'", accession)
                     taxonomy[accession] = TaxonomyInfo(genome_id=accession)
@@ -205,10 +239,10 @@ def enrich_genomes_with_taxonomy(
                 logger.warning("Failed to retrieve taxonomy for '%s'", accession)
                 taxonomy[accession] = TaxonomyInfo(genome_id=accession)
 
-        if cache_file:
-            save_taxonomy_cache(taxonomy, cache_file)
-
     return taxonomy
+
+
+_ANNOTATED_COLUMNS = ["sample", "genome", "containment", "species", "genus", "family"]
 
 
 def annotate_containment_with_taxonomy(
@@ -217,31 +251,32 @@ def annotate_containment_with_taxonomy(
 ) -> pd.DataFrame:
     """Add taxonomy columns to a parsed containment DataFrame.
 
-    Converts the wide-format containment table (samples as rows, genomes as
-    columns) into a long-format DataFrame with columns:
-    ``sample, genome, containment, species, genus, family``.
+    Converts the wide-format containment table (samples as rows, genomes as columns) into a
+    long-format DataFrame with columns ``sample, genome, containment, species, genus, family``.
+
+    Melts the genome columns instead of iterating row by row, and keeps only the sample/genome
+    pairs with a positive containment value; a zero (or missing) containment cell is dropped
+    rather than kept as a zero-valued row. This is a behaviour change from the previous
+    row-by-row implementation, which kept every cell including zeros.
     """
     from metaquest.core.utils import get_genome_columns
 
     genome_cols = get_genome_columns(containment_df)
-    records = []
-    for _, row in containment_df.iterrows():
-        sample = row.name if isinstance(row.name, str) else str(row.name)
-        for genome in genome_cols:
-            containment_val = row[genome]
-            info = taxonomy.get(genome, TaxonomyInfo(genome_id=genome))
-            records.append(
-                {
-                    "sample": sample,
-                    "genome": genome,
-                    "containment": float(containment_val),
-                    "species": info.species,
-                    "genus": info.genus,
-                    "family": info.family,
-                }
-            )
 
-    return pd.DataFrame(records)
+    melted = containment_df[genome_cols].melt(ignore_index=False, var_name="genome", value_name="containment")
+    melted = melted[melted["containment"] > 0].copy()
+    if melted.empty:
+        return pd.DataFrame(columns=_ANNOTATED_COLUMNS)
+
+    melted["sample"] = [name if isinstance(name, str) else str(name) for name in melted.index]
+    melted["containment"] = melted["containment"].astype(float)
+
+    infos = melted["genome"].map(lambda genome: taxonomy.get(genome, TaxonomyInfo(genome_id=genome)))
+    melted["species"] = infos.map(lambda info: info.species)
+    melted["genus"] = infos.map(lambda info: info.genus)
+    melted["family"] = infos.map(lambda info: info.family)
+
+    return melted[_ANNOTATED_COLUMNS].reset_index(drop=True)
 
 
 def filter_by_taxonomy(

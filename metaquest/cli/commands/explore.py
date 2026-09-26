@@ -57,7 +57,8 @@ class EnrichTaxonomyCommand(BaseCommand):
                 self.logger.error("Containment file not found: %s", containment_path)
                 return 1
 
-            df = pd.read_csv(containment_path, sep="\t", index_col=0)
+            # Only the column names are needed here, so the data rows are not read.
+            df = pd.read_csv(containment_path, sep="\t", index_col=0, nrows=0)
             genome_cols = get_genome_columns(df)
             self.logger.info("Found %d genome columns in %s", len(genome_cols), containment_path)
 

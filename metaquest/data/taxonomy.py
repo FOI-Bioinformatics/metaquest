@@ -5,11 +5,14 @@ This module provides functions for integrating with NCBI taxonomy,
 validating taxonomic assignments, and creating taxonomic summaries.
 """
 
+import csv
 import logging
 import requests
 import time
 import xml.etree.ElementTree as ET
 import pandas as pd
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import Dict, List, Optional, Union
 from pathlib import Path
 import re
@@ -28,6 +31,41 @@ MAP_RANK_COLUMNS = {
     "phylum": "phylum",
 }
 
+RETRY_TOTAL = 3
+RETRY_BACKOFF_FACTOR = 0.5
+RETRY_STATUS_FORCELIST = [429, 500, 502, 503, 504]
+
+# Columns of the incremental species-validation cache, in write order.
+_VALIDATION_CACHE_COLUMNS = [
+    "original_name",
+    "cleaned_name",
+    "validated_name",
+    "tax_id",
+    "rank",
+    "lineage",
+    "is_valid",
+    "confidence",
+]
+
+
+def _build_retrying_session() -> requests.Session:
+    """Build a Session that retries a 429/5xx NCBI response with backoff.
+
+    Each NCBITaxonomyClient owns one of these (it already keeps per-instance rate-limit
+    state), reused across every esearch/efetch call that client makes.
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=RETRY_TOTAL,
+        backoff_factor=RETRY_BACKOFF_FACTOR,
+        status_forcelist=RETRY_STATUS_FORCELIST,
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 
 class NCBITaxonomyClient:
     """Client for interacting with NCBI Taxonomy database."""
@@ -45,6 +83,7 @@ class NCBITaxonomyClient:
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
         self.last_request_time: float = 0
         self.request_delay = 1.0 / 3 if api_key else 1.0 / 10  # Rate limiting
+        self.session = _build_retrying_session()
 
     def _make_request(self, url: str, params: Dict[str, str]) -> str:
         """Make rate-limited request to NCBI API."""
@@ -60,7 +99,7 @@ class NCBITaxonomyClient:
             params["api_key"] = self.api_key
 
         try:
-            response = requests.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
             self.last_request_time = time.time()
             return response.text
@@ -219,6 +258,26 @@ class NCBITaxonomyClient:
         return cleaned.strip()
 
 
+def _append_validation_cache_row(
+    cache_file: Union[str, Path],
+    result: Dict[str, Union[str, bool]],
+    reset: bool = False,
+) -> None:
+    """Append one species validation to the CSV cache, writing the header when the file is new.
+
+    ``reset`` truncates the file first, for the one write that follows a cache file that failed
+    to load: a corrupt cache is discarded rather than appended to.
+    """
+    cache_path = Path(cache_file)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = reset or not cache_path.exists() or cache_path.stat().st_size == 0
+    with open(cache_path, "w" if reset else "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_VALIDATION_CACHE_COLUMNS)
+        if is_new:
+            writer.writeheader()
+        writer.writerow({column: result.get(column, "") for column in _VALIDATION_CACHE_COLUMNS})
+
+
 def validate_taxonomic_assignments(
     species_list: List[str],
     email: str,
@@ -242,6 +301,7 @@ def validate_taxonomic_assignments(
     try:
         # Load cache if available
         cached_results = {}
+        cache_needs_reset = False
         if cache_file and Path(cache_file).exists():
             try:
                 cache_df = pd.read_csv(cache_file)
@@ -249,6 +309,9 @@ def validate_taxonomic_assignments(
                 logger.info(f"Loaded {len(cached_results)} cached taxonomy validations")
             except Exception as e:
                 logger.warning(f"Failed to load cache file: {e}")
+                # The file is unreadable; the first successful lookup below replaces it
+                # instead of appending after its corrupt content.
+                cache_needs_reset = True
 
         # Initialize client
         client = NCBITaxonomyClient(email, api_key)
@@ -267,6 +330,13 @@ def validate_taxonomic_assignments(
                 logger.info(f"Validating {i}/{len(unique_species)}: {species}")
                 result = client.validate_species_name(species)
                 results.append(result)
+
+                # A confidence of "error" means the lookup itself failed (e.g. a network
+                # error); leave it out of the cache so a later run retries it, instead of
+                # caching the failure forever.
+                if cache_file and result.get("confidence") != "error":
+                    _append_validation_cache_row(cache_file, result, reset=cache_needs_reset)
+                    cache_needs_reset = False
 
                 # Rate limiting for API calls
                 if i % 10 == 0:
@@ -296,12 +366,8 @@ def validate_taxonomic_assignments(
             results_df.to_csv(output_path, index=False)
             logger.info(f"Taxonomy validation results saved to {output_path}")
 
-        # Update cache
-        if cache_file:
-            cache_path = Path(cache_file)
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            results_df.to_csv(cache_path, index=False)
-            logger.info(f"Taxonomy validation cache updated: {cache_path}")
+        # The cache (if requested) was already updated incrementally above, one row per
+        # successful lookup, so an interrupted run keeps whatever it fetched.
 
         # Log summary
         valid_count = results_df["is_valid"].sum() if not results_df.empty else 0

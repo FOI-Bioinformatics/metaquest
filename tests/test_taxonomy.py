@@ -44,7 +44,7 @@ class TestNCBITaxonomyClient:
         assert self.client._clean_species_name("Species [with brackets]") == "Species"
         assert self.client._clean_species_name("Species (with parentheses)") == "Species"
 
-    @patch("requests.get")
+    @patch("requests.Session.get")
     def test_make_request_success(self, mock_get):
         """Test successful API request."""
         mock_response = MagicMock()
@@ -57,7 +57,7 @@ class TestNCBITaxonomyClient:
         assert result == "<xml>test</xml>"
         mock_get.assert_called_once()
 
-    @patch("requests.get")
+    @patch("requests.Session.get")
     def test_make_request_failure(self, mock_get):
         """Test failed API request."""
         mock_get.side_effect = Exception("Network error")
@@ -133,6 +133,42 @@ class TestNCBITaxonomyClient:
             assert result["is_valid"] is False
             assert result["validated_name"] == ""
             assert result["tax_id"] == ""
+
+
+class TestClientSession:
+    """Each client owns one requests.Session, reused across its requests, with retries mounted."""
+
+    def setup_method(self):
+        self.client = NCBITaxonomyClient("test@example.com")
+
+    def test_client_has_a_session(self):
+        import requests
+
+        assert isinstance(self.client.session, requests.Session)
+
+    def test_session_is_reused_across_requests(self):
+        with patch.object(self.client.session, "get") as mock_get:
+            mock_response = MagicMock()
+            mock_response.text = "<xml/>"
+            mock_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_response
+
+            self.client._make_request("http://test.com", {"a": "1"})
+            self.client._make_request("http://test.com", {"a": "2"})
+
+            assert mock_get.call_count == 2
+
+    def test_retry_adapter_is_mounted_on_both_schemes(self):
+        for scheme in ("https://", "http://"):
+            adapter = self.client.session.adapters[scheme]
+            assert adapter.max_retries.total == 3
+            assert adapter.max_retries.backoff_factor == 0.5
+            assert set(adapter.max_retries.status_forcelist) == {429, 500, 502, 503, 504}
+            assert "GET" in adapter.max_retries.allowed_methods
+
+    def test_each_client_gets_its_own_session(self):
+        other = NCBITaxonomyClient("other@example.com")
+        assert other.session is not self.client.session
 
 
 class TestTaxonomyValidation:

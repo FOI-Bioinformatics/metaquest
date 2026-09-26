@@ -6,10 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+import metaquest.data.gtdb as gtdb
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.gtdb import (
     get_accessions_for_genus,
     get_accessions_for_species,
+    get_session,
     search_species,
     search_taxon,
 )
@@ -64,7 +66,7 @@ TAXON_RESULT_LIST = [
 
 
 class TestSearchSpecies:
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_returns_list(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = SPECIES_RESULT_LIST
@@ -76,7 +78,7 @@ class TestSearchSpecies:
         assert len(result) == 2
         assert result[0]["accession"] == "GCF_000005845.2"
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_returns_dict_with_genomes(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = SPECIES_RESULT_DICT
@@ -88,7 +90,7 @@ class TestSearchSpecies:
         assert len(result) == 1
         assert result[0]["gid"] == "GCF_000005845.2"
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_returns_dict_without_genomes_key(self, mock_get):
         """A dict without 'genomes' wraps itself in a list."""
         single_record = {"accession": "GCF_000005845.2", "species": "E. coli"}
@@ -102,7 +104,7 @@ class TestSearchSpecies:
         assert len(result) == 1
         assert result[0]["accession"] == "GCF_000005845.2"
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_empty_results(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = []
@@ -113,7 +115,7 @@ class TestSearchSpecies:
 
         assert result == []
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_none_response(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = None
@@ -124,14 +126,14 @@ class TestSearchSpecies:
 
         assert result == []
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_api_error(self, mock_get):
         mock_get.side_effect = requests.exceptions.ConnectionError("Connection refused")
 
         with pytest.raises(DataAccessError, match="GTDB API error"):
             search_species("Escherichia coli")
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_http_error(self, mock_get):
         mock_response = MagicMock()
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Server Error")
@@ -140,7 +142,7 @@ class TestSearchSpecies:
         with pytest.raises(DataAccessError, match="GTDB API error"):
             search_species("Escherichia coli")
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_http_error_400_hints_stale_name(self, mock_get):
         """A 400 usually means the name predates a GTDB genus reclassification, so say so."""
         mock_response = MagicMock()
@@ -155,7 +157,7 @@ class TestSearchSpecies:
 
         assert "genus" in str(excinfo.value)
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_http_error_500_keeps_plain_message(self, mock_get):
         """Only a 400 gets the stale-name hint; other HTTP errors keep the existing message."""
         mock_response = MagicMock()
@@ -170,14 +172,14 @@ class TestSearchSpecies:
 
         assert "not a current GTDB name" not in str(excinfo.value)
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_timeout(self, mock_get):
         mock_get.side_effect = requests.exceptions.Timeout("Request timed out")
 
         with pytest.raises(DataAccessError, match="GTDB API error"):
             search_species("Escherichia coli")
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_unexpected_data_type(self, mock_get):
         """Non-list, non-dict response returns empty list."""
         mock_response = MagicMock()
@@ -194,7 +196,7 @@ class TestSearchSpecies:
 
 
 class TestSearchTaxon:
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_returns_list(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = TAXON_RESULT_LIST
@@ -205,7 +207,7 @@ class TestSearchTaxon:
 
         assert len(result) == 3
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_with_limit(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = TAXON_RESULT_LIST[:1]
@@ -219,7 +221,7 @@ class TestSearchTaxon:
         assert call_kwargs[1]["params"]["limit"] == 1
         assert len(result) == 1
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_returns_dict_with_results_key(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {"results": TAXON_RESULT_LIST}
@@ -230,7 +232,7 @@ class TestSearchTaxon:
 
         assert len(result) == 3
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_returns_dict_without_results_key(self, mock_get):
         single_record = {"accession": "GCF_000005845.2", "name": "Escherichia"}
         mock_response = MagicMock()
@@ -242,7 +244,7 @@ class TestSearchTaxon:
 
         assert len(result) == 1
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_empty_results(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = []
@@ -253,14 +255,14 @@ class TestSearchTaxon:
 
         assert result == []
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_api_error(self, mock_get):
         mock_get.side_effect = requests.exceptions.ConnectionError("Failed")
 
         with pytest.raises(DataAccessError, match="GTDB API error"):
             search_taxon("Escherichia")
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_http_error_400_hints_stale_name(self, mock_get):
         mock_response = MagicMock()
         error_response = MagicMock(status_code=400)
@@ -272,7 +274,7 @@ class TestSearchTaxon:
         with pytest.raises(DataAccessError, match="not a current GTDB name"):
             search_taxon("Lactobacillus")
 
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_unexpected_data_type(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = 42
@@ -445,7 +447,7 @@ SPECIES_GENOMES_RESPONSE = {
 
 
 class TestLiveApiShapes:
-    @patch("metaquest.data.gtdb.requests.get")
+    @patch("requests.Session.get")
     def test_search_taxon_matches_shape(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = TAXON_MATCHES_RESPONSE
@@ -541,3 +543,44 @@ class TestLiveApiShapes:
         accessions = get_accessions_for_genus("Bacillus")
 
         assert accessions == ["GCF_000009045.1"]
+
+
+# --- get_session ---
+
+
+class TestGetSession:
+    def setup_method(self):
+        gtdb._session = None
+
+    def teardown_method(self):
+        gtdb._session = None
+
+    def test_returns_a_session(self):
+        assert isinstance(get_session(), requests.Session)
+
+    def test_returns_the_same_session_on_every_call(self):
+        assert get_session() is get_session()
+
+    def test_retry_adapter_is_mounted_on_both_schemes(self):
+        session = get_session()
+        for scheme in ("https://", "http://"):
+            adapter = session.adapters[scheme]
+            assert adapter.max_retries.total == 3
+            assert adapter.max_retries.backoff_factor == 0.5
+            assert set(adapter.max_retries.status_forcelist) == {429, 500, 502, 503, 504}
+            assert "GET" in adapter.max_retries.allowed_methods
+
+    @patch("requests.Session.get")
+    def test_session_is_reused_across_lookups(self, mock_get):
+        """search_species and search_taxon share the one process-wide session."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = []
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        session_before = get_session()
+        search_species("Escherichia coli")
+        search_taxon("Escherichia")
+
+        assert mock_get.call_count == 2
+        assert get_session() is session_before

@@ -4,6 +4,8 @@ import logging
 from typing import Dict, List, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from metaquest.core.exceptions import DataAccessError
 
@@ -11,6 +13,33 @@ logger = logging.getLogger(__name__)
 
 GTDB_API_BASE = "https://gtdb-api.ecogenomic.org"
 REQUEST_TIMEOUT = 30
+RETRY_TOTAL = 3
+RETRY_BACKOFF_FACTOR = 0.5
+RETRY_STATUS_FORCELIST = [429, 500, 502, 503, 504]
+
+_session: Optional[requests.Session] = None
+
+
+def get_session() -> requests.Session:
+    """Return the process-wide GTDB HTTP session, building it on first use.
+
+    Every genome, species and taxon lookup shares this one session, so TCP/TLS connections are
+    pooled across a whole run instead of rebuilt per request. A 429 or 5xx GTDB response is
+    retried up to RETRY_TOTAL times with exponential backoff before the caller sees it.
+    """
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        retry = Retry(
+            total=RETRY_TOTAL,
+            backoff_factor=RETRY_BACKOFF_FACTOR,
+            status_forcelist=RETRY_STATUS_FORCELIST,
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        _session.mount("https://", adapter)
+        _session.mount("http://", adapter)
+    return _session
 
 
 def _api_error_message(kind: str, name: str, e: requests.exceptions.RequestException) -> str:
@@ -39,7 +68,7 @@ def search_species(species_name: str) -> List[Dict]:
     logger.debug("Searching GTDB species: %s", species_name)
 
     try:
-        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response = get_session().get(url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
@@ -65,7 +94,7 @@ def search_taxon(taxon_name: str, limit: int = 100) -> List[Dict]:
     logger.debug("Searching GTDB taxon: %s (limit=%d)", taxon_name, limit)
 
     try:
-        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        response = get_session().get(url, params=params, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
