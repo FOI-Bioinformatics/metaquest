@@ -33,6 +33,7 @@ from metaquest.cli.commands.test_data import DownloadTestGenomeCommand
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.core.models import ContainmentSummary
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry, record_download, record_exclusion, record_metadata, save_registry
 
 
@@ -3057,3 +3058,83 @@ class TestDownloadMetadataSharesWithTheStore:
 
         with patch("metaquest.cli.commands.metadata.download_metadata", return_value={"SRR1": xml}):
             assert DownloadMetadataCommand().execute(self._args(tmp_path)) == 0
+
+
+class TestDownloadSraRegistryWrites:
+    """A download run writes the registry in a few transactions, not one per accession."""
+
+    @staticmethod
+    def _args(tmp_path):
+        return argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(tmp_path / "fastq"),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+
+    def test_run_outcomes_write_the_registry_once(self, tmp_path):
+        import metaquest.data.registry as registry_mod
+
+        args = self._args(tmp_path)
+        fastq_dir = tmp_path / "fastq"
+        already = [f"SRR{i}" for i in range(300)]
+        for accession in already:
+            (fastq_dir / accession).mkdir(parents=True)
+            (fastq_dir / accession / f"{accession}.fastq.gz").write_bytes(b"x")
+        stats = {
+            "already_downloaded_accessions": already,
+            "blacklisted_accessions": ["SRR900"],
+            "skipped_accessions": ["SRR901"],
+        }
+        with patch.object(registry_mod, "_write_registry", wraps=registry_mod._write_registry) as spy:
+            DownloadSraCommand()._record_run_outcomes(args, stats, fastq_dir, store=None)
+        assert spy.call_count == 1
+        registry = load_registry(args.registry)
+        assert rb.download_block(registry, "SRR0").state == "downloaded"
+        assert rb.download_block(registry, "SRR299").files[0].bytes == 1
+        assert rb.download_block(registry, "SRR900").message == "blacklisted"
+        assert rb.download_block(registry, "SRR901").message == "--max-downloads"
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_download_results_are_batched(self, mock_download, _which, tmp_path):
+        import metaquest.data.registry as registry_mod
+
+        def fake_download_sra(**kwargs):
+            for index in range(20):
+                kwargs["on_result"](f"SRR{index}", False, "Download failed: t")
+            return {"total": 20, "successful": 0, "failed": 0, "failed_accessions": []}
+
+        mock_download.side_effect = fake_download_sra
+        args = self._args(tmp_path)
+        with patch.object(registry_mod, "_write_registry", wraps=registry_mod._write_registry) as spy:
+            assert DownloadSraCommand().execute(args) == 0
+        assert spy.call_count == 1
+        registry = load_registry(args.registry)
+        assert all(rb.download_block(registry, f"SRR{i}").state == "failed" for i in range(20))
+
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_result_recorder_flushes_on_interrupt(self, mock_download, _which, tmp_path):
+        """A result recorded before Ctrl-C is in the registry file after the run returns 130."""
+        (tmp_path / "fastq" / "SRR1").mkdir(parents=True)
+        (tmp_path / "fastq" / "SRR1" / "SRR1.fastq.gz").write_bytes(b"x")
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, "Downloaded 1 files")
+            raise KeyboardInterrupt
+
+        mock_download.side_effect = fake_download_sra
+        args = self._args(tmp_path)
+        assert DownloadSraCommand().execute(args) == 130
+        assert rb.download_block(load_registry(args.registry), "SRR1").state == "downloaded"
+        assert not (tmp_path / "metaquest_registry.json.lock").exists()

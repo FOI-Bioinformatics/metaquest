@@ -357,9 +357,9 @@ class ExtractTargetReadsCommand(BaseCommand):
         return block.to_dict()
 
     @staticmethod
-    def _has_assembly_record(args: argparse.Namespace, accession: str) -> bool:
-        """True when the registry already holds an assembly block for this sample and genome."""
-        block = rb.extraction_block(load_registry(args.registry), accession, args.genome_id)
+    def _has_assembly_record(registry: Registry, accession: str, genome_id: str) -> bool:
+        """True when ``registry`` already holds an assembly block for this sample and genome."""
+        block = rb.extraction_block(registry, accession, genome_id)
         return block is not None and block.assembly is not None
 
     def _report_dry_run(self, args: argparse.Namespace, results: Dict[str, ExtractionResult]) -> None:
@@ -402,6 +402,7 @@ class ExtractTargetReadsCommand(BaseCommand):
             )
         version = megahit_version()
         genome_length = fasta_length(args.genome_fasta)
+        recorded: Optional[Registry] = None
         for accession, reads in with_reads.items():
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
             if args.force:
@@ -441,7 +442,16 @@ class ExtractTargetReadsCommand(BaseCommand):
             finally:
                 if uses_default_tmp_dir:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-            if not ran and self._has_assembly_record(args, accession):
+            if not ran and not args.force:
+                # Loaded once per call, on the first sample megahit skipped: only this loop
+                # changes a sample's assembly record, and never before checking it here (a
+                # forced redo clears the record above, and megahit then always runs).
+                if recorded is None:
+                    recorded = load_registry(args.registry)
+                has_record = self._has_assembly_record(recorded, accession, args.genome_id)
+            else:
+                has_record = False
+            if has_record:
                 # megahit did not run, so the recorded version and parameters still describe
                 # the assembly on disk; leave them alone.
                 continue

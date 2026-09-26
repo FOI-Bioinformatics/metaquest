@@ -217,7 +217,7 @@ def _acquire_lock(lock: Path) -> None:
 
 
 def _write_registry(registry: Registry, target: Path) -> Path:
-    """Write the registry to ``target`` atomically (temp file plus rename); the caller holds the lock."""
+    """Write the registry to ``target`` atomically (temp file, compact JSON, rename); the caller holds the lock."""
     target.parent.mkdir(parents=True, exist_ok=True)
     registry.updated = _now()
     registry.path = target
@@ -236,7 +236,7 @@ def _write_registry(registry: Registry, target: Path) -> Path:
     }
     tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     try:
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        tmp.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
         os.replace(tmp, target)
     except OSError as e:
         tmp.unlink(missing_ok=True)

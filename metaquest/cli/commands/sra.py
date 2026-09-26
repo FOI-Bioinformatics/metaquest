@@ -4,9 +4,10 @@ SRA-related CLI commands.
 
 import argparse
 import csv
+import functools
 import os
 import shutil
-from typing import Callable, Optional, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
@@ -20,9 +21,9 @@ from metaquest.data.registry import (
     project_root,
     query,
     record_download,
-    registry_transaction,
     update_linked,
 )
+from metaquest.data.registry_batch import RegistryBatch, registry_batch
 from metaquest.data.sra import (
     STORE_LINKED_PREFIX,
     default_max_workers,
@@ -34,7 +35,7 @@ from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import sidecar_completeness
-from metaquest.store.usage import ensure_project_identity, record_usage_many, record_usage_safe
+from metaquest.store.usage import ensure_project_identity, record_usage_many
 
 # Marker the data layer puts in a result message for a dataset this run downloaded and
 # saved into the store (as opposed to STORE_LINKED_PREFIX, imported above, for one the
@@ -265,43 +266,58 @@ class DownloadSraCommand(BaseCommand):
     def _record_run_outcomes(
         self, args: argparse.Namespace, stats: dict, fastq_dir: Path, store: Optional[StorePaths] = None
     ) -> None:
-        """Record the outcomes the download loop could not report, one transaction per accession.
+        """Record the outcomes the download loop could not report, in one registry transaction.
 
+        Already-downloaded, blacklisted and skipped accessions are queued on one
+        ``registry_batch`` that writes once, when the loops are done: a transaction rewrites the
+        whole registry, so one per accession took about a second each on a large project.
         Every already-downloaded accession the shared store backs is also recorded as
-        ``"linked"`` usage in the store catalogue, in one batched write after the loop
-        (``record_usage_many``) rather than one lock per accession.
+        ``"linked"`` usage in the store catalogue, in one batched write after the registry
+        write (``record_usage_many``) rather than one lock per accession, using the registry
+        that write produced.
         """
         usage_rows = []
-        for acc in stats.get("already_downloaded_accessions", []):
-            from_store = store is not None and is_store_link(fastq_dir / acc, store)
-            with registry_transaction(args.registry) as reg:
-                if from_store:
-                    ensure_project_identity(reg)
-                if (rb.download_block(reg, acc) or rb.DownloadBlock()).state != "downloaded":
-                    complete = self._sidecar_completeness(store, acc) if from_store else None
-                    record_download(
-                        reg,
-                        acc,
-                        "downloaded",
-                        fastq_dir,
-                        attempt=False,
-                        complete=complete,
-                        source="store" if from_store else None,
-                        store_name=acc if from_store else None,
+        with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
+            for acc in stats.get("already_downloaded_accessions", []):
+                from_store = store is not None and is_store_link(fastq_dir / acc, store)
+                batch.apply(
+                    functools.partial(
+                        self._record_present, acc=acc, fastq_dir=fastq_dir, store=store, from_store=from_store
                     )
-                    if from_store:
-                        update_linked(reg, acc, add=True)
-            if from_store:
-                usage_rows.append((acc, "", "linked", "already downloaded"))
+                )
+                if from_store:
+                    usage_rows.append((acc, "", "linked", "already downloaded"))
+            for acc in stats.get("blacklisted_accessions", []):
+                batch.apply(functools.partial(self._record_skip, acc=acc, message="blacklisted", fastq_dir=fastq_dir))
+            for acc in stats.get("skipped_accessions", []):
+                batch.apply(
+                    functools.partial(self._record_skip, acc=acc, message="--max-downloads", fastq_dir=fastq_dir)
+                )
         if usage_rows:
-            usage_registry = load_registry(args.registry)
+            usage_registry = batch.registry if batch.registry is not None else load_registry(args.registry)
             record_usage_many(store, usage_registry, usage_rows)
-        for acc in stats.get("blacklisted_accessions", []):
-            with registry_transaction(args.registry) as reg:
-                self._record_skip(reg, acc, "blacklisted", fastq_dir)
-        for acc in stats.get("skipped_accessions", []):
-            with registry_transaction(args.registry) as reg:
-                self._record_skip(reg, acc, "--max-downloads", fastq_dir)
+
+    def _record_present(
+        self, reg: Registry, acc: str, fastq_dir: Path, store: Optional[StorePaths], from_store: bool
+    ) -> None:
+        """Record an accession found already downloaded, unless its record already says so."""
+        if from_store:
+            ensure_project_identity(reg)
+        if (rb.download_block(reg, acc) or rb.DownloadBlock()).state == "downloaded":
+            return
+        complete = self._sidecar_completeness(store, acc) if from_store else None
+        record_download(
+            reg,
+            acc,
+            "downloaded",
+            fastq_dir,
+            attempt=False,
+            complete=complete,
+            source="store" if from_store else None,
+            store_name=acc if from_store else None,
+        )
+        if from_store:
+            update_linked(reg, acc, add=True)
 
     def _resolve_max_workers(self, args: argparse.Namespace) -> int:
         """Resolve --max-workers, falling back to a CPU-derived default.
@@ -333,22 +349,39 @@ class DownloadSraCommand(BaseCommand):
         return store_paths(store_root)
 
     def _result_recorder(
-        self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths] = None
+        self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths], batch: RegistryBatch
     ) -> Callable[[str, bool, str], None]:
         """The callback the download loop uses to record each accession's outcome.
+
+        Each outcome is queued on ``batch`` (which ``_run`` opens around the download call and
+        flushes every 50 results, every 30 seconds, and on exit including an interrupt) rather
+        than written in a transaction of its own.
 
         A dataset linked from the shared store is recorded as downloaded without counting an
         attempt against it, since no download ran; one this run downloaded into the store
         counts as an attempt like any other. Both are added to the project's list of linked
         datasets, and recorded as store catalogue usage: ``"linked"`` for a dataset the store
-        already held, ``"downloaded"`` for one this run saved into it.
+        already held, ``"downloaded"`` for one this run saved into it. The usage rows are
+        written after each registry flush, once its lock is released: the catalogue has its own
+        lock, and waiting for it while holding the project's registry lock can time a
+        concurrent writer's registry write out.
         """
+        usage_rows: List[Tuple[str, str, str, str]] = []
+
+        def _record_usage(reg: Registry) -> None:
+            if usage_rows:
+                record_usage_many(store, reg, list(usage_rows))
+                usage_rows.clear()
+
+        batch.add_flush_hook(_record_usage)
 
         def _record_result(accession: str, success: bool, message: str) -> None:
             linked = bool(success) and message.startswith(STORE_LINKED_PREFIX)
             from_store = linked or (bool(success) and message.endswith(STORE_SAVED_SUFFIX))
-            usage: Optional[Tuple[Registry, str, str]] = None
-            with registry_transaction(args.registry) as reg:
+            if from_store:
+                usage_rows.append((accession, "", "linked" if linked else "downloaded", message))
+
+            def _mutation(reg: Registry) -> None:
                 if from_store:
                     ensure_project_identity(reg)
                 complete = parse_verdict_message(message) if success else None
@@ -370,14 +403,8 @@ class DownloadSraCommand(BaseCommand):
                 )
                 if from_store:
                     update_linked(reg, accession, add=True)
-                    usage = (reg, "linked" if linked else "downloaded", message)
 
-            if usage is not None:
-                # Recorded after the registry transaction closes: the catalogue has its own
-                # lock, and waiting for it while holding the project's registry lock can time
-                # a concurrent worker's registry write out.
-                reg, stage, detail = usage
-                record_usage_safe(store, reg, accession, "", stage, detail=detail)
+            batch.apply(_mutation)
 
         return _record_result
 
@@ -446,6 +473,34 @@ class DownloadSraCommand(BaseCommand):
             "lock_wait": getattr(args, "lock_wait", 0.0),
         }
 
+    @staticmethod
+    def _registry_inputs(args: argparse.Namespace, project_registry: Registry) -> Tuple[set, dict, set]:
+        """The excluded accessions, expected spot counts and truncated accessions the registry holds.
+
+        All three are empty for a dry run. Expected spot counts are only collected with
+        ``--verify-downloads`` (the default), and truncated accessions only with
+        ``--redownload-truncated``.
+        """
+        excluded: set = set()
+        expected_spots: dict = {}
+        truncated: set = set()
+        if args.dry_run:
+            return excluded, expected_spots, truncated
+        excluded = set(query(project_registry, "excluded"))
+        if getattr(args, "verify_downloads", True):
+            for acc in project_registry.datasets:
+                spots = (rb.metadata_block(project_registry, acc) or rb.MetadataBlock()).run_total_spots
+                if spots is not None:
+                    expected_spots[acc] = spots
+        if getattr(args, "redownload_truncated", False):
+            truncated = {
+                acc
+                for acc in project_registry.datasets
+                if (verdict := rb.download_verdict(project_registry, acc)) is not None
+                and verdict.verdict == "truncated"
+            }
+        return excluded, expected_spots, truncated
+
     def execute(self, args: argparse.Namespace) -> int:
         try:
             return self._run(args)
@@ -471,56 +526,41 @@ class DownloadSraCommand(BaseCommand):
             compress = getattr(args, "compress", True)
             max_workers = self._resolve_max_workers(args)
 
-            excluded: set = set()
-            expected_spots: dict = {}
-            truncated: set = set()
             on_result = None
             fastq_dir = Path(args.fastq_folder)
 
             project_registry = load_registry(args.registry)
             store = self._resolve_store(args, project_registry)
+            excluded, expected_spots, truncated = self._registry_inputs(args, project_registry)
 
-            if not args.dry_run:
-                excluded = set(query(project_registry, "excluded"))
-
-                if verify_downloads:
-                    for acc in project_registry.datasets:
-                        spots = (rb.metadata_block(project_registry, acc) or rb.MetadataBlock()).run_total_spots
-                        if spots is not None:
-                            expected_spots[acc] = spots
-
-                if redownload_truncated:
-                    truncated = {
-                        acc
-                        for acc in project_registry.datasets
-                        if (verdict := rb.download_verdict(project_registry, acc)) is not None
-                        and verdict.verdict == "truncated"
-                    }
-
-                on_result = self._result_recorder(args, fastq_dir, store)
-
-            download_stats = download_sra(
-                fastq_folder=args.fastq_folder,
-                accessions_file=args.accessions_file,
-                max_downloads=args.max_downloads,
-                dry_run=args.dry_run,
-                num_threads=args.num_threads,
-                max_workers=max_workers,
-                force=args.force,
-                max_retries=args.max_retries,
-                temp_folder=args.temp_folder,
-                blacklist=args.blacklist,
-                blacklist_accessions=excluded,
-                on_result=on_result,
-                expected_spots=expected_spots if verify_downloads else None,
-                redownload_truncated=redownload_truncated,
-                truncated_accessions=truncated,
-                sra_cache=sra_cache,
-                use_prefetch=use_prefetch,
-                keep_sra=keep_sra,
-                compress=compress,
-                **self._store_options(args, store, project_registry),
-            )
+            # Download outcomes are queued and written in batches; the batch is flushed when the
+            # download call returns or raises, a KeyboardInterrupt included, before the error
+            # propagates. A dry run records nothing, so its batch never writes.
+            with registry_batch(args.registry) as batch:
+                if not args.dry_run:
+                    on_result = self._result_recorder(args, fastq_dir, store, batch)
+                download_stats = download_sra(
+                    fastq_folder=args.fastq_folder,
+                    accessions_file=args.accessions_file,
+                    max_downloads=args.max_downloads,
+                    dry_run=args.dry_run,
+                    num_threads=args.num_threads,
+                    max_workers=max_workers,
+                    force=args.force,
+                    max_retries=args.max_retries,
+                    temp_folder=args.temp_folder,
+                    blacklist=args.blacklist,
+                    blacklist_accessions=excluded,
+                    on_result=on_result,
+                    expected_spots=expected_spots if verify_downloads else None,
+                    redownload_truncated=redownload_truncated,
+                    truncated_accessions=truncated,
+                    sra_cache=sra_cache,
+                    use_prefetch=use_prefetch,
+                    keep_sra=keep_sra,
+                    compress=compress,
+                    **self._store_options(args, store, project_registry),
+                )
             if args.dry_run:
                 self._log_dry_run_summary(args, download_stats)
             else:

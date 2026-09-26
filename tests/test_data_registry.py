@@ -10,6 +10,7 @@ import pytest
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry as reg
+from metaquest.data import registry_batch as batch_mod
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import summarise_contigs
 from metaquest.processing.status_report import to_dataframes
@@ -1137,3 +1138,100 @@ class TestStageCountsSpeed:
         # enough on 5000 datasets to pass any bound that is safe on a slow machine.
         assert conversions == []
         assert elapsed < 0.5, f"stage_counts took {elapsed:.2f} s on 5000 datasets"
+
+
+class TestCompactRegistryFile:
+    def test_registry_is_written_compact_and_reloads(self, tmp_path):
+        """The registry file carries no indentation, ends in a newline, and loads back unchanged."""
+        path = tmp_path / reg.REGISTRY_FILENAME
+        registry = reg.Registry(path=path)
+        reg.record_screening(registry, "SRR1", "G1", 0.5, 0.9, "branchwater", 0.1, None)
+        reg.record_exclusion(registry, "SRR2", "low quality")
+        reg.save_registry(registry, path)
+        text = path.read_text()
+        assert "\n  " not in text
+        assert text.endswith("}\n")
+        assert text.count("\n") == 1
+        assert reg.load_registry(path).datasets == registry.datasets
+
+
+class TestRegistryBatch:
+    def test_queued_mutations_are_written_in_one_transaction_on_exit(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with patch.object(reg, "_write_registry", wraps=reg._write_registry) as spy:
+            with batch_mod.registry_batch(path) as batch:
+                for index in range(10):
+                    batch.apply(lambda r, i=index: reg.record_exclusion(r, f"SRR{i}", "test"))
+                assert not path.exists()
+        assert spy.call_count == 1
+        assert sorted(reg.load_registry(path).datasets) == sorted(f"SRR{i}" for i in range(10))
+
+    def test_mutations_apply_in_the_order_queued(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with batch_mod.registry_batch(path) as batch:
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "first"))
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "second"))
+        assert rb.exclusion_block(reg.load_registry(path), "SRR1").reason == "second"
+
+    def test_flushes_every_n_mutations(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with patch.object(reg, "_write_registry", wraps=reg._write_registry) as spy:
+            with batch_mod.registry_batch(path, flush_every=3) as batch:
+                for index in range(7):
+                    batch.apply(lambda r, i=index: reg.record_exclusion(r, f"SRR{i}", "test"))
+                assert spy.call_count == 2
+                assert len(reg.load_registry(path).datasets) == 6
+        assert spy.call_count == 3
+
+    def test_flushes_when_the_interval_has_elapsed(self, tmp_path, monkeypatch):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        clock = {"now": 100.0}
+        with batch_mod.registry_batch(path, flush_every=1000, flush_seconds=30.0) as batch:
+            monkeypatch.setattr(batch_mod, "_monotonic", lambda: clock["now"])
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"))
+            assert not path.exists()
+            clock["now"] += 1e9
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR2", "test"))
+            assert sorted(reg.load_registry(path).datasets) == ["SRR1", "SRR2"]
+
+    def test_flushes_on_keyboard_interrupt_and_lets_it_propagate(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with pytest.raises(KeyboardInterrupt):
+            with batch_mod.registry_batch(path) as batch:
+                batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"))
+                raise KeyboardInterrupt
+        assert "SRR1" in reg.load_registry(path).datasets
+        assert not path.with_name(path.name + ".lock").exists()
+
+    def test_a_failed_flush_on_interrupt_does_not_replace_the_interrupt(self, tmp_path, caplog):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with patch.object(reg, "_write_registry", side_effect=DataAccessError("disk gone")):
+            with pytest.raises(KeyboardInterrupt):
+                with batch_mod.registry_batch(path) as batch:
+                    batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"))
+                    raise KeyboardInterrupt
+        assert "disk gone" in caplog.text
+
+    def test_an_empty_batch_writes_nothing(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with batch_mod.registry_batch(path):
+            pass
+        assert not path.exists()
+
+    def test_the_lock_is_held_only_during_a_flush(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        with batch_mod.registry_batch(path) as batch:
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"))
+            # Another writer can still use the registry while mutations are queued.
+            with reg.registry_transaction(path) as other:
+                reg.record_exclusion(other, "SRR2", "other writer")
+        assert sorted(reg.load_registry(path).datasets) == ["SRR1", "SRR2"]
+
+    def test_flush_hooks_receive_the_written_registry(self, tmp_path):
+        path = tmp_path / reg.REGISTRY_FILENAME
+        seen = []
+        with batch_mod.registry_batch(path) as batch:
+            batch.add_flush_hook(lambda r: seen.append(sorted(r.datasets)))
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"))
+        assert seen == [["SRR1"]]
+        assert batch.registry is not None and "SRR1" in batch.registry.datasets

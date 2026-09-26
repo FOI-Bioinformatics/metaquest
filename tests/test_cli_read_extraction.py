@@ -1439,3 +1439,29 @@ class TestExtractTargetReadsCommand:
             after = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
         assert after is not None
         assert after["contigs"] > 0
+
+
+def test_assemble_loads_the_registry_at_most_once(tmp_path):
+    """Samples whose assembly megahit skipped are checked against one registry load, not one per sample."""
+    import metaquest.cli.commands.read_extraction as cli_mod
+    from metaquest.data.registry import Registry, record_assembly
+
+    registry_file = tmp_path / "registry.json"
+    registry = Registry(path=registry_file)
+    accessions = [f"SRR{i}" for i in range(1, 6)]
+    for accession in accessions:
+        record_extraction(registry, accession, "GCF_1", [], 10, False, {})
+        record_assembly(registry, accession, "GCF_1", tmp_path / accession, {"contigs": 1}, "1.2.9", {})
+    save_registry(registry, registry_file)
+    args = _args(tmp_path, registry=str(registry_file), assemble=True, output_folder=str(tmp_path / "targeted"))
+    with_reads = {accession: [tmp_path / f"{accession}.fq"] for accession in accessions}
+    results = {accession: ExtractionResult(with_reads[accession], 10, False) for accession in accessions}
+
+    with (
+        patch.object(cli_mod, "assemble_extracted_reads", return_value=(None, False)),
+        patch.object(cli_mod, "megahit_version", return_value="1.2.9"),
+        patch.object(cli_mod, "fasta_length", return_value=100),
+        patch.object(cli_mod, "load_registry", wraps=cli_mod.load_registry) as spy,
+    ):
+        ExtractTargetReadsCommand()._assemble(args, with_reads, results)
+    assert spy.call_count <= 1

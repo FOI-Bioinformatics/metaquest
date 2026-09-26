@@ -288,8 +288,11 @@ def test_registry_accessors_and_setters_round_trip(tmp_path, fixture_data):
     B.set_store_block(registry, B.store_block(registry))
     R.save_registry(registry)
 
-    # Compared as text, so a value that changed type (1 against 1.0) is caught too.
+    # Compared as text, so a value that changed type (1 against 1.0) is caught too. The fixture
+    # is kept indented for reading; the registry is written compact, so the fixture is re-dumped
+    # the same way (sorted keys, compact separators) before the comparison.
     def without_updated(text):
-        return [line for line in text.splitlines() if not line.startswith('  "updated": ')]
+        return re.sub(r'"updated":"[^"]*"', '"updated":""', text)
 
-    assert without_updated(target.read_text()) == without_updated(FIXTURE.read_text())
+    expected = json.dumps(json.loads(FIXTURE.read_text()), sort_keys=True, separators=(",", ":")) + "\n"
+    assert without_updated(target.read_text()) == without_updated(expected)
