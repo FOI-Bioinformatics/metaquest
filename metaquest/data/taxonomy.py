@@ -52,7 +52,8 @@ def _build_retrying_session() -> requests.Session:
     """Build a Session that retries a 429/5xx NCBI response with backoff.
 
     Each NCBITaxonomyClient owns one of these (it already keeps per-instance rate-limit
-    state), reused across every esearch/efetch call that client makes.
+    state), reused across every esearch/efetch call that client makes. When every retry fails the
+    last response is returned, so raise_for_status() reports the HTTP error rather than a RetryError.
     """
     session = requests.Session()
     retry = Retry(
@@ -60,6 +61,7 @@ def _build_retrying_session() -> requests.Session:
         backoff_factor=RETRY_BACKOFF_FACTOR,
         status_forcelist=RETRY_STATUS_FORCELIST,
         allowed_methods=["GET"],
+        raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("https://", adapter)

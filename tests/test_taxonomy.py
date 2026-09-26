@@ -324,3 +324,22 @@ class TestTaxonomyMapInput:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+class TestNCBIRetriesReturnTheFinalResponse:
+    """A persistent 5xx from NCBI ends as the same ProcessingError as before retries were added."""
+
+    def test_retry_does_not_raise_on_status(self):
+        client = NCBITaxonomyClient("test@example.com")
+        assert client.session.adapters["https://"].max_retries.raise_on_status is False
+
+    def test_persistent_500_is_a_processing_error_not_a_retry_error(self, monkeypatch):
+        from tests.fake_http import serve
+
+        requested = serve(monkeypatch, lambda path: (500, b"<error/>"))
+        client = NCBITaxonomyClient("test@example.com")
+        client.request_delay = 0
+        with pytest.raises(ProcessingError, match="500 Server Error") as caught:
+            client._make_request(client.base_url + "esearch.fcgi", {"db": "taxonomy"})
+        assert "Max retries" not in str(caught.value)
+        assert len(requested) == 4

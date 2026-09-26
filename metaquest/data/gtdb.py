@@ -25,7 +25,8 @@ def get_session() -> requests.Session:
 
     Every genome, species and taxon lookup shares this one session, so TCP/TLS connections are
     pooled across a whole run instead of rebuilt per request. A 429 or 5xx GTDB response is
-    retried up to RETRY_TOTAL times with exponential backoff before the caller sees it.
+    retried up to RETRY_TOTAL times with exponential backoff; if every attempt fails, the last
+    response is returned (not raised), so status checks and raise_for_status() see it as before.
     """
     global _session
     if _session is None:
@@ -35,6 +36,7 @@ def get_session() -> requests.Session:
             backoff_factor=RETRY_BACKOFF_FACTOR,
             status_forcelist=RETRY_STATUS_FORCELIST,
             allowed_methods=["GET"],
+            raise_on_status=False,
         )
         adapter = HTTPAdapter(max_retries=retry)
         _session.mount("https://", adapter)

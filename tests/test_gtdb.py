@@ -584,3 +584,45 @@ class TestGetSession:
 
         assert mock_get.call_count == 2
         assert get_session() is session_before
+
+
+# --- final 5xx response after retries (raise_on_status=False) ---
+
+
+class TestRetriesReturnTheFinalResponse:
+    """With retries exhausted the last 5xx response reaches the caller, as it did before retries."""
+
+    def setup_method(self):
+        gtdb._session = None
+
+    def teardown_method(self):
+        gtdb._session = None
+
+    def test_session_retry_does_not_raise_on_status(self):
+        adapter = get_session().adapters["https://"]
+        assert adapter.max_retries.raise_on_status is False
+
+    def test_genome_endpoint_500_falls_back_to_search(self, monkeypatch):
+        from metaquest.data.genome_taxonomy import _lookup_genome_taxonomy_gtdb
+        from tests.fake_http import serve
+
+        body = (
+            b'{"rows": [{"gtdbTaxonomy": "d__Bacteria;p__Bacillota;c__Bacilli;o__Lactobacillales;'
+            b'f__Lactobacillaceae;g__Lactobacillus;s__Lactobacillus crispatus"}]}'
+        )
+
+        def handler(path):
+            return (500, b"{}") if path.startswith("/genome/") else (200, body)
+
+        requested = serve(monkeypatch, handler)
+        info = _lookup_genome_taxonomy_gtdb("GCF_000001.1")
+        assert info is not None and info.species == "Lactobacillus crispatus"
+        # One first attempt plus RETRY_TOTAL retries on the genome endpoint, then the search endpoint once.
+        assert requested == ["/genome/GCF_000001.1"] * (gtdb.RETRY_TOTAL + 1) + ["/search/gtdb"]
+
+    def test_species_search_500_keeps_the_http_error_message(self, monkeypatch):
+        from tests.fake_http import serve
+
+        serve(monkeypatch, lambda path: (500, b"{}"))
+        with pytest.raises(DataAccessError, match="500 Server Error"):
+            search_species("Escherichia coli")
