@@ -284,7 +284,10 @@ synthetic fixtures in `tests/perf_fixtures.py` (a 20,000-dataset registry, a lar
 folder of metadata XML files, and a containment table). Each bound was set to about three times
 the time measured on the development machine when the fix it guards landed, so a failure means
 either a real regression or a slower machine, not a fixed threshold that was guessed in advance.
-Run just these checks with `python -m pytest -m perf`.
+The time bounds (not the memory bound) are multiplied by the `METAQUEST_PERF_SCALE` environment
+variable (default 1, values below 1 are rejected); CI sets it to 4 for its shared runners. The bounds
+run by default as part of `make test`; run just these checks with `make test-perf`
+(`python -m pytest -m perf`).
 
 ### Test Infrastructure Components
 

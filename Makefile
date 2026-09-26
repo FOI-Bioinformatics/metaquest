@@ -1,10 +1,11 @@
-.PHONY: env env-dev test test-network lint format check build clean pipeline install help dev-install
+.PHONY: env env-dev test test-perf test-network lint format check build clean pipeline install help dev-install
 
 help:
 	@echo "Available commands:"
 	@echo "  env         - Create or update the 'metaquest' conda environment (Python 3.12)"
 	@echo "  env-dev     - Install the package with dev extras into the 'metaquest' conda environment"
 	@echo "  test        - Run tests with coverage"
+	@echo "  test-perf   - Run only the performance bounds (scale with METAQUEST_PERF_SCALE)"
 	@echo "  lint        - Run flake8 linting"
 	@echo "  format      - Format code with black"
 	@echo "  check       - Run all quality checks (format, lint, type check, module size, ASCII, docs)"
@@ -28,6 +29,9 @@ install:
 
 test:
 	python -m pytest tests/ --cov=metaquest
+
+test-perf:
+	python -m pytest -m perf -q
 
 test-network:
 	python -m pytest tests/test_network_smoke.py -m network -x -v

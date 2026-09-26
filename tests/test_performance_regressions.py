@@ -15,11 +15,17 @@ Fixtures live in ``tests/perf_fixtures.py``: a synthetic 20,000-dataset project 
 through the real ``record_*`` writers, a 100,000-record gzip FASTQ file, 300 synthetic NCBI efetch
 metadata XML files, and a 20,000 x 5 containment table.
 
-Run only these tests with ``python -m pytest -m perf``.
+Every time bound (not the memory bound) is multiplied by the ``METAQUEST_PERF_SCALE`` environment
+variable (default 1, at least 1; CI sets 4 for its shared runners), and each failure message prints the
+scale in effect.
+
+Run only these tests with ``python -m pytest -m perf`` (``make test-perf``).
 """
 
 import argparse
+import os
 import shutil
+import sys
 import time
 import tracemalloc
 from pathlib import Path
@@ -43,6 +49,30 @@ from tests.perf_fixtures import (
     write_illumina_like_fastq_gz,
     write_metadata_folder,
 )
+
+
+def _read_scale(text):
+    """The perf time-bound factor parsed from ``METAQUEST_PERF_SCALE``; values below 1 are rejected."""
+    try:
+        scale = float(text)
+    except ValueError:
+        raise ValueError(f"METAQUEST_PERF_SCALE must be a number of at least 1, got {text!r}") from None
+    if not scale >= 1:
+        raise ValueError(f"METAQUEST_PERF_SCALE must be at least 1, got {text!r}")
+    return scale
+
+
+PERF_SCALE = _read_scale(os.environ.get("METAQUEST_PERF_SCALE", "1"))
+
+
+def _scaled(bound):
+    """``bound`` (seconds) multiplied by the module's perf scale factor."""
+    return bound * PERF_SCALE
+
+
+def _over(label, elapsed, bound):
+    """Failure message naming the measured time, the scaled bound and the scale factor."""
+    return f"{label} took {elapsed:.2f} s (bound {_scaled(bound):.2f} s, METAQUEST_PERF_SCALE={PERF_SCALE:g})"
 
 
 @pytest.fixture(scope="module")
@@ -86,16 +116,16 @@ def _best_of(call, repeats=3):
 
 
 @pytest.mark.perf
-def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_20k, monkeypatch):
+def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_20k, monkeypatch, tmp_path):
     """5,000 skipped accessions are recorded in one registry write.
 
     Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.34 s after the fix
     (about 0.4 s per accession, over 30 minutes in total, before it, when every accession wrote its
-    own transaction). Bound: 1.1 s, about three times the measured time.
+    own transaction). Bound: 1.1 s, about three times the measured time, the best of three runs,
+    each on its own copy of the registry.
     """
-    path, names = registry_20k
+    source, names = registry_20k
     skipped = names["all"][-5000:]
-    args = argparse.Namespace(registry=str(path))
     writes = []
     real_write = registry_mod._write_registry
 
@@ -103,14 +133,25 @@ def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_
         writes.append(target)
         return real_write(registry, target)
 
+    # Each run gets a fresh copy, so every run records the 5,000 outcomes rather than finding them done.
+    copies = iter(range(3))
+
+    def one_run():
+        path = tmp_path / f"run_{next(copies)}" / registry_mod.REGISTRY_FILENAME
+        path.parent.mkdir()
+        shutil.copy(source, path)
+        args = argparse.Namespace(registry=str(path))
+        start = time.perf_counter()
+        DownloadSraCommand()._record_run_outcomes(args, {"skipped_accessions": skipped}, path.parent / "fastq")
+        return time.perf_counter() - start, path
+
     monkeypatch.setattr(registry_mod, "_write_registry", counting_write)
-    start = time.perf_counter()
-    DownloadSraCommand()._record_run_outcomes(args, {"skipped_accessions": skipped}, path.parent / "fastq")
-    elapsed = time.perf_counter() - start
+    runs = [one_run() for _ in range(3)]
     monkeypatch.undo()
-    assert len(writes) == 1
-    assert rb.download_block(registry_mod.load_registry(path), skipped[-1]).state == "skipped"
-    assert elapsed < 1.1, f"_record_run_outcomes took {elapsed:.2f} s for 5,000 skipped accessions"
+    elapsed = min(t for t, _ in runs)
+    assert len(writes) == 3
+    assert rb.download_block(registry_mod.load_registry(runs[-1][1]), skipped[-1]).state == "skipped"
+    assert elapsed < _scaled(1.1), _over("_record_run_outcomes for 5,000 skipped accessions", elapsed, 1.1)
 
 
 @pytest.mark.perf
@@ -121,12 +162,12 @@ def test_write_registry_on_20000_datasets_is_fast(registry_20k, tmp_path):
     with the earlier indented output). Bound: 0.3 s, about three times the measured time, the best
     of three writes so a single slow disk flush does not fail the test.
     """
-    # A copy of its own: the module-scoped registry is changed by the other test in this module.
+    # A copy of its own, so the write never touches the module-scoped registry the other tests read.
     path = Path(shutil.copy(registry_20k[0], tmp_path / registry_mod.REGISTRY_FILENAME))
     registry = registry_mod.load_registry(path)
     best, _ = _best_of(lambda: registry_mod._write_registry(registry, path))
     assert "\n  " not in path.read_text()[:10000]
-    assert best < 0.3, f"_write_registry took {best:.2f} s on 20,000 datasets"
+    assert best < _scaled(0.3), _over("_write_registry on 20,000 datasets", best, 0.3)
 
 
 @pytest.mark.perf
@@ -155,7 +196,7 @@ def test_status_report_on_20000_datasets_is_fast(registry_20k):
     best, report = _best_of(lambda: build_report(registry, args, paths, path, True))
     assert report["wanted"]["total"] == len(names["selected"])
     assert report["stages"]["screened"]["count"] == len(names["all"])
-    assert best < 1.0, f"build_report took {best:.2f} s on 20,000 datasets"
+    assert best < _scaled(1.0), _over("build_report on 20,000 datasets", best, 1.0)
 
 
 @pytest.mark.perf
@@ -174,7 +215,7 @@ def test_results_rows_on_20000_datasets_by_3_genomes_is_fast(registry_20k):
     table["max_containment"] = table.max(axis=1)
     best, rows = _best_of(lambda: results_rows(registry, parsed_table=table))
     assert len(rows) == 3 * len(names["all"])
-    assert best < 1.5, f"results_rows took {best:.2f} s for 60,000 pairs"
+    assert best < _scaled(1.5), _over("results_rows for 60,000 pairs", best, 1.5)
 
 
 @pytest.mark.perf
@@ -214,7 +255,7 @@ def test_stage_counts_on_5000_datasets_is_fast(tmp_path):
     assert counts["stages"]["downloaded"] == 5000 and counts["genomes"]["G1"]["extracted"] == 250
     assert len(counts["genomes"]["G1"]["zero_mapped"]) == 250
     assert conversions == []
-    assert best < 0.5, f"stage_counts took {best:.2f} s on 5000 datasets"
+    assert best < _scaled(0.5), _over("stage_counts on 5000 datasets", best, 0.5)
 
 
 @pytest.mark.perf
@@ -224,13 +265,11 @@ def test_sample_records_100k_to_10k_is_fast(fastq_100k):
     Measured 2026-09-26 under coverage on an Apple-silicon laptop (macOS): 0.05 s; the reservoir
     sampler this replaced took 0.11 s here (from the original Task 2 measurement) and scaled far
     worse on a real run (25 s for ``sra_profile --sample-size 10000`` on an 11.3M-record mate
-    file). Bound: 0.2 s, about three times the measured time.
+    file). Bound: 0.2 s, about three times the measured time, the best of three runs.
     """
-    start = time.perf_counter()
-    got = sample_records([fastq_100k], 10_000, seed=0)
-    elapsed = time.perf_counter() - start
+    best, got = _best_of(lambda: sample_records([fastq_100k], 10_000, seed=0))
     assert len(got) == 10_000
-    assert elapsed < 0.2, f"sample_records took {elapsed:.2f} s"
+    assert best < _scaled(0.2), _over("sample_records 100k to 10k", best, 0.2)
 
 
 @pytest.mark.perf
@@ -254,7 +293,7 @@ def test_summary_and_screening_on_20000_rows_is_fast(containment_20000x5, tmp_pa
     best = min(timings)
     assert len(summary.sample_to_genomes) == 20000
     assert recorded > 0
-    assert best < 1.2, f"summary and screening took {best:.2f} s on 20,000 x 5"
+    assert best < _scaled(1.2), _over("summary and screening on 20,000 x 5", best, 1.2)
 
 
 @pytest.mark.perf
@@ -270,7 +309,7 @@ def test_parse_metadata_on_300_files_is_fast(metadata_folder_300, tmp_path):
     best, table = _best_of(lambda: parse_metadata(metadata_folder_300, tmp_path / "metadata_table.txt"))
     assert table.shape[0] == 300
     assert table.shape[1] > 30 + 40
-    assert best < 0.4, f"parse_metadata took {best:.2f} s on 300 files"
+    assert best < _scaled(0.4), _over("parse_metadata on 300 files", best, 0.4)
 
 
 @pytest.mark.perf
@@ -290,3 +329,23 @@ def test_load_registry_peak_memory_on_20000_datasets_is_bounded(registry_20k):
         tracemalloc.stop()
     peak_mb = peak / (1024 * 1024)
     assert peak_mb < 250, f"load_registry peak was {peak_mb:.1f} MB on 20,000 datasets"
+
+
+def test_scaled_multiplies_bounds_by_the_perf_scale(monkeypatch):
+    """``_scaled`` applies the module's scale factor, as CI's ``METAQUEST_PERF_SCALE=4`` sets it."""
+    monkeypatch.setattr(sys.modules[__name__], "PERF_SCALE", 4.0)
+    assert _scaled(1.0) == 4.0
+    assert "METAQUEST_PERF_SCALE=4" in _over("x", 5.0, 1.0)
+
+
+@pytest.mark.parametrize("text", ["0.5", "0", "-2", "fast", "nan"])
+def test_perf_scale_below_one_or_not_a_number_is_rejected(text):
+    """A scale that would tighten the bounds, or is not a number, is refused with a clear message."""
+    with pytest.raises(ValueError, match="METAQUEST_PERF_SCALE"):
+        _read_scale(text)
+
+
+def test_perf_scale_reads_one_and_larger_values():
+    """The default and a CI-style value parse to floats."""
+    assert _read_scale("1") == 1.0
+    assert _read_scale("4") == 4.0

@@ -77,6 +77,9 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Test with pytest
+        env:
+          # Shared runners are slower than the machine the perf bounds were measured on.
+          METAQUEST_PERF_SCALE: "4"
         run: |
           pytest tests/ --cov=metaquest --cov-report=xml
 
