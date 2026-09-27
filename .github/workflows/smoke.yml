@@ -53,6 +53,11 @@ jobs:
           vdb-config --restore-defaults
           vdb-config -s /repository/user/main/public/root="$RUNNER_TEMP/ncbi"
 
+      - name: Install the development dependencies
+        # environment.yml installs the package with its runtime dependencies only;
+        # the network tests need pytest from the dev extra.
+        run: pip install -e ".[dev]"
+
       - name: Run network smoke tests
         run: make test-network
 
