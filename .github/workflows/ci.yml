@@ -46,8 +46,10 @@ jobs:
         run: |
           # stop the build if there are Python syntax errors or undefined names
           flake8 metaquest --count --select=E9,F63,F7,F82 --show-source --statistics
-          # Check for PEP8 style issues, complexity, and line length
-          flake8 metaquest --count --max-complexity=15 --max-line-length=120 --statistics --extend-ignore=E203,W503
+          # Style, complexity, line length, docstrings and blind excepts, configured in setup.cfg.
+          # No --extend-ignore here: a command-line value replaces the setup.cfg list and would
+          # re-enable the pydocstyle codes that list switches off.
+          flake8 metaquest tests --count --statistics
 
       - name: Type check with mypy
         run: python -m mypy metaquest

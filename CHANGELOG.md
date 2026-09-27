@@ -61,6 +61,12 @@ external USB volume on an Apple silicon laptop, unless marked synthetic.
 - `scripts/check_ascii.sh` checks every matching file on disk when its root is not a git
   checkout (a `git archive` export, an unpacked sdist) and fails when it finds no source file at
   all, instead of passing after checking nothing.
+- `parse_containment` sorts the parsed table by `max_containment` with a stable sort, so accessions
+  with the same maximum keep their input order. The default sort ordered ties differently on
+  different CPUs, so the same matches gave a different table, screening order and pinned test
+  output on Linux and macOS.
+- The CI lint step no longer passes `--extend-ignore` on the command line, which replaced the
+  setup.cfg list and re-enabled the pydocstyle style codes the project switches off.
 
 ### Testing
 

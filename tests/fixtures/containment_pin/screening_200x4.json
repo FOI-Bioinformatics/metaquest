@@ -1,10 +1,196 @@
 {
 "5000": {
 "recorded": 298,
+"order": [
+"SRR1000003",
+"SRR9999999",
+"SRR9999998",
+"SRR1000010",
+"SRR1000020",
+"SRR1000030",
+"SRR1000008",
+"SRR1000013",
+"SRR1000016",
+"SRR1000029",
+"SRR1000034",
+"SRR1000039",
+"SRR1000042",
+"SRR1000044",
+"SRR1000050",
+"SRR1000056",
+"SRR1000061",
+"SRR1000067",
+"SRR1000068",
+"SRR1000156",
+"SRR1000165",
+"SRR1000183",
+"SRR1000186",
+"SRR1000049",
+"SRR1000054",
+"SRR1000071",
+"SRR1000077",
+"SRR1000090",
+"SRR1000095",
+"SRR1000099",
+"SRR1000114",
+"SRR1000133",
+"SRR1000148",
+"SRR1000162",
+"SRR1000167",
+"SRR1000199",
+"SRR1000060",
+"SRR1000069",
+"SRR1000091",
+"SRR1000108",
+"SRR1000120",
+"SRR1000127",
+"SRR1000135",
+"SRR1000137",
+"SRR1000145",
+"SRR1000166",
+"SRR1000173",
+"SRR1000178",
+"SRR1000180",
+"SRR1000193",
+"SRR1000001",
+"SRR1000005",
+"SRR1000014",
+"SRR1000019",
+"SRR1000028",
+"SRR1000033",
+"SRR1000092",
+"SRR1000105",
+"SRR1000124",
+"SRR1000132",
+"SRR1000134",
+"SRR1000177",
+"SRR1000181",
+"SRR1000188",
+"SRR1000194",
+"SRR1000046",
+"SRR1000055",
+"SRR1000075",
+"SRR1000112",
+"SRR1000129",
+"SRR1000139",
+"SRR1000142",
+"SRR1000146",
+"SRR1000151",
+"SRR1000157",
+"SRR1000190",
+"SRR1000018",
+"SRR1000022",
+"SRR1000024",
+"SRR1000045",
+"SRR1000062",
+"SRR1000070",
+"SRR1000087",
+"SRR1000094",
+"SRR1000144",
+"SRR1000152",
+"SRR1000175",
+"SRR1000182",
+"SRR1000196",
+"SRR1000017",
+"SRR1000031",
+"SRR1000035",
+"SRR1000052",
+"SRR1000076",
+"SRR1000118",
+"SRR1000125",
+"SRR1000138",
+"SRR1000140",
+"SRR1000163",
+"SRR1000000",
+"SRR1000009",
+"SRR1000025",
+"SRR1000058",
+"SRR1000100",
+"SRR1000101",
+"SRR1000149",
+"SRR1000150",
+"SRR1000007",
+"SRR1000041",
+"SRR1000043",
+"SRR1000057",
+"SRR1000081",
+"SRR1000102",
+"SRR1000111",
+"SRR1000122",
+"SRR1000128",
+"SRR1000191",
+"SRR1000074",
+"SRR1000131",
+"SRR1000189",
+"SRR1000192",
+"SRR1000015",
+"SRR1000023",
+"SRR1000036",
+"SRR1000047",
+"SRR1000085",
+"SRR1000110",
+"SRR1000154",
+"SRR1000169",
+"SRR1000012",
+"SRR1000059",
+"SRR1000072",
+"SRR1000086",
+"SRR1000147",
+"SRR1000155",
+"SRR1000084",
+"SRR1000115",
+"SRR1000170",
+"SRR1000184",
+"SRR1000002",
+"SRR1000078",
+"SRR1000096",
+"SRR1000107",
+"SRR1000109",
+"SRR1000161",
+"SRR1000185",
+"SRR1000197",
+"SRR1000006",
+"SRR1000080",
+"SRR1000126",
+"SRR1000143",
+"SRR1000158",
+"SRR1000027",
+"SRR1000079",
+"SRR1000103",
+"SRR1000063",
+"SRR1000083",
+"SRR1000106",
+"SRR1000119",
+"SRR1000130",
+"SRR1000164",
+"SRR1000179",
+"SRR1000004",
+"SRR1000011",
+"SRR1000026",
+"SRR1000066",
+"SRR1000097",
+"SRR1000048",
+"SRR1000053",
+"SRR1000098",
+"SRR1000113",
+"SRR1000141",
+"SRR1000174",
+"SRR1000198",
+"SRR1000088",
+"SRR1000093",
+"SRR1000159",
+"SRR1000176"
+],
+"genomes": [
+"GCF_000",
+"GCF_001",
+"GCF_OTHER",
+"GCF_002"
+],
 "datasets": {
 "SRR1000003": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.95,
@@ -47,7 +233,7 @@
 },
 "SRR1000010": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_OTHER": {
 "containment": 0.6,
@@ -76,7 +262,7 @@
 },
 "SRR1000030": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.65,
@@ -88,82 +274,26 @@
 }
 }
 },
-"SRR1000039": {
+"SRR1000008": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000034": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000016": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
+"containment": 0.55,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
-"GCF_002": {
-"containment": 0.1,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000068": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
 "GCF_001": {
 "containment": 1.0,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000061": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 1.0,
+"containment": 0.85,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -174,7 +304,7 @@
 },
 "SRR1000013": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 1.0,
@@ -200,9 +330,114 @@
 }
 }
 },
+"SRR1000016": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.1,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000029": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000034": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000039": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000042": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000044": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000050": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.45,
@@ -221,9 +456,128 @@
 }
 }
 },
+"SRR1000056": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000061": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000067": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000068": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000156": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.05,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000165": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.55,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000183": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 1.0,
@@ -251,7 +605,7 @@
 },
 "SRR1000186": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 1.0,
@@ -263,47 +617,19 @@
 }
 }
 },
-"SRR1000156": {
+"SRR1000049": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
+"GCF_001": {
 "containment": 0.05,
 "cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000008": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.55,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 1.0,
-"cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.85,
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -312,117 +638,12 @@
 }
 }
 },
-"SRR1000042": {
+"SRR1000054": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000044": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.25,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000056": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000165": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.55,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000029": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000067": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.25,
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -433,7 +654,7 @@
 },
 "SRR1000071": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.95,
@@ -445,77 +666,49 @@
 }
 }
 },
-"SRR1000199": {
+"SRR1000077": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000162": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.4,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000054": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000148": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
 "containment": 0.65,
 "cani": null,
-"csv": "matches/GCF_000.csv",
+"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
+"GCF_002": {
+"containment": 0.95,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000090": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
 "GCF_001": {
 "containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
+}
+}
+}
 },
-"GCF_002": {
-"containment": 0.8,
+"SRR1000095": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.95,
 "cani": null,
-"csv": "matches/GCF_002.csv",
+"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -524,7 +717,7 @@
 },
 "SRR1000099": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.95,
@@ -543,58 +736,9 @@
 }
 }
 },
-"SRR1000167": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.5,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000049": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.05,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000114": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.95,
@@ -622,7 +766,7 @@
 },
 "SRR1000133": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -641,19 +785,26 @@
 }
 }
 },
-"SRR1000077": {
+"SRR1000148": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_001": {
+"GCF_000": {
 "containment": 0.65,
 "cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.95,
+"cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.95,
+"containment": 0.8,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -662,61 +813,19 @@
 }
 }
 },
-"SRR1000095": {
+"SRR1000162": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000090": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000120": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
 "containment": 0.4,
 "cani": null,
-"csv": "matches/GCF_001.csv",
+"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
-}
-}
-}
 },
-"SRR1000091": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
 "GCF_001": {
-"containment": 0.9,
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
@@ -725,19 +834,26 @@
 }
 }
 },
-"SRR1000193": {
+"SRR1000167": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
+"GCF_000": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
 "GCF_001": {
-"containment": 0.9,
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.15,
+"containment": 0.8,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -746,21 +862,14 @@
 }
 }
 },
-"SRR1000145": {
+"SRR1000199": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
-"containment": 0.15,
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -769,7 +878,7 @@
 },
 "SRR1000060": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.05,
@@ -788,9 +897,30 @@
 }
 }
 },
-"SRR1000108": {
+"SRR1000069": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.55,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000091": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.9,
@@ -802,9 +932,58 @@
 }
 }
 },
+"SRR1000108": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000120": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.4,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000127": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000135": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.5,
@@ -823,30 +1002,9 @@
 }
 }
 },
-"SRR1000173": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.3,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000137": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.9,
@@ -872,47 +1030,12 @@
 }
 }
 },
-"SRR1000127": {
+"SRR1000145": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000180": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.3,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000069": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
-"containment": 0.55,
+"containment": 0.15,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
@@ -930,7 +1053,7 @@
 },
 "SRR1000166": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.9,
@@ -942,9 +1065,30 @@
 }
 }
 },
+"SRR1000173": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.3,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000178": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.9,
@@ -963,9 +1107,198 @@
 }
 }
 },
+"SRR1000180": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.3,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000193": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.15,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000001": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000005": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.35,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000014": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000019": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000028": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000033": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000092": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.3,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000105": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.85,
@@ -979,7 +1312,7 @@
 },
 "SRR1000124": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.7,
@@ -1007,7 +1340,7 @@
 },
 "SRR1000132": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.85,
@@ -1026,30 +1359,9 @@
 }
 }
 },
-"SRR1000092": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.3,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000134": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.85,
@@ -1068,30 +1380,9 @@
 }
 }
 },
-"SRR1000001": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000177": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.85,
@@ -1105,7 +1396,7 @@
 },
 "SRR1000181": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.8,
@@ -1131,128 +1422,9 @@
 }
 }
 },
-"SRR1000033": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000014": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000194": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000005": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.35,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000019": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000028": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000188": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.85,
@@ -1271,9 +1443,58 @@
 }
 }
 },
+"SRR1000194": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000046": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000055": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000075": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -1301,7 +1522,7 @@
 },
 "SRR1000112": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.3,
@@ -1320,9 +1541,30 @@
 }
 }
 },
+"SRR1000129": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.6,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000139": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.8,
@@ -1341,9 +1583,58 @@
 }
 }
 },
+"SRR1000142": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000146": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.1,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000151": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000157": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.8,
@@ -1364,7 +1655,7 @@
 },
 "SRR1000190": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.8,
@@ -1377,125 +1668,6 @@
 "containment": 0.8,
 "cani": null,
 "csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000142": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000151": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000055": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000046": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.5,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000146": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.1,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000129": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000182": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -1504,7 +1676,7 @@
 },
 "SRR1000018": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -1530,23 +1702,9 @@
 }
 }
 },
-"SRR1000087": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000022": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -1565,91 +1723,14 @@
 }
 }
 },
-"SRR1000175": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.25,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000196": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000024": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
 "cani": null,
 "csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000094": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.3,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000070": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -1658,7 +1739,7 @@
 },
 "SRR1000045": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -1677,9 +1758,79 @@
 }
 }
 },
+"SRR1000062": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000070": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000087": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000094": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.3,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000144": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.75,
@@ -1693,7 +1844,7 @@
 },
 "SRR1000152": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.75,
@@ -1712,19 +1863,194 @@
 }
 }
 },
-"SRR1000062": {
+"SRR1000175": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000182": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000196": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000017": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
-"containment": 0.75,
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000031": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.55,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000035": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.05,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.7,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.25,
+"containment": 0.05,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000052": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000076": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.35,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000118": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000125": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.4,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.7,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -1735,7 +2061,7 @@
 },
 "SRR1000138": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.5,
@@ -1756,7 +2082,7 @@
 },
 "SRR1000140": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.7,
@@ -1768,14 +2094,49 @@
 }
 }
 },
-"SRR1000076": {
+"SRR1000163": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.7,
+"containment": 0.45,
 "cani": null,
 "csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000000": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000009": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
@@ -1789,100 +2150,9 @@
 }
 }
 },
-"SRR1000163": {
+"SRR1000025": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000052": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000118": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000031": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.55,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000017": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000125": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.4,
@@ -1892,63 +2162,42 @@
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000035": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.05,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.05,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000150": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.35,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
 "containment": 0.65,
 "cani": null,
-"csv": "matches/GCF_001.csv",
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000058": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000100": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.2,
+"containment": 0.45,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -1959,7 +2208,7 @@
 },
 "SRR1000101": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.25,
@@ -1987,7 +2236,7 @@
 },
 "SRR1000149": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.1,
@@ -2006,90 +2255,27 @@
 }
 }
 },
-"SRR1000000": {
+"SRR1000150": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000100": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.45,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000058": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000025": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.4,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000009": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
 "containment": 0.35,
 "cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.2,
+"cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
@@ -2097,10 +2283,59 @@
 }
 }
 },
-"SRR1000111": {
+"SRR1000007": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
+"GCF_000": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.55,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.6,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000041": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.6,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000043": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.6,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
 "GCF_001": {
 "containment": 0.6,
 "cani": null,
@@ -2109,23 +2344,9 @@
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.4,
+"containment": 0.1,
 "cani": null,
 "csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000128": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2134,7 +2355,7 @@
 },
 "SRR1000057": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.35,
@@ -2155,110 +2376,12 @@
 },
 "SRR1000081": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.6,
 "cani": null,
 "csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000122": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000007": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.5,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.55,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000043": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.1,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000191": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000041": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.6,
-"cani": null,
-"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2267,7 +2390,7 @@
 },
 "SRR1000102": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.6,
@@ -2286,12 +2409,19 @@
 }
 }
 },
-"SRR1000131": {
+"SRR1000111": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
+"GCF_001": {
+"containment": 0.6,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
 "GCF_002": {
-"containment": 0.55,
+"containment": 0.4,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -2300,49 +2430,42 @@
 }
 }
 },
-"SRR1000192": {
+"SRR1000122": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.55,
+"containment": 0.6,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.25,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
 }
 }
 }
 },
-"SRR1000189": {
+"SRR1000128": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.45,
+"containment": 0.6,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
+}
+}
+}
 },
+"SRR1000191": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
 "GCF_001": {
-"containment": 0.5,
+"containment": 0.6,
 "cani": null,
 "csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.55,
-"cani": null,
-"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2351,7 +2474,7 @@
 },
 "SRR1000074": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.2,
@@ -2377,12 +2500,12 @@
 }
 }
 },
-"SRR1000110": {
+"SRR1000131": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
-"containment": 0.5,
+"containment": 0.55,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -2391,21 +2514,49 @@
 }
 }
 },
-"SRR1000023": {
+"SRR1000189": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.5,
+"containment": 0.45,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
+"GCF_001": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
 "GCF_002": {
-"containment": 0.25,
+"containment": 0.55,
 "cani": null,
 "csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000192": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.55,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2414,7 +2565,7 @@
 },
 "SRR1000015": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.5,
@@ -2433,9 +2584,30 @@
 }
 }
 },
-"SRR1000154": {
+"SRR1000023": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000036": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.5,
@@ -2449,7 +2621,7 @@
 },
 "SRR1000047": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.5,
@@ -2475,23 +2647,9 @@
 }
 }
 },
-"SRR1000036": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.5,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000085": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.5,
@@ -2510,9 +2668,37 @@
 }
 }
 },
+"SRR1000110": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000154": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.5,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000169": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.5,
@@ -2524,12 +2710,19 @@
 }
 }
 },
-"SRR1000072": {
+"SRR1000012": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_001": {
+"GCF_000": {
 "containment": 0.45,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.05,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
@@ -2540,7 +2733,7 @@
 },
 "SRR1000059": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.45,
@@ -2552,14 +2745,14 @@
 }
 }
 },
-"SRR1000155": {
+"SRR1000072": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_000": {
+"GCF_001": {
 "containment": 0.45,
 "cani": null,
-"csv": "matches/GCF_000.csv",
+"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2568,7 +2761,7 @@
 },
 "SRR1000086": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.45,
@@ -2589,7 +2782,7 @@
 },
 "SRR1000147": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.45,
@@ -2601,42 +2794,14 @@
 }
 }
 },
-"SRR1000012": {
+"SRR1000155": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.45,
 "cani": null,
 "csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.05,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000170": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.15,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.4,
-"cani": null,
-"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2645,7 +2810,7 @@
 },
 "SRR1000084": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.4,
@@ -2664,23 +2829,9 @@
 }
 }
 },
-"SRR1000184": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.4,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000115": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.4,
@@ -2706,14 +2857,56 @@
 }
 }
 },
-"SRR1000161": {
+"SRR1000170": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.35,
+"containment": 0.15,
 "cani": null,
 "csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.4,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000184": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.4,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000002": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.35,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.3,
+"cani": null,
+"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2722,7 +2915,7 @@
 },
 "SRR1000078": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.3,
@@ -2741,30 +2934,9 @@
 }
 }
 },
-"SRR1000109": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.35,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.15,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000096": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.25,
@@ -2783,9 +2955,58 @@
 }
 }
 },
+"SRR1000107": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.35,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000109": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.35,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.15,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000161": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.35,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000185": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.3,
@@ -2813,47 +3034,12 @@
 },
 "SRR1000197": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.35,
 "cani": null,
 "csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000002": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.35,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.3,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000107": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.35,
-"cani": null,
-"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -2862,7 +3048,7 @@
 },
 "SRR1000006": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.3,
@@ -2874,23 +3060,9 @@
 }
 }
 },
-"SRR1000143": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.3,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000080": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.25,
@@ -2911,7 +3083,7 @@
 },
 "SRR1000126": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.3,
@@ -2930,9 +3102,9 @@
 }
 }
 },
-"SRR1000158": {
+"SRR1000143": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.3,
@@ -2944,12 +3116,12 @@
 }
 }
 },
-"SRR1000103": {
+"SRR1000158": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.25,
+"containment": 0.3,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
@@ -2960,7 +3132,7 @@
 },
 "SRR1000027": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.25,
@@ -2974,7 +3146,7 @@
 },
 "SRR1000079": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.25,
@@ -2993,9 +3165,37 @@
 }
 }
 },
-"SRR1000119": {
+"SRR1000103": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.25,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000063": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.2,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000083": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.2,
@@ -3009,7 +3209,7 @@
 },
 "SRR1000106": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.2,
@@ -3028,30 +3228,9 @@
 }
 }
 },
-"SRR1000179": {
+"SRR1000119": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.2,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.2,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000083": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.2,
@@ -3065,26 +3244,12 @@
 },
 "SRR1000130": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.2,
 "cani": null,
 "csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000063": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.2,
-"cani": null,
-"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -3093,7 +3258,7 @@
 },
 "SRR1000164": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.15,
@@ -3112,12 +3277,19 @@
 }
 }
 },
-"SRR1000011": {
+"SRR1000179": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
+"GCF_001": {
+"containment": 0.2,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
 "GCF_002": {
-"containment": 0.15,
+"containment": 0.2,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -3128,7 +3300,7 @@
 },
 "SRR1000004": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.15,
@@ -3147,9 +3319,9 @@
 }
 }
 },
-"SRR1000097": {
+"SRR1000011": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.15,
@@ -3163,7 +3335,7 @@
 },
 "SRR1000026": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.15,
@@ -3177,7 +3349,7 @@
 },
 "SRR1000066": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.15,
@@ -3189,12 +3361,12 @@
 }
 }
 },
-"SRR1000174": {
+"SRR1000097": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
-"containment": 0.1,
+"containment": 0.15,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -3203,9 +3375,30 @@
 }
 }
 },
-"SRR1000198": {
+"SRR1000048": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.1,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.05,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000053": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.1,
@@ -3219,7 +3412,7 @@
 },
 "SRR1000098": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.1,
@@ -3232,55 +3425,6 @@
 "containment": 0.05,
 "cani": null,
 "csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000048": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.1,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.05,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000141": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.1,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000053": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.1,
-"cani": null,
-"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -3289,7 +3433,7 @@
 },
 "SRR1000113": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.1,
@@ -3301,12 +3445,26 @@
 }
 }
 },
-"SRR1000159": {
+"SRR1000141": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.1,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000174": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
-"containment": 0.05,
+"containment": 0.1,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -3315,9 +3473,23 @@
 }
 }
 },
+"SRR1000198": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.1,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000088": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.05,
@@ -3329,23 +3501,37 @@
 }
 }
 },
-"SRR1000176": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.05,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000093": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.05,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000159": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.05,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000176": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.05,
@@ -3357,200 +3543,125 @@
 }
 }
 }
+}
 },
+"40": {
+"recorded": 298,
+"order": [
+"SRR1000003",
+"SRR9999998",
+"SRR1000010",
+"SRR1000020",
+"SRR1000030",
+"SRR1000008",
+"SRR1000013",
+"SRR1000016",
+"SRR1000029",
+"SRR1000034",
+"SRR1000039",
+"SRR1000042",
+"SRR1000044",
+"SRR1000050",
+"SRR1000056",
+"SRR1000061",
+"SRR1000067",
+"SRR1000068",
+"SRR1000156",
+"SRR1000165",
+"SRR1000183",
+"SRR1000186",
+"SRR1000049",
+"SRR1000054",
+"SRR1000071",
+"SRR1000077",
+"SRR1000090",
+"SRR1000095",
+"SRR1000099",
+"SRR1000114",
+"SRR1000133",
+"SRR1000148",
+"SRR1000162",
+"SRR1000167",
+"SRR1000199",
+"SRR1000060",
+"SRR1000069",
+"SRR1000091",
+"SRR1000108",
+"SRR1000120",
+"SRR1000127",
+"SRR1000135",
+"SRR1000137",
+"SRR1000145",
+"SRR1000166",
+"SRR1000173",
+"SRR1000178",
+"SRR1000180",
+"SRR1000193",
+"SRR1000001",
+"SRR1000005",
+"SRR1000014",
+"SRR1000019",
+"SRR1000028",
+"SRR1000033",
+"SRR1000092",
+"SRR1000105",
+"SRR1000124",
+"SRR1000132",
+"SRR1000134",
+"SRR1000177",
+"SRR1000181",
+"SRR1000188",
+"SRR1000194",
+"SRR1000046",
+"SRR1000055",
+"SRR1000075",
+"SRR1000112",
+"SRR1000129",
+"SRR1000139",
+"SRR1000142",
+"SRR1000146",
+"SRR1000151",
+"SRR1000157",
+"SRR1000190",
+"SRR1000018",
+"SRR1000022",
+"SRR1000024",
+"SRR1000045",
+"SRR1000062",
+"SRR1000070",
+"SRR1000087",
+"SRR1000094",
+"SRR1000144",
+"SRR1000152",
+"SRR1000175",
+"SRR1000182",
+"SRR1000196",
+"SRR1000017",
+"SRR1000031",
+"SRR1000035",
+"SRR1000052",
+"SRR1000076",
+"SRR1000118",
+"SRR1000125",
+"SRR1000138",
+"SRR1000140",
+"SRR1000163",
+"SRR1000025",
+"SRR1000058",
+"SRR1000100",
+"SRR1000149",
+"SRR1000043"
+],
 "genomes": [
 "GCF_000",
 "GCF_001",
 "GCF_OTHER",
 "GCF_002"
 ],
-"order": [
-"SRR1000003",
-"SRR9999999",
-"SRR9999998",
-"SRR1000010",
-"SRR1000020",
-"SRR1000030",
-"SRR1000039",
-"SRR1000034",
-"SRR1000016",
-"SRR1000068",
-"SRR1000061",
-"SRR1000013",
-"SRR1000050",
-"SRR1000183",
-"SRR1000186",
-"SRR1000156",
-"SRR1000008",
-"SRR1000042",
-"SRR1000044",
-"SRR1000056",
-"SRR1000165",
-"SRR1000029",
-"SRR1000067",
-"SRR1000071",
-"SRR1000199",
-"SRR1000162",
-"SRR1000054",
-"SRR1000148",
-"SRR1000099",
-"SRR1000167",
-"SRR1000049",
-"SRR1000114",
-"SRR1000133",
-"SRR1000077",
-"SRR1000095",
-"SRR1000090",
-"SRR1000120",
-"SRR1000091",
-"SRR1000193",
-"SRR1000145",
-"SRR1000060",
-"SRR1000108",
-"SRR1000135",
-"SRR1000173",
-"SRR1000137",
-"SRR1000127",
-"SRR1000180",
-"SRR1000069",
-"SRR1000166",
-"SRR1000178",
-"SRR1000105",
-"SRR1000124",
-"SRR1000132",
-"SRR1000092",
-"SRR1000134",
-"SRR1000001",
-"SRR1000177",
-"SRR1000181",
-"SRR1000033",
-"SRR1000014",
-"SRR1000194",
-"SRR1000005",
-"SRR1000019",
-"SRR1000028",
-"SRR1000188",
-"SRR1000075",
-"SRR1000112",
-"SRR1000139",
-"SRR1000157",
-"SRR1000190",
-"SRR1000142",
-"SRR1000151",
-"SRR1000055",
-"SRR1000046",
-"SRR1000146",
-"SRR1000129",
-"SRR1000182",
-"SRR1000018",
-"SRR1000087",
-"SRR1000022",
-"SRR1000175",
-"SRR1000196",
-"SRR1000024",
-"SRR1000094",
-"SRR1000070",
-"SRR1000045",
-"SRR1000144",
-"SRR1000152",
-"SRR1000062",
-"SRR1000138",
-"SRR1000140",
-"SRR1000076",
-"SRR1000163",
-"SRR1000052",
-"SRR1000118",
-"SRR1000031",
-"SRR1000017",
-"SRR1000125",
-"SRR1000035",
-"SRR1000150",
-"SRR1000101",
-"SRR1000149",
-"SRR1000000",
-"SRR1000100",
-"SRR1000058",
-"SRR1000025",
-"SRR1000009",
-"SRR1000111",
-"SRR1000128",
-"SRR1000057",
-"SRR1000081",
-"SRR1000122",
-"SRR1000007",
-"SRR1000043",
-"SRR1000191",
-"SRR1000041",
-"SRR1000102",
-"SRR1000131",
-"SRR1000192",
-"SRR1000189",
-"SRR1000074",
-"SRR1000110",
-"SRR1000023",
-"SRR1000015",
-"SRR1000154",
-"SRR1000047",
-"SRR1000036",
-"SRR1000085",
-"SRR1000169",
-"SRR1000072",
-"SRR1000059",
-"SRR1000155",
-"SRR1000086",
-"SRR1000147",
-"SRR1000012",
-"SRR1000170",
-"SRR1000084",
-"SRR1000184",
-"SRR1000115",
-"SRR1000161",
-"SRR1000078",
-"SRR1000109",
-"SRR1000096",
-"SRR1000185",
-"SRR1000197",
-"SRR1000002",
-"SRR1000107",
-"SRR1000006",
-"SRR1000143",
-"SRR1000080",
-"SRR1000126",
-"SRR1000158",
-"SRR1000103",
-"SRR1000027",
-"SRR1000079",
-"SRR1000119",
-"SRR1000106",
-"SRR1000179",
-"SRR1000083",
-"SRR1000130",
-"SRR1000063",
-"SRR1000164",
-"SRR1000011",
-"SRR1000004",
-"SRR1000097",
-"SRR1000026",
-"SRR1000066",
-"SRR1000174",
-"SRR1000198",
-"SRR1000098",
-"SRR1000048",
-"SRR1000141",
-"SRR1000053",
-"SRR1000113",
-"SRR1000159",
-"SRR1000088",
-"SRR1000176",
-"SRR1000093"
-]
-},
-"40": {
-"recorded": 298,
 "datasets": {
 "SRR1000003": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.95,
@@ -3579,7 +3690,7 @@
 },
 "SRR1000010": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_OTHER": {
 "containment": 0.6,
@@ -3601,7 +3712,7 @@
 },
 "SRR1000030": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.65,
@@ -3613,51 +3724,9 @@
 }
 }
 },
-"SRR1000039": {
+"SRR1000008": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000034": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000016": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000068": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 1.0,
@@ -3665,23 +3734,9 @@
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000061": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 1.0,
+"containment": 0.85,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -3692,7 +3747,7 @@
 },
 "SRR1000013": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 1.0,
@@ -3711,9 +3766,23 @@
 }
 }
 },
-"SRR1000050": {
+"SRR1000016": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000029": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 1.0,
@@ -3725,9 +3794,170 @@
 }
 }
 },
+"SRR1000034": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000039": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000042": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000044": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000050": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000056": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000061": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000067": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000068": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000156": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000165": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 1.0,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000183": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 1.0,
@@ -3748,7 +3978,7 @@
 },
 "SRR1000186": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 1.0,
@@ -3760,161 +3990,14 @@
 }
 }
 },
-"SRR1000156": {
+"SRR1000049": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000008": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000042": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000044": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000056": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000165": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000029": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000067": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 1.0,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000071": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000199": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000162": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -3923,7 +4006,7 @@
 },
 "SRR1000054": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.95,
@@ -3935,28 +4018,63 @@
 }
 }
 },
-"SRR1000148": {
+"SRR1000071": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_000": {
-"containment": 0.65,
+"GCF_002": {
+"containment": 0.95,
 "cani": null,
-"csv": "matches/GCF_000.csv",
+"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
+}
+}
+}
 },
+"SRR1000077": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
 "GCF_001": {
-"containment": 0.95,
+"containment": 0.65,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.8,
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000090": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.95,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000095": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.95,
+"cani": null,
+"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -3965,7 +4083,7 @@
 },
 "SRR1000099": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.95,
@@ -3984,44 +4102,9 @@
 }
 }
 },
-"SRR1000167": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000049": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.95,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000114": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.95,
@@ -4049,7 +4132,7 @@
 },
 "SRR1000133": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -4068,19 +4151,26 @@
 }
 }
 },
-"SRR1000077": {
+"SRR1000148": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_001": {
+"GCF_000": {
 "containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.95,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 },
 "GCF_002": {
-"containment": 0.95,
+"containment": 0.8,
 "cani": null,
 "csv": "matches/GCF_002.csv",
 "source": "matches",
@@ -4089,26 +4179,103 @@
 }
 }
 },
-"SRR1000095": {
+"SRR1000162": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_000": {
+"GCF_001": {
 "containment": 0.95,
 "cani": null,
-"csv": "matches/GCF_000.csv",
+"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
 }
 }
 },
-"SRR1000090": {
+"SRR1000167": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.95,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000199": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.95,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000060": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000069": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000091": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000108": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.9,
 "cani": null,
 "csv": "matches/GCF_001.csv",
 "source": "matches",
@@ -4119,119 +4286,7 @@
 },
 "SRR1000120": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000091": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000193": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000145": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000060": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000108": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000135": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000173": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.9,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000137": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.9,
@@ -4245,7 +4300,7 @@
 },
 "SRR1000127": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.9,
@@ -4257,9 +4312,23 @@
 }
 }
 },
-"SRR1000180": {
+"SRR1000135": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000137": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.9,
@@ -4271,9 +4340,9 @@
 }
 }
 },
-"SRR1000069": {
+"SRR1000145": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.9,
@@ -4287,7 +4356,7 @@
 },
 "SRR1000166": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.9,
@@ -4299,9 +4368,23 @@
 }
 }
 },
+"SRR1000173": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.9,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000178": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.9,
@@ -4320,77 +4403,28 @@
 }
 }
 },
-"SRR1000105": {
+"SRR1000180": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000124": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.7,
+"containment": 0.9,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
+}
+}
+}
 },
+"SRR1000193": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
 "GCF_001": {
-"containment": 0.85,
+"containment": 0.9,
 "cani": null,
 "csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000132": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000092": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000134": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -4399,7 +4433,7 @@
 },
 "SRR1000001": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.8,
@@ -4412,83 +4446,6 @@
 "containment": 0.85,
 "cani": null,
 "csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000177": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000181": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000033": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000014": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000194": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.85,
-"cani": null,
-"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -4497,7 +4454,21 @@
 },
 "SRR1000005": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000014": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.85,
@@ -4511,7 +4482,7 @@
 },
 "SRR1000019": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.65,
@@ -4532,7 +4503,7 @@
 },
 "SRR1000028": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.85,
@@ -4544,9 +4515,23 @@
 }
 }
 },
-"SRR1000188": {
+"SRR1000033": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000092": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.85,
@@ -4558,9 +4543,163 @@
 }
 }
 },
+"SRR1000105": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000124": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000132": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000134": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000177": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000181": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000188": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000194": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.85,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000046": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000055": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000075": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -4581,7 +4720,7 @@
 },
 "SRR1000112": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.8,
@@ -4593,9 +4732,23 @@
 }
 }
 },
+"SRR1000129": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
 "SRR1000139": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.8,
@@ -4607,44 +4760,23 @@
 }
 }
 },
-"SRR1000157": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000190": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000142": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000146": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.8,
@@ -4658,7 +4790,7 @@
 },
 "SRR1000151": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.8,
@@ -4670,51 +4802,9 @@
 }
 }
 },
-"SRR1000055": {
+"SRR1000157": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000046": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000146": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.8,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000129": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.8,
@@ -4726,14 +4816,21 @@
 }
 }
 },
-"SRR1000182": {
+"SRR1000190": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.75,
+"containment": 0.8,
 "cani": null,
 "csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_002": {
+"containment": 0.8,
+"cani": null,
+"csv": "matches/GCF_002.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -4742,21 +4839,7 @@
 },
 "SRR1000018": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000087": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -4770,47 +4853,12 @@
 },
 "SRR1000022": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
 "cani": null,
 "csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000175": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000196": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-},
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
@@ -4819,7 +4867,63 @@
 },
 "SRR1000024": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000045": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000062": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000070": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000087": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.75,
@@ -4833,7 +4937,7 @@
 },
 "SRR1000094": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.75,
@@ -4845,37 +4949,9 @@
 }
 }
 },
-"SRR1000070": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000045": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_000": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_000.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
 "SRR1000144": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.75,
@@ -4889,7 +4965,7 @@
 },
 "SRR1000152": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.75,
@@ -4901,54 +4977,12 @@
 }
 }
 },
-"SRR1000062": {
+"SRR1000175": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.75,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000138": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000140": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_001": {
-"containment": 0.7,
-"cani": null,
-"csv": "matches/GCF_001.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000076": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
-"containment": 0.7,
+"containment": 0.75,
 "cani": null,
 "csv": "matches/GCF_000.csv",
 "source": "matches",
@@ -4957,37 +4991,44 @@
 }
 }
 },
-"SRR1000163": {
+"SRR1000182": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_002": {
-"containment": 0.7,
+"GCF_000": {
+"containment": 0.75,
 "cani": null,
-"csv": "matches/GCF_002.csv",
+"csv": "matches/GCF_000.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
 }
 }
 },
-"SRR1000052": {
+"SRR1000196": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
-"GCF_002": {
+"GCF_000": {
+"containment": 0.75,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+},
+"GCF_001": {
 "containment": 0.7,
 "cani": null,
-"csv": "matches/GCF_002.csv",
+"csv": "matches/GCF_001.csv",
 "source": "matches",
 "query_threshold": 0.0
 }
 }
 }
 },
-"SRR1000118": {
+"SRR1000017": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.7,
@@ -5001,7 +5042,7 @@
 },
 "SRR1000031": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.7,
@@ -5013,9 +5054,51 @@
 }
 }
 },
-"SRR1000017": {
+"SRR1000035": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_001": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_001.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000052": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000076": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_000": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_000.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000118": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.7,
@@ -5029,7 +5112,7 @@
 },
 "SRR1000125": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.7,
@@ -5041,9 +5124,23 @@
 }
 }
 },
-"SRR1000035": {
+"SRR1000138": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000140": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_001": {
 "containment": 0.7,
@@ -5055,9 +5152,37 @@
 }
 }
 },
-"SRR1000149": {
+"SRR1000163": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.7,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000025": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
+"genomes": {
+"GCF_002": {
+"containment": 0.65,
+"cani": null,
+"csv": "matches/GCF_002.csv",
+"source": "matches",
+"query_threshold": 0.0
+}
+}
+}
+},
+"SRR1000058": {
+"screening": {
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.65,
@@ -5071,7 +5196,7 @@
 },
 "SRR1000100": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.65,
@@ -5083,9 +5208,9 @@
 }
 }
 },
-"SRR1000058": {
+"SRR1000149": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_002": {
 "containment": 0.65,
@@ -5097,23 +5222,9 @@
 }
 }
 },
-"SRR1000025": {
+"SRR1000043": {
 "screening": {
-"date": "2026-09-26T21:19:22+02:00",
-"genomes": {
-"GCF_002": {
-"containment": 0.65,
-"cani": null,
-"csv": "matches/GCF_002.csv",
-"source": "matches",
-"query_threshold": 0.0
-}
-}
-}
-},
-"SRR1000128": {
-"screening": {
-"date": "2026-09-26T21:19:22+02:00",
+"date": "2026-09-27T07:35:10+02:00",
 "genomes": {
 "GCF_000": {
 "containment": 0.6,
@@ -5125,117 +5236,6 @@
 }
 }
 }
-},
-"genomes": [
-"GCF_000",
-"GCF_001",
-"GCF_OTHER",
-"GCF_002"
-],
-"order": [
-"SRR1000003",
-"SRR9999998",
-"SRR1000010",
-"SRR1000020",
-"SRR1000030",
-"SRR1000039",
-"SRR1000034",
-"SRR1000016",
-"SRR1000068",
-"SRR1000061",
-"SRR1000013",
-"SRR1000050",
-"SRR1000183",
-"SRR1000186",
-"SRR1000156",
-"SRR1000008",
-"SRR1000042",
-"SRR1000044",
-"SRR1000056",
-"SRR1000165",
-"SRR1000029",
-"SRR1000067",
-"SRR1000071",
-"SRR1000199",
-"SRR1000162",
-"SRR1000054",
-"SRR1000148",
-"SRR1000099",
-"SRR1000167",
-"SRR1000049",
-"SRR1000114",
-"SRR1000133",
-"SRR1000077",
-"SRR1000095",
-"SRR1000090",
-"SRR1000120",
-"SRR1000091",
-"SRR1000193",
-"SRR1000145",
-"SRR1000060",
-"SRR1000108",
-"SRR1000135",
-"SRR1000173",
-"SRR1000137",
-"SRR1000127",
-"SRR1000180",
-"SRR1000069",
-"SRR1000166",
-"SRR1000178",
-"SRR1000105",
-"SRR1000124",
-"SRR1000132",
-"SRR1000092",
-"SRR1000134",
-"SRR1000001",
-"SRR1000177",
-"SRR1000181",
-"SRR1000033",
-"SRR1000014",
-"SRR1000194",
-"SRR1000005",
-"SRR1000019",
-"SRR1000028",
-"SRR1000188",
-"SRR1000075",
-"SRR1000112",
-"SRR1000139",
-"SRR1000157",
-"SRR1000190",
-"SRR1000142",
-"SRR1000151",
-"SRR1000055",
-"SRR1000046",
-"SRR1000146",
-"SRR1000129",
-"SRR1000182",
-"SRR1000018",
-"SRR1000087",
-"SRR1000022",
-"SRR1000175",
-"SRR1000196",
-"SRR1000024",
-"SRR1000094",
-"SRR1000070",
-"SRR1000045",
-"SRR1000144",
-"SRR1000152",
-"SRR1000062",
-"SRR1000138",
-"SRR1000140",
-"SRR1000076",
-"SRR1000163",
-"SRR1000052",
-"SRR1000118",
-"SRR1000031",
-"SRR1000017",
-"SRR1000125",
-"SRR1000035",
-"SRR1000149",
-"SRR1000100",
-"SRR1000058",
-"SRR1000025",
-"SRR1000128"
-]
+}
 }
 }

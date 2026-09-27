@@ -427,8 +427,10 @@ def _generate_containment_summary(containment_data, output_file, summary_file, s
         # Add max_containment_annotation column
         df["max_containment_annotation"] = df.idxmax(axis=1)
 
-        # Sort by max_containment
-        df.sort_values(by="max_containment", ascending=False, inplace=True)
+        # Sort by max_containment. A stable sort keeps tied accessions in their input order, so the
+        # table (and everything recorded from it) is the same on every platform; the default
+        # quicksort orders ties differently depending on the CPU's sort kernel.
+        df.sort_values(by="max_containment", ascending=False, inplace=True, kind="stable")
 
         # Save parsed containment data
         write_csv(df, output_file, sep="\t")
