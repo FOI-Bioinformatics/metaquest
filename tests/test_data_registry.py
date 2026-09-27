@@ -1239,6 +1239,44 @@ class TestRegistryBatch:
         assert len(errors) == 1
         assert "SRR2" in errors[0].getMessage() and "no such block" in errors[0].getMessage()
 
+    def test_a_mutation_failing_partway_leaves_no_trace(self, tmp_path, caplog):
+        """What a failing mutation changed before raising is rolled back; the other mutations still land."""
+        path = tmp_path / reg.REGISTRY_FILENAME
+        reg.save_registry(reg.Registry(project={"name": "p"}), path)
+
+        def half_applied(registry):
+            reg.record_exclusion(registry, "SRR2", "first field")
+            registry.project["touched"] = True
+            raise KeyError("second field")
+
+        with batch_mod.registry_batch(path) as batch:
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR1", "test"), label="SRR1")
+            batch.apply(half_applied, label="SRR2")
+            batch.apply(lambda r: reg.record_exclusion(r, "SRR3", "test"), label="SRR3")
+        written = reg.load_registry(path)
+        assert sorted(written.datasets) == ["SRR1", "SRR3"]
+        assert written.project == {"name": "p"}
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1 and "SRR2" in errors[0].getMessage()
+
+    def test_rollback_reapplies_the_earlier_mutations_only_once(self, tmp_path):
+        """Mutations before the failing one are replayed from the file state, not applied twice."""
+        path = tmp_path / reg.REGISTRY_FILENAME
+
+        def count(registry):
+            registry.project["count"] = registry.project.get("count", 0) + 1
+
+        def broken(registry):
+            registry.project["count"] = 99
+            raise ValueError("boom")
+
+        with batch_mod.registry_batch(path) as batch:
+            batch.apply(count, label="a")
+            batch.apply(count, label="b")
+            batch.apply(broken, label="c")
+            batch.apply(count, label="d")
+        assert reg.load_registry(path).project["count"] == 3
+
     def test_a_failed_transaction_keeps_the_queue(self, tmp_path):
         path = tmp_path / reg.REGISTRY_FILENAME
         batch = batch_mod.registry_batch(path)

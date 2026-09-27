@@ -20,8 +20,37 @@ def _repo(tmp_path, files):
     return tmp_path
 
 
+def _export(tmp_path, files):
+    """A source tree that is not a git checkout, as `git archive` or an unpacked sdist leaves it."""
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return tmp_path
+
+
 def _gate(root):
     return subprocess.run(["bash", str(SCRIPT), str(root)], capture_output=True, text=True, timeout=60)
+
+
+def test_an_export_without_git_is_still_checked(tmp_path):
+    root = _export(tmp_path, {"metaquest/x.py": f'LABEL = "caf{E_ACUTE}"\n', "Makefile": "all:\n\ttrue\n"})
+    result = _gate(root)
+    assert result.returncode == 1
+    assert "metaquest/x.py" in result.stdout
+
+
+def test_a_clean_export_without_git_passes(tmp_path):
+    root = _export(tmp_path, {"tests/test_x.py": "X = 1\n", "scripts/run.sh": "echo ok\n", "setup.cfg": "[flake8]\n"})
+    result = _gate(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "No non-ASCII" in result.stdout
+
+
+def test_a_root_with_no_source_files_fails_rather_than_passing_silently(tmp_path):
+    result = _gate(_export(tmp_path, {"README.md": "text\n"}))
+    assert result.returncode == 1
+    assert "nothing was checked" in result.stdout
 
 
 def test_unmarked_non_ascii_line_in_a_test_file_fails(tmp_path):

@@ -9,10 +9,11 @@ mutations and applies them in a few transactions instead. It lives in its own mo
 
 import logging
 import time
+from dataclasses import fields
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple, Union
 
-from metaquest.data.registry import Registry, registry_path, registry_transaction
+from metaquest.data.registry import Registry, load_registry, registry_path, registry_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,10 @@ class RegistryBatch:
     is the one an earlier flush saw. ``flush_every`` or ``flush_seconds`` set to None disables
     that trigger, so a batch with both None writes once, on exit.
 
-    A mutation that raises partway through is dropped, but whatever it had already changed in
-    the registry is written with the rest of the flush: a mutation that records several fields
-    of one accession can leave that accession half-updated. Mutations should therefore do their
-    fallible work before they change the registry.
+    A mutation that raises is dropped together with whatever it had already changed: the
+    registry is reloaded from the file, which the transaction has not written yet, and the
+    mutations that succeeded before it are replayed, so no accession is left half-updated. The
+    replay costs one file load per failing mutation and nothing otherwise.
 
     Functions passed to ``add_flush_hook`` are called with the written registry after each
     flush has released the lock, so work that takes a different lock (the store catalogue)
@@ -102,19 +103,47 @@ class RegistryBatch:
             return None
         pending = list(self._queue)
         with registry_transaction(self.path) as registry:
-            for mutation, label in pending:
-                try:
-                    mutation(registry)
-                except Exception as e:  # noqa: B902 - one faulty record must not stop the others
-                    logger.error(
-                        "Dropped a registry update for %s: %s", label or "an unlabelled entry", e, exc_info=True
-                    )
+            self._apply_all(registry, pending)
         del self._queue[: len(pending)]
         self._last_flush = _monotonic()
         self.registry = registry
         for hook in self._hooks:
             hook(registry)
         return registry
+
+    def _apply_all(self, registry: Registry, pending: List[Tuple[RegistryMutation, str]]) -> None:
+        """Apply ``pending`` to ``registry`` in order, rolling back and dropping any mutation that raises.
+
+        A rollback reloads the registry from the file (unchanged until the transaction writes it)
+        and replays the mutations that had succeeded, so a mutation that raises partway through
+        leaves nothing of what it changed. Replaying costs one file load per failure and nothing
+        when every mutation succeeds.
+        """
+        applied: List[Tuple[RegistryMutation, str]] = []
+        for mutation, label in pending:
+            try:
+                mutation(registry)
+            except Exception as e:  # noqa: B902 - one faulty record must not stop the others
+                logger.error("Dropped a registry update for %s: %s", label or "an unlabelled entry", e, exc_info=True)
+                self._restore(registry, applied)
+                continue
+            applied.append((mutation, label))
+
+    def _restore(self, registry: Registry, applied: List[Tuple[RegistryMutation, str]]) -> None:
+        """Reset ``registry`` to the file's state and replay ``applied``, dropping any that now raises."""
+        fresh = load_registry(self.path)
+        for spec in fields(Registry):
+            setattr(registry, spec.name, getattr(fresh, spec.name))
+        survivors: List[Tuple[RegistryMutation, str]] = []
+        for mutation, label in applied:
+            try:
+                mutation(registry)
+            except Exception as e:  # noqa: B902 - a replay that fails is dropped like a first failure
+                logger.error("Dropped a registry update for %s on replay: %s", label or "an unlabelled entry", e)
+                self._restore(registry, survivors)
+                continue
+            survivors.append((mutation, label))
+        applied[:] = survivors
 
     def __enter__(self) -> "RegistryBatch":
         """Return the batch itself."""

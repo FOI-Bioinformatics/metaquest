@@ -50,6 +50,18 @@ external USB volume on an Apple silicon laptop, unless marked synthetic.
 - `metaquest.data.metadata.get_unique_sample_attributes`; `parse_metadata` collects the attribute
   names in its single pass and no command called the function.
 
+### Fixed
+
+- A registry batch mutation that raises partway through is now rolled back in full: the registry
+  is reloaded from the file and the mutations that succeeded before it are replayed, so no
+  accession is left with some of its fields updated.
+- During `download_sra`, once a SIGTERM or SIGHUP has been turned into an interrupt, both signals
+  are ignored until the queued outcomes have been written, so a repeated `kill` no longer loses
+  them.
+- `scripts/check_ascii.sh` checks every matching file on disk when its root is not a git
+  checkout (a `git archive` export, an unpacked sdist) and fails when it finds no source file at
+  all, instead of passing after checking nothing.
+
 ### Testing
 
 - Added `tests/test_performance_regressions.py` with timing and memory bounds covering the registry,

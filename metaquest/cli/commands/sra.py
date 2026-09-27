@@ -72,17 +72,22 @@ def _termination_raises_interrupt() -> Iterator[None]:
     A batch job's time limit, ``kill`` or a closed terminal would otherwise end the process
     without running ``finally`` blocks, losing the download outcomes a registry batch still
     holds. Raising ``KeyboardInterrupt`` sends these signals down the Ctrl-C path instead: the
-    batch is flushed and running tools are stopped. The previous handlers are restored on exit.
-    Signal handlers can only be installed from the main thread, so elsewhere nothing changes.
+    batch is flushed and running tools are stopped. Once one of these signals has been turned
+    into an interrupt, both are ignored until the block exits, so a repeated ``kill`` during the
+    final flush cannot cut it short and lose the queue. The previous handlers are restored on
+    exit. Signal handlers can only be installed from the main thread, so elsewhere nothing changes.
     """
     if threading.current_thread() is not threading.main_thread():
         yield
         return
 
+    signals = [signal.SIGTERM] + ([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])
+
     def _raise_interrupt(signum, _frame):
+        for other in signals:
+            signal.signal(other, signal.SIG_IGN)
         raise KeyboardInterrupt(f"received signal {signal.Signals(signum).name}")
 
-    signals = [signal.SIGTERM] + ([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])
     previous = {signum: signal.signal(signum, _raise_interrupt) for signum in signals}
     try:
         yield

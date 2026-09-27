@@ -21,15 +21,40 @@ cd "${1:-$(dirname "$0")/..}"
 # flag every tab-indented Makefile recipe line as non-ASCII).
 non_ascii=$'[^ -~\t]'
 
+# The files to check: the tracked ones inside a git checkout, or every matching file on disk
+# when the root is not a checkout (a `git archive` export, an unpacked sdist), so the gate
+# never passes by checking nothing.
+list_sources() {
+    if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+        git ls-files -- 'metaquest/*.py' 'tests/*.py' 'scripts/*' 'Makefile' 'setup.cfg' 'pyproject.toml'
+        return
+    fi
+    for dir in metaquest tests; do
+        [ -d "$dir" ] && find "$dir" -name '*.py' -type f
+    done
+    [ -d scripts ] && find scripts -type f
+    for file in Makefile setup.cfg pyproject.toml; do
+        [ -f "$file" ] && echo "$file"
+    done
+    return 0
+}
+
+checked=0
 hits=""
 while IFS= read -r file; do
+    checked=$((checked + 1))
     match=$(LC_ALL=C grep -n "$non_ascii" "$file" | LC_ALL=C grep -vF '# ascii-ok' || true)
     if [ -n "$match" ]; then
         hits="${hits}${file}:
 ${match}
 "
     fi
-done < <(git ls-files -- 'metaquest/*.py' 'tests/*.py' 'scripts/*' 'Makefile' 'setup.cfg' 'pyproject.toml')
+done < <(list_sources | LC_ALL=C sort)
+
+if [ "$checked" -eq 0 ]; then
+    echo "ERROR: no source files found under $(pwd); nothing was checked"
+    exit 1
+fi
 
 if [ -n "$hits" ]; then
     printf '%s' "$hits"

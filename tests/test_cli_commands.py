@@ -3249,12 +3249,18 @@ class TestDownloadSraTerminationAndFinalFlush:
             handler = signal.getsignal(signal.SIGTERM)
             with pytest.raises(KeyboardInterrupt):
                 handler(signal.SIGTERM, None)
+            # A repeated signal while the interrupt path flushes is ignored, not raised again.
+            assert signal.getsignal(signal.SIGTERM) is signal.SIG_IGN
+            if hasattr(signal, "SIGHUP"):
+                assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
             handler(signal.SIGTERM, None)
 
+        before = signal.getsignal(signal.SIGTERM)
         mock_download.side_effect = fake_download_sra
         args = self._args(tmp_path)
         assert DownloadSraCommand().execute(args) == 130
         assert rb.download_block(load_registry(args.registry), "SRR1").state == "failed"
+        assert signal.getsignal(signal.SIGTERM) is before
 
     def test_handlers_are_not_installed_off_the_main_thread(self):
         import threading
