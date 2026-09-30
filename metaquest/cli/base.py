@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.utils.security import SecureSubprocess
+from metaquest.utils.termination import EXIT_INTERRUPTED, graceful_termination
 
 if TYPE_CHECKING:
     from metaquest.data.registry import Registry
@@ -78,6 +80,10 @@ def emit_error_json(message: str) -> None:
 class BaseCommand(ABC):
     """Base class for all CLI commands."""
 
+    # False for a command that must keep the default signal behaviour; ``run`` then calls
+    # ``execute`` directly.
+    graceful_shutdown: bool = True
+
     def __init__(self):
         """Initialize the command with a logger."""
         self.logger = logging.getLogger(self.__class__.__module__)
@@ -118,6 +124,26 @@ class BaseCommand(ABC):
     def execute(self, args: argparse.Namespace) -> int:
         """Execute the command with parsed arguments."""
         pass
+
+    def run(self, args: argparse.Namespace) -> int:
+        """Run ``execute`` with SIGINT, SIGTERM and SIGHUP handled; the parser calls this, not ``execute``.
+
+        The first signal (or Ctrl-C) raises ``KeyboardInterrupt`` inside ``execute``, so its
+        ``finally`` blocks and ``with`` exits still write what the command has done; later
+        signals are logged, not raised (see ``metaquest.utils.termination``). An interrupt that
+        leaves ``execute`` is logged, running tools are stopped and 130 is returned. The
+        ``Termination`` is available to ``execute`` as ``args._termination``.
+        """
+        if not self.graceful_shutdown:
+            return self.execute(args)
+        with graceful_termination() as term:
+            args._termination = term
+            try:
+                return self.execute(args)
+            except KeyboardInterrupt:
+                self.logger.error("Interrupted (%s)", term.cause)
+                SecureSubprocess.terminate_children()
+                return EXIT_INTERRUPTED
 
     # Output. stdout carries the command's result (tables, JSON); stderr carries logging.
     # These methods and ``emit_error_json`` are the only places in the package that write to
@@ -188,7 +214,7 @@ class CommandRegistry:
             **kwargs,
         )
         command.configure_parser(subparser)
-        subparser.set_defaults(func=command.execute)
+        subparser.set_defaults(func=command.run)
 
 
 # Global registry instance

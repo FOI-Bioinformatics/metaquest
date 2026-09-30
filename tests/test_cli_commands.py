@@ -3221,8 +3221,6 @@ class TestDownloadSraTerminationAndFinalFlush:
     def test_handlers_are_installed_for_the_batch_and_restored(self, mock_download, _which, tmp_path):
         import signal
 
-        import metaquest.cli.commands.sra as sra_mod
-
         calls = []
         real_signal = signal.signal
 
@@ -3231,30 +3229,33 @@ class TestDownloadSraTerminationAndFinalFlush:
             return real_signal(signum, handler)
 
         mock_download.side_effect = self._three_failed_results
-        before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
-        with patch.object(sra_mod.signal, "signal", side_effect=spy):
+        handled = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        before = {s: signal.getsignal(s) for s in handled}
+        with patch.object(signal, "signal", side_effect=spy):
             assert DownloadSraCommand().execute(self._args(tmp_path)) == 0
-        assert [c[0] for c in calls] == [signal.SIGTERM, signal.SIGHUP, signal.SIGTERM, signal.SIGHUP]
+        assert [c[0] for c in calls] == list(handled) * 2
         installed = calls[0][1]
-        assert calls[1][1] is installed and callable(installed)
-        assert calls[2][1] is before[signal.SIGTERM] and calls[3][1] is before[signal.SIGHUP]
+        assert all(c[1] is installed for c in calls[:3]) and callable(installed)
+        assert all(c[1] is before[c[0]] for c in calls[3:])
         assert {s: signal.getsignal(s) for s in before} == before
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_sigterm_during_the_run_flushes_and_returns_130(self, mock_download, _which, tmp_path):
+    def test_sigterm_during_the_run_flushes_and_returns_130(self, mock_download, _which, tmp_path, caplog):
         import signal
 
         def fake_download_sra(**kwargs):
             kwargs["on_result"]("SRR1", False, "Download failed: t")
             handler = signal.getsignal(signal.SIGTERM)
-            with pytest.raises(KeyboardInterrupt):
+            try:
                 handler(signal.SIGTERM, None)
-            # A repeated signal while the interrupt path flushes is ignored, not raised again.
-            assert signal.getsignal(signal.SIGTERM) is signal.SIG_IGN
-            if hasattr(signal, "SIGHUP"):
-                assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
-            handler(signal.SIGTERM, None)
+            except KeyboardInterrupt:
+                # A repeated signal while the interrupt path flushes is logged, not raised again.
+                with caplog.at_level(logging.WARNING):
+                    handler(signal.SIGTERM, None)
+                assert any("SIGTERM again" in r.getMessage() for r in caplog.records)
+                raise
+            raise AssertionError("the first SIGTERM did not raise KeyboardInterrupt")
 
         before = signal.getsignal(signal.SIGTERM)
         mock_download.side_effect = fake_download_sra
@@ -3264,6 +3265,7 @@ class TestDownloadSraTerminationAndFinalFlush:
         assert signal.getsignal(signal.SIGTERM) is before
 
     def test_handlers_are_not_installed_off_the_main_thread(self):
+        import signal
         import threading
 
         import metaquest.cli.commands.sra as sra_mod
@@ -3272,7 +3274,7 @@ class TestDownloadSraTerminationAndFinalFlush:
 
         def run():
             try:
-                with patch.object(sra_mod.signal, "signal") as spy:
+                with patch.object(signal, "signal") as spy:
                     with sra_mod._termination_raises_interrupt():
                         pass
                     assert spy.call_count == 0

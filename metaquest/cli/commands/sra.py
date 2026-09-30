@@ -3,15 +3,12 @@ SRA-related CLI commands.
 """
 
 import argparse
-import contextlib
 import csv
 import functools
 import os
 import shutil
-import signal
-import threading
 import time
-from typing import Callable, Iterator, List, Optional, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from pathlib import Path
@@ -40,6 +37,7 @@ from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import sidecar_completeness
 from metaquest.store.usage import ensure_project_identity, record_usage_many
+from metaquest.utils.termination import graceful_termination
 
 # Marker the data layer puts in a result message for a dataset this run downloaded and
 # saved into the store (as opposed to STORE_LINKED_PREFIX, imported above, for one the
@@ -65,35 +63,10 @@ def _max_downloads(value: str) -> int:
     return parsed
 
 
-@contextlib.contextmanager
-def _termination_raises_interrupt() -> Iterator[None]:
-    """Turn SIGTERM and SIGHUP into ``KeyboardInterrupt`` for the duration of the block.
-
-    A batch job's time limit, ``kill`` or a closed terminal would otherwise end the process
-    without running ``finally`` blocks, losing the download outcomes a registry batch still
-    holds. Raising ``KeyboardInterrupt`` sends these signals down the Ctrl-C path instead: the
-    batch is flushed and running tools are stopped. Once one of these signals has been turned
-    into an interrupt, both are ignored until the block exits, so a repeated ``kill`` during the
-    final flush cannot cut it short and lose the queue. The previous handlers are restored on
-    exit. Signal handlers can only be installed from the main thread, so elsewhere nothing changes.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    signals = [signal.SIGTERM] + ([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])
-
-    def _raise_interrupt(signum, _frame):
-        for other in signals:
-            signal.signal(other, signal.SIG_IGN)
-        raise KeyboardInterrupt(f"received signal {signal.Signals(signum).name}")
-
-    previous = {signum: signal.signal(signum, _raise_interrupt) for signum in signals}
-    try:
-        yield
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+# The download command's own name for the context every command now runs under (BaseCommand.run).
+# Nested inside it, it installs nothing and shares its Termination; called on its own (tests that
+# call ``execute`` directly) it installs the handlers itself.
+_termination_raises_interrupt = graceful_termination
 
 
 class DownloadSraCommand(BaseCommand):
@@ -574,10 +547,11 @@ class DownloadSraCommand(BaseCommand):
         """Run ``download_sra`` with its outcomes queued in a registry batch; return its statistics.
 
         The batch is flushed when the download call returns or raises, a ``KeyboardInterrupt``
-        included (SIGTERM and SIGHUP are turned into one for the duration), before the error
-        propagates. A dry run records nothing, so its batch never writes. A final flush that fails
-        with ``DataAccessError`` is retried once; None means the retry failed too, after the
-        outcomes still queued have been logged.
+        included (SIGTERM and SIGHUP are turned into one for the duration, and a repeated signal
+        during the flush is logged rather than raised), before the error propagates. A dry run
+        records nothing, so its batch never writes. A final flush that fails with
+        ``DataAccessError`` is retried once; None means the retry failed too, after the outcomes
+        still queued have been logged.
         """
         verify_downloads = getattr(args, "verify_downloads", True)
         excluded, expected_spots, truncated = self._registry_inputs(args, project_registry)
