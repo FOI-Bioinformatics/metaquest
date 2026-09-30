@@ -16,9 +16,24 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from metaquest.core.constants import VERSION_PROBE_TIMEOUT
 from metaquest.core.exceptions import ProcessingError, SecurityError
+from metaquest.utils import resources
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
+
+
+def assembly_memory(value: str) -> Optional[Union[int, float]]:
+    """The megahit ``--memory`` value for an ``--assembly-memory`` setting, or None to leave it out.
+
+    ``auto`` gives 90% of the memory limit detected for this process (cgroup or SLURM) in
+    bytes, and None when there is none (megahit then uses its own default); a fraction is
+    passed through, and a size becomes bytes (see ``resources.parse_memory``).
+
+    Raises:
+        ValueError: If ``value`` is not a memory value.
+    """
+    limit = resources.memory_limit_bytes() if str(value).strip().lower() == "auto" else None
+    return resources.parse_memory(value, limit)
 
 
 def resolve_assembly_threads(requested: Optional[int], fallback: int) -> int:
@@ -51,9 +66,11 @@ def _megahit_args(
     preset: Optional[str],
     k_flags: Optional[Dict[str, int]],
     tmp_dir: Optional[Path],
+    memory: Optional[Union[int, float]] = None,
 ) -> List[str]:
-    """Build the megahit argument list: input reads, thread count, k-mer/preset choice and
-    an optional ``--tmp-dir`` (created and allow-listed here when given).
+    """Build the megahit argument list: input reads, thread count, k-mer/preset choice, an
+    optional ``--memory`` (bytes, or a fraction of the node's memory) and an optional
+    ``--tmp-dir`` (created and allow-listed here when given).
 
     Raises:
         ProcessingError: If the number of reads is unsupported, ``k_flags`` is given
@@ -69,6 +86,8 @@ def _megahit_args(
         raise ProcessingError(f"Expected 1 or 2 FASTQ files to assemble, got {len(reads)}")
 
     args += ["--num-cpu-threads", str(threads), "-o", str(out_dir)]
+    if memory is not None:
+        args += ["--memory", str(memory)]
     if min_contig_len is not None:
         args += ["--min-contig-len", str(min_contig_len)]
 
@@ -105,6 +124,7 @@ def assemble_extracted_reads(
     keep_intermediate: bool = False,
     k_flags: Optional[Dict[str, int]] = None,
     tmp_dir: Optional[Path] = None,
+    memory: Optional[Union[int, float]] = None,
 ) -> Tuple[Path, bool]:
     """Assemble a set of extracted FASTQ files with megahit.
 
@@ -131,6 +151,8 @@ def assemble_extracted_reads(
             choice under ``output_dir`` when not given. megahit needs FIFOs for its scratch files, so
             a default landing on a filesystem without them (e.g. ExFAT) fails; a POSIX filesystem
             works around it.
+        memory: megahit ``--memory``: bytes, or a fraction of the node's memory; None leaves the
+            flag out (see ``assembly_memory``).
 
     Returns:
         The megahit output directory and whether megahit actually ran (False when the assembly was
@@ -153,7 +175,7 @@ def assemble_extracted_reads(
             shutil.rmtree(out_dir, ignore_errors=True)
 
     SecureSubprocess.add_allowed_root(out_dir.parent)
-    args = _megahit_args(reads, out_dir, threads, min_contig_len, preset, k_flags, tmp_dir)
+    args = _megahit_args(reads, out_dir, threads, min_contig_len, preset, k_flags, tmp_dir, memory)
 
     try:
         SecureSubprocess.run_secure("megahit", args)

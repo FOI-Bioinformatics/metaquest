@@ -177,11 +177,11 @@ def _path(text: str) -> str:
     return str(Path(_text(text)).expanduser())
 
 
-_MEMORY_PATTERN = re.compile(r"^(auto|0?\.\d+|1(\.0*)?|\d+(\.\d+)?[KMGT]?)$", re.IGNORECASE)
+_MEMORY_PATTERN = re.compile(r"^(auto|0?\.\d+|1(\.0*)?|[1-9]\d*|\d+(\.\d+)?[KMGT])$", re.IGNORECASE)
 
 
 def _memory(text: str) -> str:
-    """``auto``, a fraction of the detected limit (0 to 1), or a size such as ``32G`` or bytes."""
+    """``auto``, a fraction of the node's memory (0 to 1), or a size such as ``32G`` or whole bytes."""
     value = _text(text)
     if not _MEMORY_PATTERN.match(value):
         raise ValueError("expected 'auto', a fraction such as 0.5, or a size such as 32G, 32000M or bytes")

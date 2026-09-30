@@ -29,6 +29,7 @@ from metaquest.data.sra.sampling import distribution_from_histogram, quality_his
 from metaquest.store.layout import StorePaths, sidecar_path as dataset_sidecar_path, store_paths
 from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import read_sidecar, write_sidecar
+from metaquest.utils import resources
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,8 @@ def _parse_seqkit_table(stdout: str, files: List[Path]) -> Dict[str, Dict[str, A
 
 def _run_seqkit_stats(files: List[Path]) -> Dict[str, Dict[str, Any]]:
     """Run ``seqkit stats -T -j <threads> <files...>`` and parse its output table."""
-    args = ["stats", "-T", "-j", str(DEFAULT_NUM_THREADS), *(str(f) for f in files)]
+    threads = min(DEFAULT_NUM_THREADS, resources.available_cpus())
+    args = ["stats", "-T", "-j", str(threads), *(str(f) for f in files)]
     result = SecureSubprocess.run_secure("seqkit", args)
     return _parse_seqkit_table(result.stdout or "", files)
 

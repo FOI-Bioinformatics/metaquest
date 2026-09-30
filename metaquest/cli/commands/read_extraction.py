@@ -8,9 +8,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
-from metaquest.core.exceptions import MetaQuestError
-from metaquest.core.settings import setting_for
+from metaquest.core.exceptions import ConfigurationError, MetaQuestError
+from metaquest.core.settings import SETTINGS, setting_for
 from metaquest.data import registry_blocks as rb
+from metaquest.data.assembly import assembly_memory
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     ExtractionResult,
@@ -132,6 +133,18 @@ class ExtractTargetReadsCommand(BaseCommand):
             type=int,
             default=None,
             help="Threads for the megahit assembly (defaults to 1 on macOS, --threads elsewhere)",
+        )
+        parser.add_argument(
+            "--assembly-memory",
+            dest=SETTINGS["assembly_memory"].cli_dest,
+            default=None,
+            help=(
+                "Memory for megahit (--memory): 'auto' gives 90%% of the memory limit detected for this job "
+                "(cgroup or SLURM_MEM_PER_NODE) and leaves megahit's default when none is found; a size such "
+                "as 32G or 32000M; or a fraction such as 0.5, which megahit applies to the whole node's "
+                "memory, not to a cgroup or SLURM limit, so give a size under a scheduler "
+                "(default: METAQUEST_ASSEMBLY_MEMORY, config [runtime] assembly_memory, or auto)"
+            ),
         )
         parser.add_argument("--min-contig-len", type=int, default=None, help="megahit minimum contig length")
         parser.add_argument(
@@ -425,6 +438,23 @@ class ExtractTargetReadsCommand(BaseCommand):
         else:
             self.logger.error("No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id)
 
+    def _assembly_memory(self, args: argparse.Namespace) -> Optional[Any]:
+        """The megahit ``--memory`` value for ``--assembly-memory`` (or its setting), or None to omit it.
+
+        Raises:
+            ConfigurationError: If the value given is not a memory value.
+        """
+        value = setting_for(args, "assembly_memory")
+        try:
+            memory = assembly_memory(value)
+        except ValueError as e:
+            raise ConfigurationError(f"--assembly-memory: {e}") from e
+        if memory is None:
+            self.logger.info("No memory limit detected for this job; megahit uses its own default")
+        else:
+            self.logger.info("megahit --memory %s (--assembly-memory %s)", memory, value)
+        return memory
+
     def _assemble(
         self,
         args: argparse.Namespace,
@@ -445,6 +475,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 "Running megahit single-threaded on macOS (its parallel sort is unstable here); "
                 "override with --assembly-threads"
             )
+        memory = self._assembly_memory(args)
         version = megahit_version()
         genome_length = fasta_length(args.genome_fasta)
         recorded: Optional[Registry] = None
@@ -488,6 +519,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                     preset=args.assembly_preset,
                     keep_intermediate=args.keep_intermediate,
                     tmp_dir=tmp_dir,
+                    memory=memory,
                 )
             finally:
                 if uses_default_tmp_dir:
