@@ -77,7 +77,13 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - As part of that same migration, `download_metadata` and `parse_metadata` now log and drop a single
   accession's failing `record_metadata` call instead of letting the exception end the command before
   anything is saved; the command still finishes and exits 0, with every other accession's metadata
-  recorded. A user relying on either command failing loudly on a bad record should watch the log instead.
+  recorded, and its summary line ("Recorded metadata for N accession(s) in the registry; M dropped")
+  counts the dropped records. A user relying on either command failing loudly on a bad record should
+  watch the log instead.
+- `status --reconcile` checks an untracked accession's folder again before recording it as downloaded,
+  and uses a spot-count verdict only for the download it was computed on, so a folder removed, or a
+  download redone, between the scan and the apply is not recorded from the stale scan.
+- `parse_containment` reads a parsed table from disk before taking the registry lock, not under it.
 - Every tabular and text output file metaquest writes is now written atomically, through a uniquely named
   temporary file replaced into place with `os.replace`: CSV and TSV tables, the registry, store sidecars,
   the minimap2 index and its record, per-accession metadata XML (and its copy into a store's `metadata/`

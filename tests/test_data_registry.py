@@ -1270,6 +1270,7 @@ class TestRegistryBatch:
                 # A later mutation does not retry the dropped one.
                 batch.apply(lambda r: reg.record_exclusion(r, "SRR4", "test"), label="SRR4")
         assert spy.call_count == 2
+        assert batch.dropped == 1
         assert sorted(reg.load_registry(path).datasets) == ["SRR1", "SRR3", "SRR4"]
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1

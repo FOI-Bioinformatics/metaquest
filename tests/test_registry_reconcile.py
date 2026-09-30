@@ -281,6 +281,19 @@ class TestApplyRechecksAgainstTheRegistryItIsGiven:
         assert rb.download_verdict(fresh, "SRR4") is None
         assert rb.download_verdict(fresh, "SRR3").verdict == "complete"
 
+    def test_a_verdict_is_not_used_for_a_download_redone_after_the_scan(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(reg, "_now", lambda: "2026-09-30T00:00:00+00:00")
+        registry, paths = _drifted_project(tmp_path)
+        plan = scan_reconcile(registry, paths)
+        # SRR3 is downloaded again (same spot count, no verdict recorded) before the apply.
+        monkeypatch.setattr(reg, "_now", lambda: "2026-09-30T01:00:00+00:00")
+        reg.record_download(registry, "SRR3", "downloaded", paths.fastq, "Downloaded 1 files, unverified")
+
+        apply_reconcile(registry, plan)
+
+        assert rb.download_verdict(registry, "SRR3") is None
+        assert rb.download_verdict(registry, "SRR4").verdict == "truncated"
+
     def test_an_extraction_that_appeared_after_the_scan_is_left_for_the_next_run(self, tmp_path, fixed_clock):
         registry, paths = _drifted_project(tmp_path)
         plan = scan_reconcile(registry, paths)

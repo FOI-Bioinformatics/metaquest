@@ -15,7 +15,7 @@ size ceiling; ``registry.record_screening_from_table`` delegates here.
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -141,6 +141,18 @@ def _write_row(
     _store_screening(registry, accession, screening)
 
 
+def read_screening_table(path: Union[str, Path]) -> Optional[pd.DataFrame]:
+    """The parsed containment table written at ``path``, or None when there is no such file.
+
+    Read before a registry transaction is opened, so the lock is never held while a large
+    table is parsed; a missing file is logged at debug level.
+    """
+    if not Path(path).exists():
+        logger.debug("Parsed containment table %s does not exist; nothing to record", path)
+        return None
+    return pd.read_csv(Path(path), sep="\t", index_col=0)
+
+
 def record_screening_table(
     registry: reg.Registry,
     table: Union[pd.DataFrame, str, Path],
@@ -156,10 +168,10 @@ def record_screening_table(
     block written gets the same timestamp.
     """
     if not isinstance(table, pd.DataFrame):
-        if not Path(table).exists():
-            logger.debug("Parsed containment table %s does not exist; nothing to record", table)
+        loaded = read_screening_table(table)
+        if loaded is None:
             return 0
-        table = pd.read_csv(Path(table), sep="\t", index_col=0)
+        table = loaded
     accessions, genomes, rows, cols, rounded = _positive_cells(table)
     if not len(rows):
         return 0

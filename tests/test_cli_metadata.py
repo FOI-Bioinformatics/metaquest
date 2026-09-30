@@ -39,6 +39,28 @@ def test_parse_metadata_command_records_every_run_without_iterating_rows_as_seri
     assert first["xml"] == "metadata/SRR1000000_metadata.xml"
 
 
+def test_parse_metadata_summary_counts_a_dropped_record(tmp_path, caplog):
+    """A record that fails is dropped; the exit stays 0 and the summary line says how many."""
+    import metaquest.cli.commands.metadata as command_module
+
+    folder = tmp_path / "metadata"
+    write_metadata_folder(folder, count=3, per_file=14, pool=30)
+    real_record = command_module.record_metadata
+
+    def flaky_record(registry, accession, **kwargs):
+        if accession == "SRR1000001":
+            raise ValueError("bad record")
+        return real_record(registry, accession, **kwargs)
+
+    with patch.object(command_module, "record_metadata", side_effect=flaky_record):
+        with caplog.at_level("INFO", logger="metaquest.cli.commands.metadata"):
+            assert ParseMetadataCommand().execute(_parse_args(tmp_path, folder)) == 0
+
+    datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
+    assert sorted(datasets) == ["SRR1000000", "SRR1000002"]
+    assert "Recorded metadata for 2 accession(s) in the registry; 1 dropped" in caplog.text
+
+
 def test_parse_metadata_command_records_nothing_for_an_empty_table(tmp_path):
     """An empty folder yields an empty table and no dataset entries."""
     folder = tmp_path / "metadata"

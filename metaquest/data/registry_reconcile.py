@@ -236,8 +236,11 @@ def _fill_verdicts(registry: Registry, plan: ReconcilePlan, compute: bool) -> No
         acc_dir = plan.paths.fastq / acc
         if not acc_dir.is_dir():
             continue
+        # Keyed on the download's date too, so files downloaded again between the scan and the
+        # apply are never stamped with the verdict computed on the files they replaced.
         verify = plan.value(
-            ("spots", acc, str(spots)), (lambda: verify_download(acc, acc_dir, spots)) if compute else None
+            ("spots", acc, str(spots), str(download.date)),
+            (lambda: verify_download(acc, acc_dir, spots)) if compute else None,
         )
         if verify is _NOT_SCANNED:
             continue

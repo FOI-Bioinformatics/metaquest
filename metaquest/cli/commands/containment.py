@@ -12,6 +12,7 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.branchwater import parse_containment_data
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED
 from metaquest.data.registry import record_screening_from_table, registry_transaction
+from metaquest.data.screening_table import read_screening_table
 from metaquest.visualization.plots import plot_containment as viz_plot_containment, plot_output_path
 
 
@@ -78,15 +79,15 @@ class ParseContainmentCommand(BaseCommand):
                 errors=errors,
             )
             # The table just built, so it is not read back from disk. A summary without one (no
-            # match data) falls back to the file, as record_screening_from_table always did.
+            # match data) falls back to the file, read here before the registry lock is taken.
             table = getattr(summary, "table", None)
+            if table is None:
+                table = read_screening_table(args.parsed_containment_file)
             with registry_transaction(args.registry) as registry:
-                record_screening_from_table(
-                    registry,
-                    table if table is not None else args.parsed_containment_file,
-                    args.matches_folder,
-                    max_screened=args.registry_max_screened,
-                )
+                if table is not None:
+                    record_screening_from_table(
+                        registry, table, args.matches_folder, max_screened=args.registry_max_screened
+                    )
             if errors:
                 self.logger.error("%d match file(s) could not be read: %s", len(errors), ", ".join(errors))
                 return 1

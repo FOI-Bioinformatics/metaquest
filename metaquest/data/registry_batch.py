@@ -66,6 +66,8 @@ class RegistryBatch:
         self._queue: List[Tuple[RegistryMutation, str]] = []
         self._hooks: List[Callable[[Registry], None]] = []
         self._last_flush = _monotonic()
+        # Mutations dropped because they raised, counted once their flush has been written.
+        self.dropped = 0
 
     def __len__(self) -> int:
         """The number of mutations queued and not yet written."""
@@ -104,21 +106,22 @@ class RegistryBatch:
             return None
         pending = list(self._queue)
         with registry_transaction(self.path) as registry:
-            self._apply_all(registry, pending)
+            dropped = self._apply_all(registry, pending)
         del self._queue[: len(pending)]
+        self.dropped += dropped
         self._last_flush = _monotonic()
         self.registry = registry
         for hook in self._hooks:
             hook(registry)
         return registry
 
-    def _apply_all(self, registry: Registry, pending: List[Tuple[RegistryMutation, str]]) -> None:
+    def _apply_all(self, registry: Registry, pending: List[Tuple[RegistryMutation, str]]) -> int:
         """Apply ``pending`` to ``registry`` in order, rolling back and dropping any mutation that raises.
 
         A rollback reloads the registry from the file (unchanged until the transaction writes it)
         and replays the mutations that had succeeded, so a mutation that raises partway through
         leaves nothing of what it changed. Replaying costs one file load per failure and nothing
-        when every mutation succeeds.
+        when every mutation succeeds. Returns the number of mutations dropped.
         """
         applied: List[Tuple[RegistryMutation, str]] = []
         for mutation, label in pending:
@@ -129,6 +132,7 @@ class RegistryBatch:
                 self._restore(registry, applied)
                 continue
             applied.append((mutation, label))
+        return len(pending) - len(applied)
 
     def _restore(self, registry: Registry, applied: List[Tuple[RegistryMutation, str]]) -> None:
         """Reset ``registry`` to the file's state and replay ``applied``, dropping any that now raises."""

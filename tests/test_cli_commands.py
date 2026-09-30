@@ -255,6 +255,36 @@ class TestParseContainmentCommand:
             assert "GCF_A" in screening["genomes"]
             assert screening["genomes"]["GCF_A"]["source"] == "matches"
 
+    @patch("metaquest.cli.commands.containment.parse_containment_data", return_value=None)
+    def test_a_table_read_from_disk_is_read_outside_the_registry_lock(self, _parse, tmp_path):
+        """With no table in the summary, the written file is read before the registry lock is taken."""
+        parsed = tmp_path / "parsed.txt"
+        parsed.write_text("\tGCF_A\tmax_containment\nSRR1\t0.9\t0.9\n")
+        lock = tmp_path / "metaquest_registry.json.lock"
+        import metaquest.data.screening_table as table_module
+
+        real_read = table_module.pd.read_csv
+        lock_held_while_reading = []
+
+        def spy_read(*args, **kwargs):
+            lock_held_while_reading.append(lock.exists())
+            return real_read(*args, **kwargs)
+
+        args = argparse.Namespace(
+            matches_folder=str(tmp_path / "matches"),
+            parsed_containment_file=str(parsed),
+            summary_containment_file=str(tmp_path / "summary.txt"),
+            step_size=0.1,
+            details_file=None,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            registry_max_screened=DEFAULT_REGISTRY_MAX_SCREENED,
+        )
+        with patch.object(table_module.pd, "read_csv", side_effect=spy_read):
+            assert ParseContainmentCommand().execute(args) == 0
+        assert lock_held_while_reading == [False]
+        data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        assert "GCF_A" in data["datasets"]["SRR1"]["screening"]["genomes"]
+
     def test_execute_writes_details_file_default_path(self, tmp_path):
         """The details table (cANI, sample metadata) is written next to the parsed containment table."""
         matches_folder = tmp_path / "matches"

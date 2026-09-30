@@ -192,7 +192,9 @@ def _record_all_metadata(registry_arg: Optional[str], parsed: Dict[str, Tuple[An
     """Record every ``accession -> (xml_path, fields)`` in one registry transaction; return the registry written.
 
     Each record is queued on a batch that writes once, on exit, so the registry is read inside
-    the lock and a download or selection another process recorded meanwhile is kept.
+    the lock and a download or selection another process recorded meanwhile is kept. A record
+    that fails is logged and dropped; the summary line counts the dropped records, so a run
+    that still exits 0 says how many are missing.
     """
     target = registry_path(registry_arg)
     # Paths are recorded relative to the registry's folder, as project_root would give.
@@ -202,6 +204,14 @@ def _record_all_metadata(registry_arg: Optional[str], parsed: Dict[str, Tuple[An
             batch.apply(
                 partial(record_metadata, accession=accession, xml_path=xml_path, fields=fields, root=root), accession
             )
+    if batch.dropped:
+        logger.warning(
+            "Recorded metadata for %d accession(s) in the registry; %d dropped (see the errors above)",
+            len(parsed) - batch.dropped,
+            batch.dropped,
+        )
+    elif parsed:
+        logger.info("Recorded metadata for %d accession(s) in the registry", len(parsed))
     if batch.registry is None:
         # Nothing to record: still write the registry, as a run with an empty table always has.
         return registry_update(target, lambda registry: registry)
