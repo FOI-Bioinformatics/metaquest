@@ -479,6 +479,38 @@ class TestExtractTargetReadsCommand:
         assert extraction["assembly"]["contigs"] == 2
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_execute_records_extraction_and_assembly_timing(self, mock_run, monkeypatch):
+        """Each extraction and each megahit run is timed; a rerun that skips both keeps the times."""
+        import itertools
+        import re
+
+        ticks = itertools.count(0.0, 1.5)
+        monkeypatch.setattr("metaquest.data.registry_timing.monotonic", lambda: next(ticks))
+        mock_run.side_effect = _fake_tools({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+                registry=str(registry_file),
+            )
+            assert ExtractTargetReadsCommand().execute(args) == 0
+            first = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]
+            assert ExtractTargetReadsCommand().execute(args) == 0
+            second = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]
+        iso = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+        assert iso.match(first["started"]) and first["seconds"] == 1.5
+        assert iso.match(first["assembly"]["started"]) and first["assembly"]["seconds"] == 1.5
+        assert (second["started"], second["seconds"]) == (first["started"], first["seconds"])
+        assert second["assembly"]["seconds"] == first["assembly"]["seconds"]
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_execute_records_usage_for_extraction_and_assembly(self, mock_run):
         """Extraction and assembly are recorded as store catalogue usage for this genome."""
         from metaquest.data.registry import load_registry as _load, save_registry as _save
@@ -1480,8 +1512,8 @@ class TestExtractTargetReadsCommand:
             seen = []
             original = cmd._record_result
 
-            def spy(args_, accession, outcome, store=None):
-                original(args_, accession, outcome, store)
+            def spy(args_, accession, outcome, store=None, timing=None):
+                original(args_, accession, outcome, store, timing)
                 seen.append(accession)
                 if len(seen) == 1:
                     args_._termination.stop.set()

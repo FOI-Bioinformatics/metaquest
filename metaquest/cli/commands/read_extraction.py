@@ -38,6 +38,7 @@ from metaquest.data.registry import (
     resolve_project_path,
     scan_downloads,
 )
+from metaquest.data.registry_timing import Stopwatch, set_assembly_timing, set_extraction_timing
 from metaquest.data.sra import count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.store.layout import StorePaths
@@ -336,8 +337,12 @@ class ExtractTargetReadsCommand(BaseCommand):
         accession: str,
         outcome: ExtractionResult,
         store: Optional[StorePaths] = None,
+        timing: Optional[Tuple[str, float]] = None,
     ) -> None:
-        """Checkpoint one extraction result; skipped samples are already recorded."""
+        """Checkpoint one extraction result, with its ``(started, seconds)`` timing when given.
+
+        Skipped samples are already recorded, and their recorded timing is left alone.
+        """
         if outcome.skipped:
             return
         index_dir = Path(args.output_folder) / ".index"
@@ -360,6 +365,8 @@ class ExtractTargetReadsCommand(BaseCommand):
                 mapped_total=outcome.mapped_total,
                 coverage=outcome.coverage,
             )
+            started, seconds = timing or (None, None)
+            set_extraction_timing(reg, accession, args.genome_id, started, seconds)
         detail = f"{outcome.mapped_records} mapped reads"
         breadth = (outcome.coverage or {}).get("breadth")
         if breadth is not None:
@@ -374,8 +381,14 @@ class ExtractTargetReadsCommand(BaseCommand):
         accession: str,
         outcome: ExtractionResult,
         store: Optional[StorePaths],
+        clock: Optional[Stopwatch] = None,
     ) -> None:
         """Checkpoint one sample, then stop the run if a signal arrived during or after it.
+
+        ``clock`` times each sample from the moment the previous one was checkpointed (or the
+        extraction started) until its result arrives here: the time ``extract_target_reads``
+        spent on it, a module held at a frozen line ceiling, so it is measured from this side.
+        The first sample that needs mapping also includes building the minimap2 index.
 
         Checked here -- the boundary between one sample finishing and the next starting --
         rather than inside ``extract_target_reads``'s loop, a module held at a frozen line
@@ -385,7 +398,11 @@ class ExtractTargetReadsCommand(BaseCommand):
         sample just checkpointed above is recorded either way; the next one in
         ``extract_target_reads``'s ``samples`` list is never started.
         """
-        self._record_result(args, accession, outcome, store)
+        timing = clock.lap() if clock is not None else None
+        self._record_result(args, accession, outcome, store, timing)
+        if clock is not None:
+            # The registry write above is bookkeeping, not part of the next sample's extraction.
+            clock.restart()
         term = getattr(args, "_termination", None)
         if term is not None and term.stop.is_set():
             raise KeyboardInterrupt(f"extract_target_reads stopped after {accession}")
@@ -509,6 +526,7 @@ class ExtractTargetReadsCommand(BaseCommand):
             else:
                 Path(args.output_folder).mkdir(parents=True, exist_ok=True)
                 tmp_dir = Path(tempfile.mkdtemp(dir=args.output_folder, prefix=".megahit-tmp-"))
+            watch = Stopwatch()
             try:
                 _, ran = assemble_extracted_reads(
                     reads,
@@ -524,6 +542,8 @@ class ExtractTargetReadsCommand(BaseCommand):
             finally:
                 if uses_default_tmp_dir:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
+            # megahit's own run time; None when it did not run (an assembly already on disk).
+            started, seconds = watch.lap() if ran else (None, None)
             if not ran and not args.force:
                 # Loaded once per call, on the first sample megahit skipped: only this loop
                 # changes a sample's assembly record, and never before checking it here (a
@@ -564,6 +584,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                         "preset": args.assembly_preset,
                     },
                 )
+                set_assembly_timing(reg, accession, args.genome_id, started, seconds)
             # Outside the registry lock, for the same reason as in _record_result.
             record_usage_safe(
                 store, reg, accession, args.genome_id, "assembled", detail=f"{stats.get('contigs', 0)} contigs"
@@ -601,6 +622,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 to_count = self._samples_needing_mate_counts(selected, already_done, truncated_downloads, args)
                 mate_counts = self._mate_counts(args, registry, to_count)
 
+            clock = Stopwatch()
             results = extract_target_reads(
                 parsed_containment=args.parsed_containment,
                 genome_id=args.genome_id,
@@ -614,7 +636,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 force=args.force,
                 already_done=already_done,
                 on_result=lambda accession, outcome: self._record_result_and_check_stop(
-                    args, accession, outcome, store
+                    args, accession, outcome, store, clock
                 ),
                 min_mapq=args.min_mapq,
                 temp_folder=setting_for(args, "temp_folder"),

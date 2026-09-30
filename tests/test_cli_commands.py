@@ -983,6 +983,8 @@ class TestDownloadSraCommand:
         assert callable(on_result)
         # Called through execute (not run), the command makes its own stop token for the run.
         assert isinstance(call_kwargs.pop("stop"), threading.Event)
+        # The dict download_sra fills with each attempt's timing, read back by the recorder.
+        assert call_kwargs.pop("timings") == {}
         assert call_kwargs == {
             "fastq_folder": str(tmp_path / "fastq"),
             "accessions_file": "accessions.txt",
@@ -1391,17 +1393,21 @@ class TestDownloadSraCommand:
     @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_report_file_lists_every_status(self, mock_download, _which, tmp_path):
-        mock_download.return_value = {
-            "total": 4,
-            "already_downloaded": 1,
-            "blacklisted": 1,
-            "successful": 1,
-            "failed": 1,
-            "failed_accessions": ["SRR2"],
-            "results": {"SRR1": "Downloaded 2 files", "SRR2": "Download failed: timeout"},
-            "already_downloaded_accessions": ["SRR3"],
-            "blacklisted_accessions": ["SRR4"],
-        }
+        def fake_download_sra(**kwargs):
+            kwargs["timings"]["SRR1"] = ("2026-10-01T10:00:00+00:00", 12.5)
+            return {
+                "total": 4,
+                "already_downloaded": 1,
+                "blacklisted": 1,
+                "successful": 1,
+                "failed": 1,
+                "failed_accessions": ["SRR2"],
+                "results": {"SRR1": "Downloaded 2 files", "SRR2": "Download failed: timeout"},
+                "already_downloaded_accessions": ["SRR3"],
+                "blacklisted_accessions": ["SRR4"],
+            }
+
+        mock_download.side_effect = fake_download_sra
         acc = tmp_path / "acc.txt"
         acc.write_text("SRR1\nSRR2\nSRR3\nSRR4\n")
         report = tmp_path / "reports" / "download_report.csv"
@@ -1422,12 +1428,105 @@ class TestDownloadSraCommand:
         )
         DownloadSraCommand().execute(args)
         assert report.read_text().splitlines() == [
-            "accession,status,message",
-            "SRR1,downloaded,Downloaded 2 files",
-            "SRR2,failed,Download failed: timeout",
-            "SRR3,already_present,",
-            "SRR4,blacklisted,",
+            "accession,status,message,seconds",
+            "SRR1,downloaded,Downloaded 2 files,12.5",
+            "SRR2,failed,Download failed: timeout,",
+            "SRR3,already_present,,",
+            "SRR4,blacklisted,,",
         ]
+
+    @patch("metaquest.cli.commands.sra.require_tools")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_recorder_writes_download_timing(self, mock_download, _which, tmp_path):
+        """A download's start and seconds reach the registry; a failed attempt is timed too."""
+        fastq_folder = tmp_path / "fastq"
+        (fastq_folder / "SRR1").mkdir(parents=True)
+        (fastq_folder / "SRR1" / "SRR1_1.fastq").write_text("@r\nA\n+\nI\n")
+
+        def fake_download_sra(**kwargs):
+            kwargs["timings"]["SRR1"] = ("2026-10-01T10:00:00+00:00", 12.5)
+            kwargs["on_result"]("SRR1", True, "Downloaded 1 files")
+            kwargs["timings"]["SRR2"] = ("2026-10-01T10:00:05+00:00", 3.0)
+            kwargs["on_result"]("SRR2", False, "Download failed: t")
+            return {
+                "total": 2,
+                "successful": 1,
+                "failed": 1,
+                "failed_accessions": ["SRR2"],
+                "results": {"SRR1": "Downloaded 1 files", "SRR2": "Download failed: t"},
+            }
+
+        mock_download.side_effect = fake_download_sra
+        registry_file = tmp_path / "metaquest_registry.json"
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=None,
+            registry=str(registry_file),
+            data_root=None,
+        )
+        DownloadSraCommand().execute(args)
+        datasets = json.loads(registry_file.read_text())["datasets"]
+        assert datasets["SRR1"]["download"]["started"] == "2026-10-01T10:00:00+00:00"
+        assert datasets["SRR1"]["download"]["seconds"] == 12.5
+        assert datasets["SRR2"]["download"]["seconds"] == 3.0
+
+    @patch("metaquest.cli.commands.sra.require_tools")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_recorder_clears_download_timing_for_a_store_link(self, mock_download, _which, tmp_path):
+        """A dataset linked from the store was not downloaded by this run, so an earlier time is removed."""
+        from metaquest.store.layout import init_store
+
+        store_root = tmp_path / "store"
+        paths = init_store(store_root)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        fastq_folder = tmp_path / "fastq"
+        fastq_folder.mkdir()
+        os.symlink(acc_dir, fastq_folder / "SRR1")
+        registry_file = tmp_path / "metaquest_registry.json"
+        seeded = load_registry(registry_file)
+        record_download(seeded, "SRR1", "downloaded", fastq_folder)
+        seeded.datasets["SRR1"]["download"].update(started="2026-09-01T10:00:00+00:00", seconds=99.0)
+        save_registry(seeded)
+        message = "linked from store, 1 files"
+
+        def fake_download_sra(**kwargs):
+            kwargs["timings"]["SRR1"] = ("2026-10-01T10:00:00+00:00", 0.2)
+            kwargs["on_result"]("SRR1", True, message)
+            return {"total": 1, "successful": 1, "failed": 0, "failed_accessions": [], "results": {"SRR1": message}}
+
+        mock_download.side_effect = fake_download_sra
+        report = tmp_path / "report.csv"
+        args = argparse.Namespace(
+            accessions_file=str(tmp_path / "acc.txt"),
+            fastq_folder=str(fastq_folder),
+            max_downloads=None,
+            num_threads=4,
+            max_workers=4,
+            dry_run=False,
+            force=False,
+            max_retries=1,
+            temp_folder=None,
+            blacklist=None,
+            report_file=str(report),
+            registry=str(registry_file),
+            data_root=str(store_root),
+        )
+        assert DownloadSraCommand().execute(args) == 0
+        download = json.loads(registry_file.read_text())["datasets"]["SRR1"]["download"]
+        assert download["source"] == "store"
+        assert "started" not in download and "seconds" not in download
+        assert report.read_text().splitlines()[1] == f'SRR1,downloaded,"{message}",'
 
     @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")

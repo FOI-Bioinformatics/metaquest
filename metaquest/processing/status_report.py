@@ -26,6 +26,7 @@ from metaquest.data.registry import (
     query,
     stage_members,
 )
+from metaquest.data.registry_timing import timing_summary
 from metaquest.data.sra import STORE_READY_STATES, accession_has_fastq, is_transient_folder
 from metaquest.store.catalog import Catalog
 from metaquest.store.layout import StorePaths, sidecar_path, store_paths
@@ -288,7 +289,7 @@ def build_report(
     drift: Optional[ReconcileReport] = None,
 ) -> Dict[str, Any]:
     """The status report for ``registry``: local inventory, registry file, store, stages, download
-    verdicts, genomes and drift, as the dict ``status --json`` prints.
+    verdicts, genomes, drift and timing, as the dict ``status --json`` prints.
 
     ``args`` carries the status command's options (the folders, ``accessions_file``,
     ``parsed_containment``, ``data_root``, ``genome`` and ``init``); ``drift`` is the result of
@@ -315,6 +316,7 @@ def build_report(
     report["downloads"] = download_verdicts(registry)
     report["genomes"] = _genome_report(registry, paths, args.genome, genome_counts(registry))
     report["drift"] = _drift_report(drift) if drift else {}
+    report["timing"] = timing_summary(registry)
     return report
 
 
@@ -342,6 +344,7 @@ def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
                 "metadata": "metadata" in record,
                 "analyses": ",".join(sorted(record.get("analyses", {}))),
                 **rb.profile_summary(registry, acc),
+                "download_seconds": download.seconds,
             }
         )
         for genome_id, ext in rb.extraction_blocks(registry, acc).items():
@@ -358,6 +361,8 @@ def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
                     "total_bp": asm.total_bp if asm else None,
                     "n50": asm.n50 if asm else None,
                     "assembly_date": asm.date if asm else None,
+                    "extraction_seconds": ext.seconds,
+                    "assembly_seconds": asm.seconds if asm else None,
                 }
             )
     datasets = pd.DataFrame(rows).set_index("accession") if rows else pd.DataFrame()

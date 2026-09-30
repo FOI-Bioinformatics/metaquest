@@ -127,6 +127,23 @@ def _print_stages(stages: Dict[str, Any], registry: Registry, emit: Callable[[st
         emit(f"  truncated downloads: {len(truncated)} (" + ", ".join(truncated) + ")")
 
 
+def _print_timing(timing: Optional[Dict[str, Any]], emit: Callable[[str], None]) -> None:
+    """One line with how many downloads, extractions and assemblies were timed; none when nothing was."""
+    kinds = (("downloads", "download"), ("extractions", "extraction"), ("assemblies", "assembly"))
+    if not timing or not any(timing.get(f"{plural}_timed") for plural, _ in kinds):
+        return
+    parts = []
+    for plural, prefix in kinds:
+        count = timing.get(f"{plural}_timed") or 0
+        part = f"{plural} {count}"
+        if count:
+            total = timing[f"{prefix}_seconds_total"]
+            median = timing[f"{prefix}_seconds_median"]
+            part += f" ({total:.1f} s in total, median {median:.1f} s)"
+        parts.append(part)
+    emit("  timing     : " + ", ".join(parts))
+
+
 def _print_genomes(genomes: Dict[str, Any], emit: Callable[[str], None]) -> None:
     if not genomes:
         return
@@ -206,6 +223,7 @@ def print_report(
     if report.get("store"):
         _print_store(report["store"], emit)
     _print_stages(report["stages"], registry, emit)
+    _print_timing(report.get("timing"), emit)
     _print_genomes(report["genomes"], emit)
     _print_stage_filter(registry, args.stage, args.genome, emit)
     if args.list_missing:

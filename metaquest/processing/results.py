@@ -3,7 +3,8 @@
 Joins what the project registry records for each pair (screening, selection, exclusion,
 download, run metadata, the dataset profile of ``sra_profile``, read extraction, reference
 coverage and assembly) with the containment values of the parsed containment table, which
-are unrounded and not limited by ``cap_screening``.
+are unrounded and not limited by ``cap_screening``. The last three columns are the seconds
+the download, the extraction and the assembly took, when the registry records them.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,9 @@ RESULTS_COLUMNS = [
     "n50",
     "genome_fraction_estimate",
     "assembly_mapping_rate",
+    "download_seconds",
+    "extraction_seconds",
+    "assembly_seconds",
 ]
 
 Pair = Tuple[str, str]
@@ -148,6 +152,10 @@ def _row(
         "n50": assembly.get("n50"),
         "genome_fraction_estimate": assembly.get("genome_fraction_estimate"),
         "assembly_mapping_rate": assembly.get("mapping_rate"),
+        # One field, read straight from the registry dict (see rb.raw) rather than cached per accession.
+        "download_seconds": rb.raw(registry, accession, "download", "seconds"),
+        "extraction_seconds": extraction.seconds,
+        "assembly_seconds": assembly.get("seconds"),
     }
 
 

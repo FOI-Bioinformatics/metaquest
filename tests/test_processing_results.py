@@ -50,7 +50,28 @@ def test_columns_in_stated_order():
         "n50",
         "genome_fraction_estimate",
         "assembly_mapping_rate",
+        "download_seconds",
+        "extraction_seconds",
+        "assembly_seconds",
     ]
+
+
+def test_timing_columns_come_from_registry(tmp_path):
+    from metaquest.data.registry_timing import set_assembly_timing, set_download_timing, set_extraction_timing
+
+    r = _registry(tmp_path)
+    set_download_timing(r, "SRR1", "2026-10-01T10:00:00+00:00", 12.5)
+    set_extraction_timing(r, "SRR1", "GCF_A", "2026-10-01T10:01:00+00:00", 3.25)
+    set_assembly_timing(r, "SRR1", "GCF_A", "2026-10-01T10:02:00+00:00", 60.0)
+    rows = _by_pair(results_rows(r))
+    row = rows[("SRR1", "GCF_A")]
+    assert (row["download_seconds"], row["extraction_seconds"], row["assembly_seconds"]) == (12.5, 3.25, 60.0)
+    untimed = rows[("SRR2", "GCF_A")]
+    assert (untimed["download_seconds"], untimed["extraction_seconds"], untimed["assembly_seconds"]) == (
+        None,
+        None,
+        None,
+    )
 
 
 def test_one_row_per_pair_sorted_by_containment(tmp_path):
@@ -251,6 +272,9 @@ def _reference_row(r, accession, genome_id, containment):
         "n50": assembly.get("n50"),
         "genome_fraction_estimate": assembly.get("genome_fraction_estimate"),
         "assembly_mapping_rate": assembly.get("mapping_rate"),
+        "download_seconds": download.seconds if download is not None else None,
+        "extraction_seconds": extraction.seconds,
+        "assembly_seconds": assembly.get("seconds"),
     }
 
 

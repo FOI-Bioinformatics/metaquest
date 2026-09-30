@@ -57,6 +57,12 @@ def _optional(default: Any = None) -> Any:
     return field(default=default, metadata={_OMIT: True})
 
 
+# Metadata of the optional timing fields (``started``, ``seconds``), left out while None. They are
+# declared with ``init=False`` (inline, so mypy sees it): timing is set only by
+# ``metaquest.data.registry_timing`` after a step is recorded, never when a block is built.
+_TIMING = {_OMIT: True}
+
+
 def _copy(value: Any) -> Any:
     """A shallow copy of a list or dict, so a block never aliases the registry's own containers."""
     if isinstance(value, dict):
@@ -293,6 +299,9 @@ class DownloadBlock(RegistryBlock):
     # ``[[file name, size bytes, mtime], ...]`` of the mate files ``mate_reads`` was counted from.
     mate_reads_signature: Optional[List[List[Any]]] = _optional()
     inferred: bool = _optional(False)
+    # When the last download attempt started (ISO 8601 UTC) and how many seconds it took.
+    started: Optional[str] = field(default=None, init=False, metadata=_TIMING)
+    seconds: Optional[float] = field(default=None, init=False, metadata=_TIMING)
 
 
 # -------------------------------------------------------------------- metadata
@@ -333,6 +342,9 @@ class AssemblyBlock(RegistryBlock):
     total_bp: int = 0
     n50: int = 0
     largest: int = 0
+    # When megahit started (ISO 8601 UTC) and how many seconds it ran.
+    started: Optional[str] = field(default=None, init=False, metadata=_TIMING)
+    seconds: Optional[float] = field(default=None, init=False, metadata=_TIMING)
 
 
 @dataclass
@@ -355,6 +367,9 @@ class ExtractionBlock(RegistryBlock):
     coverage_tsv: Optional[str] = None
     assembly: Optional[AssemblyBlock] = _nested(AssemblyBlock)
     inferred: bool = _optional(False)
+    # When the extraction of this sample started (ISO 8601 UTC) and how many seconds it took.
+    started: Optional[str] = field(default=None, init=False, metadata=_TIMING)
+    seconds: Optional[float] = field(default=None, init=False, metadata=_TIMING)
 
 
 # ------------------------------------------------------------ analyses, exports

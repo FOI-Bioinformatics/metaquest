@@ -1295,3 +1295,84 @@ def test_stage_filter_accessions_keeps_first_seen_order_without_duplicates(tmp_p
 def test_download_next_steps_lists_selected_not_excluded_not_downloaded(tmp_path):
     r = _mixed_registry(tmp_path)
     assert [acc for step in download_next_steps(r) for acc in step["accessions"]] == ["SRR5"]
+
+
+def _timed_project(tmp_path):
+    """A project with an initialised registry holding a download, an extraction and an assembly time."""
+    from metaquest.data.registry import record_assembly
+    from metaquest.data.registry_timing import set_assembly_timing, set_download_timing, set_extraction_timing
+
+    _project_tree(tmp_path)
+    StatusCommand().execute(_status_args(tmp_path, init=True))
+    seeded = load_registry(tmp_path / "metaquest_registry.json")
+    set_download_timing(seeded, "SRR1", "2026-10-01T10:00:00+00:00", 10.0)
+    set_download_timing(seeded, "SRR2", "2026-10-01T10:00:10+00:00", 30.0)
+    record_extraction(seeded, "SRR1", "GCF_1", [], 5, False, {})
+    set_extraction_timing(seeded, "SRR1", "GCF_1", "2026-10-01T10:01:00+00:00", 2.5)
+    record_assembly(seeded, "SRR1", "GCF_1", tmp_path / "asm", {"contigs": 1}, "v1", {})
+    set_assembly_timing(seeded, "SRR1", "GCF_1", "2026-10-01T10:02:00+00:00", 45.0)
+    save_registry(seeded)
+
+
+def test_build_report_timing_on_a_fixture_registry(tmp_path):
+    from metaquest.data.registry import ProjectPaths
+    from metaquest.data.registry_timing import set_download_timing, set_extraction_timing
+    from metaquest.processing.status_report import build_report
+
+    r = _mixed_registry(tmp_path)
+    set_download_timing(r, "SRR1", "2026-10-01T10:00:00+00:00", 4.0)
+    set_download_timing(r, "SRR2", "2026-10-01T10:00:00+00:00", 8.0)
+    set_extraction_timing(r, "SRR2", "G2", "2026-10-01T10:00:00+00:00", 1.5)
+    paths = ProjectPaths(fastq=tmp_path / "fastq", targeted=tmp_path / "targeted")
+    report = build_report(r, _status_args(tmp_path), paths, tmp_path / "metaquest_registry.json", True)
+    assert report["timing"] == {
+        "downloads_timed": 2,
+        "download_seconds_total": 12.0,
+        "download_seconds_median": 6.0,
+        "extractions_timed": 1,
+        "extraction_seconds_total": 1.5,
+        "extraction_seconds_median": 1.5,
+        "assemblies_timed": 0,
+        "assembly_seconds_total": 0.0,
+        "assembly_seconds_median": None,
+    }
+
+
+def test_status_json_and_text_report_timing(tmp_path, capsys):
+    _timed_project(tmp_path)
+    capsys.readouterr()
+    StatusCommand().execute(_status_args(tmp_path))
+    timing = json.loads(capsys.readouterr().out)["timing"]
+    assert (timing["downloads_timed"], timing["download_seconds_total"], timing["download_seconds_median"]) == (
+        2,
+        40.0,
+        20.0,
+    )
+    assert (timing["extractions_timed"], timing["assemblies_timed"]) == (1, 1)
+    StatusCommand().execute(_status_args(tmp_path, json=False))
+    out = capsys.readouterr().out
+    assert (
+        "  timing     : downloads 2 (40.0 s in total, median 20.0 s), extractions 1 (2.5 s in total, "
+        "median 2.5 s), assemblies 1 (45.0 s in total, median 45.0 s)"
+    ) in out.splitlines()
+
+
+def test_text_report_has_no_timing_line_without_timing(tmp_path, capsys):
+    _project_tree(tmp_path)
+    StatusCommand().execute(_status_args(tmp_path, init=True))
+    capsys.readouterr()
+    StatusCommand().execute(_status_args(tmp_path, json=False))
+    assert "timing" not in capsys.readouterr().out
+
+
+def test_export_tsv_carries_the_timing_columns(tmp_path, capsys):
+    import pandas as pd
+
+    _timed_project(tmp_path)
+    prefix = tmp_path / "registry"
+    StatusCommand().execute(_status_args(tmp_path, export_tsv=str(prefix)))
+    datasets = pd.read_csv(f"{prefix}_datasets.tsv", sep="\t", index_col=0)
+    extractions = pd.read_csv(f"{prefix}_extractions.tsv", sep="\t")
+    assert datasets.loc["SRR1", "download_seconds"] == 10.0 and datasets.loc["SRR2", "download_seconds"] == 30.0
+    row = extractions.set_index("accession").loc["SRR1"]
+    assert (row["extraction_seconds"], row["assembly_seconds"]) == (2.5, 45.0)
