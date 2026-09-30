@@ -11,7 +11,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - Process-level concurrency tests (`tests/test_concurrency_processes.py`, `tests/helpers_processes.py`):
   spawn the real CLI as a subprocess with fake tools on `PATH` and exercise same-accession contention for
   a plain project and for a store, registry contention during a download, two `SIGTERM`s during a
-  download, a `SIGKILL`ed lock holder, and `store_gc` against a dataset another run is downloading.
+  download, a tool that ignores `SIGTERM`, a `SIGKILL`ed lock holder, and `store_gc` against a dataset
+  another run is downloading.
 - An atomic-writes gate in `make check` (`scripts/check_atomic_writes.sh`): fails on a direct
   `.write_text`, `.write_bytes`, `.to_csv`, `copy2`, `copyfile`, `write_html` or `savefig` call, or an
   `open(path, "w...")`/`"x..."`, `path.open("w...")` or `open(path, mode)` call, outside the small allowlist
@@ -186,7 +187,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ### Testing
 
-- `make test`: 2655 passed, 4 deselected, 95% coverage (was 2449 passed at 0.5.1).
+- `make test`: 2704 passed, 4 deselected, 95% coverage (was 2449 passed at 0.5.1); the same 2704 pass
+  with no bioinformatics tool on `PATH`.
 - `make check` and `make pipeline` pass on the final state of the branch.
 
 ### Upgrade notes

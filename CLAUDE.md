@@ -187,9 +187,11 @@ Store discovery rules for agents:
   `registry_update` (`metaquest/data/registry_batch.py`) or a `RegistryBatch`, both of which hold the
   lock only for the write itself.
 - Write every output file through `metaquest/data/file_io.py`'s atomic helpers (`write_text_atomic`,
-  `write_bytes_atomic`, `open_atomic`, `write_csv`, `atomic_path`), never a direct `.write_text`,
-  `.write_bytes`, `.to_csv`, or `open(path, "w...")`; `scripts/check_atomic_writes.sh`, part of
-  `make check`, enforces this outside the small allowlist in `scripts/atomic_writes_allowlist.txt`.
+  `write_bytes_atomic`, `open_atomic`, `write_csv`, `atomic_path`, `copy_file`), never a direct
+  `.write_text`, `.write_bytes`, `.to_csv`, `shutil.copy2`/`copyfile`, or `open(path, "w..."/"x...")`;
+  `scripts/check_atomic_writes.sh`, part of `make check`, enforces this outside the small allowlist in
+  `scripts/atomic_writes_allowlist.txt` (figure writers, `savefig` and plotly `write_html`, are listed
+  there: a figure is regenerable and overwritten whole).
 - A command that runs external tools on its own worker threads (not the main thread) must pass its
   `Termination.stop` (from `args._termination`, set by `BaseCommand.run`) down to every
   `SecureSubprocess.run_secure` call as `stop=`, the same way the download workers do, or an interrupt

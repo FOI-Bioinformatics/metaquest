@@ -189,6 +189,12 @@ Three `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `pol
 | Catalogue | 120 s | 60 s | 5 s |
 | Dataset | 600 s | see below | 10 s |
 
+The registry's wait is shorter than its stale window on purpose, and the consequence is visible: a
+registry lock orphaned by a holder killed on another host (or in another pid namespace, where it cannot
+be judged dead) blocks every registry writer for about 120 s, until the lock goes stale, while each
+waiter gives up after its own 30 s and reports the registry as locked. A retry after the 120 s succeeds.
+A holder that died on the same host is taken over at once.
+
 The registry policy covers `<registry>.lock`; the catalogue policy covers
 `<store>/catalog.sqlite.lock`; the dataset policy covers four lock files: a store dataset lock
 (`<store>/locks/<ACCESSION>.lock`), a plain project's per-accession download lock
