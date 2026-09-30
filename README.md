@@ -675,7 +675,7 @@ It receives every line at INFO or above, also when the console is quiet, and DEB
 console is at DEBUG. Each line names the host and process ID that wrote it:
 
 ```
-2026-09-30 14:02:11 node17[48213] INFO metaquest.cli.main: ...
+2026-09-30 14:02:11 node17[48213] WARNING metaquest.data.sra.retry: Failed to download SRR1234567: ...
 ```
 
 When a command fails, the console shows the error on one line and the log file keeps the full
@@ -683,6 +683,19 @@ traceback; without a log file, rerun with `--log-level DEBUG` (or `-v`) to see i
 logs the MetaQuest version, its command line (with the `--api-key` value hidden), the host, the process
 ID and, under SLURM, `SLURM_JOB_ID` and `SLURM_ARRAY_TASK_ID`. `METAQUEST_LOG_HOST=true` (or
 `log_host = true` in `[runtime]`) puts the host and process ID on console lines too.
+
+`download_sra` and `download_metadata` log a progress summary every `--progress-every` items (50 by
+default) and at least every 5 minutes while items are finishing, then one closing line with the totals
+and the time taken:
+
+```
+download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left
+download_sra: finished 2000/2000 (1990 ok, 10 failed) in 10 h 45 min
+```
+
+The line for each accession is logged at DEBUG; `--progress-every 0` turns the summaries off and logs
+one INFO line per accession instead. Warnings and errors about an accession are logged at their own
+level either way.
 
 ### SRA Quality Profiling
 

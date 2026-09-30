@@ -12,12 +12,19 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   cannot be combined and override `--log-level`. At DEBUG a run logs the version, its command line (the
   `--api-key` value hidden), host, process ID and SLURM job and array task IDs. See "Logging" in the
   README.
+- Progress summaries for `download_sra` and `download_metadata`: one line every `--progress-every N`
+  items (default 50; also `METAQUEST_PROGRESS_EVERY` or `progress_every` in `[runtime]`) and at least every
+  5 minutes, such as `download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left`,
+  and a closing line with the totals and the time taken.
 
 ### Changed
 
 - A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to
   the log file when there is one. The hint "Use --log-level DEBUG for full traceback" is shown only when
   there is no log file.
+- The per-accession INFO lines of `download_sra` (a download that succeeded, a retry that succeeded) and
+  of `download_metadata` (each NCBI request) are now logged at DEBUG, replaced at INFO by the progress
+  summaries. `--progress-every 0` logs them at INFO again.
 - Exit codes: 3 for a configuration problem (`ConfigurationError`: a missing optional package or NCBI
   email address, a malformed `config.toml`), 4 for a retryable failure (an NCBI request that could not
   connect, timed out or got HTTP 429 or 5xx; a wait for the registry or catalogue lock that reached its
@@ -26,6 +33,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ### Upgrade notes
 
+- A script that searched the INFO log of `download_sra` or `download_metadata` for one line per
+  accession no longer finds those lines: run with `--progress-every 0` to keep them at INFO, or with
+  `--log-level DEBUG`. Warnings and errors naming an accession are unchanged.
 - A script that treated every non-zero exit as the same failure keeps working. A script that tested for
   exactly 1 should also accept 3 and 4; 4 means the same command may succeed if run again later.
 

@@ -20,9 +20,11 @@ from Bio import Entrez
 from lxml import etree
 from urllib.error import HTTPError, URLError
 
+from metaquest.core import settings
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import ensure_directory, list_files, write_csv, write_text_atomic
+from metaquest.utils.progress import ProgressReporter, item_level
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +214,7 @@ def _download_single_metadata(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             _pace_requests(api_key)
-            logger.info(f"Downloading metadata for {accession}")
+            logger.log(item_level(settings.active().progress_every), f"Downloading metadata for {accession}")
             with _entrez_credentials(entrez_email, api_key):
                 handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
                 try:
@@ -348,7 +350,9 @@ def _download_batch_metadata(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             _pace_requests(api_key)
-            logger.info(f"Downloading metadata for {len(batch)} accession(s)")
+            logger.log(
+                item_level(settings.active().progress_every), f"Downloading metadata for {len(batch)} accession(s)"
+            )
             with _entrez_credentials(email, api_key):
                 handle = Entrez.efetch(db="sra", id=id_string, retmode="xml")
                 try:
@@ -414,11 +418,16 @@ def _download_accessions_metadata(
     result_files: Dict[str, Path] = {}
     failures: Dict[str, str] = {}
     batches = [accessions_to_download[i : i + batch_size] for i in range(0, len(accessions_to_download), batch_size)]
+    progress = ProgressReporter(
+        "download_metadata", len(accessions_to_download), settings.active().progress_every, logger=logger
+    )
 
     for batch in batches:
         batch_successes, batch_failures = _download_batch_metadata(batch, metadata_path, email, api_key)
         result_files.update(batch_successes)
         failures.update(batch_failures)
+        progress.update_counts(len(batch_successes), len(batch_failures))
+    progress.finish()
 
     logger.info(f"Fetched {len(batches)} batches: {len(result_files)} metadata files, {len(failures)} failures")
     for accession, reason in failures.items():

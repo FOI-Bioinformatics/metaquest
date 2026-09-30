@@ -9,10 +9,12 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from metaquest.core import settings
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.sra import accession as accession_mod
+from metaquest.utils.progress import ProgressReporter, item_level
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,17 @@ logger = logging.getLogger(__name__)
 # FASTQ reading failures as OSError, EOFError, ValueError or (a corrupt gzip stream)
 # zlib.error. Anything else is a programming error and propagates.
 _DOWNLOAD_ERRORS = (MetaQuestError, OSError, EOFError, ValueError, zlib.error, subprocess.SubprocessError)
+
+# The first word of every progress line, so a shared log file can be searched for one command's progress.
+PROGRESS_LABEL = "download_sra"
+
+
+def _progress_reporter(total: int) -> ProgressReporter:
+    """A reporter over ``total`` downloads, at the interval of the ``progress_every`` setting.
+
+    ``--progress-every`` reaches this through the runtime settings ``main()`` activates.
+    """
+    return ProgressReporter(PROGRESS_LABEL, total, settings.active().progress_every, logger=logger)
 
 
 def _process_download_results(futures_results, accessions_to_download, download_results, failed_accessions):
@@ -136,6 +149,7 @@ def _retry_failed_downloads(
         return 0, failed_accessions, None
 
     logger.info(f"Retrying {len(failed_accessions)} failed downloads")
+    retry_line_level = item_level(settings.active().progress_every)
     retry_count = 0
     retried_successful = 0
     expected_spots = expected_spots or {}
@@ -182,7 +196,7 @@ def _retry_failed_downloads(
 
             if success:
                 retried_successful += 1
-                logger.info(f"Successfully downloaded {accession} on retry {retry + 1}")
+                logger.log(retry_line_level, f"Successfully downloaded {accession} on retry {retry + 1}")
                 accession_mod._notify_result(on_result, accession, success, download_results[accession])
                 continue
 
@@ -287,6 +301,7 @@ def _execute_parallel_downloads(
                 ): acc
                 for acc in accessions
             }
+            progress = _progress_reporter(len(futures))
             for future in as_completed(futures):
                 acc = futures[future]
                 try:
@@ -295,11 +310,15 @@ def _execute_parallel_downloads(
                     logger.error(f"Download failed for {acc}: {e}")
                     futures_results.append((acc, None))
                     accession_mod._notify_result(on_result, acc, False, str(e))
+                    progress.update(ok=False)
                     continue
 
                 futures_results.append((acc, result))
                 success, message = result
+                if success:
+                    logger.log(progress.item_level, "%s: %s", acc, message)
                 accession_mod._notify_result(on_result, acc, success, message)
+                progress.update(ok=bool(success))
         except KeyboardInterrupt:
             stop.set()
             logger.warning("Interrupted; cancelling pending downloads and stopping running tools")
@@ -307,6 +326,7 @@ def _execute_parallel_downloads(
             SecureSubprocess.terminate_children(stop=stop)
             raise
 
+    progress.finish()
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
 
 
