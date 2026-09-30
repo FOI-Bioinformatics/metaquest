@@ -152,8 +152,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   under their final names, which `status --reconcile` and `status --init` then recorded as a finished
   extraction, so the next `extract_target_reads` skipped the sample. The export now writes into a
   dot-prefixed folder inside the sample's output folder, and each file is renamed into place only once
-  the sample is complete. A rerun that writes fewer files than an earlier run also removes the earlier
-  run's other FASTQ files for that genome.
+  the sample is complete. The names published are recorded in a hidden `.<GENOME_ID>.extracted.json`
+  beside them; a rerun that writes fewer files removes only the files that genome's previous run
+  recorded, never a file another genome's record lists (a genome called `G1_1` next to a paired `G1`),
+  and nothing beyond the files it overwrites in a folder written by an earlier version.
 - A run that waited for another run's download of the same accession and then found the files counted
   a download attempt and replaced the other run's result message with "already exists"; it now records
   no attempt and leaves an existing record as it was.
@@ -187,7 +189,7 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ### Testing
 
-- `make test`: 2704 passed, 4 deselected, 95% coverage (was 2449 passed at 0.5.1); the same 2704 pass
+- `make test`: 2707 passed, 4 deselected, 95% coverage (was 2449 passed at 0.5.1); the same 2707 pass
   with no bioinformatics tool on `PATH`.
 - `make check` and `make pipeline` pass on the final state of the branch.
 

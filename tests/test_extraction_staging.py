@@ -16,15 +16,16 @@ from helpers_extraction import _fake_tools
 READ = "@r1\nACGT\n+\nIIII\n"
 
 
-def _extract(tmp_path: Path, out_dir: Path, state):
+def _extract(tmp_path: Path, out_dir: Path, state, genome_id="GCF_1", paired=True):
+    reads = [tmp_path / "SRR1_1.fastq.gz", tmp_path / "SRR1_2.fastq.gz"] if paired else [tmp_path / "SRR1.fastq.gz"]
     with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
         return _map_and_extract(
             accession="SRR1",
-            reads=[tmp_path / "SRR1_1.fastq.gz", tmp_path / "SRR1_2.fastq.gz"],
+            reads=reads,
             reference=tmp_path / "ref.mmi",
             genome_fasta=tmp_path / "genome.fna",
             out_dir=out_dir,
-            genome_id="GCF_1",
+            genome_id=genome_id,
             preset="sr",
             threads=1,
         )
@@ -55,8 +56,8 @@ class TestCompleteSample:
         for path in result.files:
             with gzip.open(path, "rt") as handle:
                 assert handle.read() == READ
-        # Nothing staged is left behind.
-        assert [p.name for p in out_dir.iterdir() if p.name.startswith(".")] == []
+        # Nothing staged is left behind; only the record of what was published is hidden there.
+        assert [p.name for p in out_dir.iterdir() if p.name.startswith(".")] == [".GCF_1.extracted.json"]
 
     def test_a_rerun_that_writes_fewer_files_removes_the_older_ones(self, tmp_path):
         out_dir = tmp_path / "targeted" / "SRR1"
@@ -70,6 +71,44 @@ class TestCompleteSample:
         assert result.files == [out_dir / "GCF_1_0.fastq.gz"]
         names = sorted(p.name for p in visible_files(out_dir, "*.fastq.gz"))
         assert names == ["GCF_1_0.fastq.gz"]
+
+
+class TestRerunCleanupStaysWithinTheGenome:
+    """Genome ids can look like another genome's mate names (``G1`` paired writes ``G1_1.fastq.gz``)."""
+
+    def test_a_single_end_rerun_of_g1_leaves_the_files_of_genome_g1_1(self, tmp_path):
+        out_dir = tmp_path / "targeted" / "SRR1"
+        other = _extract(tmp_path, out_dir, {"nonempty": ("-0",)}, genome_id="G1_1", paired=False)
+        assert other.files == [out_dir / "G1_1.fastq.gz"]
+        _extract(tmp_path, out_dir, {"nonempty": ("-0",)}, genome_id="G1", paired=False)
+
+        result = _extract(tmp_path, out_dir, {"nonempty": ("-0",)}, genome_id="G1", paired=False)
+
+        assert result.files == [out_dir / "G1.fastq.gz"]
+        with gzip.open(out_dir / "G1_1.fastq.gz", "rt") as handle:
+            assert handle.read() == READ
+        names = sorted(p.name for p in visible_files(out_dir, "*.fastq.gz"))
+        assert names == ["G1.fastq.gz", "G1_1.fastq.gz"]
+
+    def test_a_paired_rerun_of_g1_replaces_its_own_single_end_file(self, tmp_path):
+        out_dir = tmp_path / "targeted" / "SRR1"
+        _extract(tmp_path, out_dir, {"nonempty": ("-0",)}, genome_id="G1", paired=False)
+        assert (out_dir / "G1.fastq.gz").is_file()
+
+        result = _extract(tmp_path, out_dir, {}, genome_id="G1")
+
+        assert result.files == [out_dir / "G1_1.fastq.gz", out_dir / "G1_2.fastq.gz"]
+        names = sorted(p.name for p in visible_files(out_dir, "*.fastq.gz"))
+        assert names == ["G1_1.fastq.gz", "G1_2.fastq.gz"]
+
+    def test_a_folder_without_records_loses_nothing_but_overwritten_names(self, tmp_path):
+        out_dir = tmp_path / "targeted" / "SRR1"
+        out_dir.mkdir(parents=True)
+        (out_dir / "G1_s.fastq.gz").write_bytes(b"written before 0.6.0")
+
+        _extract(tmp_path, out_dir, {}, genome_id="G1")
+
+        assert (out_dir / "G1_s.fastq.gz").read_bytes() == b"written before 0.6.0"
 
 
 class TestInterruptedSample:
@@ -125,4 +164,5 @@ class TestPublishStaged:
                 path.write_bytes(b"x")
             published = publish_staged(staging, staged, out_dir, "G")
         assert published == [out_dir / "G_1.fastq.gz", out_dir / "G_2.fastq.gz"]
-        assert sorted(p.name for p in out_dir.iterdir()) == ["G_1.fastq.gz", "G_2.fastq.gz"]
+        assert sorted(p.name for p in visible_files(out_dir)) == ["G_1.fastq.gz", "G_2.fastq.gz"]
+        assert sorted(p.name for p in out_dir.iterdir()) == [".G.extracted.json", "G_1.fastq.gz", "G_2.fastq.gz"]
