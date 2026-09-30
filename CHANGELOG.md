@@ -128,8 +128,11 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ### Fixed
 
-- `sra_info` exits with 4, not 1, when NCBI cannot be reached after retries: its `except Exception`
-  used to catch and flatten every failure, including a retryable `NetworkError`, into exit code 1.
+- `sra_info` exits with 4, not 1, when NCBI cannot be reached after retries. Two faults hid this: its
+  `except Exception` turned every failure, including a retryable `NetworkError`, into exit code 1; and
+  `SRAMetadataClient.get_sra_metadata` caught `NetworkError` per batch (it is a `DataAccessError`),
+  logged it and returned the partial results, so the error never reached the command. It now re-raises
+  `NetworkError` before its per-batch handling.
 - megahit under cgroups (a SLURM job, a container) sized its memory from the node's total, not from the
   job's limit, and could be killed for exceeding it; `--assembly-memory auto` now passes the job's limit.
 - A disk that filled up during the first download pass did not stop it: every remaining accession was
