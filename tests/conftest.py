@@ -26,6 +26,9 @@ def isolate_runtime_settings(monkeypatch):
         if variable.startswith(settings.ENV_PREFIX) and variable not in _KEPT_METAQUEST_VARIABLES:
             monkeypatch.delenv(variable, raising=False)
     monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    # The download free-space guard reads the host's real free space; a test that wants it sets
+    # --min-free-gb (or deletes this variable) itself, so no result depends on the machine's disk.
+    monkeypatch.setenv(settings.SETTINGS["min_free_gb"].env, "0")
     settings.reset_for_tests()
     yield
     settings.reset_for_tests()

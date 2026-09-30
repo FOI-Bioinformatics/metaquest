@@ -470,7 +470,12 @@ WARNING naming every dangling link found, rather than failing silently for each 
 
 On macOS the assembly defaults to a single thread, because megahit 1.2.9's parallel k-mer sorting step
 is unstable on recent macOS releases (mapping with minimap2/samtools still uses `--threads`). Override
-the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more. A
+the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
+`--assembly-memory` sets megahit's `--memory`: `auto` (the default; also `METAQUEST_ASSEMBLY_MEMORY` or
+`assembly_memory` in `[runtime]`) gives 90% of the memory limit detected for the job (a cgroup limit, or
+`SLURM_MEM_PER_NODE`) and leaves megahit's own default when no limit is found, as on macOS; a size such
+as `32G` or `32000M` is passed in bytes; a fraction such as `0.5` is passed as it is, and megahit applies
+it to the whole node's memory, so under a scheduler give a size instead. A
 megahit failure is reported with the tool's own error message (the last few lines of its stderr), not
 just the exit code. megahit needs FIFOs for its scratch files, which some filesystems do not provide
 (ExFAT, some network shares); `--temp-folder DIR` points megahit's scratch elsewhere, at a local POSIX
@@ -597,6 +602,25 @@ minimap2, samtools or megahit) is allowed to run before it is stopped; the defau
 retries it and, if every accession that failed did so for that reason, exits with status 4 (see "Exit
 codes" below). A `--version` probe used to record a tool's version always uses a fixed 30-second
 timeout, regardless of this setting.
+
+`--max-workers N` sets how many accessions download at once. Without it the number is the CPUs
+available to this job (the CPU affinity mask, which reflects a SLURM allocation, else
+`SLURM_CPUS_PER_TASK`, else the machine's CPU count) divided by `--num-threads`, at least 1 and at most
+4, since downloads are limited by the network more than by CPUs; `METAQUEST_MAX_WORKERS_CAP` (or
+`max_workers_cap` in `[runtime]`) changes that cap.
+
+Before each accession starts, `download_sra` checks that the filesystems it writes to have room for it:
+the FASTQ folder (or the store's `tmp` folder), the `fasterq-dump` temporary folder and, with prefetch,
+the `.sra` cache. An accession whose run size is in the registry (from `download_metadata`) needs about
+8 times that size for its uncompressed FASTQ files and again for the temporary files, plus the size
+itself for the cache; locations on one filesystem add up, and downloads already running are counted.
+An accession of unknown size needs `--min-free-gb` (default 10; also `METAQUEST_MIN_FREE_GB` or
+`min_free_gb` in `[runtime]`) on each filesystem. A download that does not fit is not started and is
+recorded as failed with a `disk-full: insufficient free space on ...` message; as with a disk that
+fills up during a download, the downloads not yet started are then recorded as
+`disk-full: not attempted`, the running ones finish, no retry pass runs, and the command exits with
+status 1. `--min-free-gb 0` turns the check off. A filesystem whose free space cannot be read is
+assumed to have room.
 
 On a real run, `download_sra` also honours the project registry: accessions excluded with
 `blacklist` are skipped automatically, without needing `--blacklist blacklist.txt` on every call

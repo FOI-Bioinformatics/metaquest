@@ -1003,6 +1003,8 @@ class TestDownloadSraCommand:
             "keep_sra": False,
             "compress": True,
             "lock_wait": 0.0,
+            "run_sizes": {},
+            "min_free_gb": 0.0,  # METAQUEST_MIN_FREE_GB=0 from conftest
         }
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
@@ -1077,7 +1079,7 @@ class TestDownloadSraCommand:
             data_root=None,
         )
 
-        with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=8):
+        with patch("metaquest.utils.resources.available_cpus", return_value=8):
             result = command.execute(args)
 
         assert result == 0
@@ -1113,7 +1115,7 @@ class TestDownloadSraCommand:
             data_root=None,
         )
 
-        with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=4):
+        with patch("metaquest.utils.resources.available_cpus", return_value=4):
             with caplog.at_level("WARNING"):
                 result = command.execute(args)
 
@@ -1152,7 +1154,7 @@ class TestDownloadSraCommand:
 
         # One worker is already the floor of the derived default, so on a 2-CPU machine a
         # single 4-thread download oversubscribes and there is nothing the user could change.
-        with patch("metaquest.cli.commands.sra.os.cpu_count", return_value=2):
+        with patch("metaquest.utils.resources.available_cpus", return_value=2):
             with caplog.at_level("WARNING"):
                 result = command.execute(args)
 

@@ -16,6 +16,22 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   items (default 50; also `METAQUEST_PROGRESS_EVERY` or `progress_every` in `[runtime]`) and at least every
   5 minutes, such as `download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left`,
   and a closing line with the totals and the time taken.
+- Free-space check for `download_sra`: before each accession starts, the filesystems it writes to (FASTQ
+  or store `tmp` folder, `fasterq-dump` temporary folder, `.sra` cache) must have room for it, counting
+  the downloads already running. An accession with a registry run size needs 8 times that size for its
+  FASTQ files and again for the temporary files, plus the size for the cache; the factor comes from
+  seven runs of the crispatus test store, whose uncompressed FASTQ was 6.98 to 7.73 times the `.sra`
+  size (gzip-compressed: 1.49 to 1.66 times). An accession of unknown size needs `--min-free-gb` (default
+  10; `METAQUEST_MIN_FREE_GB`, `[runtime] min_free_gb`); 0 turns the check off. A download that does not
+  fit is not started and fails with `disk-full: insufficient free space on <mount>: ...`.
+- `--assembly-memory` on `extract_target_reads` (also `METAQUEST_ASSEMBLY_MEMORY`, `[runtime]
+  assembly_memory`): `auto`, the default, passes megahit `--memory` as 90% of the memory limit detected
+  for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE`) and omits it when none is found; a size such as
+  `32G` is passed in bytes; a fraction is passed as it is and applies to the node's whole memory.
+- The default number of parallel downloads is the CPUs available to the job (the affinity mask, which a
+  SLURM cpuset limits, else `SLURM_CPUS_PER_TASK`, else the CPU count) divided by `--num-threads`, at
+  most 4; `METAQUEST_MAX_WORKERS_CAP` (or `[runtime] max_workers_cap`) changes the cap, which the
+  `--max-workers` help now names. `seqkit stats` in the store statistics uses at most as many threads.
 
 ### Changed
 
@@ -37,6 +53,15 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `extract_target_reads` (also `METAQUEST_TIMEOUT` or `[runtime] timeout` in `config.toml`) now sets it;
   0, the default, means no limit. A `--version` probe always uses a fixed 30-second timeout regardless of
   this setting, so a hung tool cannot stall version detection.
+
+### Fixed
+
+- megahit under cgroups (a SLURM job, a container) sized its memory from the node's total, not from the
+  job's limit, and could be killed for exceeding it; `--assembly-memory auto` now passes the job's limit.
+- A disk that filled up during the first download pass did not stop it: every remaining accession was
+  still started and failed in turn, and the retry pass tried again. The first disk-full result now
+  cancels the downloads not yet started (recorded as `disk-full: not attempted`, as the retry pass
+  already did), lets the running ones finish, and skips the retry pass.
 
 ### Upgrade notes
 

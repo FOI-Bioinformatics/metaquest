@@ -88,7 +88,8 @@ def test_boolean_from_environment_and_native_toml(tmp_path, monkeypatch):
     assert settings.resolve_setting("log_host").value is False
 
 
-def test_every_default_is_the_documented_one():
+def test_every_default_is_the_documented_one(monkeypatch):
+    monkeypatch.delenv("METAQUEST_MIN_FREE_GB")  # set to 0 by conftest for every other test
     values = {name: resolved.value for name, resolved in settings.resolve_all().items()}
     assert values["subprocess_timeout"] == 0.0
     assert values["max_workers_cap"] == 4
@@ -163,6 +164,14 @@ def test_config_value_of_the_wrong_type_is_refused(tmp_path):
 def test_assembly_memory_accepts_documented_forms(monkeypatch, value):
     monkeypatch.setenv("METAQUEST_ASSEMBLY_MEMORY", value)
     assert settings.resolve_setting("assembly_memory").value == value
+
+
+@pytest.mark.parametrize("value", ["2.5", "0", "lots", "-1G"])
+def test_assembly_memory_rejects_other_forms(monkeypatch, value):
+    # "2.5" is neither a fraction (at most 1) nor a whole number of bytes.
+    monkeypatch.setenv("METAQUEST_ASSEMBLY_MEMORY", value)
+    with pytest.raises(ConfigurationError, match="METAQUEST_ASSEMBLY_MEMORY"):
+        settings.resolve_setting("assembly_memory")
 
 
 def test_heartbeat_not_below_the_stale_limit_is_refused(monkeypatch):

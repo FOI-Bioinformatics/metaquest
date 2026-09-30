@@ -5,9 +5,10 @@ import subprocess
 import threading
 import time
 import zlib
-from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from metaquest.core import settings
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
@@ -16,6 +17,9 @@ from metaquest.data.file_io import write_text_atomic
 from metaquest.data.sra import accession as accession_mod
 from metaquest.utils.progress import ProgressReporter, item_level
 from metaquest.utils.security import SecureSubprocess
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from metaquest.data.sra.space import SpaceGuard
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,46 @@ _DOWNLOAD_ERRORS = (MetaQuestError, OSError, EOFError, ValueError, zlib.error, s
 
 # The first word of every progress line, so a shared log file can be searched for one command's progress.
 PROGRESS_LABEL = "download_sra"
+
+
+# The message recorded for an accession a disk-full abort kept from starting, in either pass.
+DISK_FULL_NOT_ATTEMPTED = "disk-full: not attempted"
+
+# Per-accession timing of the last download attempt: (start as ISO 8601 UTC, seconds taken).
+Timings = Dict[str, Tuple[str, float]]
+
+
+def _instrumented(
+    worker: Callable[..., Tuple[bool, str]], guard: Optional["SpaceGuard"], timings: Optional[Timings]
+) -> Callable[..., Tuple[bool, str]]:
+    """``worker`` with a free-space check before it starts and its run time recorded.
+
+    Both download passes call the returned function in place of ``worker``, with the same
+    arguments. Before the worker starts, ``guard.reserve`` must find room for the accession;
+    when it does not, the worker is not called and ``(False, <disk-full message>)`` is returned.
+    The reservation is released when the worker returns or raises. Each call the worker makes
+    is timed into ``timings[accession] = (started, seconds)``, written in the worker thread
+    before the result reaches the main thread's ``on_result``, so a later attempt overwrites an
+    earlier one. ``guard`` or ``timings`` may be None to skip that part.
+    """
+
+    def _run(accession: str, *args: Any, **kwargs: Any) -> Tuple[bool, str]:
+        if guard is not None:
+            refusal = guard.reserve(accession)
+            if refusal is not None:
+                logger.error("Not starting %s: %s", accession, refusal)
+                return False, refusal
+        started = datetime.now(timezone.utc)
+        clock = time.monotonic()
+        try:
+            return worker(accession, *args, **kwargs)
+        finally:
+            if timings is not None:
+                timings[accession] = (started.isoformat(timespec="seconds"), round(time.monotonic() - clock, 3))
+            if guard is not None:
+                guard.release(accession)
+
+    return _run
 
 
 def _progress_reporter(total: int) -> ProgressReporter:
@@ -208,7 +252,7 @@ def _retry_failed_downloads(
                 abort_reason = "disk-full"
                 logger.error(f"Disk full while downloading {accession}; aborting remaining retries")
                 for not_attempted in retry_batch[index + 1 :]:
-                    download_results[not_attempted] = "disk-full: not attempted"
+                    download_results[not_attempted] = DISK_FULL_NOT_ATTEMPTED
                     failed_accessions.append(not_attempted)
                     accession_mod._notify_result(on_result, not_attempted, False, download_results[not_attempted])
                 break
@@ -275,11 +319,21 @@ def _execute_parallel_downloads(
     Other runs in the process are not affected. The process-wide ``STOP`` and
     ``SecureSubprocess``'s stopping flag are left as they are: a run neither sets nor clears
     them, so an emergency stop set before the run still applies to it.
+
+    The first result classified as disk-full (a tool that ran out of space, or the free-space
+    guard refusing to start one) cancels every download not yet started: each is recorded as
+    failed with ``"disk-full: not attempted"`` and notified at once, while downloads already
+    running finish. The stop token is not used for this, so running tools are not stopped.
+
+    Returns (successful, failed, abort_reason), ``abort_reason`` being ``"disk-full"`` after
+    such an abort, else None.
     """
     if stop is None:
         stop = threading.Event()
     expected_spots = expected_spots or {}
     futures_results: list = []
+    abort_reason: Optional[str] = None
+    not_attempted: Set[str] = set()
     worker = downloader or accession_mod.download_accession
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         try:
@@ -304,21 +358,17 @@ def _execute_parallel_downloads(
             progress = _progress_reporter(len(futures))
             for future in as_completed(futures):
                 acc = futures[future]
-                try:
-                    result = future.result()
-                except (*_DOWNLOAD_ERRORS, CancelledError) as e:
-                    logger.error(f"Download failed for {acc}: {e}")
-                    futures_results.append((acc, None))
-                    accession_mod._notify_result(on_result, acc, False, str(e))
-                    progress.update(ok=False)
+                if acc in not_attempted:
                     continue
-
-                futures_results.append((acc, result))
-                success, message = result
-                if success:
-                    logger.log(progress.item_level, "%s: %s", acc, message)
-                accession_mod._notify_result(on_result, acc, success, message)
-                progress.update(ok=bool(success))
+                success, message = _collect_result(future, acc, futures_results, on_result, progress)
+                if (
+                    abort_reason is None
+                    and not success
+                    and accession_mod.classify_download_error(message) == "disk-full"
+                ):
+                    abort_reason = "disk-full"
+                    logger.error("Disk full while downloading %s; downloads not yet started are cancelled", acc)
+                    not_attempted = _cancel_pending(futures, futures_results, on_result, progress)
         except KeyboardInterrupt:
             stop.set()
             logger.warning("Interrupted; cancelling pending downloads and stopping running tools")
@@ -327,7 +377,59 @@ def _execute_parallel_downloads(
             raise
 
     progress.finish()
-    return _process_download_results(futures_results, accessions, download_results, failed_accessions)
+    successful, failed = _process_download_results(futures_results, accessions, download_results, failed_accessions)
+    return successful, failed, abort_reason
+
+
+def _collect_result(
+    future: Future,
+    acc: str,
+    futures_results: list,
+    on_result: Optional[Callable[[str, bool, str], None]],
+    progress: ProgressReporter,
+) -> Tuple[bool, str]:
+    """Record one finished download on the main thread: tally entry, callback and progress.
+
+    A worker that raised leaves None in ``futures_results`` (``_process_download_results``
+    counts it as failed) and is reported as ``(False, <error text>)``.
+    """
+    try:
+        result = future.result()
+    except (*_DOWNLOAD_ERRORS, CancelledError) as e:
+        logger.error(f"Download failed for {acc}: {e}")
+        futures_results.append((acc, None))
+        accession_mod._notify_result(on_result, acc, False, str(e))
+        progress.update(ok=False)
+        return False, str(e)
+
+    futures_results.append((acc, result))
+    success, message = result
+    if success:
+        logger.log(progress.item_level, "%s: %s", acc, message)
+    accession_mod._notify_result(on_result, acc, success, message)
+    progress.update(ok=bool(success))
+    return bool(success), message
+
+
+def _cancel_pending(
+    futures: Dict[Future, str],
+    futures_results: list,
+    on_result: Optional[Callable[[str, bool, str], None]],
+    progress: ProgressReporter,
+) -> Set[str]:
+    """Cancel every download not yet started; record and notify each as ``"disk-full: not attempted"``.
+
+    Returns the accessions cancelled, whose futures ``as_completed`` still yields later and the
+    caller skips. A download already running cannot be cancelled and reports its own result.
+    """
+    cancelled: Set[str] = set()
+    for future, acc in futures.items():
+        if future.cancel():
+            cancelled.add(acc)
+            futures_results.append((acc, (False, DISK_FULL_NOT_ATTEMPTED)))
+            accession_mod._notify_result(on_result, acc, False, DISK_FULL_NOT_ATTEMPTED)
+            progress.update(ok=False)
+    return cancelled
 
 
 def _download_with_retries(
@@ -347,20 +449,28 @@ def _download_with_retries(
     compress: bool = True,
     downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
     stop: Optional[threading.Event] = None,
+    guard: Optional["SpaceGuard"] = None,
+    timings: Optional[Timings] = None,
 ) -> Tuple[int, int, List[str], Dict[str, Any], Optional[str]]:
     """Run the parallel downloads and optional retry pass.
 
-    ``stop`` is the run's stop token (a new one when None), shared by both passes.
+    ``stop`` is the run's stop token (a new one when None), shared by both passes. The worker
+    (``downloader``, or ``download_accession``) is wrapped once by ``_instrumented`` and both
+    passes call the wrapped one: ``guard`` (a ``SpaceGuard``, or None for no free-space check)
+    is asked for room before every attempt, and ``timings`` (when given) receives each
+    accession's start time and duration.
+
     Returns (successful_count, failed_count, failed_accessions, download_results, abort_reason).
-    ``abort_reason`` is ``"disk-full"`` when a retry hit a disk-full error (see
-    ``_retry_failed_downloads``), else ``None``.
+    ``abort_reason`` is ``"disk-full"`` when either pass hit a disk-full error (see
+    ``_execute_parallel_downloads`` and ``_retry_failed_downloads``), else ``None``; after a
+    first-pass abort no retry pass runs.
     """
     if stop is None:
         stop = threading.Event()
     failed_accessions: list = []
     download_results: dict = {}
-    abort_reason: Optional[str] = None
-    successful_count, failed_count = _execute_parallel_downloads(
+    worker = _instrumented(downloader or accession_mod.download_accession, guard, timings)
+    successful_count, failed_count, abort_reason = _execute_parallel_downloads(
         accessions_to_download,
         fastq_path,
         num_threads,
@@ -376,11 +486,11 @@ def _download_with_retries(
         use_prefetch,
         keep_sra,
         compress,
-        downloader,
+        worker,
         stop=stop,
     )
 
-    if max_retries > 0 and failed_accessions:
+    if max_retries > 0 and failed_accessions and abort_reason is None:
         retried_successful, failed_accessions, abort_reason = _retry_failed_downloads(
             failed_accessions,
             max_retries,
@@ -395,7 +505,7 @@ def _download_with_retries(
             use_prefetch,
             keep_sra,
             compress,
-            downloader,
+            worker,
             stop=stop,
         )
         successful_count += retried_successful

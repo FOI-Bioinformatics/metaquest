@@ -5,7 +5,6 @@ SRA-related CLI commands.
 import argparse
 import csv
 import functools
-import os
 import shutil
 import time
 from typing import Callable, List, Optional, Set, Tuple
@@ -41,6 +40,7 @@ from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import sidecar_completeness
 from metaquest.store.usage import ensure_project_identity, record_usage_many
+from metaquest.utils import resources
 from metaquest.utils.termination import graceful_termination
 
 # Marker the data layer puts in a result message for a dataset this run downloaded and
@@ -115,7 +115,10 @@ class DownloadSraCommand(BaseCommand):
             "--max-workers",
             type=int,
             default=None,
-            help="Number of parallel downloads (default: computed from the CPU count)",
+            help=(
+                "Number of parallel downloads (default: CPUs available to this job / --num-threads, "
+                "at most 4; change the cap with METAQUEST_MAX_WORKERS_CAP)"
+            ),
         )
         parser.add_argument(
             "--dry-run",
@@ -246,6 +249,20 @@ class DownloadSraCommand(BaseCommand):
             help=(
                 "Seconds before prefetch or fasterq-dump is stopped; 0 (the default) means no limit "
                 "(default: METAQUEST_TIMEOUT, config [runtime] timeout, or 0)"
+            ),
+        )
+
+        parser.add_argument(
+            "--min-free-gb",
+            dest="min_free_gb",
+            type=float,
+            default=None,
+            help=(
+                "Free space, in GB, a download of unknown size needs on each filesystem it writes to; "
+                "one with a registry run size needs about 8 times that size for its FASTQ files and "
+                "again for fasterq-dump's temporary files. A download that does not fit is not started, "
+                "and no further downloads start after it. 0 turns the check off "
+                "(default: METAQUEST_MIN_FREE_GB, config [runtime] min_free_gb, or 10)"
             ),
         )
 
@@ -387,11 +404,11 @@ class DownloadSraCommand(BaseCommand):
         """
         explicit = args.max_workers is not None
         max_workers = args.max_workers if explicit else default_max_workers(args.num_threads)
-        cpu_count = os.cpu_count() or 4
+        cpu_count = resources.available_cpus()
         if explicit and max_workers * args.num_threads > cpu_count:
             self.logger.warning(
                 "--max-workers %d x --num-threads %d = %d threads requested, which exceeds "
-                "the %d CPUs detected on this machine; downloads may be slower than expected",
+                "the %d CPUs available to this job; downloads may be slower than expected",
                 max_workers,
                 args.num_threads,
                 max_workers * args.num_threads,
@@ -545,24 +562,28 @@ class DownloadSraCommand(BaseCommand):
         }
 
     @staticmethod
-    def _registry_inputs(args: argparse.Namespace, project_registry: Registry) -> Tuple[set, dict, set]:
-        """The excluded accessions, expected spot counts and truncated accessions the registry holds.
+    def _registry_inputs(args: argparse.Namespace, project_registry: Registry) -> Tuple[set, dict, set, dict]:
+        """The excluded accessions, expected spot counts, truncated accessions and run sizes in the registry.
 
-        All three are empty for a dry run. Expected spot counts are only collected with
+        All four are empty for a dry run. Expected spot counts are only collected with
         ``--verify-downloads`` (the default), and truncated accessions only with
-        ``--redownload-truncated``.
+        ``--redownload-truncated``. Run sizes (NCBI's ``.sra`` size in bytes) feed the
+        free-space guard; an accession without one needs ``--min-free-gb`` instead.
         """
         excluded: set = set()
         expected_spots: dict = {}
         truncated: set = set()
+        run_sizes: dict = {}
         if args.dry_run:
-            return excluded, expected_spots, truncated
+            return excluded, expected_spots, truncated, run_sizes
         excluded = set(query(project_registry, "excluded"))
-        if getattr(args, "verify_downloads", True):
-            for acc in project_registry.datasets:
-                spots = (rb.metadata_block(project_registry, acc) or rb.MetadataBlock()).run_total_spots
-                if spots is not None:
-                    expected_spots[acc] = spots
+        verify = getattr(args, "verify_downloads", True)
+        for acc in project_registry.datasets:
+            metadata = rb.metadata_block(project_registry, acc) or rb.MetadataBlock()
+            if verify and metadata.run_total_spots is not None:
+                expected_spots[acc] = metadata.run_total_spots
+            if metadata.run_size is not None:
+                run_sizes[acc] = metadata.run_size
         if getattr(args, "redownload_truncated", False):
             truncated = {
                 acc
@@ -570,7 +591,7 @@ class DownloadSraCommand(BaseCommand):
                 if (verdict := rb.download_verdict(project_registry, acc)) is not None
                 and verdict.verdict == "truncated"
             }
-        return excluded, expected_spots, truncated
+        return excluded, expected_spots, truncated, run_sizes
 
     def _download_batched(
         self,
@@ -590,7 +611,7 @@ class DownloadSraCommand(BaseCommand):
         still queued have been logged.
         """
         verify_downloads = getattr(args, "verify_downloads", True)
-        excluded, expected_spots, truncated = self._registry_inputs(args, project_registry)
+        excluded, expected_spots, truncated, run_sizes = self._registry_inputs(args, project_registry)
         on_result = None
         batch = registry_batch(args.registry)
         body_done = False
@@ -623,6 +644,8 @@ class DownloadSraCommand(BaseCommand):
                     keep_sra=getattr(args, "keep_sra", False),
                     compress=getattr(args, "compress", True),
                     stop=term.stop,
+                    run_sizes=run_sizes,
+                    min_free_gb=setting_for(args, "min_free_gb"),
                     **self._store_options(args, store, project_registry),
                 )
                 body_done = True

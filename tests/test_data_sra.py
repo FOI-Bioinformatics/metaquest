@@ -1463,19 +1463,24 @@ class TestDefaultMaxWorkers:
     """Test default_max_workers pure helper."""
 
     def test_default_max_workers_scales_with_cpu_and_threads(self, monkeypatch):
-        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setattr("metaquest.utils.resources.available_cpus", lambda: 8)
         assert default_max_workers(4) == 2
 
     def test_default_max_workers_capped_by_default_max_workers_constant(self, monkeypatch):
-        monkeypatch.setattr("os.cpu_count", lambda: 64)
+        monkeypatch.setattr("metaquest.utils.resources.available_cpus", lambda: 64)
         assert default_max_workers(1) == 4
 
     def test_default_max_workers_capped_by_max_concurrent_downloads(self, monkeypatch):
-        monkeypatch.setattr("os.cpu_count", lambda: None)
+        monkeypatch.setattr("metaquest.utils.resources.available_cpus", lambda: 1)
         assert default_max_workers(1) <= 10
 
+    def test_default_max_workers_cap_comes_from_the_setting(self, monkeypatch):
+        monkeypatch.setattr("metaquest.utils.resources.available_cpus", lambda: 64)
+        monkeypatch.setenv("METAQUEST_MAX_WORKERS_CAP", "8")
+        assert default_max_workers(1) == 8
+
     def test_default_max_workers_at_least_one(self, monkeypatch):
-        monkeypatch.setattr("os.cpu_count", lambda: 2)
+        monkeypatch.setattr("metaquest.utils.resources.available_cpus", lambda: 2)
         assert default_max_workers(16) == 1
 
 

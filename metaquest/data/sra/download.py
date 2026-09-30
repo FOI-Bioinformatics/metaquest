@@ -2,18 +2,20 @@
 
 import functools
 import logging
-import os
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
-from metaquest.core.constants import DEFAULT_MAX_WORKERS, MAX_CONCURRENT_DOWNLOADS
+from metaquest.core import settings
+from metaquest.core.constants import MAX_CONCURRENT_DOWNLOADS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import ensure_directory
 from metaquest.data.sra import accession as accession_mod
 from metaquest.data.sra import fastq as fastq_mod
 from metaquest.data.sra import retry as retry_mod
+from metaquest.data.sra import space as space_mod
 from metaquest.data.sra import store_handoff as store_handoff_mod
+from metaquest.utils import resources
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: metaquest.store imports this package
     from metaquest.store.layout import StorePaths
@@ -22,16 +24,19 @@ logger = logging.getLogger(__name__)
 
 
 def default_max_workers(num_threads: int) -> int:
-    """Size the download worker pool from the machine's CPU count and per-download thread use.
+    """Size the download worker pool from the CPUs available to this job and per-download thread use.
 
     Each worker runs its own ``fasterq-dump`` using ``num_threads`` threads, so the pool is
-    sized to roughly saturate the CPU without wildly oversubscribing it: divide the CPU count
-    by the per-download thread count, floor at 1 worker, cap at ``MAX_CONCURRENT_DOWNLOADS``
-    (a hard ceiling regardless of CPU count) and at ``DEFAULT_MAX_WORKERS`` (this project's
-    conservative default).
+    sized to roughly saturate the CPUs without oversubscribing them: divide the CPUs this
+    process may use (``resources.available_cpus``: the affinity mask, a SLURM allocation, or
+    the CPU count) by the per-download thread count, floor at 1 worker, and cap at the
+    ``max_workers_cap`` setting (4 unless ``METAQUEST_MAX_WORKERS_CAP`` or the config file
+    changes it; downloads are limited by the network more than by CPUs) and at
+    ``MAX_CONCURRENT_DOWNLOADS`` (a hard ceiling).
     """
-    cpu_count = os.cpu_count() or 4
-    return min(MAX_CONCURRENT_DOWNLOADS, max(1, cpu_count // max(1, num_threads)), DEFAULT_MAX_WORKERS)
+    cpus = resources.available_cpus()
+    cap = settings.active().max_workers_cap
+    return min(MAX_CONCURRENT_DOWNLOADS, max(1, cpus // max(1, num_threads)), cap)
 
 
 def _read_blacklist_files(blacklist_files):
@@ -166,6 +171,42 @@ def _log_download_run_summary(
         retry_mod._handle_download_failure(fastq_path, failed_accessions)
 
 
+def _space_guard(
+    fastq_path: Path,
+    temp_folder: Optional[Union[str, Path]],
+    sra_cache: Optional[Union[str, Path]],
+    store: Optional["StorePaths"],
+    use_prefetch: bool,
+    run_sizes: Optional[Mapping[str, Any]],
+    min_free_gb: Optional[float],
+    force: bool,
+    accessions: List[str],
+) -> Optional[space_mod.SpaceGuard]:
+    """The free-space guard for this run, or None when ``min_free_gb`` (or its setting) is 0.
+
+    An accession the shared store already holds is linked, not downloaded, so it needs no
+    space (unless ``force`` downloads it again). Logs the preflight warnings.
+    """
+    floor_gb = settings.active().min_free_gb if min_free_gb is None else min_free_gb
+    if not floor_gb or floor_gb <= 0:
+        return None
+    exempt = (
+        {acc for acc in accessions if store_handoff_mod._store_state(store, acc) == "ready"}
+        if store is not None and not force
+        else set()
+    )
+    guard = space_mod.SpaceGuard(
+        space_mod.download_locations(fastq_path, temp_folder, sra_cache, store),
+        int(floor_gb * space_mod.GB),
+        run_sizes or {},
+        use_prefetch,
+        exempt=exempt,
+    )
+    for warning in guard.preflight(accessions):
+        logger.warning(warning)
+    return guard
+
+
 def download_sra(
     fastq_folder: Union[str, Path],
     accessions_file: Union[str, Path],
@@ -193,6 +234,9 @@ def download_sra(
     store_metadata: Optional[Union[str, Path, Sequence[Union[str, Path]]]] = None,
     lock_wait: float = 0.0,
     stop: Optional[threading.Event] = None,
+    run_sizes: Optional[Mapping[str, Any]] = None,
+    min_free_gb: Optional[float] = None,
+    timings: Optional[retry_mod.Timings] = None,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -252,6 +296,13 @@ def download_sra(
             stop=stop)`` also stops those. Either way only this run is affected; another run in
             the same process keeps going. The process-wide ``accession.STOP`` still stops every
             run from starting further tools
+        run_sizes: Per-accession ``.sra`` size in bytes (NCBI's run size, from the registry),
+            used by the free-space guard to estimate what each download needs
+        min_free_gb: Free space, in GB, an accession without a known run size needs on every
+            filesystem a download writes to; 0 turns the free-space guard off; None uses the
+            ``min_free_gb`` setting (``--min-free-gb``, ``METAQUEST_MIN_FREE_GB``, default 10)
+        timings: When given, receives ``accession -> (started, seconds)`` for every download
+            attempt that ran, filled before that attempt's ``on_result`` call
 
     Returns:
         Dictionary with download statistics
@@ -324,6 +375,18 @@ def download_sra(
             truncated=frozenset(truncated_accessions) if truncated_accessions is not None else None,
         )
 
+        guard = _space_guard(
+            fastq_path,
+            temp_folder,
+            sra_cache,
+            store,
+            use_prefetch,
+            run_sizes,
+            min_free_gb,
+            force,
+            accessions_to_download,
+        )
+
         # Download accessions in parallel, with an optional retry pass
         successful_count, failed_count, failed_accessions, download_results, abort_reason = (
             retry_mod._download_with_retries(
@@ -343,6 +406,8 @@ def download_sra(
                 compress,
                 downloader,
                 stop=stop if stop is not None else threading.Event(),
+                guard=guard,
+                timings=timings,
             )
         )
 
