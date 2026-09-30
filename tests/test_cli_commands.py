@@ -414,15 +414,18 @@ class TestDownloadMetadataCommand:
         assert args.api_key is None
         assert args.batch_size == 200
 
-    def test_configure_parser_api_key_defaults_from_environment(self, monkeypatch):
-        """--api-key defaults to the NCBI_API_KEY environment variable."""
+    @patch("metaquest.cli.commands.metadata.download_metadata", return_value={})
+    def test_api_key_defaults_from_environment(self, mock_download, monkeypatch):
+        """Without --api-key, the NCBI_API_KEY environment variable reaches download_metadata."""
         monkeypatch.setenv("NCBI_API_KEY", "env-key")
         command = DownloadMetadataCommand()
         parser = argparse.ArgumentParser()
         command.configure_parser(parser)
 
-        args = parser.parse_args(["--email", "test@example.com"])
-        assert args.api_key == "env-key"
+        args = parser.parse_args(["--email", "test@example.com", "--dry-run"])
+        assert args.api_key is None  # resolved through the runtime settings, not at parse time
+        assert command.execute(args) == 0
+        assert mock_download.call_args.kwargs["api_key"] == "env-key"
 
     def test_configure_parser_with_options(self):
         """Test parser with optional arguments."""

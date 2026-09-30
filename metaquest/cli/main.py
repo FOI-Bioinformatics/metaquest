@@ -12,7 +12,8 @@ from typing import Dict, List, Optional
 
 from metaquest import __version__
 from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, command_registry
-from metaquest.core.exceptions import MetaQuestError
+from metaquest.core import settings
+from metaquest.core.exceptions import ConfigurationError, MetaQuestError
 from metaquest.utils.logging import setup_logging
 
 # Import all command modules to register them
@@ -169,8 +170,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         metavar="LEVEL",
-        default="INFO",
-        help="Set the logging level (one of DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+        default=None,
+        help=(
+            "Set the logging level (one of DEBUG, INFO, WARNING, ERROR, CRITICAL; "
+            "default: METAQUEST_LOG_LEVEL, config [runtime] log_level, or INFO)"
+        ),
     )
 
     command_registry.setup_parsers(parser)
@@ -191,22 +195,30 @@ def main(args: Optional[List[str]] = None) -> int:
     parser = create_parser()
     parsed_args = parser.parse_args(args)
 
-    # Set up logging
-    setup_logging(level=getattr(logging, parsed_args.log_level))
+    # Every runtime setting is resolved once, before logging is set up, since the level is one.
+    try:
+        runtime = settings.activate(parsed_args)
+    except ConfigurationError as e:
+        setup_logging(level=logging.INFO)
+        logging.error(f"Error: {e}")
+        return 1
+    setup_logging(level=getattr(logging, runtime.log_level))
+    logging.debug("Runtime settings (value and source):\n  %s", "\n  ".join(runtime.describe()))
+    debug = runtime.log_level == "DEBUG"
 
     try:
         # Execute the chosen command
         return parsed_args.func(parsed_args)
     except MetaQuestError as e:
         logging.error(f"Error: {e}")
-        if parsed_args.log_level == "DEBUG":
+        if debug:
             logging.debug(traceback.format_exc())
         else:
             logging.info("Use --log-level DEBUG for full traceback.")
         return 1
     except Exception as e:
         logging.error(f"{type(e).__name__}: {e}")
-        if parsed_args.log_level == "DEBUG":
+        if debug:
             logging.debug(traceback.format_exc())
         else:
             logging.info("Use --log-level DEBUG for full traceback.")

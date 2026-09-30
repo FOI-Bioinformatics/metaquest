@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import AbstractSet, Callable, List, Optional, Tuple, Union
 
 from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
+from metaquest.core.settings import settings_or
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
@@ -480,12 +481,13 @@ def project_lock_path(fastq_folder: Union[str, Path], accession: str) -> Path:
 
 def _project_lock_policy(accession: str, wait_seconds: float) -> LockPolicy:
     """The dataset lock's policy (stale threshold and heartbeat), applied to a project's accession."""
+    stale, heartbeat = settings_or(dataset_lock_stale=DATASET_LOCK_STALE_SECONDS, lock_heartbeat=LOCK_HEARTBEAT_SECONDS)
     return LockPolicy(
         what=f"accession {accession}",
-        stale_seconds=DATASET_LOCK_STALE_SECONDS,
+        stale_seconds=stale,
         wait_seconds=wait_seconds,
         poll_seconds=PROJECT_LOCK_POLL_SECONDS,
-        heartbeat_seconds=LOCK_HEARTBEAT_SECONDS,
+        heartbeat_seconds=heartbeat,
     )
 
 

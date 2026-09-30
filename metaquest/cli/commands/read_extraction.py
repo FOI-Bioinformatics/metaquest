@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
@@ -107,7 +108,10 @@ class ExtractTargetReadsCommand(BaseCommand):
         parser.add_argument(
             "--temp-folder",
             default=None,
-            help="Where the intermediate SAM alignment(s) are written (default: alongside each sample's output)",
+            help=(
+                "Where the intermediate SAM alignment(s) are written "
+                "(default: METAQUEST_TEMP_FOLDER, else alongside each sample's output)"
+            ),
         )
         parser.add_argument(
             "--allow-truncated",
@@ -457,9 +461,10 @@ class ExtractTargetReadsCommand(BaseCommand):
             # removed afterwards, even on failure. A directory unique to this run (rather
             # than a fixed default name) keeps two concurrent runs sharing one output folder
             # from removing each other's still-in-use scratch.
-            uses_default_tmp_dir = not args.temp_folder
-            if args.temp_folder:
-                tmp_dir = Path(args.temp_folder)
+            temp_folder = setting_for(args, "temp_folder")
+            uses_default_tmp_dir = not temp_folder
+            if temp_folder:
+                tmp_dir = Path(temp_folder)
             else:
                 Path(args.output_folder).mkdir(parents=True, exist_ok=True)
                 tmp_dir = Path(tempfile.mkdtemp(dir=args.output_folder, prefix=".megahit-tmp-"))
@@ -576,7 +581,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                     args, accession, outcome, store
                 ),
                 min_mapq=args.min_mapq,
-                temp_folder=args.temp_folder,
+                temp_folder=setting_for(args, "temp_folder"),
                 allow_truncated=args.allow_truncated,
                 mate_counts=mate_counts,
                 truncated_downloads=truncated_downloads,

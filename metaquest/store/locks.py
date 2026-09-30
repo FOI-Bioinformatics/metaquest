@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
+from metaquest.core.settings import setting_or, settings_or
 from metaquest.store.layout import StorePaths, lock_path
 from metaquest.utils.lockfile import (
     LOCK_WAIT_LOG_SECONDS,
@@ -62,13 +63,14 @@ __all__ = [
 
 
 def _dataset_policy(accession: str, wait_seconds: float) -> LockPolicy:
-    """The dataset lock's policy, built from this module's current limits."""
+    """The dataset lock's policy: runtime settings when set, else this module's current limits."""
+    stale, heartbeat = settings_or(dataset_lock_stale=DATASET_LOCK_STALE_SECONDS, lock_heartbeat=LOCK_HEARTBEAT_SECONDS)
     return LockPolicy(
         what=accession,
-        stale_seconds=DATASET_LOCK_STALE_SECONDS,
+        stale_seconds=stale,
         wait_seconds=wait_seconds,
         poll_seconds=LOCK_POLL_SECONDS,
-        heartbeat_seconds=LOCK_HEARTBEAT_SECONDS,
+        heartbeat_seconds=heartbeat,
     )
 
 
@@ -109,7 +111,7 @@ def lock_is_held(paths: StorePaths, accession: str) -> bool:
         age = time.time() - lock.stat().st_mtime
     except OSError:
         return False
-    return age <= DATASET_LOCK_STALE_SECONDS and not holder_is_dead(read_holder(lock))
+    return age <= setting_or("dataset_lock_stale", DATASET_LOCK_STALE_SECONDS) and not holder_is_dead(read_holder(lock))
 
 
 def lock_holder(paths: StorePaths, accession: str) -> str:

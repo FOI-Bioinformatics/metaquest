@@ -11,6 +11,7 @@ from pathlib import Path
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import ConfigurationError, MetaQuestError
 from metaquest.core.optional import require
+from metaquest.core.settings import require_email, setting_for
 from metaquest.data.file_io import open_atomic, write_csv
 from metaquest.data.defaults import read_matrix, read_records, read_table
 from metaquest.data.taxonomy import (
@@ -268,8 +269,14 @@ class TaxonomyValidationCommand(BaseCommand):
             help="Text file with species names (one per line) or CSV with species column",  # noqa: E501
         )
         parser.add_argument("--species-column", help="Column name containing species (for CSV files)")
-        parser.add_argument("--email", required=True, help="Email address for NCBI API access")
-        parser.add_argument("--api-key", help="NCBI API key for increased rate limits")
+        parser.add_argument(
+            "--email",
+            default=None,
+            help="Email address for NCBI API access (default: METAQUEST_NCBI_EMAIL or config [runtime] ncbi_email)",
+        )
+        parser.add_argument(
+            "--api-key", help="NCBI API key for increased rate limits (default: METAQUEST_NCBI_API_KEY or NCBI_API_KEY)"
+        )
         parser.add_argument(
             "--output-file",
             default="taxonomy_validation.csv",
@@ -282,6 +289,7 @@ class TaxonomyValidationCommand(BaseCommand):
         )
 
     def execute(self, args):
+        email = require_email(args)
         try:
             import pandas as pd
 
@@ -307,8 +315,8 @@ class TaxonomyValidationCommand(BaseCommand):
             logger.info("Validating species names against NCBI taxonomy...")
             results_df = validate_taxonomic_assignments(
                 species_list,
-                email=args.email,
-                api_key=args.api_key,
+                email=email,
+                api_key=setting_for(args, "ncbi_api_key"),
                 output_file=args.output_file,
                 cache_file=args.cache_file,
             )

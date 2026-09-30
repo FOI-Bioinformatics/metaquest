@@ -5,7 +5,6 @@ Metadata-related CLI commands.
 import argparse
 import logging
 from functools import partial
-import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -14,6 +13,7 @@ import pandas as pd
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.core.settings import require_email, setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.file_io import copy_file
@@ -88,7 +88,11 @@ class DownloadMetadataCommand(BaseCommand):
         return "Metadata"
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--email", required=True, help="Your email address for NCBI API access")
+        parser.add_argument(
+            "--email",
+            default=None,
+            help="Email address for NCBI API access (default: METAQUEST_NCBI_EMAIL or config [runtime] ncbi_email)",
+        )
         parser.add_argument("--matches-folder", default="matches", help="Folder containing match files")
         parser.add_argument(
             "--metadata-folder",
@@ -113,8 +117,8 @@ class DownloadMetadataCommand(BaseCommand):
         )
         parser.add_argument(
             "--api-key",
-            default=os.environ.get("NCBI_API_KEY"),
-            help="NCBI API key for a higher rate limit (default: the NCBI_API_KEY environment variable)",
+            default=None,
+            help="NCBI API key for a higher rate limit (default: METAQUEST_NCBI_API_KEY or NCBI_API_KEY)",
         )
         parser.add_argument(
             "--batch-size",
@@ -147,15 +151,16 @@ class DownloadMetadataCommand(BaseCommand):
         self.logger.info("Copied %d metadata file(s) into the store at %s", len(downloaded), paths.metadata)
 
     def execute(self, args: argparse.Namespace) -> int:
+        email = require_email(args)
         try:
             downloaded = download_metadata(
-                email=args.email,
+                email=email,
                 matches_folder=args.matches_folder,
                 metadata_folder=args.metadata_folder,
                 threshold=args.threshold,
                 dry_run=args.dry_run,
                 accessions_file=args.accessions_file,
-                api_key=args.api_key,
+                api_key=setting_for(args, "ncbi_api_key"),
                 batch_size=args.batch_size,
             )
             term = getattr(args, "_termination", None)

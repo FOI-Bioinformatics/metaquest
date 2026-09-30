@@ -15,6 +15,7 @@ from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import open_atomic
 from metaquest.data.registry import (
@@ -129,7 +130,7 @@ class DownloadSraCommand(BaseCommand):
         )
         parser.add_argument(
             "--temp-folder",
-            help="Directory to use for fasterq-dump temporary files (must be writable)",
+            help="Directory to use for fasterq-dump temporary files (must be writable; default: METAQUEST_TEMP_FOLDER)",
         )
         parser.add_argument(
             "--blacklist",
@@ -228,11 +229,12 @@ class DownloadSraCommand(BaseCommand):
             "--lock-wait",
             dest="lock_wait",
             type=float,
-            default=0.0,
+            default=None,
             help=(
                 "Seconds to wait for another run's download of the same accession before giving up "
                 "on it, whether through a shared store or, without one, this project's own "
-                "per-accession lock (default: 0, wait for as long as the other run keeps working)"
+                "per-accession lock (default: METAQUEST_LOCK_WAIT, config [runtime] lock_wait, or 0, "
+                "wait for as long as the other run keeps working)"
             ),
         )
 
@@ -470,7 +472,7 @@ class DownloadSraCommand(BaseCommand):
         store's own ``tmp`` folder (the default home for ``.sra-cache`` when downloading
         through a store)."""
         folders = {fastq_dir}
-        temp_folder = getattr(args, "temp_folder", None)
+        temp_folder = setting_for(args, "temp_folder")
         if temp_folder:
             folders.add(Path(temp_folder))
         sra_cache = getattr(args, "sra_cache", None)
@@ -508,14 +510,14 @@ class DownloadSraCommand(BaseCommand):
         """
         if store is None:
             # Without a store, --lock-wait still applies to the project's per-accession lock.
-            return {"lock_wait": getattr(args, "lock_wait", 0.0)}
+            return {"lock_wait": setting_for(args, "lock_wait")}
         return {
             "store": store,
             "link_mode": getattr(args, "link_mode", "auto"),
             "accept_partial": getattr(args, "accept_partial", False),
             "resume_partial": getattr(args, "resume_partial", True),
             "store_metadata": [project_root(registry) / "metadata", store.metadata],
-            "lock_wait": getattr(args, "lock_wait", 0.0),
+            "lock_wait": setting_for(args, "lock_wait"),
         }
 
     @staticmethod
@@ -585,7 +587,7 @@ class DownloadSraCommand(BaseCommand):
                     max_workers=max_workers,
                     force=args.force,
                     max_retries=args.max_retries,
-                    temp_folder=args.temp_folder,
+                    temp_folder=setting_for(args, "temp_folder"),
                     blacklist=args.blacklist,
                     blacklist_accessions=excluded,
                     on_result=on_result,

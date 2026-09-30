@@ -11,34 +11,27 @@ resolves that precedence and reads/writes the user config.
 import json
 import logging
 import os
-import tomllib
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from metaquest.core.constants import CONFIG_DIRNAME, CONFIG_FILENAME, STORE_ENV
+from metaquest.core.constants import STORE_ENV
 from metaquest.core.exceptions import DataAccessError
+from metaquest.core.settings import config_path, read_config
 from metaquest.data.file_io import write_text_atomic
 from metaquest.store.layout import StorePaths, read_marker, store_paths
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
 
-
-def config_path() -> Path:
-    """Path to the user config file: $XDG_CONFIG_HOME/metaquest/config.toml, or
-    ~/.config/metaquest/config.toml when XDG_CONFIG_HOME is not set."""
-    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
-    return base / CONFIG_DIRNAME / CONFIG_FILENAME
-
-
-def read_config() -> Dict[str, Any]:
-    """Read the user config file, returning {} if it does not exist."""
-    path = config_path()
-    if not path.exists():
-        return {}
-    with path.open("rb") as handle:
-        return tomllib.load(handle)
+# The user config file is shared with the runtime settings, which own its reader; both names
+# stay importable from here for existing callers.
+__all__ = [
+    "config_path",
+    "read_config",
+    "resolve_optional_store",
+    "resolve_store_root",
+    "write_config_data_root",
+]
 
 
 def _strip_store_table(text: str) -> str:

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.constants import SHORT_LOCK_HEARTBEAT_SECONDS, SHORT_LOCK_POLL_SECONDS
 from metaquest.core.exceptions import DataAccessError
+from metaquest.core.settings import settings_or
 from metaquest.data.file_io import visible_files, write_text_atomic
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
@@ -37,8 +38,7 @@ REGISTRY_FILENAME = "metaquest_registry.json"
 # file loads unchanged; the next save writes it back as version 2.
 SCHEMA_VERSION = 2
 STAGES = ("screened", "selected", "excluded", "downloaded", "analysed", "extracted", "assembled")
-# Registry lock limits, read at call time. The wait fits within SLURM's KillWait; holders
-# refresh the lock every SHORT_LOCK_HEARTBEAT_SECONDS, well inside the 30 s age older versions reclaim.
+# Registry lock defaults, read at call time; runtime settings override them. The wait fits SLURM's KillWait.
 LOCK_STALE_SECONDS = 120.0
 LOCK_WAIT_SECONDS = 30.0
 _MATE_SUFFIXES = ("_1", "_2", "_s", "_0")
@@ -199,8 +199,8 @@ def load_registry(path: Optional[Union[str, Path]] = None) -> Registry:
 @contextmanager
 def _acquire_lock(lock: Path) -> Iterator[Path]:
     """Hold the registry lock file ``lock`` for a with-block (``metaquest.utils.lockfile``)."""
-    # Positional: stale, wait, poll and heartbeat seconds; the first two are read now so tests can shrink them.
-    limits = (LOCK_STALE_SECONDS, LOCK_WAIT_SECONDS, SHORT_LOCK_POLL_SECONDS, SHORT_LOCK_HEARTBEAT_SECONDS)
+    stale, wait = settings_or(registry_lock_stale=LOCK_STALE_SECONDS, registry_lock_wait=LOCK_WAIT_SECONDS)
+    limits = (stale, wait, SHORT_LOCK_POLL_SECONDS, SHORT_LOCK_HEARTBEAT_SECONDS)
     with held_lock(lock, LockPolicy("Registry", *limits)) as held:
         yield held
 

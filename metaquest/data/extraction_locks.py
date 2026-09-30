@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
+from metaquest.core.settings import settings_or
 from metaquest.data.file_io import ensure_directory
 from metaquest.utils.lockfile import LockHeld, LockPolicy, held_lock
 
@@ -61,10 +62,11 @@ def index_build_lock(index_path: Path, should_stop: Optional[Callable[[], bool]]
     """
     lock = index_lock_path(index_path)
     ensure_directory(lock.parent)
+    stale, heartbeat = settings_or(dataset_lock_stale=DATASET_LOCK_STALE_SECONDS, lock_heartbeat=LOCK_HEARTBEAT_SECONDS)
     policy = LockPolicy(
         what=f"index {index_path.name}",
-        stale_seconds=DATASET_LOCK_STALE_SECONDS,
-        heartbeat_seconds=LOCK_HEARTBEAT_SECONDS,
+        stale_seconds=stale,
+        heartbeat_seconds=heartbeat,
         poll_seconds=LOCK_POLL_SECONDS,
     )
     with held_lock(lock, policy, should_stop=should_stop):
@@ -81,10 +83,11 @@ def sample_extraction_lock(output_root: Path, accession: str, genome_id: str) ->
     """
     lock = sample_lock_path(output_root, accession, genome_id)
     ensure_directory(lock.parent)
+    stale, heartbeat = settings_or(dataset_lock_stale=DATASET_LOCK_STALE_SECONDS, lock_heartbeat=LOCK_HEARTBEAT_SECONDS)
     policy = LockPolicy(
         what=f"extraction of {accession} against {genome_id}",
-        stale_seconds=DATASET_LOCK_STALE_SECONDS,
-        heartbeat_seconds=LOCK_HEARTBEAT_SECONDS,
+        stale_seconds=stale,
+        heartbeat_seconds=heartbeat,
     )
     with held_lock(lock, policy, blocking=False):
         yield

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from metaquest.cli.base import BaseCommand, accessions_from_args, read_accessions_file, resolve_command_store
+from metaquest.core.settings import require_email, setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
 from metaquest.data.registry import Registry, load_registry, record_analysis
@@ -64,12 +65,12 @@ class SRAInfoCommand(BaseCommand):
         )
         parser.add_argument(
             "--email",
-            required=True,
-            help="Email address for NCBI API access (required by NCBI)",
+            default=None,
+            help="Email address for NCBI API access (default: METAQUEST_NCBI_EMAIL or config [runtime] ncbi_email)",
         )
         parser.add_argument(
             "--api-key",
-            help="NCBI API key for increased rate limits (optional)",
+            help="NCBI API key for increased rate limits (default: METAQUEST_NCBI_API_KEY or NCBI_API_KEY)",
         )
         parser.add_argument(
             "--output-report",
@@ -125,6 +126,7 @@ class SRAInfoCommand(BaseCommand):
             self.emit(f"  Estimated download time: {estimated_hours:.1f} hours")
 
     def execute(self, args):
+        email = require_email(args)
         try:
             accessions = read_accessions_file(args.accessions_file)
 
@@ -134,7 +136,7 @@ class SRAInfoCommand(BaseCommand):
 
             self.emit(f"Analyzing {len(accessions)} SRA accessions...")
 
-            client = SRAMetadataClient(args.email, args.api_key)
+            client = SRAMetadataClient(email, setting_for(args, "ncbi_api_key"))
             metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
 
             if not metadata:

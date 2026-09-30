@@ -10,6 +10,7 @@ from typing import Any, List
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_completeness, _gitignore_guard
 from metaquest.core.exceptions import DataAccessError
+from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry, record_download, registry_transaction, update_linked
 from metaquest.store.adopt import adopt
@@ -95,10 +96,11 @@ class StoreAdoptCommand(BaseCommand):
             "--lock-wait",
             dest="lock_wait",
             type=float,
-            default=0.0,
+            default=None,
             help=(
                 "Seconds to wait for another project's work on the same accession before giving "
-                "up on it (default: 0, wait for as long as the other project keeps working)"
+                "up on it (default: METAQUEST_LOCK_WAIT, config [runtime] lock_wait, or 0, wait for "
+                "as long as the other project keeps working)"
             ),
         )
 
@@ -125,7 +127,7 @@ class StoreAdoptCommand(BaseCommand):
                 dry_run=args.dry_run,
                 compress=args.compress,
                 metadata_folders=[Path(args.metadata_folder), paths.metadata],
-                lock_wait=getattr(args, "lock_wait", 0.0),
+                lock_wait=setting_for(args, "lock_wait"),
                 should_stop=None if term is None else term.stop.is_set,
             )
         except DataAccessError as e:

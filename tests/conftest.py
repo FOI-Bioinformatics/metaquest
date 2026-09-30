@@ -2,10 +2,33 @@
 Shared test fixtures and configuration for MetaQuest tests.
 """
 
+import os
+
 import matplotlib.pyplot as plt
 import pytest
 
+from metaquest.core import settings
 from metaquest.core.constants import STORE_ENV
+
+# Read once when the perf module is imported, not a runtime setting; left for CI to set.
+_KEPT_METAQUEST_VARIABLES = {"METAQUEST_PERF_SCALE"}
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_settings(monkeypatch):
+    """Start every test from the default runtime settings.
+
+    ``metaquest.core.settings`` reads ``METAQUEST_*`` variables (and ``NCBI_API_KEY``) and caches
+    the result; a developer's own shell values must not leak into a test, and a test's
+    ``activate`` must not leak into the next one.
+    """
+    for variable in list(os.environ):
+        if variable.startswith(settings.ENV_PREFIX) and variable not in _KEPT_METAQUEST_VARIABLES:
+            monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    settings.reset_for_tests()
+    yield
+    settings.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

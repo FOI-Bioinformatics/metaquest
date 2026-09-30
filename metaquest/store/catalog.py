@@ -38,6 +38,7 @@ from metaquest.core.constants import (
     SHORT_LOCK_POLL_SECONDS,
 )
 from metaquest.core.exceptions import DataAccessError
+from metaquest.core.settings import setting_or
 from metaquest.store.layout import StorePaths
 from metaquest.store.sidecar import Sidecar
 from metaquest.utils.lockfile import LockPolicy, held_lock, verify_held
@@ -546,8 +547,8 @@ class Catalog:
 def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     """Open the catalogue for a write session, serialised across processes.
 
-    Acquires ``paths.catalog_lock`` (waiting up to ``CATALOG_LOCK_WAIT_SECONDS``, then
-    raising ``LockHeld`` naming the holder), opens the
+    Acquires ``paths.catalog_lock`` (waiting up to the ``catalog_lock_wait`` runtime setting, by
+    default ``CATALOG_LOCK_WAIT_SECONDS``, then raising ``LockHeld`` naming the holder), opens the
     catalogue, migrates its schema, backfills the journal from any ``projects``/``usage`` rows
     that predate it (``journal.backfill_from_catalog``, a no-op once the journal already has
     project lines), yields it for the caller to write through, commits on a clean exit, and
@@ -563,7 +564,7 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     policy = LockPolicy(
         what="Store catalogue",
         stale_seconds=CATALOG_LOCK_STALE_SECONDS,
-        wait_seconds=CATALOG_LOCK_WAIT_SECONDS,
+        wait_seconds=setting_or("catalog_lock_wait", CATALOG_LOCK_WAIT_SECONDS),
         poll_seconds=SHORT_LOCK_POLL_SECONDS,
         heartbeat_seconds=SHORT_LOCK_HEARTBEAT_SECONDS,
     )
