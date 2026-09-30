@@ -101,6 +101,31 @@ conda activate metaquest
 
 Map plots need the `maps` extra (see the extras table above); `environment.yml` installs every extra.
 
+### Checking the environment
+
+`doctor` (listed under Environment in `metaquest --help`) reports whether this environment can run
+MetaQuest, without changing anything:
+
+```bash
+metaquest doctor                              # every check, one line each
+metaquest doctor --for extract_target_reads   # a tool this command needs is a failure, not a warning
+metaquest doctor --json                       # the same report as one JSON document
+metaquest doctor --network                    # also check that NCBI and Branchwater answer (10 s each)
+```
+
+It checks the Python and MetaQuest versions; every external tool, with its path, version and the
+oldest supported version; that the config file parses, with each runtime setting and where its value
+came from; the shared data store, if one is configured (`--data-root`, `METAQUEST_DATA`, the registry
+or the config file), for its marker, write access and free space; free space at the project folder
+(`--project`, default the working directory), the temporary folder and the `.sra` cache against
+`min_free_gb`; the CPUs available against the node's total, the memory limit and any SLURM job
+variables; and that the nearest project registry loads. A missing tool is a warning unless `--for`
+names a command that needs it; a tool below its oldest supported version, a config file or variable
+that does not parse, a store without its marker, an unreadable registry and, with `--network`, an
+unreachable service are failures. `doctor` exits with 0 when nothing failed (warnings allowed) and
+with 3 otherwise. It still runs when the config file is malformed, which stops every other command,
+and reports the parse error as a failed check. `make doctor` runs it from a checkout.
+
 ### Development Commands
 ```bash
 make help           # Show all available commands

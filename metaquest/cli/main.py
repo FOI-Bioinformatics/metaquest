@@ -43,6 +43,7 @@ from metaquest.cli.commands import (
 )
 from metaquest.cli.commands.select import SelectDatasetsCommand
 from metaquest.cli.commands.blacklist import BlacklistCommand
+from metaquest.cli.commands.doctor import STARTUP_ERROR_ATTR, DoctorCommand
 from metaquest.cli.commands.branchwater_search import BranchwaterSearchCommand
 from metaquest.cli.commands.store import (
     StoreAdoptCommand,
@@ -117,6 +118,8 @@ def register_all_commands() -> None:
         InteractivePlotCommand(),
         TaxonomyValidationCommand(),
         TaxonomicSummaryCommand(),
+        # Environment commands
+        DoctorCommand(),
         # Former names (0.5.0), hidden from the help
         *renamed_commands(),
     ]
@@ -125,7 +128,7 @@ def register_all_commands() -> None:
         command_registry.register(command)
 
 
-GROUP_ORDER = ["Containment", "Metadata", "Genomes", "Reads", "Store", "Analysis", "Other"]
+GROUP_ORDER = ["Containment", "Metadata", "Genomes", "Reads", "Store", "Analysis", "Environment", "Other"]
 
 
 class _HelpFormatter(DefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -272,9 +275,14 @@ def main(args: Optional[List[str]] = None) -> int:
     try:
         runtime = settings.activate(parsed_args)
     except ConfigurationError as e:
-        setup_logging(level=logging.INFO)
-        logging.error(f"Error: {e}")
-        return exit_code_for(e)
+        if getattr(parsed_args, "command", None) != "doctor":
+            setup_logging(level=logging.INFO)
+            logging.error(f"Error: {e}")
+            return exit_code_for(e)
+        # doctor exists to diagnose exactly this: it runs on the built-in defaults and its
+        # config check reports the error (exit code 3 through its own failed check).
+        runtime = settings.activate_defaults()
+        setattr(parsed_args, STARTUP_ERROR_ATTR, str(e))
     failed = _configure_logging(runtime)
     if failed is not None:
         return failed

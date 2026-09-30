@@ -1,4 +1,4 @@
-.PHONY: env env-dev test test-perf test-network lint format check build clean pipeline install help dev-install
+.PHONY: env env-dev test test-perf test-network lint format check doctor build clean pipeline install help dev-install
 
 help:
 	@echo "Available commands:"
@@ -9,6 +9,7 @@ help:
 	@echo "  lint        - Run flake8 linting"
 	@echo "  format      - Format code with black"
 	@echo "  check       - Run all quality checks (format, lint, type check, module size, ASCII, atomic writes, docs)"
+	@echo "  doctor      - Check external tools, configuration, store, disk space and resources"
 	@echo "  build       - Build distribution packages"
 	@echo "  clean       - Clean build artifacts and cache"
 	@echo "  pipeline    - Run full integration test pipeline"
@@ -73,6 +74,9 @@ check:
 	@echo "Checking every command is documented and README names no unknown command..."
 	python scripts/check_docs_commands.py
 	@echo "All quality checks passed!"
+
+doctor:
+	python -m metaquest.cli.main doctor
 
 build:
 	python -m build

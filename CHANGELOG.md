@@ -32,6 +32,15 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   SLURM cpuset limits, else `SLURM_CPUS_PER_TASK`, else the CPU count) divided by `--num-threads`, at
   most 4; `METAQUEST_MAX_WORKERS_CAP` (or `[runtime] max_workers_cap`) changes the cap, which the
   `--max-workers` help now names. `seqkit stats` in the store statistics uses at most as many threads.
+- `metaquest doctor` (new Environment group; `make doctor`): checks the Python and MetaQuest versions,
+  every external tool with its path, version and oldest supported version, that the config file parses
+  (with each runtime setting and its source), the shared data store (marker, write access, free space),
+  free space at the project, temporary folder and `.sra` cache against `min_free_gb`, CPUs, memory
+  limit and SLURM variables, and the nearest project registry; `--network` adds NCBI and Branchwater
+  (10 s each), `--for COMMAND` turns a missing tool that command needs into a failure, `--json` writes
+  one JSON document. Exit code 0 without a failed check, 3 with one. It still runs, and reports the
+  error, when `config.toml` does not parse. See "Checking the environment" in the README.
+
 ### Changed
 
 - A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to

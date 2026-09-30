@@ -84,6 +84,11 @@ def _runtime_table(config: Mapping[str, Any]) -> Dict[str, Any]:
     return table
 
 
+def runtime_table() -> Dict[str, Any]:
+    """The user config file's ``[runtime]`` table as it is now, or {}; ``ConfigurationError`` if unreadable."""
+    return _runtime_table(read_config())
+
+
 # --- parsers: text in, typed value out, ValueError on a bad value -------------
 
 
@@ -449,6 +454,20 @@ def activate(args: Optional[argparse.Namespace]) -> RuntimeSettings:
     """
     global _active
     runtime = _build(args)
+    with _lock:
+        _active = runtime
+    return runtime
+
+
+def activate_defaults() -> RuntimeSettings:
+    """Make the built-in defaults the active settings, ignoring flags, environment and config file.
+
+    Used by ``main()`` for ``metaquest doctor`` alone when ``activate`` fails, so the command
+    still runs and reports the value that does not parse instead of stopping before it starts.
+    """
+    global _active
+    resolved = {spec.name: Resolved(spec.name, spec.default, "default") for spec in _SPECS}
+    runtime = RuntimeSettings.from_resolved(resolved)
     with _lock:
         _active = runtime
     return runtime
