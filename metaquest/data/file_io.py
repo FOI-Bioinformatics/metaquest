@@ -196,7 +196,8 @@ def atomic_path(target: Union[str, Path], fsync: bool = False) -> Iterator[Path]
 
     Readers see either the previous content or the complete new content, never a partial file.
     The temporary file is created empty (``O_EXCL``, mode 0o666 less the umask, so the group
-    permissions of a shared folder apply) and takes the mode of an existing target. A symlinked
+    permissions of a shared folder apply) and takes the mode of an existing target just before
+    the rename, so a read-only target is replaced too. A symlinked
     target is resolved and the file it points to is replaced, so the link itself stays. When the
     body raises, the rename fails or the process is interrupted (``KeyboardInterrupt``), the
     temporary file is removed and the target is left as it was. With ``fsync`` the file and its
@@ -210,13 +211,15 @@ def atomic_path(target: Union[str, Path], fsync: bool = False) -> Iterator[Path]
     os.close(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
     replaced = False
     try:
+        yield tmp
+        if fsync:
+            _fsync_path(tmp)
+        # The target's mode is copied only now, so a read-only target (0o444) can still be
+        # replaced: the body and the fsync write to a temporary file this process can open.
         try:
             os.chmod(tmp, stat.S_IMODE(final.stat().st_mode))
         except FileNotFoundError:
             pass
-        yield tmp
-        if fsync:
-            _fsync_path(tmp)
         _replace_with_retry(tmp, final)
         replaced = True
         if fsync:

@@ -131,7 +131,7 @@ def load_taxonomy_cache(cache_file: Path) -> Dict[str, TaxonomyInfo]:
     if not cache_file.exists():
         return cache
 
-    with open(cache_file, "r", newline="") as f:
+    with open(cache_file, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
             gid = row.get("genome_id", "")
@@ -183,7 +183,7 @@ def _append_taxonomy_cache_row(cache_file: Path, info: TaxonomyInfo) -> None:
     cache_path = Path(cache_file)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     is_new = not cache_path.exists() or cache_path.stat().st_size == 0
-    with open(cache_path, "a", newline="") as f:
+    with open(cache_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_CACHE_COLUMNS, delimiter="\t")
         if is_new:
             writer.writeheader()

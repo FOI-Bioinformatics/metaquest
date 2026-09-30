@@ -294,7 +294,7 @@ def _append_validation_cache_row(
             writer.writerow(row)
         return
     is_new = not cache_path.exists() or cache_path.stat().st_size == 0
-    with open(cache_path, "a", newline="") as f:
+    with open(cache_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_VALIDATION_CACHE_COLUMNS)
         if is_new:
             writer.writeheader()
@@ -327,7 +327,7 @@ def validate_taxonomic_assignments(
         cache_needs_reset = False
         if cache_file and Path(cache_file).exists():
             try:
-                cache_df = pd.read_csv(cache_file)
+                cache_df = pd.read_csv(cache_file, encoding="utf-8")
                 cached_results = dict(zip(cache_df["original_name"], cache_df.to_dict("records")))
                 logger.info(f"Loaded {len(cached_results)} cached taxonomy validations")
             except Exception as e:

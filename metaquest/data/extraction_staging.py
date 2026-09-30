@@ -6,6 +6,9 @@ sample is complete are the files renamed into ``targeted/<ACC>/``, one rename pe
 folder listing (``visible_files``, and so ``scan_extractions`` and ``status --reconcile``)
 skips dot-prefixed names, so a sample stopped by a signal, a timeout or a kill never leaves a
 partial FASTQ that a later scan could record as a finished extraction.
+
+``require_nonempty`` guards a staged output a tool reported as written (the minimap2 index)
+against being published empty.
 """
 
 import logging
@@ -15,11 +18,23 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, List
 
+from metaquest.core.exceptions import ProcessingError
 from metaquest.data.file_io import unique_temp_path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["extracted_names", "publish_staged", "staged_sample_outputs"]
+__all__ = ["extracted_names", "publish_staged", "require_nonempty", "staged_sample_outputs"]
+
+
+def require_nonempty(path: Path, what: str) -> None:
+    """Raise ``ProcessingError`` when ``path``, which a tool reported as written, is empty.
+
+    Called on a staged output before it is published, so a tool that exits 0 without writing
+    (or after a full disk truncated its output) never leaves an empty file under the final name.
+    """
+    if Path(path).stat().st_size == 0:
+        raise ProcessingError(f"{what} is empty although the tool reported success: {path}")
+
 
 # Mate suffixes ``_export_mapped_fastq`` writes for paired input; single-end input has none.
 _PAIRED_SUFFIXES = ("_1", "_2", "_s", "_0")

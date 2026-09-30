@@ -568,7 +568,8 @@ class TestAdditionalEdgeCases:
             "confidence": "high",
         }
 
-        # Validate
+        # Validate; the progress lines are INFO, which caplog records only when asked to.
+        caplog.set_level("INFO", logger="metaquest.data.taxonomy")
         validate_taxonomic_assignments(species_list, email="test@example.com")
 
         # Should log progress

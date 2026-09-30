@@ -307,6 +307,30 @@ class TestBuildIndex:
         assert len(state["calls"]) == 1  # the FASTA has not changed, so the index is reused
         assert not list(index_dir.glob("*.tmp"))
 
+    def test_an_empty_index_is_never_published(self, tmp_path):
+        """A minimap2 that exits 0 without writing (or after a full disk truncated it) fails the build."""
+        genome = tmp_path / "g.fna"
+        genome.write_text(">s\nACGT\n")
+        index_dir = tmp_path / ".index"
+        state = {"empty_index": True}
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+            with pytest.raises(ProcessingError, match="empty"):
+                build_index(genome, "sr", index_dir)
+        assert [p.name for p in index_dir.iterdir() if not p.name.endswith(".lock")] == []
+
+    def test_an_empty_index_left_by_an_older_version_is_rebuilt(self, tmp_path):
+        genome = tmp_path / "g.fna"
+        genome.write_text(">s\nACGT\n")
+        index_dir = tmp_path / ".index"
+        state = {}
+        with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+            index = build_index(genome, "sr", index_dir)
+            index.write_bytes(b"")
+            again = build_index(genome, "sr", index_dir)
+        assert again == index
+        assert len(state["calls"]) == 2
+        assert index.stat().st_size > 0
+
     def test_index_rebuilt_for_a_different_genome_with_the_same_name(self, tmp_path):
         """Two genome files can share a stem, so the index is keyed on the FASTA's identity.
 

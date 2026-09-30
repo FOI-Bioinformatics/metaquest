@@ -81,8 +81,10 @@ _STAGING_SUFFIX = "_adopt"
 # free-space estimate (``_folder_bytes``, via ``_copy_ignores``) can never drift apart: a name
 # the copy skips is a name the byte count must skip too, and nothing else -- an ordinary
 # hidden directory or file (``.hidden/``, a pipeline's ``.snakemake/`` work folder) matches
-# neither pattern, so the copy does not skip it and the byte count must not either.
-_COPY_IGNORE_PATTERNS = ("._*", ".DS_Store")
+# neither pattern, so the copy does not skip it and the byte count must not either. The two
+# temporary-file patterns are what an interrupted write leaves: ``.<name>.<host>.<pid>.<token>.tmp``
+# (``unique_temp_path``) and the ``<name>.tmp.<pid>`` of versions before 0.6.0.
+_COPY_IGNORE_PATTERNS = ("._*", ".DS_Store", ".*.tmp", "*.tmp.[0-9]*")
 ADOPT_COPY_IGNORE = shutil.ignore_patterns(*_COPY_IGNORE_PATTERNS)
 
 

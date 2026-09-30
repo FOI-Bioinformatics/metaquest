@@ -16,6 +16,43 @@ from metaquest.store.layout import (
 from metaquest.core.constants import STORE_LAYOUT, STORE_MARKER
 
 
+def test_two_first_time_inits_keep_the_first_marker(tmp_path, monkeypatch):
+    """Both runs find no marker; the one that publishes second must not overwrite the first."""
+    import threading
+
+    from metaquest.store import layout as layout_module
+
+    root = tmp_path / "store"
+    real_write = layout_module.write_text_atomic
+    both_checked = threading.Barrier(2, timeout=5)
+    first_done = threading.Event()
+    ids = {}
+
+    def _write(path, text, **kwargs):
+        # Both runs have found no marker; the second writes only once the first has finished.
+        both_checked.wait()
+        if threading.current_thread().name == "second":
+            assert first_done.wait(timeout=5)
+        return real_write(path, text, **kwargs)
+
+    monkeypatch.setattr(layout_module, "write_text_atomic", _write)
+
+    def _init(name):
+        init_store(root)
+        ids[name] = read_marker(root)["id"]
+        if name == "first":
+            first_done.set()
+
+    threads = [threading.Thread(target=_init, args=(name,), name=name) for name in ("first", "second")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert ids["first"] == ids["second"] == read_marker(root)["id"]
+    assert sorted(p.name for p in root.iterdir() if p.name.startswith(".")) == []
+
+
 def test_store_paths_layout(tmp_path):
     root = tmp_path / "store"
     paths = store_paths(root)

@@ -120,10 +120,11 @@ def _fake_tools(state):
         result = MagicMock(returncode=0, stdout="", stderr="")
         if executable == "minimap2":
             if "-d" in args:
-                # Building an index: create the .mmi the real tool would write.
+                # Building an index: create the .mmi the real tool would write (empty when the
+                # state asks for a tool that exits 0 without writing).
                 index_path = Path(args[args.index("-d") + 1])
                 index_path.parent.mkdir(parents=True, exist_ok=True)
-                index_path.write_bytes(b"")
+                index_path.write_bytes(b"" if state.get("empty_index") else b"MMI\x02")
             elif "-o" in args and state.get("minimap2_fail_stderr") is not None:
                 raise subprocess.CalledProcessError(1, ["minimap2", *args], stderr=state["minimap2_fail_stderr"])
             elif "-o" in args:

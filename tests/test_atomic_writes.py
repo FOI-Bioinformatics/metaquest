@@ -125,6 +125,17 @@ def test_existing_mode_is_kept(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
 
 
+@pytest.mark.parametrize("fsync", [False, True])
+def test_a_read_only_target_is_replaced_and_stays_read_only(tmp_path, fsync):
+    target = tmp_path / "sidecar.json"
+    target.write_text("{}")
+    os.chmod(target, 0o444)
+    write_text_atomic(target, '{"a": 1}', fsync=fsync)
+    assert target.read_text() == '{"a": 1}'
+    assert stat.S_IMODE(target.stat().st_mode) == 0o444
+    assert _no_temp_files(tmp_path)
+
+
 def test_new_file_follows_umask(tmp_path):
     old = os.umask(0o002)
     try:

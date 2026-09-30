@@ -538,6 +538,20 @@ class TestAdoptIgnoresAppleDouble:
         assert sc.state == "complete"
         assert [f["name"] for f in sc.files] == ["SRR1_1.fastq.gz"]
 
+    def test_leftover_temporary_files_are_not_copied_into_the_store(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project = tmp_path / "proj" / "fastq"
+        acc = project / "SRR1"
+        acc.mkdir(parents=True)
+        _write_fastq_gz(acc / "SRR1_1.fastq.gz")
+        # An interrupted compression of this version and of a version before 0.6.0.
+        (acc / ".SRR1_2.fastq.gz.node1.4242.0badf00d.tmp").write_bytes(b"partial")
+        (acc / "SRR1_2.fastq.gz.tmp.4242").write_bytes(b"partial")
+        report = adopt(project, paths, move=False, dry_run=False, compress=True, metadata_folders=[], lock_wait=0)
+        assert report.copied == ["SRR1"]
+        assert sorted(p.name for p in (paths.sra / "SRR1").iterdir()) == ["SRR1.json", "SRR1_1.fastq.gz"]
+        assert _folder_bytes(acc) == (acc / "SRR1_1.fastq.gz").stat().st_size
+
 
 class TestFolderBytes:
     """``_folder_bytes`` feeds ``_has_room_for``'s free-space check, which must estimate the

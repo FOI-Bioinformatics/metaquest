@@ -25,7 +25,7 @@ import pandas as pd
 
 from metaquest.core.exceptions import ConfigurationError, DataAccessError, ProcessingError, SecurityError
 from metaquest.data.extraction_locks import LockHeld, index_build_lock, sample_extraction_lock
-from metaquest.data.extraction_staging import publish_staged, staged_sample_outputs
+from metaquest.data.extraction_staging import publish_staged, require_nonempty, staged_sample_outputs
 from metaquest.data.file_io import atomic_path, ensure_directory, write_text_atomic
 from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
@@ -106,15 +106,14 @@ def _index_source(genome_path: Path) -> Dict[str, Any]:
 
 
 def _index_is_current(index_path: Path, source: Dict[str, Any]) -> bool:
-    """True when ``index_path`` exists and its record says it was built from ``source``.
+    """True when ``index_path`` is non-empty and its record says it was built from ``source``.
 
     The record is compared in full because the index is named after the FASTA's stem only:
-    a different genome with the same file name (a second assembly called ``wMel.fna``, a
-    copy restored from a tarball) would otherwise be mapped against the wrong index. An
-    mtime comparison alone does not catch it either, since ``cp -p``, ``mv``, ``rsync -a``
-    and tar all preserve an older mtime.
+    a different genome with the same file name (a second assembly called ``wMel.fna``, a copy
+    restored from a tarball) would otherwise be mapped against the wrong index; ``cp -p``,
+    ``mv``, ``rsync -a`` and tar all preserve an older mtime, so an mtime alone does not tell.
     """
-    if not index_path.exists():
+    if not index_path.exists() or index_path.stat().st_size == 0:
         return False
     record_path = index_path.with_suffix(index_path.suffix + ".json")
     try:
@@ -147,6 +146,7 @@ def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[st
             return index_path
         with atomic_path(index_path) as staged:
             SecureSubprocess.run_secure("minimap2", _minimap2_index_args(preset, staged, genome_path))
+            require_nonempty(staged, "The minimap2 index")
         write_text_atomic(index_path.with_suffix(index_path.suffix + ".json"), json.dumps(source, indent=2))
         return index_path
 

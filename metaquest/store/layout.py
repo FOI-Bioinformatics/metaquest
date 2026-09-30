@@ -9,6 +9,7 @@ first time a root is used.
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from metaquest.core.constants import STORE_LAYOUT, STORE_MARKER
-from metaquest.data.file_io import write_text_atomic
+from metaquest.data.file_io import unique_temp_path, write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,35 @@ def init_store(root: Path) -> StorePaths:
             "created": datetime.now(timezone.utc).isoformat(),
             "layout": STORE_LAYOUT,
         }
-        write_text_atomic(paths.marker, json.dumps(marker, indent=2), fsync=True)
-        logger.info("Initialized store at %s", paths.root)
+        if _publish_marker(paths.marker, json.dumps(marker, indent=2)):
+            logger.info("Initialized store at %s", paths.root)
 
     return paths
+
+
+def _publish_marker(marker: Path, text: str) -> bool:
+    """Create ``marker`` holding ``text`` unless it exists; True when this call created it.
+
+    The complete marker is written to a temporary name and published with ``os.link``, which
+    fails when the name exists, so two first-time ``store_init`` runs never overwrite each
+    other's marker: the second keeps the first one's id. A filesystem without hard links
+    (exFAT, some SMB shares) falls back to checking again and renaming, as before.
+    """
+    tmp = unique_temp_path(marker)
+    try:
+        write_text_atomic(tmp, text, fsync=True)
+        try:
+            os.link(tmp, marker)
+        except FileExistsError:
+            logger.debug("Store marker %s was created by another process meanwhile", marker)
+            return False
+        except OSError:
+            if marker.exists():
+                return False
+            os.replace(tmp, marker)
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def read_marker(root: Path) -> Optional[dict]:

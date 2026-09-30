@@ -156,6 +156,19 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - `store_gc --yes` removing several datasets could delete the catalogue row of one that a download
   published again after gc had moved the old copy aside; such a dataset now keeps its new copy and row
   and is reported `in_use` with "published again during removal".
+- An atomic write onto a read-only file (mode 0o444) failed with `PermissionError`; the target's mode is
+  now copied onto the temporary file only just before the rename, so such a file is replaced and stays
+  read-only.
+- A minimap2 that exited 0 without writing its index published a zero-length index that every later run
+  reused; an empty index is now refused when built and rebuilt when found.
+- Two first-time `store_init` runs on a new store could each write a marker with its own id, the last one
+  replacing the first; the marker is now published with a hard link that fails when it exists, so the
+  second run keeps the first run's id (a filesystem without hard links falls back to the old rename).
+- The taxonomy validation caches are read and appended as UTF-8, matching the UTF-8 written when a cache
+  is reset.
+- `store_adopt` no longer copies leftover temporary files (`.<name>.<host>.<pid>.<token>.tmp`, or the
+  `<name>.tmp.<pid>` of earlier versions) from a project folder into the store, nor counts them in its
+  free-space estimate.
 - The warning for a catalogue write that failed after a store publish names the store root and the
   `store_reindex --data-root` command to repair it.
 - The copy made by `store_link --mode copy` (and by `download_sra` with a copy link mode) is built under a
