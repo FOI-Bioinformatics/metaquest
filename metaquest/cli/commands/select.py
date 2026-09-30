@@ -8,6 +8,7 @@ from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_TOP_N
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data import registry_blocks as rb
+from metaquest.data.file_io import write_text_atomic
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection
 from metaquest.data.registry_batch import registry_update
@@ -219,7 +220,7 @@ class SelectDatasetsCommand(BaseCommand):
 
             output = Path(args.output)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("".join(f"{acc}\n" for acc in accessions))
+            write_text_atomic(output, "".join(f"{acc}\n" for acc in accessions))
             self.logger.info("Wrote %d accession(s) to %s", len(accessions), output)
             if not accessions:
                 self.logger.warning("No accessions met the criteria; %s is empty", output)

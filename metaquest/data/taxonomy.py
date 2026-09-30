@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.data.file_io import open_atomic, write_csv
 
 logger = logging.getLogger(__name__)
 
@@ -284,12 +285,20 @@ def _append_validation_cache_row(
     """
     cache_path = Path(cache_file)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    is_new = reset or not cache_path.exists() or cache_path.stat().st_size == 0
-    with open(cache_path, "w" if reset else "a", newline="") as f:
+    row = {column: result.get(column, "") for column in _VALIDATION_CACHE_COLUMNS}
+    if reset:
+        # A fresh file replaces the corrupt one in a single rename.
+        with open_atomic(cache_path, newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=_VALIDATION_CACHE_COLUMNS)
+            writer.writeheader()
+            writer.writerow(row)
+        return
+    is_new = not cache_path.exists() or cache_path.stat().st_size == 0
+    with open(cache_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_VALIDATION_CACHE_COLUMNS)
         if is_new:
             writer.writeheader()
-        writer.writerow({column: result.get(column, "") for column in _VALIDATION_CACHE_COLUMNS})
+        writer.writerow(row)
 
 
 def validate_taxonomic_assignments(
@@ -379,7 +388,7 @@ def validate_taxonomic_assignments(
         if output_file:
             output_path = Path(output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            results_df.to_csv(output_path, index=False)
+            write_csv(results_df, output_path, index=False)
             logger.info(f"Taxonomy validation results saved to {output_path}")
 
         # The cache (if requested) was already updated incrementally above, one row per
@@ -512,7 +521,7 @@ def analyze_taxonomic_composition(
             if output_dir:
                 output_path = Path(output_dir) / f"taxonomy_summary_{level}.csv"
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                summary_df.to_csv(output_path)
+                write_csv(summary_df, output_path)
                 logger.info(f"Saved {level} summary to {output_path}")
 
         return results

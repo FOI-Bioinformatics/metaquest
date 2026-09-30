@@ -81,9 +81,8 @@ class TestDiversityAnalysisCommand:
     @requires_analysis
     @patch("metaquest.processing.diversity.calculate_alpha_diversity")
     @patch("metaquest.processing.diversity.calculate_beta_diversity")
-    @patch("metaquest.cli.commands.advanced_analysis.Path.mkdir")
     @patch("metaquest.cli.commands.advanced_analysis.read_matrix")
-    def test_execute_success_basic(self, mock_read_matrix, mock_mkdir, mock_beta_div, mock_alpha_div):
+    def test_execute_success_basic(self, mock_read_matrix, mock_beta_div, mock_alpha_div, tmp_path):
         """Test successful execution without PERMANOVA."""
         # Setup mocks
         mock_abundance_df = pd.DataFrame({"sample1": [1, 2], "sample2": [3, 4]})
@@ -99,29 +98,30 @@ class TestDiversityAnalysisCommand:
         args = argparse.Namespace(
             abundance_file="abundance.csv",
             metadata_file=None,
-            output_dir="test_output",
+            output_dir=str(tmp_path / "out"),
             alpha_metrics=["shannon"],
             beta_metric="bray_curtis",
             permanova_formula=None,
         )
 
-        with patch("pandas.DataFrame.to_csv") as mock_to_csv:
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
-        mock_mkdir.assert_called_once()
         mock_alpha_div.assert_called_once_with(mock_abundance_df, ["shannon"])
         mock_beta_div.assert_called_once_with(mock_abundance_df, "bray_curtis")
-        assert mock_to_csv.call_count == 2  # Alpha and beta results
+        # Alpha and beta results, and no temporary file left beside them.
+        assert sorted(p.name for p in (tmp_path / "out").iterdir()) == [
+            "alpha_diversity.csv",
+            "beta_diversity_bray_curtis.csv",
+        ]
 
     @requires_analysis
     @patch("metaquest.processing.diversity.calculate_alpha_diversity")
     @patch("metaquest.processing.diversity.calculate_beta_diversity")
     @patch("metaquest.processing.diversity.perform_permanova")
-    @patch("metaquest.cli.commands.advanced_analysis.Path.mkdir")
     @patch("pandas.read_csv")
     def test_execute_success_with_permanova(
-        self, mock_read_csv, mock_mkdir, mock_permanova, mock_beta_div, mock_alpha_div
+        self, mock_read_csv, mock_permanova, mock_beta_div, mock_alpha_div, tmp_path
     ):
         """Test successful execution with PERMANOVA."""
         # Setup mocks
@@ -142,18 +142,19 @@ class TestDiversityAnalysisCommand:
         args = argparse.Namespace(
             abundance_file="abundance.csv",
             metadata_file="metadata.csv",
-            output_dir="test_output",
+            output_dir=str(tmp_path / "out"),
             alpha_metrics=["shannon"],
             beta_metric="bray_curtis",
             permanova_formula="treatment",
         )
 
-        with patch("pandas.DataFrame.to_csv"), patch("builtins.open", mock_open()) as mock_file:
-            result = command.execute(args)
+        result = command.execute(args)
 
         assert result == 0
         mock_permanova.assert_called_once()
-        mock_file.assert_called()
+        report = (tmp_path / "out" / "permanova_results.txt").read_text()
+        assert "Variable: treatment" in report
+        assert "P-value: 0.0300" in report
 
     @requires_analysis
     @patch("pandas.read_csv")

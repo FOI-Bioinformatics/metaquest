@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from metaquest.data.file_io import visible_files
+from metaquest.data.file_io import visible_files, write_text_atomic
 from metaquest.data.sra import MATE_SUFFIXES, MATE1_SUFFIXES, fastq_stem
 from metaquest.sra.analytics import QualityProfile, SRADatasetAnalyzer, _gc_histogram
 from metaquest.sra.dataset_stats import load_dataset_stats
@@ -57,7 +57,7 @@ def profile_to_dict(profile: QualityProfile) -> Dict[str, Any]:
 def write_profile_json(profile: QualityProfile, output_dir: Union[str, Path]) -> Path:
     """Write ``profile`` as JSON into ``output_dir`` and return the file's path."""
     path = profile_json_path(profile.accession, output_dir)
-    path.write_text(json.dumps(profile_to_dict(profile), indent=2))
+    write_text_atomic(path, json.dumps(profile_to_dict(profile), indent=2))
     return path
 
 

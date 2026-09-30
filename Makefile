@@ -8,7 +8,7 @@ help:
 	@echo "  test-perf   - Run only the performance bounds (scale with METAQUEST_PERF_SCALE)"
 	@echo "  lint        - Run flake8 linting"
 	@echo "  format      - Format code with black"
-	@echo "  check       - Run all quality checks (format, lint, type check, module size, ASCII, docs)"
+	@echo "  check       - Run all quality checks (format, lint, type check, module size, ASCII, atomic writes, docs)"
 	@echo "  build       - Build distribution packages"
 	@echo "  clean       - Clean build artifacts and cache"
 	@echo "  pipeline    - Run full integration test pipeline"
@@ -68,6 +68,8 @@ check:
 	python tests/test_module_sizes.py --check
 	@echo "Checking for non-ASCII bytes outside the documented exemptions..."
 	bash scripts/check_ascii.sh
+	@echo "Checking that output files are written atomically (temp name, then rename)..."
+	bash scripts/check_atomic_writes.sh
 	@echo "Checking every command is documented and README names no unknown command..."
 	python scripts/check_docs_commands.py
 	@echo "All quality checks passed!"

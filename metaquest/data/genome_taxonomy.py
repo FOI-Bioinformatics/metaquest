@@ -15,6 +15,7 @@ import requests
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.core.models import TaxonomyInfo
+from metaquest.data.file_io import open_atomic
 from metaquest.data.gtdb import GTDB_API_BASE, REQUEST_TIMEOUT, get_session
 
 logger = logging.getLogger(__name__)
@@ -153,7 +154,7 @@ def load_taxonomy_cache(cache_file: Path) -> Dict[str, TaxonomyInfo]:
 
 def save_taxonomy_cache(taxonomy: Dict[str, TaxonomyInfo], cache_file: Path) -> None:
     """Save a genome-to-taxonomy mapping to a TSV file."""
-    with open(cache_file, "w", newline="") as f:
+    with open_atomic(cache_file, newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_CACHE_COLUMNS, delimiter="\t")
         writer.writeheader()
         for info in taxonomy.values():

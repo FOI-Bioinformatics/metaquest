@@ -23,9 +23,9 @@ MIN_MAINTAINABILITY = 20.0
 # Follow-up after 0.5.0: split each of these three into a package, as metaquest/data/sra.py was
 # split in 0.5.0, and drop its entry here once every resulting module meets the ceilings.
 KNOWN_EXCEPTIONS: Dict[str, Tuple[int, float]] = {
-    "metaquest/data/read_extraction.py": (1210, MIN_MAINTAINABILITY),
-    "metaquest/data/registry.py": (1004, MIN_MAINTAINABILITY),
-    "metaquest/visualization/reporting.py": (826, MIN_MAINTAINABILITY),
+    "metaquest/data/read_extraction.py": (1200, MIN_MAINTAINABILITY),
+    "metaquest/data/registry.py": (1001, MIN_MAINTAINABILITY),
+    "metaquest/visualization/reporting.py": (813, MIN_MAINTAINABILITY),
 }
 
 

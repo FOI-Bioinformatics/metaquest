@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from metaquest.core.constants import STORE_LAYOUT, STORE_MARKER
+from metaquest.data.file_io import write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def init_store(root: Path) -> StorePaths:
             "created": datetime.now(timezone.utc).isoformat(),
             "layout": STORE_LAYOUT,
         }
-        paths.marker.write_text(json.dumps(marker, indent=2))
+        write_text_atomic(paths.marker, json.dumps(marker, indent=2), fsync=True)
         logger.info("Initialized store at %s", paths.root)
 
     return paths

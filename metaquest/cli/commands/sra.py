@@ -16,6 +16,7 @@ from pathlib import Path
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data import registry_blocks as rb
+from metaquest.data.file_io import open_atomic
 from metaquest.data.registry import (
     Registry,
     load_registry,
@@ -272,7 +273,7 @@ class DownloadSraCommand(BaseCommand):
         rows.extend((acc, "skipped", "--max-downloads") for acc in stats.get("skipped_accessions", []))
         path = Path(report_file)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", newline="") as handle:
+        with open_atomic(path, newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(["accession", "status", "message"])
             writer.writerows(sorted(rows))

@@ -176,6 +176,7 @@ class MetaquestDiversityPlugin(CommandLinePlugin):
         import pandas as pd
         from pathlib import Path
 
+        from metaquest.data.file_io import open_atomic, write_csv
         from metaquest.processing.diversity import (
             calculate_alpha_diversity,
             calculate_beta_diversity,
@@ -195,21 +196,21 @@ class MetaquestDiversityPlugin(CommandLinePlugin):
             # Alpha diversity
             alpha_div = calculate_alpha_diversity(abundance_df, args.alpha_metrics)
             alpha_output = output_dir / "alpha_diversity.csv"
-            alpha_div.to_csv(alpha_output)
+            write_csv(alpha_div, alpha_output)
             logger.info(f"Alpha diversity results saved to {alpha_output}")
 
             # Beta diversity
             beta_div = calculate_beta_diversity(abundance_df, args.beta_metric)
             assert isinstance(beta_div, pd.DataFrame)
             beta_output = output_dir / f"beta_diversity_{args.beta_metric}.csv"
-            beta_div.to_csv(beta_output)
+            write_csv(beta_div, beta_output)
             logger.info(f"Beta diversity results saved to {beta_output}")
 
             # PERMANOVA
             if args.permanova_formula and metadata_df is not None:
                 permanova_results = perform_permanova(beta_div, metadata_df, args.permanova_formula)
                 permanova_output = output_dir / "permanova_results.txt"
-                with open(permanova_output, "w") as f:
+                with open_atomic(permanova_output) as f:
                     f.write("PERMANOVA Results\n")
                     f.write("=================\n\n")
                     for variable, results in permanova_results.items():

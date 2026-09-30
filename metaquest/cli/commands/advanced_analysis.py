@@ -11,6 +11,7 @@ from pathlib import Path
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import ConfigurationError, MetaQuestError
 from metaquest.core.optional import require
+from metaquest.data.file_io import open_atomic, write_csv
 from metaquest.data.defaults import read_matrix, read_records, read_table
 from metaquest.data.taxonomy import (
     validate_taxonomic_assignments,
@@ -91,7 +92,7 @@ class DiversityAnalysisCommand(BaseCommand):
             alpha_div = calculate_alpha_diversity(abundance_df, args.alpha_metrics)
 
             alpha_output = output_dir / "alpha_diversity.csv"
-            alpha_div.to_csv(alpha_output)
+            write_csv(alpha_div, alpha_output)
             logger.info(f"Alpha diversity results saved to {alpha_output}")
 
             # Calculate beta diversity
@@ -100,7 +101,7 @@ class DiversityAnalysisCommand(BaseCommand):
             assert isinstance(beta_div, pd.DataFrame)
 
             beta_output = output_dir / f"beta_diversity_{args.beta_metric}.csv"
-            beta_div.to_csv(beta_output)
+            write_csv(beta_div, beta_output)
             logger.info(f"Beta diversity results saved to {beta_output}")
 
             # PERMANOVA if requested
@@ -109,7 +110,7 @@ class DiversityAnalysisCommand(BaseCommand):
                 permanova_results = perform_permanova(beta_div, metadata_df, args.permanova_formula)
 
                 permanova_output = output_dir / "permanova_results.txt"
-                with open(permanova_output, "w") as f:
+                with open_atomic(permanova_output) as f:
                     f.write("PERMANOVA Results\n")
                     f.write("=================\n\n")
                     for variable, results in permanova_results.items():

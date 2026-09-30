@@ -24,6 +24,7 @@ from urllib3.util.retry import Retry
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.core.optional import require
+from metaquest.data.file_io import open_atomic, write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -194,14 +195,14 @@ def _cache_write(cache_dir: Path, key: str, text: str, server: str, threshold: f
     """Write a cache entry; a failure (for example a read-only cache directory) is logged, not raised."""
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        (cache_dir / f"{key}.csv").write_text(text)
+        write_text_atomic(cache_dir / f"{key}.csv", text)
         meta = {
             "fetched": datetime.now(timezone.utc).isoformat(),
             "server": server,
             "threshold": threshold,
             "rows": rows,
         }
-        (cache_dir / f"{key}.json").write_text(json.dumps(meta))
+        write_text_atomic(cache_dir / f"{key}.json", json.dumps(meta))
     except OSError as e:
         logger.warning("Could not write Branchwater cache entry %s: %s", key, e)
 
@@ -300,7 +301,7 @@ def write_branchwater_csv(matches: List[Tuple[str, float]], output_path: Union[s
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     empty_metadata = [""] * (len(BRANCHWATER_COLUMNS) - 3)
-    with open(path, "w", newline="") as handle:
+    with open_atomic(path, newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(BRANCHWATER_COLUMNS)
         for accession, containment in matches:

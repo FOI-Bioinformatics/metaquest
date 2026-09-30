@@ -16,6 +16,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from metaquest.core.exceptions import MetaQuestError, VisualizationError
 from metaquest.core.optional import require
 from metaquest.core.utils import get_genome_columns as _get_genome_columns
+from metaquest.data.file_io import write_text_atomic
 from metaquest.visualization.plots import (
     plot_containment,
     plot_metadata_counts,
@@ -731,8 +732,7 @@ def _create_default_template():
         templates_dir = Path(__file__).parent / "templates"
         templates_dir.mkdir(exist_ok=True)
 
-        with open(template_path, "w") as f:
-            f.write(default_template)
+        write_text_atomic(template_path, default_template)
 
     return template_path
 
@@ -807,8 +807,7 @@ def _generate_html_report(
         raise VisualizationError(f"Error rendering HTML report template: {e}") from e
 
     # Write to file
-    with open(output_path, "w") as f:
-        f.write(output_html)
+    write_text_atomic(output_path, output_html)
 
     logger.info(f"HTML report saved to {output_path}")
     return output_path

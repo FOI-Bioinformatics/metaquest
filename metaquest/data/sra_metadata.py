@@ -17,6 +17,7 @@ import pandas as pd
 import requests
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import write_csv
 
 logger = logging.getLogger(__name__)
 
@@ -472,7 +473,7 @@ def save_metadata_report(metadata: Dict[str, SRADatasetInfo], output_file: Union
         )
 
     df = pd.DataFrame(records)
-    df.to_csv(output_file, index=False)
+    write_csv(df, output_file, index=False)
     logger.info(f"Metadata report saved to {output_file}")
 
 
@@ -521,7 +522,7 @@ def generate_statistics_report(rows: Sequence[Dict[str, Any]], output_file: Unio
         logger.warning("No statistics to write")
         return []
     df = pd.DataFrame(list(rows))
-    df.to_csv(output_file, index=False)
+    write_csv(df, output_file, index=False)
     logger.info(f"Statistics report saved to {output_file} ({len(df)} datasets)")
     return format_statistics_summary(df)
 

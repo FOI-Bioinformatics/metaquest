@@ -18,6 +18,7 @@ from metaquest.cli.base import BaseCommand, read_accessions_file, resolve_comman
 from metaquest.cli.commands.sra_profile import add_sampling_arguments
 from metaquest.core.exceptions import MetaQuestError, ValidationError
 from metaquest.core.optional import require
+from metaquest.data.file_io import write_text_atomic
 from metaquest.data.registry import load_registry, record_analysis
 from metaquest.data.registry_batch import registry_batch
 from metaquest.sra.analytics import AnomalyReport, ComparativeAnalysis, QualityProfile, json_safe
@@ -215,7 +216,7 @@ class SRAReportCommand(BaseCommand):
             "comparison": self._comparison_payload(comparison),
         }
         path = output_dir / REPORT_JSON
-        path.write_text(json.dumps(json_safe(payload), indent=2))
+        write_text_atomic(path, json.dumps(json_safe(payload), indent=2))
         return path
 
     def _record(

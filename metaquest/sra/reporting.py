@@ -27,6 +27,7 @@ from metaquest.sra.analytics import (
     SRADatasetAnalyzer,
 )
 from metaquest.core.optional import require
+from metaquest.data.file_io import write_text_atomic
 from metaquest.utils.html import CATEGORICAL_COLORS, REPORT_CSS, plotly_js_script, plotly_layout
 
 # Quality-grade colours drawn from the validated categorical palette (ordinal:
@@ -129,8 +130,7 @@ class SRAReportGenerator:
         html_content = self._generate_quality_html(dashboard_data)
 
         dashboard_path = self.output_dir / f"quality_dashboard_{int(datetime.now().timestamp())}.html"
-        with open(dashboard_path, "w") as f:
-            f.write(html_content)
+        write_text_atomic(dashboard_path, html_content)
 
         logger.info(f"Quality dashboard saved to {dashboard_path}")
         return dashboard_path
@@ -178,8 +178,7 @@ class SRAReportGenerator:
         html_content = self._generate_comparative_html(report_data)
 
         report_path = self.output_dir / f"comparative_analysis_{int(datetime.now().timestamp())}.html"
-        with open(report_path, "w") as f:
-            f.write(html_content)
+        write_text_atomic(report_path, html_content)
 
         logger.info(f"Comparative analysis saved to {report_path}")
         return report_path
@@ -230,7 +229,7 @@ class SRAReportGenerator:
             "SRA report", title, timestamp, quality=self.quality_section(profiles, anomalies), comparative=comparative
         )
         report_path = self.output_dir / filename
-        report_path.write_text(html)
+        write_text_atomic(report_path, html)
         logger.info(f"SRA report saved to {report_path}")
         return report_path
 

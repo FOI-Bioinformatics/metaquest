@@ -237,6 +237,9 @@ command shown.
   `setup.cfg` or `pyproject.toml`, aside from the documented exemptions in
   `scripts/check_ascii.sh`: single lines marked `# ascii-ok` with a reason (the package
   author's name, Unicode test fixtures). `bash scripts/check_ascii.sh`
+- **Atomic writes**: every file under `metaquest/` is written through `write_text_atomic`, `write_csv`,
+  `open_atomic` or `atomic_path` (`data/file_io.py`), never `.write_text(`, `.to_csv(<path>` or
+  `open(<path>, "w")`, outside `scripts/atomic_writes_allowlist.txt`. `bash scripts/check_atomic_writes.sh`
 - **Documented commands**: every command visible in `metaquest --help` is mentioned in
   README.md, and README.md invokes no command the CLI registry does not have.
   `python scripts/check_docs_commands.py`

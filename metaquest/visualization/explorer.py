@@ -22,6 +22,7 @@ import pandas as pd
 from metaquest.core.models import TaxonomyInfo
 from metaquest.core.optional import require
 from metaquest.core.utils import get_genome_columns
+from metaquest.data.file_io import write_text_atomic
 from metaquest.utils.html import (
     CONTAINMENT_SCALE,
     REPORT_CSS,
@@ -86,9 +87,7 @@ def generate_containment_explorer(
     table_html = _build_table_html(long_df)
     html_content = _assemble_html(title, summary, sunburst_html, heatmap_html, table_html, box_html, bar_html)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        f.write(html_content)
+    write_text_atomic(output_path, html_content)
 
     logger.info(f"Containment explorer saved to {output_path}")
     return output_path

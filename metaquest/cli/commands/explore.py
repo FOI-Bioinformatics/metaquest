@@ -8,6 +8,7 @@ import pandas as pd
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.core.utils import get_genome_columns
+from metaquest.data.file_io import write_csv
 from metaquest.data.genome_taxonomy import (
     annotate_containment_with_taxonomy,
     enrich_genomes_with_taxonomy,
@@ -294,7 +295,7 @@ class FindByTaxonomyCommand(BaseCommand):
                 result = filtered
 
             if args.output:
-                result.to_csv(args.output, sep="\t")
+                write_csv(result, args.output, sep="\t")
                 self.logger.info("Wrote %d results to %s", len(result), args.output)
             else:
                 self.emit_raw(result.to_csv(sep="\t"))

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand, accessions_from_args, resolve_command_store
 from metaquest.core.exceptions import MetaQuestError, ValidationError
-from metaquest.data.file_io import visible_files
+from metaquest.data.file_io import visible_files, write_text_atomic
 from metaquest.data.registry import load_registry, record_analysis
 from metaquest.data.registry_batch import registry_batch
 from metaquest.data.sra import is_transient_folder
@@ -200,7 +200,7 @@ class SRAProfileCommand(BaseCommand):
             "failed_accessions": failed,
             "summary_stats": self._summary_stats(profiles),
         }
-        path.write_text(json.dumps(summary, indent=2))
+        write_text_atomic(path, json.dumps(summary, indent=2))
         return path
 
     def _record(self, args: argparse.Namespace, profiled: List[ProfiledDataset], output_dir: Path) -> None:

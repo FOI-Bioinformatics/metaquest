@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 
 from metaquest.core.constants import CONFIG_DIRNAME, CONFIG_FILENAME, STORE_ENV
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import write_text_atomic
 from metaquest.store.layout import StorePaths, read_marker, store_paths
 from metaquest.utils.security import SecureSubprocess
 
@@ -78,7 +79,7 @@ def write_config_data_root(root: Path) -> Path:
     # string literal for a plain path (no control characters to worry about).
     new_block = f"[store]\ndata_root = {json.dumps(root_posix)}\n"
 
-    path.write_text(remaining_text + new_block)
+    write_text_atomic(path, remaining_text + new_block, fsync=True)
     return path
 
 

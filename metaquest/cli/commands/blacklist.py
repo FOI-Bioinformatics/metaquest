@@ -7,6 +7,7 @@ from typing import Dict, List
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data import registry_blocks as rb
+from metaquest.data.file_io import write_text_atomic
 from metaquest.data.registry import Registry, clear_exclusion, load_registry, query, record_exclusion
 from metaquest.data.registry_batch import registry_update
 
@@ -26,8 +27,8 @@ def read_blacklist_file(path: Path) -> Dict[str, str]:
 
 
 def write_blacklist_file(path: Path, entries: Dict[str, str]) -> None:
-    path.write_text(
-        "".join(f"{acc}  # {reason}\n" if reason else f"{acc}\n" for acc, reason in sorted(entries.items()))
+    write_text_atomic(
+        path, "".join(f"{acc}  # {reason}\n" if reason else f"{acc}\n" for acc, reason in sorted(entries.items()))
     )
 
 

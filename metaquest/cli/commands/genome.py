@@ -8,7 +8,7 @@ from typing import Optional
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import GENOME_FASTA_GLOBS
 from metaquest.core.exceptions import MetaQuestError
-from metaquest.data.file_io import visible_files
+from metaquest.data.file_io import open_atomic, visible_files, write_text_atomic
 from metaquest.data.genome_download import download_genomes, extract_and_organize, partition_present_genomes
 from metaquest.data.gtdb import (
     get_accessions_for_genus,
@@ -93,7 +93,7 @@ class GenomeSearchCommand(BaseCommand):
             output_text = "\n".join(lines) + "\n"
 
             if args.output:
-                Path(args.output).write_text(output_text)
+                write_text_atomic(args.output, output_text)
                 self.logger.info("Wrote accessions to %s", args.output)
             else:
                 self.emit_raw(output_text)
@@ -327,7 +327,7 @@ class GenomePrepareCommand(BaseCommand):
 
         manifest_path = Path(manifest_file)
         rows = []
-        with open(manifest_path, "w", newline="") as f:
+        with open_atomic(manifest_path, newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["name", "genome_filename", "protein_filename"])
             for gf in genome_files:

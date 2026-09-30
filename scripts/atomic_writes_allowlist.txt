@@ -1,0 +1,3 @@
+# Modules allowed to write files directly; see scripts/check_atomic_writes.sh.
+# One path per line, then the reason. Keep this list short: it should only shrink.
+metaquest/data/file_io.py  implements the atomic helpers; writes only into the temporary name atomic_path yields

@@ -314,7 +314,7 @@ def _finalize_metadata_extraction(metadata_records, output_file, processed_count
     # Save to output file
     # Ensure directory exists
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-    metadata_df.to_csv(output_file, sep="\t", index=False)
+    write_csv(metadata_df, output_file, sep="\t", index=False)
 
     if not metadata_records:
         logger.info(f"Saved empty metadata file to {output_file}")

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Union
 
 from metaquest.core.exceptions import ProcessingError
-from metaquest.data.file_io import ensure_directory
+from metaquest.data.file_io import ensure_directory, write_bytes_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -46,19 +46,10 @@ def download_test_genome(output_folder: Union[str, Path]) -> Path:
             "GCF_000008985.1_ASM898v1/GCF_000008985.1_ASM898v1_genomic.fna.gz"
         )
 
-        # Download compressed file
-        temp_file = output_path.with_suffix(".gz")
+        # Download and decompress in memory (the genome is small), then publish in one rename so
+        # an interrupted download never leaves a partial FASTA that the check above would reuse.
         response = urllib.request.urlopen(url, timeout=30)
-        with open(temp_file, "wb") as dl_f:
-            dl_f.write(response.read())
-
-        # Decompress file
-        with gzip.open(temp_file, "rt") as f_in:
-            with open(output_path, "w") as f_out:
-                f_out.write(f_in.read())
-
-        # Remove temporary file
-        temp_file.unlink()
+        write_bytes_atomic(output_path, gzip.decompress(response.read()))
 
         logger.info(f"Downloaded test genome to {output_path}")
         return output_path

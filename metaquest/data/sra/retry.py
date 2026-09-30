@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data.file_io import write_text_atomic
 from metaquest.data.sra import accession as accession_mod
 from metaquest.utils.security import SecureSubprocess
 
@@ -205,9 +206,7 @@ def _handle_download_failure(fastq_path, failed_accessions):
 
     # Write failed accessions to file for easier retry
     failed_file = Path(fastq_path) / FAILED_ACCESSIONS_FILE
-    with open(failed_file, "w") as f:
-        for acc in failed_accessions:
-            f.write(f"{acc}\n")
+    write_text_atomic(failed_file, "".join(f"{acc}\n" for acc in failed_accessions))
 
     logger.info(f"Failed accessions written to {failed_file}")
     logger.info(
