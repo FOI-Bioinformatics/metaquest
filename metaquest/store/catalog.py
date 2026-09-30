@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, TypeVar
 
 from metaquest.core.constants import (
+    CATALOG_BUSY_TIMEOUT_SECONDS,
     CATALOG_LOCK_STALE_SECONDS,
     CATALOG_LOCK_WAIT_SECONDS,
     SHORT_LOCK_HEARTBEAT_SECONDS,
@@ -177,7 +178,11 @@ class Catalog:
                 f"No store catalogue at {self.paths.catalog}; build one with: metaquest store_reindex"
             )
         self.paths.root.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.paths.catalog))
+        # SQLite's own busy handler, on top of catalog_write's O_EXCL lock file: the implicit
+        # default (5 s) is shorter than a store_reindex replay can hold the database, and
+        # shorter than the window this connection may need to wait out another connection's
+        # transaction.
+        conn = sqlite3.connect(str(self.paths.catalog), timeout=CATALOG_BUSY_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         # DELETE, never WAL: SQLite documents WAL as unsafe over NFS and SMB (its shared-memory

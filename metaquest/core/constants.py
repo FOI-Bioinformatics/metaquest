@@ -252,6 +252,13 @@ SHORT_LOCK_POLL_SECONDS = 0.05
 CATALOG_LOCK_WAIT_SECONDS = 60.0
 CATALOG_LOCK_STALE_SECONDS = 120.0
 
+# SQLite's own busy handler for every catalogue connection (metaquest.store.catalog),
+# separate from the O_EXCL lock-file wait above: it covers the brief window between another
+# connection taking SQLite's internal lock and catalog_write's own lock file being visible,
+# and a store_reindex replay that can hold the database busy longer than sqlite3's implicit
+# 5 second default.
+CATALOG_BUSY_TIMEOUT_SECONDS = 30.0
+
 # Memory and Resource Limits
 DEFAULT_MEMORY_LIMIT_GB = 8
 MAX_FILE_SIZE_MB = 1024  # 1GB max file size for uploads

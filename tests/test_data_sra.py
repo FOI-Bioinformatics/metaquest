@@ -2229,6 +2229,60 @@ class TestDownloadSraStore:
         assert (fastq_folder / "SRR1").is_symlink()
         assert not (paths.locks / "SRR1.lock").exists()
 
+    def test_catalogue_busy_during_publish_still_links_and_reindex_repairs_it(self, tmp_path, monkeypatch, caplog):
+        """A catalogue lock held by another writer through the whole publish window must not
+        turn a completed, published download into a reported failure: the dataset is linked
+        into the project and the message says the catalogue write is pending, and a later
+        store_reindex (called directly here) picks up the sidecar already on disk."""
+        import threading
+
+        from metaquest.store.catalog import Catalog, catalog_write
+        from metaquest.store.sidecar import read_sidecar
+
+        monkeypatch.setattr("metaquest.store.catalog.CATALOG_LOCK_WAIT_SECONDS", 0.2)
+
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+        calls = []
+
+        barrier_entered = threading.Event()
+        release = threading.Event()
+
+        def hold_catalogue_lock():
+            with catalog_write(paths) as catalog:
+                catalog.migrate()
+                barrier_entered.set()
+                release.wait(timeout=5)
+
+        holder = threading.Thread(target=hold_catalogue_lock)
+        holder.start()
+        assert barrier_entered.wait(timeout=2)
+
+        try:
+            with patch("metaquest.data.sra.accession.download_accession", side_effect=self._fake_download(calls)):
+                with caplog.at_level("WARNING", logger="metaquest.data.sra.store_handoff"):
+                    stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+        finally:
+            release.set()
+            holder.join(timeout=5)
+
+        assert stats["successful"] == 1
+        result = stats["results"]["SRR1"]
+        assert result.endswith("; stored")
+        assert "catalogue pending" in result
+        assert (fastq_folder / "SRR1").is_symlink()
+        assert "store_reindex" in caplog.text
+
+        with Catalog(paths) as catalog:
+            assert catalog.get_dataset("SRR1") is None
+
+        sidecar = read_sidecar(paths.sra / "SRR1" / "SRR1.json")
+        assert sidecar is not None
+        with catalog_write(paths) as catalog:
+            catalog.reindex([sidecar])
+        with Catalog(paths) as catalog:
+            assert catalog.get_dataset("SRR1") is not None
+
     def test_gzipped_store_download_records_gzip_compression(self, tmp_path):
         from metaquest.store.sidecar import read_sidecar
 

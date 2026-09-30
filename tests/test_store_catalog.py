@@ -544,3 +544,68 @@ def test_reindex_drops_a_row_whose_folder_is_gone(paths):
         ]
 
     assert accessions == ["SRR1"]
+
+
+def test_catalog_read_waits_out_a_brief_exclusive_lock(paths):
+    """Every catalogue connection's own SQLite busy handler, not just catalog_write's lock
+    file, must let a reader wait out a short-lived exclusive lock from another connection
+    instead of failing at once with 'database is locked'."""
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+
+    entered = threading.Event()
+
+    def hold_exclusive():
+        conn = sqlite3.connect(str(paths.catalog), timeout=5.0)
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+            entered.set()
+            time.sleep(1.0)
+            conn.rollback()
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=hold_exclusive)
+    thread.start()
+    assert entered.wait(timeout=2)
+
+    with Catalog(paths) as catalog:
+        row = catalog.get_dataset("SRR1")
+
+    thread.join(timeout=5)
+    assert row is None
+
+
+def test_catalog_busy_timeout_constant_is_wired_to_connect(paths, monkeypatch):
+    """A short CATALOG_BUSY_TIMEOUT_SECONDS makes a new connection give up quickly against a
+    held exclusive lock, which only happens if the constant actually reaches
+    sqlite3.connect's ``timeout`` rather than a hard-coded default."""
+    monkeypatch.setattr("metaquest.store.catalog.CATALOG_BUSY_TIMEOUT_SECONDS", 0.05)
+
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_exclusive():
+        conn = sqlite3.connect(str(paths.catalog), timeout=5.0)
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+            entered.set()
+            release.wait(timeout=5)
+            conn.rollback()
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=hold_exclusive)
+    thread.start()
+    assert entered.wait(timeout=2)
+
+    try:
+        with pytest.raises(DataAccessError):
+            with Catalog(paths) as catalog:
+                catalog.get_dataset("SRR1")
+    finally:
+        release.set()
+        thread.join(timeout=5)

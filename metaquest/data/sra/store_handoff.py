@@ -95,6 +95,34 @@ def _store_precheck(
     return None
 
 
+def _catalogue_published(store, sidecar) -> bool:
+    """Record a just-published dataset's sidecar in the store catalogue; never raises.
+
+    ``_store_fetch`` calls this only after the dataset is already complete in ``sra/<ACC>``,
+    so the catalogue write is bookkeeping, not part of what makes the download succeed: a
+    locked or otherwise unwritable catalogue (``DataAccessError``, e.g. another writer
+    holding the catalogue lock, or a store_reindex replay in progress) must not turn a
+    correctly published dataset into a reported download failure. On that failure this logs
+    a warning naming ``metaquest store_reindex`` (which rebuilds the catalogue from the
+    sidecars already on disk, including this one) and returns False; a real success returns
+    True. Same shape as ``record_usage_safe``/``record_usage_many`` in
+    ``metaquest.store.usage``, which protect usage recording the same way.
+    """
+    from metaquest.store.catalog import catalog_write
+
+    try:
+        with catalog_write(store) as catalog:
+            catalog.upsert_dataset(sidecar)
+        return True
+    except DataAccessError as e:
+        logger.warning(
+            "Could not record %s in the store catalogue: %s; run metaquest store_reindex to repair it",
+            sidecar.accession,
+            e,
+        )
+        return False
+
+
 def _store_fetch(
     accession: str,
     project_fastq: Path,
@@ -112,7 +140,6 @@ def _store_fetch(
     sidecar-less dataset for another project to find, and an existing copy is replaced only
     once its replacement is complete.
     """
-    from metaquest.store.catalog import catalog_write
     from metaquest.store.layout import sra_dir
     from metaquest.store.link import link_dataset
     from metaquest.store.sidecar import build_sidecar, ncbi_from_metadata_xml, write_sidecar
@@ -161,11 +188,11 @@ def _store_fetch(
     write_sidecar(staged / f"{accession}.json", sidecar)
     cleanup_mod.publish_folder(staged, target, store.tmp)
 
-    with catalog_write(store) as catalog:
-        catalog.upsert_dataset(sidecar)
+    catalogued = _catalogue_published(store, sidecar)
 
     link_dataset(project_fastq, accession, store, mode=link_mode)
-    return True, f"{message}; stored"
+    suffix = "; stored" if catalogued else "; catalogue pending; stored"
+    return True, f"{message}{suffix}"
 
 
 def _store_download(
