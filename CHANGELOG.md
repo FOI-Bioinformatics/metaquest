@@ -4,8 +4,20 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ## [0.7.0] - unreleased
 
+### Added
+
+- Logging options on every command, before or after the command name: `--log-file PATH` appends every
+  line at INFO or above to a file, each stamped with host name and process ID and with the full traceback
+  of a failure; `-q/--quiet` (warnings and errors only on the console) and `-v/--verbose` (DEBUG), which
+  cannot be combined and override `--log-level`. At DEBUG a run logs the version, its command line (the
+  `--api-key` value hidden), host, process ID and SLURM job and array task IDs. See "Logging" in the
+  README.
+
 ### Changed
 
+- A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to
+  the log file when there is one. The hint "Use --log-level DEBUG for full traceback" is shown only when
+  there is no log file.
 - Exit codes: 3 for a configuration problem (`ConfigurationError`: a missing optional package or NCBI
   email address, a malformed `config.toml`), 4 for a retryable failure (an NCBI request that could not
   connect, timed out or got HTTP 429 or 5xx; a wait for the registry or catalogue lock that reached its

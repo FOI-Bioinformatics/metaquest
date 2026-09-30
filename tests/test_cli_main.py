@@ -230,7 +230,8 @@ class TestMainFunction:
         result = main(["test_command"])
 
         assert result == 0
-        mock_setup_logging.assert_called_once_with(level=logging.INFO)
+        mock_setup_logging.assert_called_once()
+        assert mock_setup_logging.call_args.kwargs["level"] == logging.INFO
         mock_args.func.assert_called_once_with(mock_args)
 
     @patch("metaquest.cli.main.setup_logging")
@@ -250,7 +251,8 @@ class TestMainFunction:
         result = main(["failing_command"])
 
         assert result == 1
-        mock_setup_logging.assert_called_once_with(level=logging.ERROR)
+        mock_setup_logging.assert_called_once()
+        assert mock_setup_logging.call_args.kwargs["level"] == logging.ERROR
         mock_args.func.assert_called_once_with(mock_args)
 
     @patch("metaquest.cli.main.logging.error")
@@ -271,8 +273,10 @@ class TestMainFunction:
         result = main(["error_command"])
 
         assert result == 1
-        mock_setup_logging.assert_called_once_with(level=logging.DEBUG)
-        mock_log_error.assert_called_once_with("Exception: Test error")
+        mock_setup_logging.assert_called_once()
+        assert mock_setup_logging.call_args.kwargs["level"] == logging.DEBUG
+        mock_log_error.assert_called_once()
+        assert mock_log_error.call_args.args == ("Exception: Test error",)
 
     @patch("metaquest.cli.main.setup_logging")
     @patch("metaquest.cli.main.create_parser")
@@ -297,7 +301,8 @@ class TestMainFunction:
             main(["test_command"])
 
             expected_level = getattr(logging, level)
-            mock_setup_logging.assert_called_once_with(level=expected_level)
+            mock_setup_logging.assert_called_once()
+            assert mock_setup_logging.call_args.kwargs["level"] == expected_level
 
     @patch("metaquest.cli.main.sys.argv", ["metaquest"])
     def test_main_no_args_uses_sys_argv(self):

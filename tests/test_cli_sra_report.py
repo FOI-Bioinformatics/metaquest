@@ -16,6 +16,7 @@ from metaquest.cli.commands.sra_report import SRAReportCommand, load_groups
 from metaquest.core.exceptions import ValidationError
 from metaquest.sra.analytics import ComparativeAnalysis, QualityProfile, SRADatasetAnalyzer
 from metaquest.sra.profiles import write_profile_json
+from metaquest.utils.logging import ConsoleFormatter
 
 
 def _write_fastq(path, reads):
@@ -289,7 +290,7 @@ def test_no_accession_source_is_an_error(tmp_path, caplog):
     with caplog.at_level(logging.ERROR):
         assert SRAReportCommand().execute(_args(tmp_path)) == 1
     assert any("Give --accessions-file, --groups-file or a --quality-profiles" in r.message for r in caplog.records)
-    assert not any(r.exc_info for r in caplog.records)
+    assert not any("Traceback" in ConsoleFormatter().format(r) for r in caplog.records)
 
 
 def test_no_fastq_for_any_accession_is_an_error(tmp_path, caplog):
@@ -339,7 +340,7 @@ def test_an_expected_error_is_one_line_without_traceback(caplog, tmp_path):
     with caplog.at_level("ERROR"):
         assert SRAReportCommand().execute(args) == 1
     assert any("Report failed" in r.message and "missing.txt" in r.message for r in caplog.records)
-    assert not any(r.exc_info for r in caplog.records)
+    assert not any("Traceback" in ConsoleFormatter().format(r) for r in caplog.records)
 
 
 def test_cli_execute_logs_traceback_for_unexpected_error(caplog, monkeypatch, tmp_path):

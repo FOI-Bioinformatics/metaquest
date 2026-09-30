@@ -650,6 +650,40 @@ another run's lock on the project registry or the store catalogue that gave up.
 `download_sra` exits with 4 only when every accession that failed did so for a network reason; if any
 failed for another reason (not found, disk full, locked by another run, interrupted) it exits with 1.
 
+### Logging
+
+Log lines go to stderr; a command's result (tables, JSON) goes to stdout. These options work on every
+command, before or after the command name (`metaquest --quiet download_sra ...` and
+`metaquest download_sra ... --quiet` are the same):
+
+| Option | Effect |
+|---|---|
+| `--log-level LEVEL` | Console level: DEBUG, INFO (the default), WARNING, ERROR or CRITICAL |
+| `-q`, `--quiet` | Only warnings and errors on the console (same as `--log-level WARNING`) |
+| `-v`, `--verbose` | Debug lines and full tracebacks on the console (same as `--log-level DEBUG`) |
+| `--log-file PATH` | Also append every line to `PATH`; its folder is created |
+| `--progress-every N` | Log a progress summary every N items of a long run (default 50) |
+
+`-q` and `-v` cannot be given together, and either one overrides `--log-level`. `store_status` keeps its
+own `--verbose` (list every dataset), so its log level is raised with `metaquest -v store_status`.
+Each option can also be set with an environment variable (`METAQUEST_LOG_LEVEL`, `METAQUEST_LOG_FILE`,
+`METAQUEST_PROGRESS_EVERY`) or in the `[runtime]` table of `~/.config/metaquest/config.toml`
+(`log_level`, `log_file`, `progress_every`); a flag takes precedence over both.
+
+The log file is opened for appending, so several runs (or several SLURM array tasks) can share one file.
+It receives every line at INFO or above, also when the console is quiet, and DEBUG lines when the
+console is at DEBUG. Each line names the host and process ID that wrote it:
+
+```
+2026-09-30 14:02:11 node17[48213] INFO metaquest.cli.main: ...
+```
+
+When a command fails, the console shows the error on one line and the log file keeps the full
+traceback; without a log file, rerun with `--log-level DEBUG` (or `-v`) to see it. At DEBUG a run also
+logs the MetaQuest version, its command line (with the `--api-key` value hidden), the host, the process
+ID and, under SLURM, `SLURM_JOB_ID` and `SLURM_ARRAY_TASK_ID`. `METAQUEST_LOG_HOST=true` (or
+`log_host = true` in `[runtime]`) puts the host and process ID on console lines too.
+
 ### SRA Quality Profiling
 
 `sra_profile` computes statistics and a quality profile for each downloaded dataset. It reads the

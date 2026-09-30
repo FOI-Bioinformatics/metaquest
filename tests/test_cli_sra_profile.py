@@ -18,6 +18,7 @@ from metaquest.cli.commands.sra_profile import SRAProfileCommand
 from metaquest.sra.analytics import QualityProfile, SRADatasetAnalyzer
 from metaquest.sra.profiles import load_quality_profiles
 from metaquest.store.stats import compute_dataset_stats
+from metaquest.utils.logging import ConsoleFormatter
 
 
 def _write_fastq(path, reads):
@@ -239,7 +240,7 @@ def test_a_folder_without_accession_folders_is_an_error(tmp_path, caplog):
     with caplog.at_level("ERROR"):
         assert SRAProfileCommand().execute(_args(tmp_path)) == 1
     assert "No accession folders" in caplog.text
-    assert not any(r.exc_info for r in caplog.records)
+    assert not any("Traceback" in ConsoleFormatter().format(r) for r in caplog.records)
 
 
 def test_an_accession_without_fastq_files_fails_and_is_summarised(tmp_path, caplog):
@@ -526,7 +527,7 @@ def test_an_expected_error_is_one_line_without_traceback(caplog, tmp_path):
     with caplog.at_level("ERROR"):
         assert SRAProfileCommand().execute(args) == 1
     assert any("Profiling failed" in r.message and "missing.txt" in r.message for r in caplog.records)
-    assert not any(r.exc_info for r in caplog.records)
+    assert not any("Traceback" in ConsoleFormatter().format(r) for r in caplog.records)
 
 
 def test_a_bug_while_profiling_one_accession_is_not_counted_as_a_failed_accession(tmp_path, caplog):

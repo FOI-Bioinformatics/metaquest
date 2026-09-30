@@ -397,7 +397,8 @@ def test_main_resolves_the_log_level_from_the_environment(monkeypatch):
     monkeypatch.setenv("METAQUEST_LOG_LEVEL", "warning")
     with patch("metaquest.cli.main.setup_logging") as setup:
         assert main(["store_status", "--data-root", "/nonexistent-store-root"]) == 1
-    setup.assert_called_once_with(level=logging.WARNING)
+    setup.assert_called_once()
+    assert setup.call_args.kwargs["level"] == logging.WARNING
     assert settings.active().sources["log_level"] == "METAQUEST_LOG_LEVEL"
 
 

@@ -68,6 +68,91 @@ class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return super()._get_help_string(action) or ""
 
 
+LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+GLOBAL_OPTIONS_TITLE = "logging and progress"
+
+
+def _non_negative_count(text: str) -> int:
+    """An argparse type: a whole number, 0 or more."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"expected a whole number, 0 or more, got {value}")
+    return value
+
+
+def add_global_options(parser: argparse.ArgumentParser, suppress_defaults: bool) -> None:
+    """Add the logging and progress options to ``parser``.
+
+    They go on the main parser with real defaults (None or False, so the runtime settings
+    decide) and on every command's parser with ``argparse.SUPPRESS`` defaults, so a flag given
+    after the command name overrides the main parser's value and one left out does not reset
+    it. ``-q/--quiet`` and ``-v/--verbose`` are stored as ``log_quiet`` and ``log_verbose``;
+    ``main`` turns them into a log level. A command that already has one of these option
+    strings (``store_status --verbose``) keeps its own, and the clashing flag is left out of
+    its parser (``metaquest -v store_status`` still sets the log level).
+    """
+
+    def default(value: Any) -> Any:
+        return argparse.SUPPRESS if suppress_defaults else value
+
+    taken = set(getattr(parser, "_option_string_actions", {}))
+    group = parser.add_argument_group(GLOBAL_OPTIONS_TITLE)
+    if "--log-level" not in taken:
+        group.add_argument(
+            "--log-level",
+            choices=LOG_LEVEL_NAMES,
+            metavar="LEVEL",
+            default=default(None),
+            help=(
+                "Console logging level (one of DEBUG, INFO, WARNING, ERROR, CRITICAL; "
+                "default: METAQUEST_LOG_LEVEL, config [runtime] log_level, or INFO)"
+            ),
+        )
+    if "--log-file" not in taken:
+        group.add_argument(
+            "--log-file",
+            metavar="PATH",
+            default=default(None),
+            help=(
+                "Append every log line at INFO or above, with host, process ID and tracebacks, to this file "
+                "(default: METAQUEST_LOG_FILE or config [runtime] log_file; none)"
+            ),
+        )
+    levels = group.add_mutually_exclusive_group()
+    if not taken & {"-q", "--quiet"}:
+        levels.add_argument(
+            "-q",
+            "--quiet",
+            dest="log_quiet",
+            action="store_true",
+            default=default(False),
+            help="Show only warnings and errors on the console (same as --log-level WARNING)",
+        )
+    if not taken & {"-v", "--verbose"}:
+        levels.add_argument(
+            "-v",
+            "--verbose",
+            dest="log_verbose",
+            action="store_true",
+            default=default(False),
+            help="Show debug lines and tracebacks on the console (same as --log-level DEBUG)",
+        )
+    if "--progress-every" not in taken:
+        group.add_argument(
+            "--progress-every",
+            type=_non_negative_count,
+            metavar="N",
+            default=default(None),
+            help=(
+                "Log a progress summary every N items of a long run; 0 logs one line per item instead "
+                "(default: METAQUEST_PROGRESS_EVERY, config [runtime] progress_every, or 50)"
+            ),
+        )
+
+
 def emit_error_json(message: str) -> None:
     """Write ``{"error": message}`` to stdout as one JSON document.
 
@@ -163,11 +248,11 @@ class BaseCommand(ABC):
 
         A command's ``except`` path returns this, so the process exits with 3 for a
         configuration problem, 4 for a retryable one (network, a lock wait that gave up) and 1
-        for any other failure (see ``metaquest.core.exceptions.ExitCode``). The message is one
-        line; the traceback is attached only when DEBUG logging is enabled.
+        for any other failure (see ``metaquest.core.exceptions.ExitCode``). The traceback is
+        always attached: the console handler shows only the one-line message unless the
+        console is at DEBUG, and a log file (``--log-file``) keeps the traceback.
         """
-        trace = error if self.logger.isEnabledFor(logging.DEBUG) else None
-        self.logger.error("%s: %s", context, error, exc_info=trace)
+        self.logger.error("%s: %s", context, error, exc_info=error)
         return exit_code_for(error)
 
     # Output. stdout carries the command's result (tables, JSON); stderr carries logging.
@@ -239,6 +324,7 @@ class CommandRegistry:
             **kwargs,
         )
         command.configure_parser(subparser)
+        add_global_options(subparser, suppress_defaults=True)
         subparser.set_defaults(func=command.run)
 
 

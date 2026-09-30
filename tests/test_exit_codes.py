@@ -24,6 +24,7 @@ from metaquest.core.exceptions import (
 )
 from metaquest.data import registry as reg
 from metaquest.utils.lockfile import LockHeld, LockLost, LockPolicy, held_lock
+from metaquest.utils.logging import ConsoleFormatter
 
 
 @pytest.mark.parametrize(
@@ -116,7 +117,9 @@ def test_fail_logs_one_line_and_returns_the_code(error, code, caplog):
         assert _Failing(error).execute(argparse.Namespace()) == code
     record = caplog.records[-1]
     assert record.getMessage() == "Doing the thing: bad"
-    assert not record.exc_info
+    # The traceback is attached for the log file; the console shows the one line only.
+    assert record.exc_info is not None and record.exc_info[1] is error
+    assert ConsoleFormatter("%(message)s").format(record) == "Doing the thing: bad"
 
 
 def test_fail_attaches_the_traceback_at_debug(caplog):

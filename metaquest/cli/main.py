@@ -6,12 +6,13 @@ This module provides the main CLI entry point with modular command architecture.
 
 import argparse
 import logging
+import os
+import socket
 import sys
-import traceback
 from typing import Dict, List, Optional
 
 from metaquest import __version__
-from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, command_registry
+from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, add_global_options, command_registry
 from metaquest.core import settings
 from metaquest.core.exceptions import ConfigurationError, MetaQuestError, exit_code_for
 from metaquest.utils.logging import setup_logging
@@ -166,20 +167,88 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--version", action="version", version=f"MetaQuest v{__version__}")
 
-    parser.add_argument(
-        "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        metavar="LEVEL",
-        default=None,
-        help=(
-            "Set the logging level (one of DEBUG, INFO, WARNING, ERROR, CRITICAL; "
-            "default: METAQUEST_LOG_LEVEL, config [runtime] log_level, or INFO)"
-        ),
-    )
+    add_global_options(parser, suppress_defaults=False)
 
     command_registry.setup_parsers(parser)
 
     return parser
+
+
+def _flag(args: argparse.Namespace, name: str) -> bool:
+    """True only when ``args`` really holds ``name`` set to True (a mock namespace invents attributes)."""
+    try:
+        return vars(args).get(name) is True
+    except TypeError:
+        return False
+
+
+def _apply_quiet_and_verbose(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Turn ``-q``/``-v`` into ``args.log_level``; together (in either placement) they are a usage error."""
+    quiet, verbose = _flag(args, "log_quiet"), _flag(args, "log_verbose")
+    if quiet and verbose:
+        parser.error("argument -q/--quiet: not allowed with argument -v/--verbose")
+    if quiet:
+        args.log_level = "WARNING"
+    elif verbose:
+        args.log_level = "DEBUG"
+
+
+# Flags whose value must not reach a log file shared with other users.
+SECRET_FLAGS = ("--api-key",)
+
+
+def _masked_argv(argv: List[str]) -> List[str]:
+    """``argv`` with the value of every secret flag replaced by ``***``."""
+    masked: List[str] = []
+    hide_next = False
+    for item in argv:
+        if hide_next:
+            masked.append("***")
+            hide_next = False
+        elif item in SECRET_FLAGS:
+            masked.append(item)
+            hide_next = True
+        elif item.split("=", 1)[0] in SECRET_FLAGS and "=" in item:
+            masked.append(item.split("=", 1)[0] + "=***")
+        else:
+            masked.append(item)
+    return masked
+
+
+def _log_run_header(argv: List[str]) -> None:
+    """Log, at DEBUG, what identifies this run in a shared log: version, arguments, host, PID, SLURM IDs."""
+    logging.debug("MetaQuest v%s: %s", __version__, " ".join(["metaquest", *_masked_argv(argv)]))
+    logging.debug("Host %s, process ID %d", socket.gethostname(), os.getpid())
+    slurm = [f"{name}={os.environ[name]}" for name in ("SLURM_JOB_ID", "SLURM_ARRAY_TASK_ID") if os.environ.get(name)]
+    if slurm:
+        logging.debug("SLURM: %s", ", ".join(slurm))
+
+
+def _configure_logging(runtime: settings.RuntimeSettings) -> Optional[int]:
+    """Set up logging from the runtime settings; an exit code when the log file cannot be opened."""
+    level = getattr(logging, runtime.log_level)
+    try:
+        setup_logging(
+            level=level,
+            log_file=runtime.log_file,
+            show_host=runtime.log_host,
+            console_traceback=level <= logging.DEBUG,
+        )
+    except OSError as e:
+        setup_logging(level=level, show_host=runtime.log_host)
+        error = ConfigurationError(
+            f"Cannot open the log file {runtime.log_file} (from {runtime.source('log_file')}): {e}"
+        )
+        logging.error(f"Error: {error}")
+        return exit_code_for(error)
+    return None
+
+
+def _log_failure(message: str, error: BaseException, log_file: Optional[str]) -> None:
+    """Log a failure that left the command: one line on the console, the traceback in the log file."""
+    logging.error(message, exc_info=error)
+    if not log_file and not logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.info("Use --log-level DEBUG for full traceback.")
 
 
 def main(args: Optional[List[str]] = None) -> int:
@@ -194,8 +263,10 @@ def main(args: Optional[List[str]] = None) -> int:
         failure (network, a lock wait that gave up), 130 interrupted
         (``metaquest.core.exceptions.ExitCode``).
     """
+    argv = list(sys.argv[1:] if args is None else args)
     parser = create_parser()
     parsed_args = parser.parse_args(args)
+    _apply_quiet_and_verbose(parser, parsed_args)
 
     # Every runtime setting is resolved once, before logging is set up, since the level is one.
     try:
@@ -204,28 +275,22 @@ def main(args: Optional[List[str]] = None) -> int:
         setup_logging(level=logging.INFO)
         logging.error(f"Error: {e}")
         return exit_code_for(e)
-    setup_logging(level=getattr(logging, runtime.log_level))
+    failed = _configure_logging(runtime)
+    if failed is not None:
+        return failed
     for message in runtime.warnings:
         logging.getLogger("metaquest.core.settings").warning(message)
+    _log_run_header(argv)
     logging.debug("Runtime settings (value and source):\n  %s", "\n  ".join(runtime.describe()))
-    debug = runtime.log_level == "DEBUG"
 
     try:
         # Execute the chosen command
         return parsed_args.func(parsed_args)
     except MetaQuestError as e:
-        logging.error(f"Error: {e}")
-        if debug:
-            logging.debug(traceback.format_exc())
-        else:
-            logging.info("Use --log-level DEBUG for full traceback.")
+        _log_failure(f"Error: {e}", e, runtime.log_file)
         return exit_code_for(e)
     except Exception as e:
-        logging.error(f"{type(e).__name__}: {e}")
-        if debug:
-            logging.debug(traceback.format_exc())
-        else:
-            logging.info("Use --log-level DEBUG for full traceback.")
+        _log_failure(f"{type(e).__name__}: {e}", e, runtime.log_file)
         return exit_code_for(e)
     except KeyboardInterrupt as e:
         # Only a command with graceful_shutdown False gets here; BaseCommand.run handles the rest.
