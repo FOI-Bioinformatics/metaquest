@@ -129,9 +129,9 @@ def test_record_run_outcomes_with_5000_skipped_is_one_fast_transaction(registry_
     writes = []
     real_write = registry_mod._write_registry
 
-    def counting_write(registry, target):
+    def counting_write(registry, target, lock):
         writes.append(target)
-        return real_write(registry, target)
+        return real_write(registry, target, lock)
 
     # Each run gets a fresh copy, so every run records the 5,000 outcomes rather than finding them done.
     copies = iter(range(3))
