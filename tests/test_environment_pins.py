@@ -83,6 +83,23 @@ def test_pinned_floors_match_tools_table():
     assert not mismatches, "\n".join(mismatches)
 
 
+def test_pigz_and_datasets_floors_are_pinned_explicitly():
+    """pigz and ncbi-datasets-cli both carry an explicit floor now, in TOOLS and environment.yml.
+
+    Both used to have ``min_version=None`` in ``TOOLS`` (any version accepted) while
+    ``environment.yml`` already pinned ``pigz>=2.4``/``ncbi-datasets-cli>=16`` as documentation
+    only: neither floor was actually enforced by ``require_tools``/``metaquest doctor``. Named
+    explicitly here (on top of the generic comparison in ``test_pinned_floors_match_tools_table``)
+    so a future change that quietly drops either floor back to ``None`` fails immediately with a
+    clear message, rather than only via the generic mismatch loop above.
+    """
+    assert TOOLS["pigz"].min_version == "2.4"
+    assert TOOLS["datasets"].min_version == "16"
+    deps = _parsed_dependencies()
+    assert deps["pigz"] == "2.4"
+    assert deps["ncbi-datasets-cli"] == "16"
+
+
 def test_seqkit_stays_commented_out_and_unfloored():
     """seqkit is optional and has no TOOLS floor; it is documented, not installed by default."""
     assert TOOLS["seqkit"].min_version is None
