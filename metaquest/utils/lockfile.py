@@ -50,7 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, LockTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ __all__ = [
     "LockPolicy",
     "LockReentry",
     "LockWaitStopped",
+    "LockWaitTimeout",
     "describe_holder",
     "held_lock",
     "holder_is_dead",
@@ -86,6 +87,15 @@ __all__ = [
 
 class LockHeld(DataAccessError):
     """Raised when a lock is taken by another holder and the caller will not wait any longer."""
+
+
+class LockWaitTimeout(LockHeld, LockTimeoutError):
+    """Raised when a blocking wait reaches ``policy.wait_seconds`` with the lock still held.
+
+    Both a ``LockHeld`` (callers that handle a held lock keep doing so) and a
+    ``LockTimeoutError``, so a command that stops on it exits with 4 (retryable). A
+    non-blocking attempt that finds the lock held raises a plain ``LockHeld`` (exit code 1).
+    """
 
 
 class LockLost(DataAccessError):
@@ -523,8 +533,9 @@ class _DeferredSignals:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
-def _held_error(lock: Path, policy: LockPolicy) -> LockHeld:
-    return LockHeld(f"{policy.what} is locked by {describe_holder(read_holder(lock))}: {lock}")
+def _held_error(lock: Path, policy: LockPolicy, timed_out: bool = False) -> LockHeld:
+    message = f"{policy.what} is locked by {describe_holder(read_holder(lock))}: {lock}"
+    return LockWaitTimeout(message) if timed_out else LockHeld(message)
 
 
 def _check_stop(policy: LockPolicy, should_stop: Optional[Callable[[], bool]], waited: float) -> None:
@@ -561,7 +572,7 @@ def _acquire(
             _check_stop(policy, should_stop, waited)
             raise LockReentry(f"{policy.what} is already locked by this thread: {lock}")
         if blocking and policy.wait_seconds and waited >= policy.wait_seconds:
-            raise _held_error(lock, policy)
+            raise _held_error(lock, policy, timed_out=True)
         observed = _observe(lock)
         if observed is None:
             continue
@@ -610,11 +621,11 @@ def held_lock(
     """Hold ``lock`` for the length of the block, under ``policy``.
 
     Waits while a live holder keeps the lock, up to ``policy.wait_seconds`` (zero: no
-    limit), then raises ``LockHeld``; ``blocking=False`` raises it at once instead, after
-    any stale or dead-holder takeover. ``should_stop`` ends a wait with ``LockWaitStopped``
-    as soon as it returns True; a free lock is taken regardless. A thread asking for a lock
-    it already holds (by its resolved path) gets ``LockReentry`` at once; other threads
-    contend normally. The parent folder must exist.
+    limit), then raises ``LockWaitTimeout`` (a ``LockHeld``); ``blocking=False`` raises a plain
+    ``LockHeld`` at once instead, after any stale or dead-holder takeover. ``should_stop``
+    ends a wait with ``LockWaitStopped`` as soon as it returns True; a free lock is taken
+    regardless. A thread asking for a lock it already holds (by its resolved path) gets
+    ``LockReentry`` at once; other threads contend normally. The parent folder must exist.
     """
     lock = Path(lock)
     key = os.path.realpath(lock)

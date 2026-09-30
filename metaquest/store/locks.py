@@ -86,7 +86,8 @@ def dataset_lock(
 
     ``wait_seconds`` of zero (the default) waits for as long as the current holder stays
     alive, since a download legitimately runs for hours; a positive value gives up after
-    that many seconds with a ``DataAccessError`` naming the accession and the holder.
+    that many seconds with ``LockWaitTimeout`` (a ``LockHeld`` and a ``LockTimeoutError``, exit
+    code 4) naming the accession and the holder.
     ``should_stop``, when given, ends a wait for a held lock with ``LockWaitStopped`` as
     soon as it returns True; a free lock is taken regardless. ``blocking=False`` raises
     ``LockHeld`` at once instead of waiting (after any stale or dead-holder takeover), for a

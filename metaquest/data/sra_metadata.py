@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 import pandas as pd
 import requests
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, NetworkError
 from metaquest.data.file_io import write_csv
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,14 @@ class SRADatasetInfo:
     biosample: str
     library_selection: str
     library_source: str
+
+
+def _is_transient(error: "requests.RequestException") -> bool:
+    """True for a failure worth retrying later: no connection, a timeout, HTTP 429 or a 5xx answer."""
+    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+        return True
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    return isinstance(status, int) and (status == 429 or status >= 500)
 
 
 class SRAMetadataClient:
@@ -81,7 +89,9 @@ class SRAMetadataClient:
             return response.text
         except requests.RequestException as e:
             logger.error(f"NCBI API request failed: {e}")
-            raise DataAccessError(f"Failed to query NCBI: {e}")
+            if _is_transient(e):
+                raise NetworkError(f"Failed to query NCBI: {e}") from e
+            raise DataAccessError(f"Failed to query NCBI: {e}") from e
 
     def get_sra_metadata(self, accessions: List[str]) -> Dict[str, SRADatasetInfo]:
         """

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, LockTimeoutError
 from metaquest.utils import lockfile
 from metaquest.utils.lockfile import (
     LockHeld,
@@ -616,6 +616,7 @@ class TestCallers:
             with catalog_module.catalog_write(paths):
                 pass
         assert str(excinfo.value) == expected
+        assert isinstance(excinfo.value, LockTimeoutError)  # a wait that gave up: exit code 4
 
     def test_dataset_lock_of_a_dead_local_holder_is_taken_over(self, tmp_path):
         from metaquest.store.layout import init_store, lock_path

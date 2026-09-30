@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from metaquest import __version__
 from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, command_registry
 from metaquest.core import settings
-from metaquest.core.exceptions import ConfigurationError, MetaQuestError
+from metaquest.core.exceptions import ConfigurationError, MetaQuestError, exit_code_for
 from metaquest.utils.logging import setup_logging
 
 # Import all command modules to register them
@@ -190,7 +190,9 @@ def main(args: Optional[List[str]] = None) -> int:
         args: Command line arguments (if None, sys.argv[1:] is used)
 
     Returns:
-        Exit code (0 for success, non-zero for errors)
+        Exit code: 0 success, 1 failure, 2 usage error, 3 configuration problem, 4 retryable
+        failure (network, a lock wait that gave up), 130 interrupted
+        (``metaquest.core.exceptions.ExitCode``).
     """
     parser = create_parser()
     parsed_args = parser.parse_args(args)
@@ -201,7 +203,7 @@ def main(args: Optional[List[str]] = None) -> int:
     except ConfigurationError as e:
         setup_logging(level=logging.INFO)
         logging.error(f"Error: {e}")
-        return 1
+        return exit_code_for(e)
     setup_logging(level=getattr(logging, runtime.log_level))
     logging.debug("Runtime settings (value and source):\n  %s", "\n  ".join(runtime.describe()))
     debug = runtime.log_level == "DEBUG"
@@ -215,14 +217,18 @@ def main(args: Optional[List[str]] = None) -> int:
             logging.debug(traceback.format_exc())
         else:
             logging.info("Use --log-level DEBUG for full traceback.")
-        return 1
+        return exit_code_for(e)
     except Exception as e:
         logging.error(f"{type(e).__name__}: {e}")
         if debug:
             logging.debug(traceback.format_exc())
         else:
             logging.info("Use --log-level DEBUG for full traceback.")
-        return 1
+        return exit_code_for(e)
+    except KeyboardInterrupt as e:
+        # Only a command with graceful_shutdown False gets here; BaseCommand.run handles the rest.
+        logging.error("Interrupted")
+        return exit_code_for(e)
 
 
 if __name__ == "__main__":

@@ -389,7 +389,7 @@ def test_main_refuses_a_malformed_config(tmp_path, caplog):
 
     path = _write_config(tmp_path, "[runtime\n")
     with patch("metaquest.cli.main.setup_logging"), caplog.at_level(logging.ERROR):
-        assert main(["store_status"]) == 1
+        assert main(["store_status"]) == 3  # ConfigurationError
     assert str(path) in caplog.text
 
 
@@ -397,7 +397,7 @@ def test_download_metadata_without_an_email_is_refused(tmp_path, caplog):
     from metaquest.cli.main import main
 
     with patch("metaquest.cli.commands.metadata.download_metadata") as download, caplog.at_level(logging.ERROR):
-        assert main(["download_metadata", "--matches-folder", str(tmp_path)]) == 1
+        assert main(["download_metadata", "--matches-folder", str(tmp_path)]) == 3  # ConfigurationError
     download.assert_not_called()
     assert "METAQUEST_NCBI_EMAIL" in caplog.text
 

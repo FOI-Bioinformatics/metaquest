@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
-from metaquest.core.exceptions import DataAccessError
+from metaquest.core.exceptions import DataAccessError, exit_code_for
 from metaquest.utils.security import SecureSubprocess
 from metaquest.utils.termination import EXIT_INTERRUPTED, graceful_termination
 
@@ -157,6 +157,18 @@ class BaseCommand(ABC):
             # A signal while the handlers were being installed or restored, outside execute.
             self.logger.error("Interrupted")
             return EXIT_INTERRUPTED
+
+    def fail(self, error: BaseException, context: str) -> int:
+        """Log ``error`` under ``context`` and return its exit code.
+
+        A command's ``except`` path returns this, so the process exits with 3 for a
+        configuration problem, 4 for a retryable one (network, a lock wait that gave up) and 1
+        for any other failure (see ``metaquest.core.exceptions.ExitCode``). The message is one
+        line; the traceback is attached only when DEBUG logging is enabled.
+        """
+        trace = error if self.logger.isEnabledFor(logging.DEBUG) else None
+        self.logger.error("%s: %s", context, error, exc_info=trace)
+        return exit_code_for(error)
 
     # Output. stdout carries the command's result (tables, JSON); stderr carries logging.
     # These methods and ``emit_error_json`` are the only places in the package that write to
