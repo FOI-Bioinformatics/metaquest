@@ -11,7 +11,6 @@ scanners here rebuild or reconcile the journal from what is on disk.
 import json
 import logging
 import os
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,11 +18,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
+from metaquest.core.constants import SHORT_LOCK_HEARTBEAT_SECONDS, SHORT_LOCK_POLL_SECONDS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import visible_files
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
+from metaquest.utils.lockfile import LockPolicy, held_lock
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -37,7 +38,9 @@ REGISTRY_FILENAME = "metaquest_registry.json"
 # file loads unchanged; the next save writes it back as version 2.
 SCHEMA_VERSION = 2
 STAGES = ("screened", "selected", "excluded", "downloaded", "analysed", "extracted", "assembled")
-LOCK_STALE_SECONDS = 30.0
+# Registry lock limits, read at call time. The wait fits within SLURM's KillWait; holders
+# refresh the lock every SHORT_LOCK_HEARTBEAT_SECONDS, well inside the 30 s age older versions reclaim.
+LOCK_STALE_SECONDS = 120.0
 LOCK_WAIT_SECONDS = 30.0
 _MATE_SUFFIXES = ("_1", "_2", "_s", "_0")
 _ASSEMBLY_SUFFIX = "_assembly"
@@ -194,29 +197,13 @@ def load_registry(path: Optional[Union[str, Path]] = None) -> Registry:
     )
 
 
-def _acquire_lock(lock: Path) -> None:
-    deadline = time.monotonic() + LOCK_WAIT_SECONDS
-    while True:
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            return
-        except FileExistsError:
-            # Check the wait deadline before staleness: when the two windows are equal, the
-            # lock's age and the elapsed wait cross their thresholds on the same iteration,
-            # and giving up (a lock truly held by another process) must win over reclaiming it.
-            if time.monotonic() > deadline:
-                raise DataAccessError(f"Registry is locked by another process: {lock}")
-            try:
-                age = time.time() - lock.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age > LOCK_STALE_SECONDS:
-                logger.warning("Removing stale registry lock %s (%.0f s old)", lock, age)
-                lock.unlink(missing_ok=True)
-                continue
-            time.sleep(0.05)
+@contextmanager
+def _acquire_lock(lock: Path) -> Iterator[Path]:
+    """Hold the registry lock file ``lock`` for a with-block (``metaquest.utils.lockfile``)."""
+    # Positional: stale, wait, poll and heartbeat seconds; the first two are read now so tests can shrink them.
+    limits = (LOCK_STALE_SECONDS, LOCK_WAIT_SECONDS, SHORT_LOCK_POLL_SECONDS, SHORT_LOCK_HEARTBEAT_SECONDS)
+    with held_lock(lock, LockPolicy("Registry", *limits)) as held:
+        yield held
 
 
 def _write_registry(registry: Registry, target: Path) -> Path:
@@ -251,12 +238,8 @@ def save_registry(registry: Registry, path: Optional[Union[str, Path]] = None) -
     """Write an already loaded registry atomically under a lock file."""
     target = Path(path) if path else (registry.path or registry_path())
     target.parent.mkdir(parents=True, exist_ok=True)
-    lock = target.with_name(target.name + ".lock")
-    _acquire_lock(lock)
-    try:
+    with _acquire_lock(target.with_name(target.name + ".lock")):
         return _write_registry(registry, target)
-    finally:
-        lock.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -264,8 +247,7 @@ def registry_transaction(path: Optional[Union[str, Path]] = None) -> Iterator[Re
     """Load, mutate and save the registry under one lock, so a concurrent edit is never reverted.
 
     Not re-entrant: nesting a second call to this function (or to `save_registry`) for the
-    same registry file inside this block's body will deadlock against the lock this call
-    already holds, since the lock file is only released when this context manager exits.
+    same registry file inside this block's body raises ``LockReentry`` at once.
 
     Use this instead of holding one loaded registry across a long run: the file is
     read inside the lock and written back at the end of the block. If the block
@@ -273,14 +255,10 @@ def registry_transaction(path: Optional[Union[str, Path]] = None) -> Iterator[Re
     """
     target = registry_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    lock = target.with_name(target.name + ".lock")
-    _acquire_lock(lock)
-    try:
+    with _acquire_lock(target.with_name(target.name + ".lock")):
         registry = load_registry(target)
         yield registry
         _write_registry(registry, target)
-    finally:
-        lock.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------- writers

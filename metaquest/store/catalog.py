@@ -11,8 +11,8 @@ genome across every project. Because it is rebuildable from the sidecars
 (``reindex``), losing or corrupting ``catalog.sqlite`` never loses data; it
 only loses the cross-project ``usage`` history, which lives only here.
 
-Writes are serialised across processes with the same lock protocol the
-per-project registry uses (``metaquest.data.registry._acquire_lock``), on a
+Writes are serialised across processes with the lock-file mechanism every
+MetaQuest lock uses (``metaquest.utils.lockfile``), on a
 ``catalog.sqlite.lock`` file next to the database, so two projects on one
 machine or a shared network volume never interleave writes. Reads may open the
 database directly without taking the lock, but only one that already exists:
@@ -30,10 +30,16 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, TypeVar
 
+from metaquest.core.constants import (
+    CATALOG_LOCK_STALE_SECONDS,
+    CATALOG_LOCK_WAIT_SECONDS,
+    SHORT_LOCK_HEARTBEAT_SECONDS,
+    SHORT_LOCK_POLL_SECONDS,
+)
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.registry import _acquire_lock
 from metaquest.store.layout import StorePaths
 from metaquest.store.sidecar import Sidecar
+from metaquest.utils.lockfile import LockPolicy, held_lock
 
 logger = logging.getLogger(__name__)
 
@@ -535,21 +541,26 @@ class Catalog:
 def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     """Open the catalogue for a write session, serialised across processes.
 
-    Acquires ``paths.catalog_lock`` (blocking, with the same wait/stale-lock
-    protocol as the per-project registry's ``_acquire_lock``), opens the
+    Acquires ``paths.catalog_lock`` (waiting up to ``CATALOG_LOCK_WAIT_SECONDS``, then
+    raising ``LockHeld`` naming the holder), opens the
     catalogue, migrates its schema, backfills the journal from any ``projects``/``usage`` rows
     that predate it (``journal.backfill_from_catalog``, a no-op once the journal already has
     project lines), yields it for the caller to write through, commits on a clean exit, and
     always releases the lock. If the block raises, the connection is closed without committing
     (uncommitted changes are discarded) and the lock is still released.
 
-    Not re-entrant: nesting a second ``catalog_write`` (or ``Catalog.__enter__``, opened
-    against the same store root) inside this block's body will deadlock against the
-    ``catalog.sqlite.lock`` file this call already holds.
+    Not re-entrant: nesting a second ``catalog_write`` against the same store root inside
+    this block's body, in the same thread, raises ``LockReentry`` at once.
     """
     paths.root.mkdir(parents=True, exist_ok=True)
-    _acquire_lock(paths.catalog_lock)
-    try:
+    policy = LockPolicy(
+        what="Store catalogue",
+        stale_seconds=CATALOG_LOCK_STALE_SECONDS,
+        wait_seconds=CATALOG_LOCK_WAIT_SECONDS,
+        poll_seconds=SHORT_LOCK_POLL_SECONDS,
+        heartbeat_seconds=SHORT_LOCK_HEARTBEAT_SECONDS,
+    )
+    with held_lock(paths.catalog_lock, policy):
         with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             from metaquest.store import journal
@@ -560,5 +571,3 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
                 catalog.conn.commit()
             except sqlite3.Error as e:
                 raise DataAccessError(f"Cannot commit catalog write: {e}") from e
-    finally:
-        paths.catalog_lock.unlink(missing_ok=True)

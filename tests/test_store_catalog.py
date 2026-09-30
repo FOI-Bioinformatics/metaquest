@@ -392,6 +392,7 @@ def test_catalog_write_serializes_two_writers(paths):
 
 def test_catalog_write_raises_when_lock_never_released(paths, monkeypatch):
     monkeypatch.setattr(registry_module, "LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("metaquest.store.catalog.CATALOG_LOCK_WAIT_SECONDS", 0.2)
 
     # Simulate another process holding the lock: a fresh, non-stale lock file.
     paths.catalog_lock.parent.mkdir(parents=True, exist_ok=True)

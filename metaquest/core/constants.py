@@ -243,6 +243,15 @@ STORE_LAYOUT = "sra-v1"
 LOCK_HEARTBEAT_SECONDS = 10.0
 DATASET_LOCK_STALE_SECONDS = 600.0
 
+# Short-lived locks (metaquest.utils.lockfile): the project registry and the store catalogue.
+# Their holders write for well under a second, poll quickly while waiting, and refresh the
+# lock file every SHORT_LOCK_HEARTBEAT_SECONDS so a slow write is never judged stale. The
+# registry's own wait and stale limits live in metaquest.data.registry.
+SHORT_LOCK_HEARTBEAT_SECONDS = 5.0
+SHORT_LOCK_POLL_SECONDS = 0.05
+CATALOG_LOCK_WAIT_SECONDS = 60.0
+CATALOG_LOCK_STALE_SECONDS = 120.0
+
 # Memory and Resource Limits
 DEFAULT_MEMORY_LIMIT_GB = 8
 MAX_FILE_SIZE_MB = 1024  # 1GB max file size for uploads
