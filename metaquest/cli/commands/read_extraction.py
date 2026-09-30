@@ -418,7 +418,13 @@ class ExtractTargetReadsCommand(BaseCommand):
         results: Dict[str, ExtractionResult],
         store: Optional[StorePaths] = None,
     ) -> None:
-        """Assemble every sample that has mapped reads, recording each assembly as it lands."""
+        """Assemble every sample that has mapped reads, recording each assembly as it lands.
+
+        Checked before each sample: a signal (``args._termination.stop``) stops the loop there,
+        leaving every later sample unassembled and megahit never started for it. ``execute``
+        raises afterward if stopped, so ``BaseCommand.run`` returns 130 without costing the run
+        what it already assembled.
+        """
         asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
         if args.assembly_threads is None and asm_threads < args.threads:
             self.logger.info(
@@ -428,7 +434,11 @@ class ExtractTargetReadsCommand(BaseCommand):
         version = megahit_version()
         genome_length = fasta_length(args.genome_fasta)
         recorded: Optional[Registry] = None
+        term = getattr(args, "_termination", None)
         for accession, reads in with_reads.items():
+            if term is not None and term.stop.is_set():
+                self.logger.warning("Stopping before %s: interrupted", accession)
+                break
             out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
             if args.force:
                 # A forced redo replaces whatever assembly was recorded: assemble_extracted_reads
@@ -588,6 +598,9 @@ class ExtractTargetReadsCommand(BaseCommand):
 
             if args.assemble:
                 self._assemble(args, with_reads, results, store)
+                term = getattr(args, "_termination", None)
+                if term is not None and term.stop.is_set():
+                    raise KeyboardInterrupt("extract_target_reads assembly stopped")
             return 0
         except MetaQuestError as e:
             self.logger.error("Error extracting target reads: %s", e)

@@ -1474,6 +1474,47 @@ class TestExtractTargetReadsCommand:
             assert "SRR2" not in registry.datasets
             assert not (root / "targeted" / "SRR2").exists()
 
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_signal_between_assembly_samples_stops_before_the_next_one(self, mock_run):
+        """A stop noticed after SRR1's assembly is recorded ends the run before SRR2's
+        megahit ever starts."""
+        import metaquest.cli.commands.read_extraction as cli_module
+
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _two_sample_tree(tmp)
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                assemble=True,
+            )
+            seen = []
+            real_record_assembly = cli_module.record_assembly
+
+            def spy(*a, **kw):
+                result = real_record_assembly(*a, **kw)
+                seen.append(a[1])
+                if len(seen) == 1:
+                    args._termination.stop.set()
+                return result
+
+            with patch.object(cli_module, "record_assembly", side_effect=spy):
+                rc = cmd.run(args)
+
+            assert rc == 130
+            assert seen == ["SRR1"]
+            registry = load_registry(args.registry)
+            assert registry.datasets["SRR1"]["extractions"]["GCF_1"]["assembly"] is not None
+            # Both samples were already mapped (the mapping loop ran to completion); only the
+            # assembly loop was stopped, so SRR2's extraction record carries no assembly.
+            assert registry.datasets["SRR2"]["extractions"]["GCF_1"]["assembly"] is None
+            assert not (root / "targeted" / "SRR2" / "GCF_1_assembly").exists()
+
 
 def test_assemble_loads_the_registry_at_most_once(tmp_path):
     """Samples whose assembly megahit skipped are checked against one registry load, not one per sample."""
