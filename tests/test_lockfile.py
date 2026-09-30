@@ -539,6 +539,7 @@ class TestStress:
         _assert_no_overlap(markers)
         assert not lock.exists()
 
+    @pytest.mark.multiprocess
     def test_eight_processes_never_overlap(self, tmp_path):
         lock = tmp_path / "counter.lock"
         counter = tmp_path / "counter.txt"

@@ -172,6 +172,7 @@ pythonpath = ["."]
 markers = [
     "network: calls NCBI or SRA over the internet; run explicitly with 'pytest -m network'",
     "perf: timing or memory bound, runs by default; time bounds scale with METAQUEST_PERF_SCALE (CI sets 4)",
+    "multiprocess: starts real processes (the CLI with fake tools on PATH, no network); runs by default",
 ]
 
 [tool.coverage.run]

@@ -361,6 +361,13 @@ The project includes comprehensive integration testing:
    - Data export to multiple formats
    - Error handling in complete workflows
 
+`tests/test_concurrency_processes.py` runs the CLI as separate processes to check concurrent downloads
+into one project and through one store, registry writers during a download, SIGTERM handling, takeover
+of a killed lock holder and `store_gc` against a running download. `tests/helpers_processes.py` supplies
+the isolated environment (`cli_env`, with `HOME` and the store under `tmp_path`) and fake `fasterq-dump`,
+`prefetch` and `pigz` scripts that wait on barrier files, so no real tool or network is needed. These
+tests carry the `multiprocess` marker, run by default and are skipped on Windows.
+
 ### Quality Gates
 Before committing code:
 1. `make check` must pass (linting, formatting, type checking)
