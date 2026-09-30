@@ -2,16 +2,24 @@
 
 All notable changes to MetaQuest are documented in this file. Dates are in YYYY-MM-DD format.
 
-## [0.7.0] - unreleased
+## [0.7.0] - 2026-10-01
 
 ### Added
 
+- Runtime settings with one order of precedence: a flag, then a `METAQUEST_<NAME>` environment variable,
+  then the `[runtime]` table of `~/.config/metaquest/config.toml` (or
+  `$XDG_CONFIG_HOME/metaquest/config.toml`), then a built-in default. They cover the external tool
+  timeout, the download worker cap, the lock waits and stale limits, the NCBI email address and API key,
+  the temporary folder, logging, the free-space floor and megahit's memory; `docs/configuration.md`
+  lists each one with its type, default, variable and flag. A value that does not parse stops the
+  command with exit code 3 and names the variable or config key; an unknown `[runtime]` key is a
+  warning. At DEBUG a run logs every setting with its value and source.
 - Logging options on every command, before or after the command name: `--log-file PATH` appends every
   line at INFO or above to a file, each stamped with host name and process ID and with the full traceback
   of a failure; `-q/--quiet` (warnings and errors only on the console) and `-v/--verbose` (DEBUG), which
   cannot be combined and override `--log-level`. At DEBUG a run logs the version, its command line (the
-  `--api-key` value hidden), host, process ID and SLURM job and array task IDs. See "Logging" in the
-  README.
+  `--api-key` value hidden), host, process ID and SLURM job and array task IDs. `METAQUEST_LOG_HOST=true`
+  adds host and process ID to console lines. See "Logging" in the README.
 - Progress summaries for `download_sra` and `download_metadata`: one line every `--progress-every N`
   items (default 50; also `METAQUEST_PROGRESS_EVERY` or `progress_every` in `[runtime]`) and at least every
   5 minutes, such as `download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left`,
@@ -22,8 +30,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   FASTQ files and again for the temporary files, plus the size for the cache; the factor comes from
   seven runs of the crispatus test store, whose uncompressed FASTQ was 6.98 to 7.73 times the `.sra`
   size (gzip-compressed: 1.49 to 1.66 times). An accession of unknown size needs `--min-free-gb` (default
-  10; `METAQUEST_MIN_FREE_GB`, `[runtime] min_free_gb`); 0 turns the check off. A download that does not
-  fit is not started and fails with `disk-full: insufficient free space on <mount>: ...`.
+  10; `METAQUEST_MIN_FREE_GB`, `[runtime] min_free_gb`); 0 turns the check off. An accession that does
+  not fit while others run waits for them to release their space; one that would not fit even alone
+  fails with `insufficient-space: not enough free space on <mount>: ...`, and the others continue.
 - `--assembly-memory` on `extract_target_reads` (also `METAQUEST_ASSEMBLY_MEMORY`, `[runtime]
   assembly_memory`): `auto`, the default, passes megahit `--memory` as 90% of the memory limit detected
   for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE`) and omits it when none is found; a size such as
@@ -40,26 +49,35 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   (10 s each), `--for COMMAND` turns a missing tool that command needs into a failure, `--json` writes
   one JSON document. Exit code 0 without a failed check, 3 with one. It still runs, and reports the
   error, when `config.toml` does not parse. See "Checking the environment" in the README.
+- Timing: the registry records when each download, extraction and assembly started and how many
+  seconds it took (`started`, `seconds`; absent in registries written earlier). `download_sra
+  --report-file` has a trailing `seconds` column, `results_table` ends with `download_seconds`,
+  `extraction_seconds` and `assembly_seconds`, `status --json` has a `timing` block (counts, totals
+  and medians), the text report one timing line, and `status --export-tsv` the same columns. An
+  extraction's time runs from the previous sample's checkpoint, so the first sample's includes building
+  the minimap2 index; an assembly's time is the megahit run.
 - `pypi`, a second job in the release workflow (`.github/workflows/release.yml`), publishes the
   distribution the `build` job already produces to PyPI via PyPI's trusted-publisher mechanism (no
   token in the repository). It only runs once the repository variable `PYPI_PUBLISH` is set to
-  `true`; see the new `docs/packaging.md` for the checklist before that (PyPI name availability,
-  trusted-publisher setup) and a bioconda `meta.yaml` recipe template for the separate
-  `bioconda-recipes` submission that follows a working PyPI release.
+  `true`; see `docs/packaging.md` for the checklist before that and a bioconda recipe template.
 
 ### Changed
 
+- Exit codes: 3 for a configuration problem (`ConfigurationError`: a missing optional package, an
+  external tool that is missing or too old, a missing NCBI email address, a malformed `config.toml` or a
+  setting that does not parse, a log file that cannot be opened), 4 for a retryable failure (a wait for
+  the registry or catalogue lock that reached its limit; an NCBI request of `sra_info` that could not
+  connect, timed out or got HTTP 429 or 5xx after its retries; a `download_sra` run whose every failure
+  was a network one), 130 for an interrupt, 1 for any other failure. `download_metadata` still logs each
+  accession NCBI did not return and exits with 0. See "Exit codes" in the README.
 - A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to
   the log file when there is one. The hint "Use --log-level DEBUG for full traceback" is shown only when
   there is no log file.
-- The per-accession INFO lines of `download_sra` (a download that succeeded, a retry that succeeded) and
-  of `download_metadata` (each NCBI request) are now logged at DEBUG, replaced at INFO by the progress
-  summaries. `--progress-every 0` logs them at INFO again.
-- Exit codes: 3 for a configuration problem (`ConfigurationError`: a missing optional package or NCBI
-  email address, a malformed `config.toml`), 4 for a retryable failure (an NCBI request that could not
-  connect, timed out or got HTTP 429 or 5xx; a wait for the registry or catalogue lock that reached its
-  limit; a `download_sra` run whose every failure was a network one), 130 for an interrupt, 1 for any
-  other failure. See "Exit codes" in the README.
+- The per-accession INFO lines of `download_sra` for a download or a retry that succeeded, and of
+  `download_metadata` for each NCBI request, are now logged at DEBUG, replaced at INFO by the progress
+  summaries. `--progress-every 0` logs them at INFO again. Three per-accession lines of `download_sra`
+  ("Downloading SRA for ...", "Skipping ..., FASTQ files already exist", and "Linked ... to the store
+  copy" in a store) are still at INFO in this release.
 - External tool timeout is now configurable and, by default, unlimited: `run_secure` used to give every
   external tool (`fasterq-dump`, `prefetch`, `minimap2`, `samtools`, `megahit`) a fixed one-hour limit
   (`MAX_SUBPROCESS_TIMEOUT`) even when a caller passed no timeout at all, and `timeout=0` was silently
@@ -68,41 +86,45 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   0, the default, means no limit. A `--version` probe always uses a fixed 30-second timeout regardless of
   this setting, so a hung tool cannot stall version detection.
 - One table of external tools (`metaquest/utils/tools.py`) with the oldest supported versions: sra-tools
-  3.0, minimap2 2.17, samtools 1.10 (for `samtools coverage`), megahit 1.2.9. `download_sra`,
-  `extract_target_reads`, `genome_download` and `genome_prepare` check the tools they need before any
-  work starts and exit with 3 (was 1 for `download_sra` and `extract_target_reads`; `genome_download`
-  and `genome_prepare` had no check and failed inside the first `datasets` call) when one is missing or
-  older than its floor, listing every problem with its `conda install` command.
-- `environment.yml`'s version floors now match `metaquest/utils/tools.py`'s `TOOLS` table exactly
-  (checked by the new `tests/test_environment_pins.py`): `samtools>=1.10`, `megahit>=1.2.9`,
-  `pigz>=2.4` and `ncbi-datasets-cli>=16` are now pinned (all four were unpinned before); `TOOLS`
-  itself gains the `pigz`/`datasets` floors, so `metaquest doctor` and every command's
-  `require_tools` check now enforce them too. The still-commented-out `seqkit` stays unpinned,
-  since `TOOLS` records no minimum version for it.
-  `DEFAULT_MEMORY_LIMIT_GB`, `MAX_FILE_SIZE_MB`, `DEFAULT_PLUGIN_TIMEOUT`, `ERROR_MESSAGES` and
-  `SUCCESS_MESSAGES` are removed from `metaquest/core/constants.py`: none was read anywhere
-  outside its own definition. The console log level choices and default, previously spelled out
-  separately in `metaquest/cli/base.py` and `metaquest/core/settings.py`, now both come from
-  `constants.LOG_LEVELS`/`DEFAULT_LOG_LEVEL`.
-- The NCBI taxonomy client's and the GTDB client's retry-session construction (a `requests.Session`
-  with a mounted `urllib3.util.retry.Retry`) is consolidated into one
-  `metaquest.utils.http.retrying_session()`, instead of each client building its own
-  `HTTPAdapter`/`Retry` pair; `NCBITaxonomyClient` keeps its historical
-  `taxonomy._build_retrying_session()` entry point as a thin wrapper over it. `SRAMetadataClient`
-  (`sra_info`, and the dataset preview it shares) now builds one of these sessions in `__init__`
-  too, instead of calling the module-level `requests.get` on every request, so an NCBI connection
-  failure, 429 or 5xx is retried with backoff before `NetworkError` is raised.
+  3.0, minimap2 2.17, samtools 1.10 (for `samtools coverage`), megahit 1.2.9, pigz 2.4 and
+  ncbi-datasets-cli 16. `download_sra`, `extract_target_reads`, `genome_download` and `genome_prepare`
+  check the tools they need before any work starts and exit with 3 (was 1 for `download_sra` and
+  `extract_target_reads`; `genome_download` and `genome_prepare` had no check and failed inside the first
+  `datasets` call) when one is missing or older than its floor, listing every problem with its `conda
+  install` command. The optional tools (`prefetch`, `pigz`, `seqkit`) are checked only by `doctor`.
+- `environment.yml` pins the same floors as that table (`sra-tools>=3.0`, `minimap2>=2.17`,
+  `samtools>=1.10`, `megahit>=1.2.9`, `pigz>=2.4`, `ncbi-datasets-cli>=16`; checked by
+  `tests/test_environment_pins.py`); `seqkit` stays commented out and has no floor.
+- `--email` of `download_metadata`, `sra_info` and `validate_taxonomy` is no longer required when an
+  address is set in `METAQUEST_NCBI_EMAIL` or `ncbi_email` in `[runtime]`; `--api-key` falls back to
+  `METAQUEST_NCBI_API_KEY`, then `NCBI_API_KEY`, then `ncbi_api_key`. Without any email address the
+  command stops with exit code 3 and says how to give one.
+- `--lock-wait`, `--temp-folder` and `--log-level` fall back to their environment variable and
+  `[runtime]` key when not given; the lock limits of the registry, the store catalogue and the dataset
+  locks can be set the same way (see `docs/configuration.md`). The built-in values are unchanged.
+- The NCBI taxonomy client, the GTDB client and `SRAMetadataClient` (`sra_info`) share one retrying
+  HTTP session (`metaquest.utils.http.retrying_session()`); `SRAMetadataClient` used to call
+  `requests.get` without retries, and now retries a connection failure, HTTP 429 or 5xx with backoff
+  before it raises `NetworkError`.
+- `DEFAULT_MEMORY_LIMIT_GB`, `MAX_FILE_SIZE_MB`, `DEFAULT_PLUGIN_TIMEOUT`, `ERROR_MESSAGES` and
+  `SUCCESS_MESSAGES` are removed from `metaquest/core/constants.py`: none was read anywhere outside its
+  own definition. The console log level choices and default come from `constants.LOG_LEVELS` and
+  `DEFAULT_LOG_LEVEL` alone.
 
 ### Security
 
 - NCBI and store metadata XML is now parsed with a hardened lxml parser
   (`metaquest/utils/xml.py`'s `SAFE_PARSER`/`parse_xml_file`, used by `data/metadata.py`'s
-  per-file parse): entity resolution, network access and DTD loading are all refused, closing an
-  XXE (external entity reading a local file or the network) and "billion laughs" (entity
-  expansion) risk that lxml's permissive defaults otherwise leave open. The stdlib
+  per-file parse): entity resolution, network access and external DTD loading are refused, closing an
+  XXE (external entity reading a local file or the network) risk that lxml's defaults leave open; a
+  "billion laughs" document is rejected by libxml2's entity-amplification limit. The stdlib
   `xml.etree.ElementTree` parse sites elsewhere (`data/metadata.py`'s batch parse,
-  `data/sra_metadata.py`, `data/taxonomy.py`) are unchanged: CPython's expat binding has refused
-  entity expansion by default since Python 3.7.1, so the same risk does not apply to them.
+  `data/sra_metadata.py`, `data/taxonomy.py`) are unchanged: expat does not resolve external entities
+  or fetch a DTD, so XXE does not apply to them. It is not hardened against entity expansion the way
+  `SAFE_PARSER` is; those sites parse small responses fetched directly from NCBI, not stored files, and
+  that remaining risk is accepted there.
+- The `--api-key` value is replaced by `***` in the command line logged at DEBUG, and shown as `(set)` in
+  the settings list and in `doctor`.
 
 ### Fixed
 
@@ -111,19 +133,50 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - megahit under cgroups (a SLURM job, a container) sized its memory from the node's total, not from the
   job's limit, and could be killed for exceeding it; `--assembly-memory auto` now passes the job's limit.
 - A disk that filled up during the first download pass did not stop it: every remaining accession was
-  still started and failed in turn, and the retry pass tried again. The first disk-full result now
-  cancels the downloads not yet started (recorded as `disk-full: not attempted`, as the retry pass
-  already did), lets the running ones finish, and skips the retry pass.
+  still started and failed in turn, and the retry pass tried again. The first result in which a tool
+  reports that it ran out of space now cancels the downloads not yet started (recorded as `disk-full:
+  not attempted`, as the retry pass already did), lets the running ones finish, and skips the retry pass.
+- `timeout=0` passed to `run_secure` meant a one-hour limit instead of no limit (see Changed).
+
+### Documentation
+
+- `docs/hpc.md`: running on a SLURM cluster, with a pre-flight `doctor` check, an array job template for
+  `download_sra`, what the walltime signal flushes and how a rerun resumes, exit codes with
+  `--dependency=afterok` and a resubmission loop on 4, a shared store on a group filesystem, NFS caveats
+  (lock files, clock skew, temporary files, log files), megahit memory and one extraction job per genome.
+- `docs/configuration.md`: every runtime setting with its type, default, environment variable, flag and
+  config key; the `[store] data_root` key; the two orders of precedence and why they differ.
+- `docs/packaging.md`: the PyPI and bioconda release order, the checklist before turning on
+  `PYPI_PUBLISH`, and a bioconda recipe template.
+- README: "Configuration", "Running on a cluster", one exit-code table, "Logging", "Checking the
+  environment", and the external tool table with the oldest supported versions.
+- `docs/ARCHITECTURE.md`: the configuration section now describes `core/settings.py` and
+  `store/resolve.py`; new entries for the tool table, resources, progress, XML and HTTP helpers, the
+  free-space guard and the timing module; the exit-code and logging policies. The catalogue's journal mode
+  is corrected to `DELETE`.
 
 ### Upgrade notes
 
-- A script that searched the INFO log of `download_sra` or `download_metadata` for one line per
-  accession no longer finds those lines: run with `--progress-every 0` to keep them at INFO, or with
-  `--log-level DEBUG`. Warnings and errors naming an accession are unchanged.
 - A script that treated every non-zero exit as the same failure keeps working. A script that tested for
-  exactly 1 should also accept 3 and 4; 4 means the same command may succeed if run again later.
-- `fasterq-dump`/`prefetch` older than 3.0 (sra-tools 2.x) are now refused by `download_sra` with exit
-  code 3; install sra-tools 3.0 or later (`environment.yml` already does).
+  exactly 1 should also accept 3 and 4; 4 means the same command may succeed if run again later, and 3
+  means the environment or configuration needs fixing first.
+- An external tool is no longer stopped after one hour. A job that relied on that limit to end a stuck
+  tool should set `--timeout` (or `METAQUEST_TIMEOUT`); under a scheduler the walltime is the limit.
+- A script that searched the INFO log of `download_sra` or `download_metadata` for one line per
+  accession no longer finds most of those lines: run with `--progress-every 0` to keep them at INFO, or
+  with `--log-level DEBUG`. Warnings and errors naming an accession are unchanged.
+- `--email` can be dropped from scripts once `METAQUEST_NCBI_EMAIL` or `ncbi_email` is set; a script
+  that passes it keeps working.
+- Older tools are refused with exit code 3: sra-tools before 3.0 by `download_sra`, minimap2 before 2.17
+  and samtools before 1.10 by `extract_target_reads` (megahit before 1.2.9 with `--assemble`), and
+  ncbi-datasets-cli before 16 by `genome_download` and `genome_prepare`. `environment.yml` installs
+  versions that pass; run `metaquest doctor` to see what is installed.
+- `~/.config/metaquest/config.toml` is now read by every command, not only for the store root: a file
+  that is not valid TOML, or a `[runtime]` value that does not parse, stops every command except
+  `doctor` with exit code 3. Run `metaquest doctor` to see which key is at fault.
+- For library users: `MAX_SUBPROCESS_TIMEOUT` is kept as an alias of `DEFAULT_SUBPROCESS_TIMEOUT` (0);
+  `metaquest.utils.security.missing_tools` is removed (use `metaquest.utils.tools.require_tools` or
+  `probe_tool`); the five constants listed under Changed are removed.
 
 ## [0.6.0] - 2026-09-30
 
