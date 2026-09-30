@@ -11,7 +11,7 @@ import logging
 import time
 from dataclasses import fields
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
 
 from metaquest.data.registry import Registry, load_registry, registry_path, registry_transaction
 
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _monotonic = time.monotonic
 
 RegistryMutation = Callable[[Registry], Any]
+T = TypeVar("T")
 
 
 class RegistryBatch:
@@ -176,3 +177,18 @@ def registry_batch(
     the flush would wait for a lock this process already holds.
     """
     return RegistryBatch(path, flush_every=flush_every, flush_seconds=flush_seconds)
+
+
+def registry_update(path: Optional[Union[str, Path]], mutation: Callable[[Registry], T]) -> T:
+    """Load the registry, apply ``mutation`` to it and write it, all under one lock; return its result.
+
+    For a command that works for a while and then records what it found: do the work on a
+    snapshot (``load_registry``, no lock), then pass the recording step here, so the file is
+    read again inside the lock and whatever other writers committed meanwhile is kept. The lock
+    is held only while ``mutation`` runs, so ``mutation`` must be quick (no read counting, no
+    network, no store catalogue). When it raises, nothing is written and the exception
+    propagates. Not re-entrant, like ``registry_transaction``.
+    """
+    with registry_transaction(path) as registry:
+        result = mutation(registry)
+    return result

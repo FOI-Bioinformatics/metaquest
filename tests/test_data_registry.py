@@ -984,7 +984,8 @@ class TestStoreBackedVerdictBackfill:
     """A record linked from the store gets its verdict from the store's own sidecar."""
 
     def test_a_store_backed_record_is_filled_in_from_the_sidecar(self, tmp_path):
-        from metaquest.data.registry import ProjectPaths, Registry, _fill_missing_download_verdicts
+        from metaquest.data.registry import ProjectPaths, Registry
+        from metaquest.data.registry_reconcile import _fill_missing_download_verdicts
         from metaquest.store.layout import init_store, sidecar_path
         from metaquest.store.sidecar import Sidecar, write_sidecar
 
@@ -1012,7 +1013,8 @@ class TestStoreBackedVerdictBackfill:
         assert complete["reads_r1"] == 100
 
     def test_a_store_backed_record_without_a_sidecar_is_left_alone(self, tmp_path):
-        from metaquest.data.registry import ProjectPaths, Registry, _fill_missing_download_verdicts
+        from metaquest.data.registry import ProjectPaths, Registry
+        from metaquest.data.registry_reconcile import _fill_missing_download_verdicts
         from metaquest.store.layout import init_store
 
         init_store(tmp_path / "store")

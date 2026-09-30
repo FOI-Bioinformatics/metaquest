@@ -23,7 +23,7 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import visible_files
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
-from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder, verify_download
+from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder
 from metaquest.utils.lockfile import LockPolicy, held_lock
 
 if TYPE_CHECKING:
@@ -994,95 +994,11 @@ def bootstrap_from_disk(
 
 
 def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
-    """Compare the registry with the disk: mark missing downloads, register untracked work.
+    """Compare the registry with the disk; see ``metaquest.data.registry_reconcile.reconcile``.
 
-    Untracked FASTQ and extractions are recorded the way ``bootstrap_from_disk`` records
-    them, with ``"inferred": true``, so a project worked on outside MetaQuest lands in the
-    journal instead of being reported as drift on every run. They stay in the report.
-
-    A link into a shared store whose target has gone (an unmounted store, a dataset removed
-    from it) is reported as well, and is not repaired here: removing the link would lose the
-    record of which datasets this project uses.
+    Kept here so existing callers keep importing it from this module. The import is deferred
+    because ``registry_reconcile`` imports this module.
     """
-    # Imported here rather than at module level: the store package imports the data layer.
-    from metaquest.store.link import dangling_links
+    from metaquest.data.registry_reconcile import reconcile as _reconcile
 
-    report = ReconcileReport()
-    on_disk = scan_downloads(paths.fastq)
-    for acc in registry.datasets:
-        download = rb.download_block(registry, acc)
-        if download is not None and download.state == "downloaded" and acc not in on_disk:
-            download.state, download.date = "missing", _now()
-            rb.set_download_block(registry, acc, download)
-            report.recorded_missing.append(acc)
-    tracked = set(query(registry, "downloaded"))
-    report.untracked_fastq = sorted(acc for acc in on_disk if acc not in tracked)
-    for acc in report.untracked_fastq:
-        record_download(registry, acc, "downloaded", paths.fastq, attempt=False)
-        rb.mark_inferred(registry, acc, "download", attempts=0)
-    genome_ids = sorted(_genome_ids_on_disk(paths, registry))
-    assemblies = scan_assemblies(paths.targeted, genome_ids)
-    for acc, per_genome_files in scan_extractions(paths.targeted, genome_ids).items():
-        for genome_id, files in per_genome_files.items():
-            if rb.extraction_block(registry, acc, genome_id) is None:
-                report.untracked_extractions.append((acc, genome_id))
-                _infer_extraction(registry, acc, genome_id, files)
-                asm_dir = assemblies.get(acc, {}).get(genome_id)
-                if asm_dir is not None:
-                    _infer_assembly(registry, acc, genome_id, asm_dir)
-    report.empty_assembly_dirs = empty_assembly_dirs(paths.targeted, genome_ids)
-    report.dangling_links = dangling_links(paths.fastq)
-    _fill_missing_download_verdicts(registry, paths)
-    return report
-
-
-def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> None:
-    """Compute a completeness verdict for a downloaded accession that never got one.
-
-    A project downloaded before completeness verification existed (or with
-    ``--no-verify-downloads``) has metadata recorded but no ``download.complete`` verdict.
-    When NCBI's recorded spot count is on file, this recomputes it the same way a fresh
-    download would have, against the accession's files on disk. A record whose reads came from
-    the shared store is filled in from that dataset's sidecar instead: the store already
-    verified it when it was downloaded, and counting the reads again through a link would
-    repeat work another project has done.
-    """
-    for acc in registry.datasets:
-        download = rb.download_block(registry, acc) or rb.DownloadBlock()
-        # A verdict recorded as an empty dict counts as none, as it did before the typed blocks.
-        if download.state != "downloaded" or (download.complete is not None and download.complete.to_dict()):
-            continue
-        if download.source == "store":
-            complete = _store_verdict(registry, acc)
-            if complete is not None:
-                set_download_verdict(registry, acc, complete)
-            continue
-        spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots
-        if not spots:
-            continue
-        acc_dir = paths.fastq / acc
-        if not acc_dir.is_dir():
-            continue
-        verify = verify_download(acc, acc_dir, spots)
-        complete = {"method": "spots", "ratio": verify["ratio"], "verdict": verify["verdict"]}
-        set_download_verdict(registry, acc, complete)
-
-
-def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any]]:
-    """The completeness verdict the store's sidecar records for ``accession``, or None.
-
-    Reads the store root the registry itself recorded; a project whose store has moved or is
-    not mounted simply gets no verdict this time round, exactly as before.
-    """
-    root = rb.store_block(registry).root
-    if not root:
-        return None
-    # Imported here, not at module level: metaquest.store imports this module.
-    from metaquest.store.layout import sidecar_path, store_paths
-    from metaquest.store.sidecar import sidecar_completeness
-
-    try:
-        return sidecar_completeness(sidecar_path(store_paths(Path(root)), accession))
-    except (OSError, DataAccessError) as e:
-        logger.warning("Could not read the store sidecar for %s: %s", accession, e)
-        return None
+    return _reconcile(registry, paths)
