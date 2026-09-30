@@ -205,6 +205,8 @@ def main(args: Optional[List[str]] = None) -> int:
         logging.error(f"Error: {e}")
         return exit_code_for(e)
     setup_logging(level=getattr(logging, runtime.log_level))
+    for message in runtime.warnings:
+        logging.getLogger("metaquest.core.settings").warning(message)
     logging.debug("Runtime settings (value and source):\n  %s", "\n  ".join(runtime.describe()))
     debug = runtime.log_level == "DEBUG"
 

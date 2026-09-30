@@ -112,7 +112,7 @@ def test_registry_defaults_match_the_registry_module():
 
 
 def test_runtime_settings_has_one_field_per_setting():
-    fields = {f.name for f in dataclasses.fields(settings.RuntimeSettings)} - {"sources"}
+    fields = {f.name for f in dataclasses.fields(settings.RuntimeSettings)} - {"sources", "warnings"}
     assert fields == set(settings.SETTINGS)
 
 
@@ -208,12 +208,39 @@ def test_runtime_that_is_not_a_table_is_refused(tmp_path):
         settings.resolve_all()
 
 
-def test_unknown_runtime_key_warns(tmp_path, caplog):
+def test_unknown_runtime_key_is_kept_for_the_caller(tmp_path, caplog):
     _write_config(tmp_path, "[runtime]\nprogres_every = 5\n")
     with caplog.at_level(logging.WARNING, logger="metaquest.core.settings"):
-        resolved = settings.resolve_all()
-    assert resolved["progress_every"].source == "default"
+        runtime = settings.activate(None)
+    assert runtime.source("progress_every") == "default"
+    assert len(runtime.warnings) == 1 and "'progres_every'" in runtime.warnings[0]
+    assert caplog.text == ""  # activate runs before logging is set up; main() logs the warnings
+
+
+def test_unknown_runtime_key_is_logged_by_active_without_activate(tmp_path, caplog):
+    _write_config(tmp_path, "[runtime]\nprogres_every = 5\n")
+    with caplog.at_level(logging.WARNING, logger="metaquest.core.settings"):
+        settings.active()
     assert "progres_every" in caplog.text
+
+
+def test_main_reports_an_unknown_config_key_on_stderr(tmp_path, monkeypatch, capsys):
+    """The warning reaches the stderr handler setup_logging installs, not only a caplog handler."""
+    from metaquest.cli.main import main
+
+    _write_config(tmp_path, "[runtime]\nprogres_every = 5\n")
+    monkeypatch.chdir(tmp_path)
+    root = logging.getLogger()
+    level = root.level
+    try:
+        main(["blacklist", "--list", "--registry", str(tmp_path / "metaquest_registry.json")])
+    finally:
+        for handler in root.handlers[:]:
+            if getattr(handler, "_metaquest", False):
+                root.removeHandler(handler)
+        root.setLevel(level)
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "unknown key 'progres_every' in [runtime] is ignored" in err
 
 
 def test_other_tables_are_ignored(tmp_path, caplog):

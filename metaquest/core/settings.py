@@ -349,14 +349,32 @@ def _cli_values(args: Optional[argparse.Namespace]) -> Dict[str, Any]:
         return {}
 
 
-def resolve_all(args: Optional[argparse.Namespace] = None) -> Dict[str, Resolved]:
-    """Resolve every setting, taking flag values from ``args``; warn about unknown config keys."""
-    runtime = _runtime_table(read_config())
+def config_warnings(runtime: Mapping[str, Any]) -> Tuple[str, ...]:
+    """One message per key in the config file's ``[runtime]`` table that names no setting."""
     known = {spec.key for spec in _SPECS}
-    for key in sorted(set(runtime) - known):
-        logger.warning("Config file %s: unknown key '%s' in [%s] is ignored", config_path(), key, RUNTIME_TABLE)
+    return tuple(
+        f"Config file {config_path()}: unknown key '{key}' in [{RUNTIME_TABLE}] is ignored"
+        for key in sorted(set(runtime) - known)
+    )
+
+
+def _resolve_table(args: Optional[argparse.Namespace], runtime: Mapping[str, Any]) -> Dict[str, Resolved]:
     given = _cli_values(args)
     return {spec.name: _resolve(spec, given.get(spec.cli_dest or ""), runtime) for spec in _SPECS}
+
+
+def resolve_all(args: Optional[argparse.Namespace] = None) -> Dict[str, Resolved]:
+    """Resolve every setting, taking flag values from ``args``.
+
+    Unknown config keys are not reported here: ``activate`` keeps them in
+    ``RuntimeSettings.warnings`` for the caller to log once logging is configured.
+    """
+    return _resolve_table(args, _runtime_table(read_config()))
+
+
+def _build(args: Optional[argparse.Namespace]) -> "RuntimeSettings":
+    runtime = _runtime_table(read_config())
+    return RuntimeSettings.from_resolved(_resolve_table(args, runtime), warnings=config_warnings(runtime))
 
 
 @dataclass(frozen=True)
@@ -381,12 +399,15 @@ class RuntimeSettings:
     min_free_gb: float
     assembly_memory: str
     sources: Mapping[str, str] = field(default_factory=dict)
+    # Messages about the config file (unknown keys) for the caller to log; activate() runs
+    # before logging is set up, so logging them there would lose them.
+    warnings: Tuple[str, ...] = ()
 
     @classmethod
-    def from_resolved(cls, resolved: Mapping[str, Resolved]) -> "RuntimeSettings":
+    def from_resolved(cls, resolved: Mapping[str, Resolved], warnings: Tuple[str, ...] = ()) -> "RuntimeSettings":
         """Build the settings from ``resolve_all``'s result, checking the lock limits agree."""
         values = {name: item.value for name, item in resolved.items()}
-        runtime = cls(**values, sources={name: item.source for name, item in resolved.items()})
+        runtime = cls(**values, sources={name: item.source for name, item in resolved.items()}, warnings=warnings)
         runtime._check_lock_limits()
         return runtime
 
@@ -422,9 +443,12 @@ _active: Optional[RuntimeSettings] = None
 
 
 def activate(args: Optional[argparse.Namespace]) -> RuntimeSettings:
-    """Resolve every setting with the flags in ``args`` and make the result the active one."""
+    """Resolve every setting with the flags in ``args`` and make the result the active one.
+
+    Nothing is logged: the caller logs ``runtime.warnings`` once logging is configured.
+    """
     global _active
-    runtime = RuntimeSettings.from_resolved(resolve_all(args))
+    runtime = _build(args)
     with _lock:
         _active = runtime
     return runtime
@@ -435,7 +459,10 @@ def active() -> RuntimeSettings:
     global _active
     with _lock:
         if _active is None:
-            _active = RuntimeSettings.from_resolved(resolve_all(None))
+            # Library use without activate(): the host has configured logging by now.
+            _active = _build(None)
+            for message in _active.warnings:
+                logger.warning(message)
         return _active
 
 
