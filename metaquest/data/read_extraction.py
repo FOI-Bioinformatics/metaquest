@@ -13,7 +13,6 @@ to filter and export the mapped reads. External tools run through
 import gzip
 import json
 import logging
-import os
 import platform
 import re
 import shutil
@@ -25,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Un
 import pandas as pd
 
 from metaquest.core.exceptions import ConfigurationError, DataAccessError, ProcessingError, SecurityError
-from metaquest.data.file_io import ensure_directory
+from metaquest.data.file_io import atomic_path, ensure_directory, write_text_atomic
 from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
 
@@ -130,7 +129,7 @@ def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[st
     ``<index>.json`` record beside it naming the FASTA it was built from (resolved path,
     size and mtime). It is reused only when all three still match, and rebuilt otherwise.
 
-    The build writes to a per-process temporary name and is moved into place, so a second
+    The build writes to a unique temporary name and is moved into place, so a second
     run against the same output folder either sees the previous index or none at all, never
     a half-written one. A build that fails leaves no index behind.
     """
@@ -141,13 +140,9 @@ def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[st
     if _index_is_current(index_path, source):
         return index_path
 
-    staged = index_path.with_suffix(f"{index_path.suffix}.tmp.{os.getpid()}")
-    try:
+    with atomic_path(index_path) as staged:
         SecureSubprocess.run_secure("minimap2", _minimap2_index_args(preset, staged, genome_path))
-        os.replace(staged, index_path)
-    finally:
-        staged.unlink(missing_ok=True)
-    index_path.with_suffix(index_path.suffix + ".json").write_text(json.dumps(source, indent=2))
+    write_text_atomic(index_path.with_suffix(index_path.suffix + ".json"), json.dumps(source, indent=2))
     return index_path
 
 
@@ -303,7 +298,7 @@ def _sample_reads(fastq_folder: Path, accession: str) -> List[Path]:
     For paired data that is the mate pair alone: the bare ``<acc>.fastq`` file that
     ``--split-3`` writes for unpaired spots would make minimap2 read three files as an
     interleaved set and report mismatched mate counts, so it is left out. Single-end data
-    gives the bare file. Zero-byte files and ``.gz.tmp.<pid>`` leftovers of an interrupted
+    gives the bare file. Zero-byte files and hidden temporary leftovers of an interrupted
     download are excluded by ``fastq_files``.
     """
     acc_dir = fastq_folder / accession

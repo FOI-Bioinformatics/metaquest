@@ -22,7 +22,7 @@ from urllib.error import HTTPError, URLError
 
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.core.validation import validate_folder
-from metaquest.data.file_io import ensure_directory, list_files, write_csv
+from metaquest.data.file_io import ensure_directory, list_files, write_csv, write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,8 @@ def _entrez_credentials(email: str, api_key: Optional[str]) -> Iterator[None]:
 
 
 def _write_metadata_file(metadata_path: Path, accession: str, content: str) -> Path:
-    """Write one accession's metadata XML atomically (temp name, then ``os.replace``)."""
-    target = metadata_path / f"{accession}_metadata.xml"
-    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
-    tmp.write_text(content)
-    os.replace(tmp, target)
-    return target
+    """Write one accession's metadata XML atomically (``write_text_atomic``)."""
+    return write_text_atomic(metadata_path / f"{accession}_metadata.xml", content)
 
 
 def _split_efetch_packages(xml_text: str, wanted: Set[str]) -> Dict[str, str]:
@@ -776,9 +772,7 @@ def check_metadata_attributes(file_path: Union[str, Path], output_file: Union[st
         sorted_counts = {k: v for k, v in sorted(counts.items(), key=lambda item: item[1], reverse=True)}
 
         # Save to file
-        with open(output_file, "w") as f:
-            for key, value in sorted_counts.items():
-                f.write(f"{key}\t{value}\n")
+        write_text_atomic(output_file, "".join(f"{key}\t{value}\n" for key, value in sorted_counts.items()))
 
         logger.info(f"Saved attribute counts to {output_file}")
         return sorted_counts

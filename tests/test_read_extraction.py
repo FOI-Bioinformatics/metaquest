@@ -299,13 +299,13 @@ class TestBuildIndex:
             # Built under a temporary name and moved into place, so a concurrent run never
             # reads a half-written index.
             assert args[:3] == ["-x", "sr", "-d"]
-            assert args[3].startswith(f"{first}.tmp.")
+            assert Path(args[3]).parent == first.parent and Path(args[3]).name.startswith(f".{first.name}.")
             assert args[4] == str(genome)
             assert first.is_file()
             again = build_index(genome, "sr", index_dir)
         assert again == first
         assert len(state["calls"]) == 1  # the FASTA has not changed, so the index is reused
-        assert not list(index_dir.glob("*.tmp.*"))
+        assert not list(index_dir.glob("*.tmp"))
 
     def test_index_rebuilt_for_a_different_genome_with_the_same_name(self, tmp_path):
         """Two genome files can share a stem, so the index is keyed on the FASTA's identity.
@@ -348,7 +348,7 @@ class TestBuildIndex:
                 build_index(genome, "sr", index_dir)
 
         assert not (index_dir / "g.sr.mmi").exists()
-        assert not list(index_dir.glob("*.tmp.*"))
+        assert not list(index_dir.glob("*.tmp"))
 
     def test_index_rebuilt_when_fasta_touched_newer(self, tmp_path):
         genome = tmp_path / "g.fna"

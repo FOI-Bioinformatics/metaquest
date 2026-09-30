@@ -12,7 +12,6 @@ reads what is already on disk plus a caller-supplied ``ncbi`` dict.
 import hashlib
 import json
 import logging
-import os
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
@@ -21,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import write_text_atomic
 from metaquest.data.metadata import parse_metadata_xml
 from metaquest.data.sra import (
     MATE1_SUFFIXES,
@@ -229,15 +229,11 @@ def ncbi_from_metadata_xml(xml_path: Union[str, Path]) -> Dict[str, Any]:
 
 
 def write_sidecar(path: Union[str, Path], sidecar: Sidecar) -> Path:
-    """Write ``sidecar`` to ``path`` atomically (temp file plus ``os.replace``), sorted keys, indent 2."""
+    """Write ``sidecar`` to ``path`` atomically and flushed to disk (``write_text_atomic``), sorted keys, indent 2."""
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     try:
-        tmp.write_text(json.dumps(sidecar.to_dict(), indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, target)
+        write_text_atomic(target, json.dumps(sidecar.to_dict(), indent=2, sort_keys=True) + "\n", fsync=True)
     except OSError as e:
-        tmp.unlink(missing_ok=True)
         raise DataAccessError(f"Cannot write sidecar {target}: {e}") from e
     return target
 

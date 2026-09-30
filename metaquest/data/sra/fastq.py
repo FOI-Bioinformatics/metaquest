@@ -7,7 +7,6 @@ import gzip
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -18,7 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from metaquest.core.constants import FASTQ_GLOBS
 from metaquest.core.exceptions import SecurityError
-from metaquest.data.file_io import visible_files
+from metaquest.data.file_io import open_atomic, visible_files
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -402,8 +401,8 @@ def compress_fastq(path: Path, threads: int) -> Path:
     the uncompressed source is removed and only the ``.gz`` file remains.
 
     On failure, no partial ``.gz`` is left behind and the uncompressed source survives
-    untouched: the Python fallback writes to a process-unique temp file and only
-    ``os.replace``s it onto the final ``.gz`` name (and only then unlinks the source)
+    untouched: the Python fallback writes to a unique hidden temp file and only
+    renames it onto the final ``.gz`` name (and only then unlinks the source)
     once the gzip stream has closed cleanly; a failing ``pigz`` invocation has any
     ``.gz`` it managed to write before dying removed. Either way the original
     exception propagates to the caller.
@@ -422,21 +421,16 @@ def compress_fastq(path: Path, threads: int) -> Path:
             raise
         return target
 
-    tmp_target = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     block_size = 1024 * 1024
-    try:
-        with open(path, "rb") as source, gzip.open(tmp_target, "wb", compresslevel=6) as dest:
+    # open_atomic writes a dot-prefixed temporary name (unique_temp_path), which fastq_files and
+    # every other folder listing skip, and removes it on any exit that did not publish it. The
+    # gzip header records the real file name rather than the temporary one.
+    with open(path, "rb") as source, open_atomic(target, "wb") as raw:
+        with gzip.GzipFile(filename=target.name, mode="wb", fileobj=raw, compresslevel=6) as dest:
             while True:
                 block = source.read(block_size)
                 if not block:
                     break
                 dest.write(block)
-        os.replace(tmp_target, target)
-    finally:
-        if tmp_target.exists():
-            try:
-                tmp_target.unlink()
-            except OSError as cleanup_error:
-                logger.warning(f"Could not remove leftover temp file {tmp_target}: {cleanup_error}")
     path.unlink()
     return target

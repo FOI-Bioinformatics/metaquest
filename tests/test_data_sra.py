@@ -1347,11 +1347,11 @@ class TestCompressFastq:
         path = tmp_path / "SRR1_1.fastq"
         path.write_text("@r\nACGT\n+\nIIII\n" * 3)
 
-        real_gzip_open = gzip.open
+        real_gzip_file = gzip.GzipFile
         write_calls = {"n": 0}
 
         def flaky_open(*args, **kwargs):
-            handle = real_gzip_open(*args, **kwargs)
+            handle = real_gzip_file(*args, **kwargs)
             real_write = handle.write
 
             def flaky_write(data):
@@ -1364,7 +1364,7 @@ class TestCompressFastq:
             return handle
 
         with patch("metaquest.data.sra.fastq.shutil.which", return_value=None):
-            with patch("metaquest.data.sra.fastq.gzip.open", side_effect=flaky_open):
+            with patch("metaquest.data.sra.fastq.gzip.GzipFile", side_effect=flaky_open):
                 with pytest.raises(OSError):
                     compress_fastq(path, threads=4)
 
@@ -1372,7 +1372,7 @@ class TestCompressFastq:
         assert path.exists()
         assert fastq_files(tmp_path) == [path]
         assert not (tmp_path / "SRR1_1.fastq.gz").exists()
-        assert not any(p.name.startswith("SRR1_1.fastq.gz.tmp.") for p in tmp_path.iterdir())
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["SRR1_1.fastq"]
 
     def test_compress_fastq_pigz_failure_leaves_no_partial_gz(self, tmp_path):
         """If pigz (via run_secure) raises, any partial .gz it left behind is removed."""

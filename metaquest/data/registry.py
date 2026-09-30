@@ -10,7 +10,6 @@ scanners here rebuild or reconcile the journal from what is on disk.
 
 import json
 import logging
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 from metaquest.core.constants import DEFAULT_REGISTRY_MAX_SCREENED, GENOME_FASTA_GLOBS
 from metaquest.core.constants import SHORT_LOCK_HEARTBEAT_SECONDS, SHORT_LOCK_POLL_SECONDS
 from metaquest.core.exceptions import DataAccessError
-from metaquest.data.file_io import visible_files
+from metaquest.data.file_io import visible_files, write_text_atomic
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder
@@ -224,14 +223,12 @@ def _write_registry(registry: Registry, target: Path) -> Path:
         "project": registry.project,
         "store": registry.store,
     }
-    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+    # write_text_atomic removes its temporary file on any exit that did not replace the target,
+    # KeyboardInterrupt included, and fsync keeps a power loss from leaving an empty registry.
     try:
-        tmp.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
-        os.replace(tmp, target)
+        return write_text_atomic(target, json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", fsync=True)
     except OSError as e:
-        tmp.unlink(missing_ok=True)
         raise DataAccessError(f"Cannot write registry {target}: {e}") from e
-    return target
 
 
 def save_registry(registry: Registry, path: Optional[Union[str, Path]] = None) -> Path:
@@ -798,8 +795,8 @@ def scan_downloads(fastq_folder: Path) -> Dict[str, Tuple[int, int]]:
         if is_transient_folder(folder.name):
             continue
         if accession_has_fastq(folder):
-            # fastq_files, not a raw glob: a zero-byte file or a .gz.tmp.<pid> leftover of an
-            # interrupted compression is not a downloaded read file.
+            # fastq_files, not a raw glob: a zero-byte file or the hidden temporary leftover of
+            # an interrupted compression is not a downloaded read file.
             files = fastq_files(folder)
             found[folder.name] = (len(files), sum(p.stat().st_size for p in files))
     return found
