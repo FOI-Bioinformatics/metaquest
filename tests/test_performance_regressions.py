@@ -165,7 +165,8 @@ def test_write_registry_on_20000_datasets_is_fast(registry_20k, tmp_path):
     # A copy of its own, so the write never touches the module-scoped registry the other tests read.
     path = Path(shutil.copy(registry_20k[0], tmp_path / registry_mod.REGISTRY_FILENAME))
     registry = registry_mod.load_registry(path)
-    best, _ = _best_of(lambda: registry_mod._write_registry(registry, path))
+    with registry_mod._acquire_lock(path.with_name(path.name + ".lock")) as lock:
+        best, _ = _best_of(lambda: registry_mod._write_registry(registry, path, lock))
     assert "\n  " not in path.read_text()[:10000]
     assert best < _scaled(0.3), _over("_write_registry on 20,000 datasets", best, 0.3)
 

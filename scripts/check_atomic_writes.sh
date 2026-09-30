@@ -6,13 +6,15 @@
 # atomic_path): the content goes to a unique temporary name next to the target and is moved into
 # place with one rename, so a reader, a second process or an interrupted run never sees a partial
 # file. This gate flags the direct forms that bypass them:
-#   .write_text(   .write_bytes(   .to_csv(<path> ...)   open(<path>, "w..." / 'w...')
+#   .write_text(   .write_bytes(   .to_csv(<path> ...)   copy2(   copyfile(   write_html(   savefig(
+#   open(<path>, "w..."/"x...")   <path>.open("w..."/"x...")   open(<path>, <mode variable>)
 # A to_csv call without a path (to_csv(), to_csv(sep=...)) returns a string and is allowed, as are
 # read and append modes. Comment lines are ignored. A module that must write directly (the helpers
 # themselves, an append-only log) is listed in scripts/atomic_writes_allowlist.txt, one path per
 # line followed by the reason; an entry whose file no longer exists, or that has no reason, fails
 # the gate so the list only shrinks with the code.
-# Limitation: plain grep, one line at a time, so an open( call split across lines is not seen.
+# Limitations: plain grep, one line at a time, so a call split across lines is not seen, and an
+# open( whose path argument itself holds a parenthesis (open(Path(x), "w")) is not seen either.
 # Usage: scripts/check_atomic_writes.sh [ROOT]   (ROOT defaults to the repository root)
 set -euo pipefail
 
@@ -39,7 +41,13 @@ if [ -f "$allowlist_file" ]; then
     done < "$allowlist_file"
 fi
 
-direct_write='\.write_text\(|\.write_bytes\(|\.to_csv\(|open\([^)]*,[[:space:]]*(mode[[:space:]]*=[[:space:]]*)?["'"'"']w'
+quote="[\"']"
+mode_kw='(mode[[:space:]]*=[[:space:]]*)?'
+direct_write='\.write_text\(|\.write_bytes\(|\.to_csv\(|copy2\(|copyfile\(|write_html\(|savefig\('
+direct_write="${direct_write}|open\\([^)]*,[[:space:]]*${mode_kw}${quote}[wx]"
+direct_write="${direct_write}|\\.open\\([[:space:]]*${mode_kw}${quote}[wx]"
+# open(<path>, mode) with the mode in a variable; os.open, gzip.open and the like are not matched.
+direct_write="${direct_write}|(^|[^.A-Za-z_])open\\([^),]*,[[:space:]]*${mode_kw}[A-Za-z_][A-Za-z_0-9]*[[:space:]]*[,)]"
 # A to_csv call whose first argument is a keyword other than path_or_buf, or that has none, writes
 # no file: it returns the CSV text.
 to_csv_no_path='\.to_csv\([[:space:]]*(\)|[A-Za-z_]+[[:space:]]*=)'

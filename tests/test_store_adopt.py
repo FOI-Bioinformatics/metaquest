@@ -729,3 +729,31 @@ class TestContentComparisonPasses:
 
         assert opened[str(project)] == 2
         assert opened[str(store)] == 2
+
+
+class TestAdoptLockLost:
+    def test_a_lock_taken_over_during_staging_publishes_nothing(self, tmp_path):
+        import json
+
+        from metaquest.data.sra import compress_fastq as real_compress
+
+        paths = init_store(tmp_path / "store")
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+        other = {"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00", "token": "feedbeef"}
+
+        def _compress(path, threads):
+            # Another run reclaimed the lock while this one was compressing.
+            lock_path(paths, "SRR1").write_text(json.dumps(other))
+            return real_compress(path, threads)
+
+        with patch("metaquest.store.adopt.compress_fastq", side_effect=_compress):
+            report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.failed == ["SRR1"]
+        assert report.adopted == []
+        assert not sra_dir(paths, "SRR1").exists()
+        # The project's folder is untouched and the lock still names the other holder.
+        assert (project_fastq / "SRR1").is_dir() and not (project_fastq / "SRR1").is_symlink()
+        assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
+        assert json.loads(lock_path(paths, "SRR1").read_text())["token"] == "feedbeef"

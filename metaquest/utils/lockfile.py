@@ -21,12 +21,26 @@ Release compares the token under the same guard and never removes a lock that no
 someone else. The heartbeat reads the token and touches the file through one descriptor. A
 holder record that is not JSON (a bare pid written by an older version, or a test fixture)
 is never judged dead; it follows the age rule alone.
+
+On the main thread, SIGINT, SIGTERM and SIGHUP are blocked (``pthread_sigmask``) from just
+before a lock file is created until the acquisition is recorded as held, so a first signal
+cannot leave a lock file that nothing releases; a signal arriving meanwhile is delivered as
+soon as the lock is recorded. Windows and threads other than the main one get no mask; the
+heartbeat thread blocks these signals for good. Remaining windows, all rare and all ending in
+a wait rather than in lost data: a signal the kernel delivers to another thread of the
+process (a download worker) while the main thread is in that section still reaches Python
+there; a ``KeyboardInterrupt`` raised while a release waits for the reclaim guard
+(``_wait_for_guard``) leaves the lock file in place until it goes stale; and a process
+killed (SIGKILL) while it holds a reclaim guard leaves the guard, so for
+``RECLAIM_GUARD_STALE_SECONDS`` every release of that lock waits
+``RELEASE_GUARD_WAIT_SECONDS`` and no waiter can reclaim it.
 """
 
 import json
 import logging
 import os
 import secrets
+import signal
 import socket
 import threading
 import time
@@ -51,6 +65,10 @@ RELEASE_GUARD_WAIT_SECONDS = 5.0
 # Errors a heartbeat refresh may raise beyond the OSError it handles itself; any of them marks
 # that one lock lost and leaves the heartbeat thread refreshing the others.
 _REFRESH_FAILURES = (ArithmeticError, AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError)
+# Signals held back while a lock file is created and recorded as held (see _DeferredSignals).
+_DEFERRED_SIGNALS = frozenset(
+    getattr(signal, name) for name in ("SIGINT", "SIGTERM", "SIGHUP") if hasattr(signal, name)
+)
 
 __all__ = [
     "LockHeld",
@@ -433,6 +451,10 @@ class _Heartbeat:
         return due, min(entry.refreshed + entry.interval for entry in live) - now
 
     def _run(self) -> None:
+        # Python runs signal handlers on the main thread only; blocking them here keeps the kernel
+        # from delivering one to this thread while the main thread holds them back (_DeferredSignals).
+        if hasattr(signal, "pthread_sigmask"):
+            signal.pthread_sigmask(signal.SIG_BLOCK, _DEFERRED_SIGNALS)
         while True:
             with self.cond:
                 due, sleep = self._due()
@@ -477,6 +499,30 @@ if hasattr(os, "register_at_fork"):
 # -------------------------------------------------------------- acquire, release
 
 
+class _DeferredSignals:
+    """SIGINT, SIGTERM and SIGHUP blocked on the main thread between creating a lock and recording it.
+
+    ``block`` is called before each attempt to create the lock file and ``restore`` once the
+    acquisition is recorded as held (or the attempt failed); a signal that arrives in between
+    is delivered by ``restore``. Off the main thread, and where ``pthread_sigmask`` does not
+    exist (Windows), both do nothing.
+    """
+
+    def __init__(self) -> None:
+        self.previous: Optional[Any] = None
+
+    def block(self) -> None:
+        if self.previous is not None or not hasattr(signal, "pthread_sigmask"):
+            return
+        if threading.current_thread() is threading.main_thread():
+            self.previous = signal.pthread_sigmask(signal.SIG_BLOCK, _DEFERRED_SIGNALS)
+
+    def restore(self) -> None:
+        if self.previous is not None:
+            previous, self.previous = self.previous, None
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
 def _held_error(lock: Path, policy: LockPolicy) -> LockHeld:
     return LockHeld(f"{policy.what} is locked by {describe_holder(read_holder(lock))}: {lock}")
 
@@ -487,19 +533,28 @@ def _check_stop(policy: LockPolicy, should_stop: Optional[Callable[[], bool]], w
 
 
 def _acquire(
-    lock: Path, key: str, policy: LockPolicy, should_stop: Optional[Callable[[], bool]], blocking: bool
+    lock: Path,
+    key: str,
+    policy: LockPolicy,
+    should_stop: Optional[Callable[[], bool]],
+    blocking: bool,
+    deferred: _DeferredSignals,
 ) -> Dict[str, Any]:
     """Take ``lock`` under ``policy`` and return the holder record written.
 
     The wait limit is checked before a reclaim, so a lock truly held by another process is
-    reported, not taken, when both thresholds pass on the same poll.
+    reported, not taken, when both thresholds pass on the same poll. Signals are deferred
+    around each creation attempt and stay deferred when it succeeds: the caller restores them
+    once it has recorded the lock as held.
     """
     started = time.monotonic()
     next_log = FIRST_WAIT_LOG_SECONDS
     while True:
+        deferred.block()
         holder = _create(lock)
         if holder is not None:
             return holder
+        deferred.restore()
         waited = time.monotonic() - started
         if key in _thread_entries():
             # A stop the caller asked for is what it gets; otherwise the wait could never end.
@@ -563,16 +618,20 @@ def held_lock(
     """
     lock = Path(lock)
     key = os.path.realpath(lock)
-    holder = _acquire(lock, key, policy, should_stop, blocking)
     owner = os.getpid()
-    entry = _Held(lock, key, str(holder["token"]), policy.heartbeat_seconds)
+    deferred = _DeferredSignals()
+    entry: Optional[_Held] = None
     try:
+        holder = _acquire(lock, key, policy, should_stop, blocking, deferred)
+        entry = _Held(lock, key, str(holder["token"]), policy.heartbeat_seconds)
         _thread_entries()[key] = entry
         _HEARTBEAT.add(entry)
+        deferred.restore()
         yield lock
     finally:
+        deferred.restore()
         # A forked child leaves the block too, but the lock is its parent's to release.
-        if os.getpid() == owner:
+        if entry is not None and os.getpid() == owner:
             if _thread_entries().get(key) is entry:
                 del _thread_entries()[key]
             _HEARTBEAT.remove(entry)

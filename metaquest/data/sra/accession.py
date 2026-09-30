@@ -228,6 +228,12 @@ def _handle_download_output(
             try:
                 fastq_mod.compress_fastq(file, num_threads, stop=stop)
             except fastq_mod._TOOL_ERRORS as e:
+                if stop_requested(stop):
+                    # pigz terminated with the run's tools, or the Python fallback stopping on
+                    # the token: an interruption, not a compression failure.
+                    compression_skipped = [f.name for f in moved[index:]]
+                    logger.info(f"Compression of {output_path.name} stopped: the run was interrupted")
+                    break
                 logger.warning(f"Could not compress {file}: {e}")
                 compression_failures.append(file.name)
 

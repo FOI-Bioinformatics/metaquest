@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Union
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import unique_temp_path
 from metaquest.store.layout import StorePaths, sra_dir
 from metaquest.store.locks import touch_dataset_use
 
@@ -124,7 +125,14 @@ def link_dataset(
     _clear_existing(link)
 
     if mode == "copy":
-        shutil.copytree(store_dataset, link)
+        # Copied under a dot-prefixed name and renamed into place, so an interrupted copy never
+        # leaves a partial dataset folder that looks like a download.
+        staging = unique_temp_path(link)
+        try:
+            shutil.copytree(store_dataset, staging)
+            os.replace(staging, link)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
         touch_dataset_use(paths, accession)
         logger.info("Copied %s from the store into %s", accession, link)
         return link

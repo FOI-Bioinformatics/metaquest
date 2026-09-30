@@ -40,7 +40,7 @@ from metaquest.core.constants import (
 from metaquest.core.exceptions import DataAccessError
 from metaquest.store.layout import StorePaths
 from metaquest.store.sidecar import Sidecar
-from metaquest.utils.lockfile import LockPolicy, held_lock
+from metaquest.utils.lockfile import LockPolicy, held_lock, verify_held
 
 logger = logging.getLogger(__name__)
 
@@ -552,7 +552,9 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
     that predate it (``journal.backfill_from_catalog``, a no-op once the journal already has
     project lines), yields it for the caller to write through, commits on a clean exit, and
     always releases the lock. If the block raises, the connection is closed without committing
-    (uncommitted changes are discarded) and the lock is still released.
+    (uncommitted changes are discarded) and the lock is still released. The commit happens only
+    while the lock is still this process's (``verify_held``): a holder stalled past the stale
+    window gets ``LockLost``, a ``DataAccessError``, and its changes are discarded.
 
     Not re-entrant: nesting a second ``catalog_write`` against the same store root inside
     this block's body, in the same thread, raises ``LockReentry`` at once.
@@ -565,13 +567,14 @@ def catalog_write(paths: StorePaths) -> Iterator[Catalog]:
         poll_seconds=SHORT_LOCK_POLL_SECONDS,
         heartbeat_seconds=SHORT_LOCK_HEARTBEAT_SECONDS,
     )
-    with held_lock(paths.catalog_lock, policy):
+    with held_lock(paths.catalog_lock, policy) as lock:
         with Catalog(paths, create=True) as catalog:
             catalog.migrate()
             from metaquest.store import journal
 
             journal.backfill_from_catalog(paths, catalog)
             yield catalog
+            verify_held(lock)
             try:
                 catalog.conn.commit()
             except sqlite3.Error as e:

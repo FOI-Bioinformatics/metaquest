@@ -609,3 +609,20 @@ def test_catalog_busy_timeout_constant_is_wired_to_connect(paths, monkeypatch):
     finally:
         release.set()
         thread.join(timeout=5)
+
+
+def test_a_catalogue_lock_taken_over_during_a_write_commits_nothing(paths):
+    import json
+
+    from metaquest.utils.lockfile import LockLost
+
+    other = {"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00", "token": "feedbeef"}
+    with pytest.raises(LockLost):
+        with catalog_write(paths) as catalog:
+            catalog.upsert_dataset(_sidecar("SRR1"))
+            # Another process reclaimed the lock while this holder was stalled.
+            paths.catalog_lock.write_text(json.dumps(other))
+    with Catalog(paths, create=True) as catalog:
+        catalog.migrate()
+        assert catalog.get_dataset("SRR1") is None
+    assert json.loads(paths.catalog_lock.read_text())["token"] == "feedbeef"

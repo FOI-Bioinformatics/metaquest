@@ -14,6 +14,7 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data.sra import accession as accession_mod
 from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
+from metaquest.utils.lockfile import LockLost, verify_held
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ def _store_fetch(
     sidecar-less dataset for another project to find, and an existing copy is replaced only
     once its replacement is complete.
     """
-    from metaquest.store.layout import sra_dir
+    from metaquest.store.layout import lock_path, sra_dir
     from metaquest.store.link import link_dataset
     from metaquest.store.sidecar import build_sidecar, ncbi_from_metadata_xml, write_sidecar
 
@@ -188,6 +189,9 @@ def _store_fetch(
 
     sidecar = build_sidecar(accession, staged, ncbi, accession_mod.fasterq_dump_version(), compression)
     write_sidecar(staged / f"{accession}.json", sidecar)
+    # A holder stalled past the stale window may have lost the lock to another project, which
+    # then owns the staged folder too: publish nothing, and leave that folder to its new owner.
+    verify_held(lock_path(store, accession))
     cleanup_mod.publish_folder(staged, target, store.tmp)
 
     catalogued = _catalogue_published(store, sidecar)
@@ -222,7 +226,9 @@ def _store_download(
     ``lock_wait`` of zero waits for as long as the other project keeps working; a positive
     value gives up after that many seconds, naming the accession and the holder. ``stop`` is
     the run's stop token: when it (or the process-wide ``STOP``) is set, a wait for the lock
-    ends with ``(False, "interrupted")``; it is passed on to ``download_accession``.
+    ends with ``(False, "interrupted")``; it is passed on to ``download_accession``. A lock
+    lost while the download ran (``verify_held`` just before the publish) ends with
+    ``(False, "lock lost: ...")`` and nothing published.
     """
     from metaquest.store.locks import LockWaitStopped, dataset_lock
 
@@ -248,6 +254,9 @@ def _store_download(
     except LockWaitStopped:
         logger.info(f"Stopped waiting for the store lock on {accession}: the run was interrupted")
         return False, "interrupted"
+    except LockLost as e:
+        logger.error(f"Store download of {accession} not published: {e}")
+        return False, f"lock lost: {e}"
     except DataAccessError as e:
         logger.error(f"Store download failed for {accession}: {e}")
         return False, f"store error: {e}"

@@ -97,7 +97,7 @@ def list_files(directory: Union[str, Path], pattern: str = "*", include_hidden: 
 
 def copy_file(source: Union[str, Path], destination: Union[str, Path]) -> Path:
     """
-    Copy a file from source to destination.
+    Copy a file from source to destination, publishing it with one rename (``atomic_path``).
 
     Args:
         source: Source file path
@@ -113,10 +113,11 @@ def copy_file(source: Union[str, Path], destination: Union[str, Path]) -> Path:
         source_path = Path(source)
         dest_path = Path(destination)
 
-        # Ensure destination directory exists
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-        return Path(shutil.copy2(source_path, dest_path))
+        if dest_path.is_dir():
+            dest_path = dest_path / source_path.name
+        with atomic_path(dest_path) as tmp:
+            shutil.copy2(source_path, tmp)
+        return dest_path
     except Exception as e:
         raise DataAccessError(f"Failed to copy {source} to {destination}: {e}")
 

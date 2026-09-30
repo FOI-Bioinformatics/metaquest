@@ -25,6 +25,7 @@ import pandas as pd
 
 from metaquest.core.exceptions import ConfigurationError, DataAccessError, ProcessingError, SecurityError
 from metaquest.data.extraction_locks import LockHeld, index_build_lock, sample_extraction_lock
+from metaquest.data.extraction_staging import publish_staged, staged_sample_outputs
 from metaquest.data.file_io import atomic_path, ensure_directory, write_text_atomic
 from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
@@ -412,15 +413,12 @@ def _map_and_extract(
     ``genome_fasta`` is the FASTA it was built from, used as a one-time fallback if aligning
     against the index fails. ``force_single_end`` (set when the caller already knows the two
     mate files disagree in read count) maps each mate file in its own minimap2 run and merges
-    the two alignments afterwards, deliberately as single-end, rather than relying on
-    minimap2's own after-the-fact stderr warning.
+    the two alignments as single-end, rather than relying on minimap2's stderr warning.
 
     Returns the FASTQ files written (two for paired input, one otherwise, none when nothing
     mapped) with the mapped-record counts and the reference coverage (its table is written
-    beside the FASTQ). The SAM alignment(s) live under ``sam_dir`` (or ``out_dir``) and are
-    removed once the filtered BAM exists, unless ``keep_sam``; the BAM is always removed once
-    the FASTQ export and the coverage table are written.
-    """
+    beside the FASTQ, which is staged: ``extraction_staging``). SAM files (under ``sam_dir`` or
+    ``out_dir``) go once the BAM exists unless ``keep_sam``; the BAM goes after the export."""
     ensure_directory(out_dir)
     sam_root = ensure_directory(sam_dir) if sam_dir is not None else out_dir
     bam_path = out_dir / f"{genome_id}.mapped.bam"
@@ -483,8 +481,10 @@ def _map_and_extract(
         mapped_total - mapped,
     )
 
-    written = _export_mapped_fastq(reads, bam_path, out_dir, genome_id, threads)
-    coverage = reference_coverage(accession, genome_id, bam_path, out_dir, sam_root, threads)
+    with staged_sample_outputs(out_dir, genome_id) as staging:
+        staged = _export_mapped_fastq(reads, bam_path, staging, genome_id, threads)
+        coverage = reference_coverage(accession, genome_id, bam_path, out_dir, sam_root, threads)
+        written = publish_staged(staging, staged, out_dir, genome_id)
     bam_path.unlink(missing_ok=True)
 
     return ExtractionResult(written, mapped, unequal, mapped_total=mapped_total, coverage=coverage)

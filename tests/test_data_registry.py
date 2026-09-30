@@ -185,6 +185,40 @@ class TestRegistryTransaction:
         assert data["datasets"]["SRR1"]["download"]["state"] == "failed"
         assert not list(tmp_path.glob("*.lock")) and not list(tmp_path.glob("*.tmp.*"))
 
+    def test_a_lock_taken_over_during_the_transaction_writes_nothing(self, tmp_path):
+        from metaquest.utils.lockfile import LockLost
+
+        target = tmp_path / "metaquest_registry.json"
+        reg.save_registry(reg.load_registry(target))
+        before = target.read_text()
+        lock = target.with_name(target.name + ".lock")
+        other = {"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00", "token": "feedbeef"}
+        with pytest.raises(LockLost):
+            with reg.registry_transaction(target) as r:
+                reg.record_exclusion(r, "SRR1", "amplicon")
+                # Another process reclaimed the lock while this holder was stalled.
+                lock.write_text(json.dumps(other))
+        assert target.read_text() == before
+        assert json.loads(lock.read_text())["token"] == "feedbeef"
+
+    def test_a_batch_keeps_its_queue_when_the_lock_was_lost(self, tmp_path):
+        from metaquest.utils.lockfile import LockLost
+
+        target = tmp_path / "metaquest_registry.json"
+        lock = target.with_name(target.name + ".lock")
+        other = {"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00", "token": "feedbeef"}
+        batch = batch_mod.RegistryBatch(target, flush_every=None, flush_seconds=None)
+
+        def _mutation(registry):
+            reg.record_exclusion(registry, "SRR1", "amplicon")
+            lock.write_text(json.dumps(other))
+
+        batch.apply(_mutation, "SRR1")
+        with pytest.raises(LockLost):
+            batch.flush()
+        assert batch.pending_labels() == ["SRR1"]
+        assert not target.exists()
+
     def test_transaction_writes_nothing_on_error(self, tmp_path):
         target = tmp_path / "metaquest_registry.json"
         with pytest.raises(ValueError, match="boom"):

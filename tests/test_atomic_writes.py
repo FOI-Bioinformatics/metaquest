@@ -253,9 +253,10 @@ def test_write_registry_interrupted_leaves_no_temp(tmp_path):
     reg.save_registry(registry, target)
     before = target.read_text()
     registry.datasets["SRR1"] = {}
-    with patch.object(file_io.os, "replace", side_effect=KeyboardInterrupt):
-        with pytest.raises(KeyboardInterrupt):
-            reg._write_registry(registry, target)
+    with reg._acquire_lock(target.with_name(target.name + ".lock")) as lock:
+        with patch.object(file_io.os, "replace", side_effect=KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                reg._write_registry(registry, target, lock)
     assert target.read_text() == before
     assert _no_temp_files(tmp_path)
     assert not [p for p in tmp_path.iterdir() if ".tmp" in p.name]
@@ -265,6 +266,7 @@ def test_write_registry_fsyncs(tmp_path):
     from metaquest.data import registry as reg
 
     target = tmp_path / reg.REGISTRY_FILENAME
-    with patch.object(file_io.os, "fsync", wraps=os.fsync) as fsync:
-        reg._write_registry(reg.load_registry(target), target)
+    with reg._acquire_lock(target.with_name(target.name + ".lock")) as lock:
+        with patch.object(file_io.os, "fsync", wraps=os.fsync) as fsync:
+            reg._write_registry(reg.load_registry(target), target, lock)
     assert fsync.called

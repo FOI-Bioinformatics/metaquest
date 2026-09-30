@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Sequence, Union
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
 from metaquest.core.exceptions import SecurityError
 from metaquest.core.validation import validate_accession
@@ -99,6 +99,16 @@ class SecureSubprocess:
         return cls._stopping or (stop is not None and stop.is_set())
 
     @classmethod
+    def _children_snapshot(cls) -> List[Tuple[subprocess.Popen, Optional[threading.Event]]]:
+        """The tracked children and their tokens; retried when another thread changes the table meanwhile."""
+        for _ in range(100):
+            try:
+                return list(cls._children.items())
+            except RuntimeError:
+                continue
+        return []
+
+    @classmethod
     def terminate_children(cls, grace: float = 5.0, stop: Optional[threading.Event] = None) -> int:
         """Terminate, then kill, the children started by ``run_secure`` that are still running.
 
@@ -109,13 +119,20 @@ class SecureSubprocess:
         Each child is sent SIGTERM; one that has not exited ``grace`` seconds later is sent
         SIGKILL. Returns the number of children stopped.
         """
-        with cls._children_lock:
+        # The third-signal handler calls this on the main thread, which may be inside run_secure
+        # holding the (non-reentrant) lock: a bounded wait, then an unlocked snapshot, so the
+        # handler can never deadlock against the code it interrupted.
+        locked = cls._children_lock.acquire(timeout=0.1)
+        try:
             if stop is None:
                 cls._stopping = True
-                children = list(cls._children)
             else:
                 stop.set()
-                children = [child for child, owner in cls._children.items() if owner is stop]
+            owners = cls._children_snapshot()
+        finally:
+            if locked:
+                cls._children_lock.release()
+        children = [child for child, owner in owners if stop is None or owner is stop]
         for child in children:
             if child.poll() is None:
                 child.terminate()

@@ -258,6 +258,18 @@ class TestApplyRechecksAgainstTheRegistryItIsGiven:
         assert rb.download_block(fresh, "SRR8").state == "downloaded"
         assert report.recorded_missing == ["SRR2"]
 
+    def test_an_accession_removed_after_the_scan_is_not_recorded_as_downloaded(self, tmp_path, fixed_clock):
+        registry, paths = _drifted_project(tmp_path)
+        plan = scan_reconcile(registry, paths)
+        assert "SRR7" in plan.on_disk
+        # store_unlink (or a user) removes the folder between the scan and the apply.
+        (paths.fastq / "SRR7" / "SRR7_1.fastq").unlink()
+
+        report = apply_reconcile(registry, plan)
+
+        assert "SRR7" not in report.untracked_fastq
+        assert rb.download_block(registry, "SRR7") is None
+
     def test_a_verdict_is_used_only_for_the_spot_count_it_was_computed_for(self, tmp_path, fixed_clock):
         registry, paths = _drifted_project(tmp_path)
         plan = scan_reconcile(registry, paths)

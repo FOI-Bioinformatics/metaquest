@@ -410,6 +410,8 @@ def compress_fastq(path: Path, threads: int, stop: Optional[threading.Event] = N
 
     ``stop`` is the calling download run's stop token; ``pigz`` is recorded under it so
     ``SecureSubprocess.terminate_children(stop=stop)`` stops it with the rest of that run.
+    The Python fallback checks it before every block and raises ``InterruptedError`` (an
+    ``OSError``) once it is set, removing its temporary file and keeping the source.
     """
     target = path.with_suffix(path.suffix + ".gz")
 
@@ -432,6 +434,8 @@ def compress_fastq(path: Path, threads: int, stop: Optional[threading.Event] = N
     with open(path, "rb") as source, open_atomic(target, "wb") as raw:
         with gzip.GzipFile(filename=target.name, mode="wb", fileobj=raw, compresslevel=6) as dest:
             while True:
+                if stop is not None and stop.is_set():
+                    raise InterruptedError(f"Compression of {path} stopped: the run was interrupted")
                 block = source.read(block_size)
                 if not block:
                     break

@@ -150,7 +150,10 @@ def _reconcile(registry: Registry, plan: ReconcilePlan, compute: bool) -> Reconc
             rb.set_download_block(registry, acc, download)
             report.recorded_missing.append(acc)
     tracked = set(query(registry, "downloaded"))
-    report.untracked_fastq = sorted(acc for acc in plan.on_disk if acc not in tracked)
+    # Checked on disk again, the mirror of the check above: an accession unlinked or removed after
+    # the scan (store_unlink records it missing) must not be written back as downloaded.
+    untracked = (acc for acc in plan.on_disk if acc not in tracked)
+    report.untracked_fastq = sorted(acc for acc in untracked if accession_has_fastq(plan.paths.fastq / acc))
     for acc in report.untracked_fastq:
         record_download(registry, acc, "downloaded", plan.paths.fastq, attempt=False)
         rb.mark_inferred(registry, acc, "download", attempts=0)

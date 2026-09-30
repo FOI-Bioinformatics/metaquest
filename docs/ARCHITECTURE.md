@@ -173,8 +173,12 @@ Known limitation: a dataset lock's staging folder (a plain project's `.metaquest
 store's own staging path) is named after the accession alone, not the holder's token. A takeover of a
 holder that is not dead but merely stalled past the stale window (a suspended process, for example) does
 not stop that stalled holder from writing into the same staging folder the new holder is now using, so the
-two holders' output can mix there until the stalled one calls `verify_held` and stops. The per-accession
-lock file itself is never shared this way; only the staging path underneath it is.
+two holders' output can mix there while both run. The mixed folder is never published by the stalled
+holder: every destructive or publishing step calls `verify_held` first (the plain-project and store
+download publish, the `store_adopt` publish, each registry write and each catalogue commit), and a holder
+that finds its lock taken over stops with `LockLost` ("lock lost: ..." for a download) and leaves the
+staging folder to the new holder. The per-accession lock file itself is never shared this way; only the
+staging path underneath it is.
 
 Three `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `poll_seconds`,
 `heartbeat_seconds`) cover every lock kind:

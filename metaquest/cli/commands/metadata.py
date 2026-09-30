@@ -6,7 +6,6 @@ import argparse
 import logging
 from functools import partial
 import os
-import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -14,9 +13,10 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import pandas as pd
 
 from metaquest.cli.base import BaseCommand
-from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.defaults import resolve_metadata_table
+from metaquest.data.file_io import copy_file
 from metaquest.data.metadata import (
     check_metadata_attributes,
     download_metadata,
@@ -139,8 +139,9 @@ class DownloadMetadataCommand(BaseCommand):
         try:
             paths.metadata.mkdir(parents=True, exist_ok=True)
             for xml_path in downloaded.values():
-                shutil.copy2(xml_path, paths.metadata / Path(xml_path).name)
-        except OSError as e:
+                # One rename, so another project or store_verify never reads a half-copied XML.
+                copy_file(xml_path, paths.metadata / Path(xml_path).name)
+        except (OSError, DataAccessError) as e:
             self.logger.warning("Could not copy metadata into the store at %s: %s", paths.metadata, e)
             return
         self.logger.info("Copied %d metadata file(s) into the store at %s", len(downloaded), paths.metadata)

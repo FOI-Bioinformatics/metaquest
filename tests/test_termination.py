@@ -233,3 +233,27 @@ def test_download_sra_alias_delegates_to_graceful_termination():
         assert isinstance(term, Termination)
         with pytest.raises(KeyboardInterrupt):
             os.kill(os.getpid(), signal.SIGTERM)
+
+
+def test_terminate_children_does_not_deadlock_when_its_own_thread_holds_the_table_lock():
+    """The third-signal handler runs on the main thread, possibly inside run_secure's locked section."""
+    import time
+    from unittest.mock import MagicMock
+
+    from metaquest.utils.security import SecureSubprocess
+
+    child = MagicMock()
+    child.poll.return_value = None
+    token = threading.Event()
+    SecureSubprocess._children[child] = token
+    try:
+        with SecureSubprocess._children_lock:
+            started = time.monotonic()
+            stopped = SecureSubprocess.terminate_children(grace=0.1, stop=token)
+            elapsed = time.monotonic() - started
+    finally:
+        SecureSubprocess._children.pop(child, None)
+    assert stopped == 1
+    child.terminate.assert_called_once()
+    assert token.is_set()
+    assert elapsed < 2.0

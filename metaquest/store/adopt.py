@@ -52,7 +52,7 @@ from metaquest.data.sra import (
     is_transient_folder,
 )
 from metaquest.store.catalog import catalog_write
-from metaquest.store.layout import StorePaths, sidecar_path, sra_dir
+from metaquest.store.layout import StorePaths, lock_path, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
 from metaquest.store.locks import dataset_lock, lock_holder, lock_is_held
 from metaquest.store.sidecar import (
@@ -63,6 +63,7 @@ from metaquest.store.sidecar import (
     read_sidecar,
     write_sidecar,
 )
+from metaquest.utils.lockfile import LockLost, verify_held
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,9 @@ def _stage_into_store(
                 compress_fastq(file_path, _ADOPT_COMPRESS_THREADS)
 
     store_dir.parent.mkdir(parents=True, exist_ok=True)
+    # A holder stalled past the stale window may have lost the lock (and the staging path) to
+    # another run: publish nothing then, and leave the staged copy to the new holder.
+    verify_held(lock_path(paths, accession))
     shutil.move(str(staged), str(store_dir))
 
     _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
@@ -506,13 +510,18 @@ def _adopt_one(
         return
 
     paths.locks.mkdir(parents=True, exist_ok=True)
-    with dataset_lock(paths, accession, wait_seconds=lock_wait):
-        published_elsewhere = sc_path.is_file()
-        if not published_elsewhere:
-            if store_dir.is_dir():
-                _finish_sidecar(accession, store_dir, sc_path, paths, metadata_folders)
-            else:
-                _stage_into_store(entry, accession, paths, compress, metadata_folders, report)
+    try:
+        with dataset_lock(paths, accession, wait_seconds=lock_wait):
+            published_elsewhere = sc_path.is_file()
+            if not published_elsewhere:
+                if store_dir.is_dir():
+                    _finish_sidecar(accession, store_dir, sc_path, paths, metadata_folders)
+                else:
+                    _stage_into_store(entry, accession, paths, compress, metadata_folders, report)
+    except LockLost as e:
+        logger.error("%s: lock lost: %s; nothing published, project copy kept", accession, e)
+        report.failed.append(accession)
+        return
 
     if published_elsewhere:
         # Someone published this accession while we waited for the lock; the project's copy is

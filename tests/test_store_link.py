@@ -293,3 +293,21 @@ class TestLinkModeAcrossVolumes:
         from metaquest.store.link import _shares_a_parent
 
         assert _shares_a_parent(Path("/Volumes/lab/store"), Path("/Volumes/lab/project/fastq")) is True
+
+
+def test_link_dataset_copy_mode_interrupted_leaves_no_visible_folder(tmp_path, paths, monkeypatch):
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    real_copytree = shutil.copytree
+
+    def _interrupted_copytree(src, dst, *args, **kwargs):
+        real_copytree(src, dst, *args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("metaquest.store.link.shutil.copytree", _interrupted_copytree)
+    with pytest.raises(KeyboardInterrupt):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert not (project_fastq / "SRR1").exists()
+    assert list(project_fastq.iterdir()) == []
+    assert not accession_has_fastq(project_fastq / "SRR1")

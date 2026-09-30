@@ -13,8 +13,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   a plain project and for a store, registry contention during a download, two `SIGTERM`s during a
   download, a `SIGKILL`ed lock holder, and `store_gc` against a dataset another run is downloading.
 - An atomic-writes gate in `make check` (`scripts/check_atomic_writes.sh`): fails on a direct
-  `.write_text`, `.write_bytes`, `.to_csv`, or `open(path, "w...")` call outside the small allowlist in
-  `scripts/atomic_writes_allowlist.txt`.
+  `.write_text`, `.write_bytes`, `.to_csv`, `copy2`, `copyfile`, `write_html` or `savefig` call, or an
+  `open(path, "w...")`/`"x..."`, `path.open("w...")` or `open(path, mode)` call, outside the small allowlist
+  in `scripts/atomic_writes_allowlist.txt`. Figure writers (matplotlib `savefig`, plotly `write_html`) are
+  on the allowlist: a figure is regenerable and overwritten whole, and no later step reads it.
 - A `multiprocess` pytest marker for tests that start real subprocesses; it runs as part of the default
   suite.
 - Locks for a shared minimap2 index build and for per-sample read extraction
@@ -78,13 +80,34 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   recorded. A user relying on either command failing loudly on a bad record should watch the log instead.
 - Every tabular and text output file metaquest writes is now written atomically, through a uniquely named
   temporary file replaced into place with `os.replace`: CSV and TSV tables, the registry, store sidecars,
-  the minimap2 index and its record, per-accession metadata XML, and every HTML report; the registry and
-  sidecar writes also call `fsync`. Temporary file names are dot-prefixed and carry the hostname, pid, and
-  a random token, so they no longer collide between two SLURM nodes writing into the same folder, and
-  stay invisible to every folder listing. Text metaquest writes is now explicit UTF-8 rather than the
-  platform's default locale encoding.
+  the minimap2 index and its record, per-accession metadata XML (and its copy into a store's `metadata/`
+  folder), extracted genome FASTA files, the SRA HTML report, the containment HTML report and the
+  explorer page; the registry and sidecar writes also call `fsync`. Figures (PNG, PDF, SVG and the
+  interactive plotly HTML plots) are still written directly. Temporary file names are dot-prefixed and
+  carry the hostname, pid, and a random token, so they no longer collide between two SLURM nodes writing
+  into the same folder, and stay invisible to every folder listing. Text metaquest writes is now explicit
+  UTF-8 rather than the platform's default locale encoding.
 - `--lock-wait` and `--sra-cache`'s help text now cover a plain project's own per-accession lock, not only
   the store's.
+- Five more commands stop between units on a signal, record what finished, and exit with status 130:
+  `extract_target_reads` (in both the mapping and the assembly loops), `store_adopt` (including
+  `--dry-run`, which used to exit 0), `sra_profile`, `download_metadata` and `parse_metadata`.
+- New download result strings reach `failed_accessions.txt` and the registry: `interrupted` (the run was
+  stopped before or during this accession), `locked: ...` (another process held the accession's lock
+  for longer than `--lock-wait`) and `lock lost: ...` (another process took the lock over while this one
+  was stalled, so nothing was published). `locked:` is classified `unknown`, so the retry pass tries the
+  accession again and waits up to `--lock-wait` for the lock once more.
+- New files on disk: `fastq/.locks/` (a plain project's per-accession locks), `<store>/locks/<ACC>.used`
+  (its modification time records when a project was last handed the dataset, read by `store_gc`),
+  `<lock>.reclaim` guards held for a few file operations during a stale-lock takeover or a release, and,
+  rarely, a `<lock>.reclaimed.<hex>` file left when a process is killed in the middle of a takeover.
+- `store_gc --json` dataset entries gained a `downloaded` field (the catalogue's download time).
+- A write failure at a former `DataFrame.to_csv` site now raises `DataAccessError` with a "Failed to write
+  CSV file" message instead of the underlying `OSError`.
+- `Bio.Entrez.email` and `Bio.Entrez.api_key` are now set only around each NCBI efetch call and restored
+  afterwards, so a library host that sets its own values keeps them.
+- A second `extract_target_reads` that needs the minimap2 index another process is building waits, with
+  no time limit, for that build to finish and then reuses the index.
 
 ### Fixed
 
@@ -108,7 +131,25 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   interrupting one run's tools no longer affects a concurrent run in the same process.
 - `pigz`, started to compress a finished download, was not stopped by an interrupt and could keep
   running after its parent command exited; it now receives the same per-run stop token as the download
-  tools and is terminated with them.
+  tools and is terminated with them, and a `pigz` stopped this way is reported as "compression skipped
+  (interrupted)" rather than "compression failed". Without `pigz`, the Python gzip fallback now checks
+  the stop token between 1 MiB blocks, so an interrupted download no longer waits for a whole file to be
+  compressed.
+- A download into a shared store, or a `store_adopt`, whose holder stalled past the lock's stale window
+  (a sleeping laptop, a suspended job) while another project took the lock over could still publish its
+  staged folder into the store. Both now confirm the lock is still theirs immediately before the
+  publishing rename and report `lock lost: ...` with nothing published otherwise. A registry write and a
+  store catalogue commit make the same check and raise `LockLost`, leaving a registry batch's queue
+  intact for the next flush.
+- A per-sample read extraction interrupted while `samtools fastq` was writing left partial FASTQ files
+  under their final names, which `status --reconcile` and `status --init` then recorded as a finished
+  extraction, so the next `extract_target_reads` skipped the sample. The export now writes into a
+  dot-prefixed folder inside the sample's output folder, and each file is renamed into place only once
+  the sample is complete. A rerun that writes fewer files than an earlier run also removes the earlier
+  run's other FASTQ files for that genome.
+- The copy made by `store_link --mode copy` (and by `download_sra` with a copy link mode) is built under a
+  dot-prefixed name and renamed into place, so an interrupted copy no longer leaves a partial dataset
+  folder in the project.
 
 ### Testing
 

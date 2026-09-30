@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 from metaquest.core.constants import GENOME_ACCESSION_PATTERN, GENOME_ACCESSION_PREFIXES
 from metaquest.core.exceptions import DataAccessError
+from metaquest.data.file_io import copy_file
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ def extract_and_organize(
             # Use the first (typically only) FASTA file
             source_fasta = fasta_files[0]
             dest_fasta = output_dir / f"{accession}.fna"
-            shutil.copy2(str(source_fasta), str(dest_fasta))
+            copy_file(source_fasta, dest_fasta)
             genome_paths[accession] = dest_fasta
             logger.debug(f"Extracted {accession} -> {dest_fasta}")
 

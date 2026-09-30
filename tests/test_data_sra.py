@@ -2698,6 +2698,34 @@ class TestStoreDownloadPublishesAtomically:
         assert (paths.tmp / "SRR1").is_dir()
         assert not (fastq_folder / "SRR1").exists()
 
+    def test_a_lock_taken_over_during_the_download_publishes_nothing(self, tmp_path):
+        import json as json_module
+
+        from metaquest.store.layout import lock_path
+
+        paths = self._store(tmp_path)
+        fastq_folder = tmp_path / "project" / "fastq"
+        other = {"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00", "token": "feedbeef"}
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True, exist_ok=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            # Another project reclaimed the lock while this holder was stalled.
+            lock_path(paths, accession).write_text(json_module.dumps(other))
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, max_retries=0)
+
+        assert stats["failed"] == 1
+        assert stats["results"]["SRR1"].startswith("lock lost: ")
+        assert not (paths.sra / "SRR1").exists()
+        assert not (fastq_folder / "SRR1").exists()
+        # The staged folder and the lock now belong to the other holder and are left alone.
+        assert (paths.tmp / "SRR1").is_dir()
+        assert json_module.loads(lock_path(paths, "SRR1").read_text())["token"] == "feedbeef"
+
     def test_a_failed_replacement_leaves_the_existing_copy_in_place(self, tmp_path):
         from metaquest.store.sidecar import Sidecar, write_sidecar
 

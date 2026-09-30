@@ -35,6 +35,15 @@ def _fixture_tree(tmp_path: Path, body: str) -> Path:
         'with open(path, "w") as f:\n',
         "with open(path, 'wb') as f:\n",
         'with gzip.open(path, mode="wt") as f:\n',
+        "shutil.copy2(src, dest)\n",
+        "shutil.copyfile(src, dest)\n",
+        "fig.write_html(str(path))\n",
+        "plt.savefig(path, dpi=300)\n",
+        "with path.open('w') as f:\n",
+        'with path.open(mode="wb") as f:\n',
+        "with open(p, 'x') as f:\n",
+        "with open(p, mode) as f:\n",
+        "with open(p, mode=write_mode, encoding='utf-8') as f:\n",
     ],
 )
 def test_gate_fails_on_direct_write(tmp_path, line):
@@ -54,6 +63,10 @@ def test_gate_fails_on_direct_write(tmp_path, line):
         "write_text_atomic(path, text)\n",
         'with open_atomic(path, "w") as f:\n',
         "# a comment about x.write_text(data)\n",
+        "with path.open('rb') as f:\n",
+        "with open(p, encoding='utf-8') as f:\n",
+        "fd = os.open(lock, os.O_CREAT | os.O_EXCL)\n",
+        "webbrowser.open(uri)\n",
     ],
 )
 def test_gate_passes_on_allowed_forms(tmp_path, line):

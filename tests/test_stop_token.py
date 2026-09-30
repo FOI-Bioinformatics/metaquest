@@ -213,6 +213,49 @@ class TestTokenThroughTheDownloadChain:
         assert success is True
         assert seen == [("pigz", token)]
 
+    def test_the_gzip_fallback_stops_between_blocks_once_the_token_is_set(self, tmp_path):
+        from metaquest.data.sra.fastq import compress_fastq
+
+        source = tmp_path / "SRR1_1.fastq"
+        body = b"@r\nACGT\n+\nIIII\n" * (3 * 1024 * 1024 // 16)  # three 1 MiB blocks
+        source.write_bytes(body)
+
+        class _SetAfterFirstBlock(threading.Event):
+            checks = 0
+
+            def is_set(self):
+                self.checks += 1
+                return self.checks > 1
+
+        token = _SetAfterFirstBlock()
+        with patch("metaquest.data.sra.fastq.shutil.which", return_value=None):
+            with pytest.raises(InterruptedError):
+                compress_fastq(source, 1, stop=token)
+        assert token.checks == 2
+        assert source.read_bytes() == body
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["SRR1_1.fastq"]
+
+    def test_pigz_stopped_by_the_runs_token_is_reported_as_interrupted(self, tmp_path):
+        temp = tmp_path / "SRR1_temp"
+        temp.mkdir()
+        (temp / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        token = threading.Event()
+
+        def fake_run(executable, args, **kwargs):
+            # terminate_children(stop=token) kills pigz as the run stops.
+            token.set()
+            raise subprocess.CalledProcessError(-15, ["pigz", *args])
+
+        with patch("metaquest.data.sra.fastq.shutil.which", return_value="/usr/bin/pigz"):
+            with patch("metaquest.data.sra.fastq.SecureSubprocess.run_secure", side_effect=fake_run):
+                success, message = accession_mod._handle_download_output(
+                    temp, tmp_path / "SRR1", compress=True, stop=token
+                )
+        assert success is True
+        assert "compression skipped (interrupted) for SRR1_1.fastq" in message
+        assert "compression failed" not in message
+        assert (tmp_path / "SRR1" / "SRR1_1.fastq").is_file()
+
     def test_project_download_forwards_its_token_to_download_accession(self, tmp_path):
         token = threading.Event()
         seen = {}

@@ -23,7 +23,7 @@ from metaquest.data.file_io import visible_files, write_text_atomic
 from metaquest.data import registry_blocks as rb
 from metaquest.data.read_extraction import coverage_table_path, summarise_contigs, summarise_coverage_table
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, fastq_files, is_transient_folder
-from metaquest.utils.lockfile import LockPolicy, held_lock
+from metaquest.utils.lockfile import LockPolicy, held_lock, verify_held
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -205,14 +205,14 @@ def _acquire_lock(lock: Path) -> Iterator[Path]:
         yield held
 
 
-def _write_registry(registry: Registry, target: Path) -> Path:
-    """Write the registry to ``target`` atomically (temp file, compact JSON, rename); the caller holds the lock."""
+def _write_registry(registry: Registry, target: Path, lock: Path) -> Path:
+    """Write the registry to ``target`` atomically (temp file, compact JSON, rename) while ``lock`` is still held."""
+    verify_held(lock)  # LockLost (a DataAccessError) if a stall let another holder reclaim it
     target.parent.mkdir(parents=True, exist_ok=True)
     registry.updated = _now()
     registry.path = target
-    # A registry loaded from an older schema is upgraded to the current one on save; there
-    # is no separate migration step, since every field new schema versions add already
-    # defaults to {} when missing.
+    # A registry of an older schema is upgraded on save; there is no migration step, since
+    # every field new schema versions add defaults to {} when missing.
     registry.version = SCHEMA_VERSION
     payload = {
         "version": registry.version,
@@ -235,8 +235,8 @@ def save_registry(registry: Registry, path: Optional[Union[str, Path]] = None) -
     """Write an already loaded registry atomically under a lock file."""
     target = Path(path) if path else (registry.path or registry_path())
     target.parent.mkdir(parents=True, exist_ok=True)
-    with _acquire_lock(target.with_name(target.name + ".lock")):
-        return _write_registry(registry, target)
+    with _acquire_lock(target.with_name(target.name + ".lock")) as lock:
+        return _write_registry(registry, target, lock)
 
 
 @contextmanager
@@ -252,10 +252,10 @@ def registry_transaction(path: Optional[Union[str, Path]] = None) -> Iterator[Re
     """
     target = registry_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with _acquire_lock(target.with_name(target.name + ".lock")):
+    with _acquire_lock(target.with_name(target.name + ".lock")) as lock:
         registry = load_registry(target)
         yield registry
-        _write_registry(registry, target)
+        _write_registry(registry, target, lock)
 
 
 # --------------------------------------------------------------------- writers

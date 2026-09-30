@@ -628,3 +628,51 @@ class TestCallers:
         assert lock_is_held(paths, "SRR1") is False
         with dataset_lock(paths, "SRR1", wait_seconds=0.5):
             assert lock_is_held(paths, "SRR1") is True
+
+
+@pytest.mark.skipif(not hasattr(__import__("signal"), "pthread_sigmask"), reason="needs pthread_sigmask")
+class TestSignalsDeferredAroundCreation:
+    def test_a_signal_during_creation_is_delivered_after_the_lock_is_recorded_and_then_released(
+        self, tmp_path, monkeypatch
+    ):
+        import signal
+
+        lock = tmp_path / "x.lock"
+        real_create = lockfile._create
+        seen = {}
+
+        def _create_and_signal(path):
+            holder = real_create(path)
+            # Without the mask this raises here, between creating the file and recording it.
+            # Sent to the main thread itself, as the kernel may deliver a process signal to it.
+            signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
+            seen["after_kill"] = True
+            return holder
+
+        previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            monkeypatch.setattr(lockfile, "_create", _create_and_signal)
+            with pytest.raises(KeyboardInterrupt):
+                with held_lock(lock, _policy()):
+                    seen["body"] = True
+        finally:
+            signal.signal(signal.SIGINT, previous)
+        # The signal is raised once the lock is recorded (as the block starts, or on the way in),
+        # so the lock is released rather than left behind.
+        assert seen["after_kill"] is True
+        assert not lock.exists()
+        assert signal.SIGINT not in signal.pthread_sigmask(signal.SIG_BLOCK, [])
+
+    def test_no_mask_off_the_main_thread(self, tmp_path):
+        import signal
+
+        masks = []
+
+        def _worker():
+            with held_lock(tmp_path / "y.lock", _policy()):
+                masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+
+        thread = threading.Thread(target=_worker)
+        thread.start()
+        thread.join()
+        assert masks and signal.SIGINT not in masks[0]
