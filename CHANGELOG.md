@@ -40,20 +40,26 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   so two runs on one project no longer both write into `fastq/<ACCESSION>_temp` and delete each other's
   in-flight output. Each download is built, verified and compressed under
   `fastq/.metaquest-tmp/<ACCESSION>` and published into `fastq/<ACCESSION>` with one rename.
-  `--lock-wait` now bounds this wait too, the same as it already bounded the store's lock.
+  `--lock-wait` now bounds this wait too, the same as it already bounded the store's lock. The new
+  in-lock "already exists" check this adds (so a second process finding a finished download does not
+  re-fetch it) honours `--redownload-truncated` the same way the existing pre-lock check already did: an
+  accession the registry's last verification marked `truncated` is still re-downloaded once the lock is
+  held when that flag was given, rather than being reported already present.
 - `store_gc` treats a dataset used (linked or downloaded) within the last day as in use even when nothing
   currently holds its lock, and re-checks each candidate's lock, usage, and link state again immediately
   before removing it, not only at classification time; a dataset kept for either reason is listed under
   `in_use` with the specific reason. `store_verify --fix-state` re-reads the sidecar under the dataset
   lock immediately before writing it back, and skips the write if another process changed it meanwhile or
   if the dataset is locked.
-- A store catalogue write that fails after a dataset has already been published and linked no longer
-  fails the download: the result is reported as a success with "; catalogue pending; stored" in its
-  message, and `store_reindex` repairs the missing catalogue row from the sidecar already on disk.
+- A store catalogue write that fails after a dataset has already been published, but before it is
+  linked into the project, no longer fails the download: the result is reported as a success with
+  "; catalogue pending; stored" in its message, the dataset is still linked, and `store_reindex` repairs
+  the missing catalogue row from the sidecar already on disk.
 - Every command now handles `SIGINT`, `SIGTERM`, and `SIGHUP`. The first turns into a `KeyboardInterrupt`
   so a `finally` block or a registry batch can flush what has been done; a second signal is logged rather
   than raised, so it cannot cut a final write short; a third abandons the write, terminates any running
-  tool, and exits with status 130.
+  tool, and exits with status 130. A `store_adopt --dry-run` scan stopped this way also exits 130, the
+  same as a real run, rather than completing its report.
 - `import metaquest` no longer calls `setup_logging()`; a library host now configures its own logging, or
   calls `metaquest.utils.logging.setup_logging()` itself for console or file output. The CLI is
   unaffected, since `metaquest.cli.main.main()` already calls it explicitly. A second call to
@@ -66,6 +72,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   the lock and never overwrites a concurrent `download_sra`'s committed outcome. `status --reconcile` now
   splits its filesystem scan (no lock held) from applying the resulting plan (under the lock), so read
   counting no longer runs while the registry lock is held.
+- As part of that same migration, `download_metadata` and `parse_metadata` now log and drop a single
+  accession's failing `record_metadata` call instead of letting the exception end the command before
+  anything is saved; the command still finishes and exits 0, with every other accession's metadata
+  recorded. A user relying on either command failing loudly on a bad record should watch the log instead.
 - Every tabular and text output file metaquest writes is now written atomically, through a uniquely named
   temporary file replaced into place with `os.replace`: CSV and TSV tables, the registry, store sidecars,
   the minimap2 index and its record, per-accession metadata XML, and every HTML report; the registry and

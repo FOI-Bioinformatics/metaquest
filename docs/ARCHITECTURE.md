@@ -169,6 +169,13 @@ caller managing its own `O_EXCL` file:
 - **Release**: a lock is removed only by the process whose token matches the one written in the file, so
   a process that took over a lock never removes a later holder's lock on the same path.
 
+Known limitation: a dataset lock's staging folder (a plain project's `.metaquest-tmp/<ACCESSION>`, or the
+store's own staging path) is named after the accession alone, not the holder's token. A takeover of a
+holder that is not dead but merely stalled past the stale window (a suspended process, for example) does
+not stop that stalled holder from writing into the same staging folder the new holder is now using, so the
+two holders' output can mix there until the stalled one calls `verify_held` and stops. The per-accession
+lock file itself is never shared this way; only the staging path underneath it is.
+
 Three `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `poll_seconds`,
 `heartbeat_seconds`) cover every lock kind:
 
