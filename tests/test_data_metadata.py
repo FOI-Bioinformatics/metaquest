@@ -386,20 +386,23 @@ class TestDownloadAccessionsMetadata:
         assert "SRR456" not in result
         mock_logger.error.assert_called()
 
-    def test_download_accessions_metadata_sets_entrez_email_and_api_key(self, tmp_path):
-        """Entrez.email and Entrez.api_key are set once before any batch is fetched."""
+    def test_download_accessions_metadata_passes_email_and_api_key_to_each_batch(self, tmp_path):
+        """email and api_key reach every batch call, so each batch sets its own Entrez credentials.
+
+        _download_accessions_metadata no longer sets Entrez.email/api_key itself (that global
+        state is set only for the duration of one efetch call, under _ENTREZ_LOCK, so concurrent
+        downloads with different credentials do not race on it; see _entrez_credentials). Instead
+        it must pass email/api_key through to _download_batch_metadata for every batch.
+        """
         metadata_path = tmp_path / "metadata"
         metadata_path.mkdir()
 
-        with patch("metaquest.data.metadata._download_batch_metadata", return_value=({}, {})):
-            from metaquest.data.metadata import Entrez
-
+        with patch("metaquest.data.metadata._download_batch_metadata", return_value=({}, {})) as mock_batch:
             _download_accessions_metadata(["SRR1"], metadata_path, "test@example.com", 1, api_key="my-key")
-            assert Entrez.email == "test@example.com"
-            assert Entrez.api_key == "my-key"
+            assert mock_batch.call_args == call(["SRR1"], metadata_path, "test@example.com", "my-key")
 
             _download_accessions_metadata(["SRR1"], metadata_path, "test@example.com", 1, api_key=None)
-            assert Entrez.api_key is None
+            assert mock_batch.call_args == call(["SRR1"], metadata_path, "test@example.com", None)
 
     def test_download_accessions_metadata_batches_by_batch_size(self, tmp_path):
         """5 accessions with batch_size=2 make 3 efetch calls (batches of 2, 2, 1)."""

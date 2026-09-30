@@ -71,6 +71,7 @@ class SecureSubprocess:
 
     # Directories registered at runtime from user-supplied output or temp folders.
     _extra_roots: List[Path] = []
+    _extra_roots_lock = threading.Lock()
 
     # Child processes started by run_secure that have not yet finished; read by
     # terminate_children so an interrupt can stop tools running in worker threads.
@@ -114,15 +115,17 @@ class SecureSubprocess:
     def allowed_roots(cls) -> List[Path]:
         """Directories under which validated paths may fall."""
         roots = [Path.cwd(), Path.home(), Path("/tmp"), Path(tempfile.gettempdir())]
-        roots.extend(cls._extra_roots)
+        with cls._extra_roots_lock:
+            roots.extend(cls._extra_roots)
         return [root.resolve() for root in roots]
 
     @classmethod
     def add_allowed_root(cls, path: Union[str, Path]) -> Path:
         """Permit paths under a directory the user chose on the command line."""
         resolved = Path(path).resolve()
-        if resolved not in cls._extra_roots:
-            cls._extra_roots.append(resolved)
+        with cls._extra_roots_lock:
+            if resolved not in cls._extra_roots:
+                cls._extra_roots.append(resolved)
         return resolved
 
     @staticmethod

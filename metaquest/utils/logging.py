@@ -18,6 +18,9 @@ def setup_logging(
     """
     Set up logging configuration.
 
+    Calling this twice replaces only the handlers it installed itself, so a host
+    application's own handlers (or pytest's caplog handler) are left in place.
+
     Args:
         level: Logging level
         log_file: Path to log file (if None, log to stderr only)
@@ -28,9 +31,12 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
-    # Remove existing handlers to avoid duplicate logs
+    # Remove only the handlers a previous call to this function installed, identified by
+    # the _metaquest marker set below; any other handler already on the root logger (a
+    # host application's own, or pytest's caplog handler) is left alone.
     for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
+        if getattr(handler, "_metaquest", False):
+            root_logger.removeHandler(handler)
 
     # Create formatter
     formatter = logging.Formatter(log_format, date_format)
@@ -39,6 +45,7 @@ def setup_logging(
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
+    console_handler._metaquest = True  # type: ignore[attr-defined]
     root_logger.addHandler(console_handler)
 
     # Create file handler if log_file provided
@@ -46,6 +53,7 @@ def setup_logging(
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
+        file_handler._metaquest = True  # type: ignore[attr-defined]
         root_logger.addHandler(file_handler)
 
     # Suppress verbose logging from some libraries

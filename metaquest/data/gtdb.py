@@ -1,6 +1,7 @@
 """GTDB API client for genome taxonomy database queries."""
 
 import logging
+import threading
 from typing import Dict, List, Optional
 
 import requests
@@ -18,6 +19,7 @@ RETRY_BACKOFF_FACTOR = 0.5
 RETRY_STATUS_FORCELIST = [429, 500, 502, 503, 504]
 
 _session: Optional[requests.Session] = None
+_SESSION_LOCK = threading.Lock()
 
 
 def get_session() -> requests.Session:
@@ -27,20 +29,27 @@ def get_session() -> requests.Session:
     pooled across a whole run instead of rebuilt per request. A 429 or 5xx GTDB response is
     retried up to RETRY_TOTAL times with exponential backoff; if every attempt fails, the last
     response is returned (not raised), so status checks and raise_for_status() see it as before.
+
+    Double-checked locking: the cheap unlocked check on the fast path skips the lock once the
+    session exists; two threads racing on the first call both wait on _SESSION_LOCK and only
+    the first one to acquire it builds the session, so every caller ends up sharing one.
     """
     global _session
     if _session is None:
-        _session = requests.Session()
-        retry = Retry(
-            total=RETRY_TOTAL,
-            backoff_factor=RETRY_BACKOFF_FACTOR,
-            status_forcelist=RETRY_STATUS_FORCELIST,
-            allowed_methods=["GET"],
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        _session.mount("https://", adapter)
-        _session.mount("http://", adapter)
+        with _SESSION_LOCK:
+            if _session is None:
+                new_session = requests.Session()
+                retry = Retry(
+                    total=RETRY_TOTAL,
+                    backoff_factor=RETRY_BACKOFF_FACTOR,
+                    status_forcelist=RETRY_STATUS_FORCELIST,
+                    allowed_methods=["GET"],
+                    raise_on_status=False,
+                )
+                adapter = HTTPAdapter(max_retries=retry)
+                new_session.mount("https://", adapter)
+                new_session.mount("http://", adapter)
+                _session = new_session
     return _session
 
 

@@ -4,15 +4,17 @@ Metadata handling for MetaQuest.
 This module provides functions for downloading and processing metadata from NCBI.
 """
 
+import contextlib
 import copy
 import http.client
 import logging
 import os
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import time
 import pandas as pd
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from Bio import Entrez
 from lxml import etree
@@ -39,6 +41,13 @@ _RATE_LIMIT_DELAY_WITH_KEY = 0.1
 # Monotonic timestamp of the previous NCBI request, module-level so pacing holds across
 # batches within one process.
 _last_request_time = 0.0
+# Held across the sleep in _pace_requests, so two threads racing on a request each wait
+# out the full gap rather than both sleeping the same (too-short) remainder concurrently.
+_PACE_LOCK = threading.Lock()
+
+# Serializes the window between setting Bio.Entrez's email/api_key module attributes and
+# making the efetch call that depends on them; see _entrez_credentials below.
+_ENTREZ_LOCK = threading.Lock()
 
 
 def _pace_requests(api_key: Optional[str]) -> None:
@@ -49,10 +58,35 @@ def _pace_requests(api_key: Optional[str]) -> None:
     """
     global _last_request_time
     delay = _RATE_LIMIT_DELAY_WITH_KEY if api_key else _RATE_LIMIT_DELAY_NO_KEY
-    elapsed = time.monotonic() - _last_request_time
-    if elapsed < delay:
-        time.sleep(delay - elapsed)
-    _last_request_time = time.monotonic()
+    with _PACE_LOCK:
+        elapsed = time.monotonic() - _last_request_time
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+        _last_request_time = time.monotonic()
+
+
+@contextlib.contextmanager
+def _entrez_credentials(email: str, api_key: Optional[str]) -> Iterator[None]:
+    """Hold Bio.Entrez's email/api_key module attributes at the given values for one call.
+
+    Biopython keeps ``Entrez.email``/``Entrez.api_key`` as plain module attributes, so two
+    threads fetching with different credentials (different projects, or a library host running
+    more than one download at once) race on them: one thread's efetch call can pick up the
+    other's email or key. This holds _ENTREZ_LOCK for the duration, so only one thread has the
+    attributes set to its own values while it calls efetch, and restores whatever was set
+    before on exit (via ``finally``, so an exception from the call does not leave the wrong
+    credentials in place for the next caller).
+    """
+    with _ENTREZ_LOCK:
+        previous_email = Entrez.email
+        previous_api_key = Entrez.api_key
+        Entrez.email = email  # type: ignore[assignment]
+        Entrez.api_key = api_key  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            Entrez.email = previous_email
+            Entrez.api_key = previous_api_key
 
 
 def _write_metadata_file(metadata_path: Path, accession: str, content: str) -> Path:
@@ -177,22 +211,18 @@ def _download_single_metadata(
     Returns:
         Tuple of (success, path or error message)
     """
-    # Bio.Entrez's email/api_key module attributes default to None with no annotation, so mypy
-    # infers their type as exactly None; these assignments are the documented Biopython usage.
-    Entrez.email = entrez_email  # type: ignore[assignment]
-    Entrez.api_key = api_key  # type: ignore[assignment]
-
     last_error_message = f"Failed after {MAX_RETRIES} attempts"
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             _pace_requests(api_key)
             logger.info(f"Downloading metadata for {accession}")
-            handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
-            try:
-                metadata = handle.read().decode()
-            finally:
-                handle.close()
+            with _entrez_credentials(entrez_email, api_key):
+                handle = Entrez.efetch(db="sra", id=accession, retmode="xml")
+                try:
+                    metadata = handle.read().decode()
+                finally:
+                    handle.close()
             return True, _write_metadata_file(metadata_path, accession, metadata)
 
         except HTTPError as e:
@@ -323,11 +353,12 @@ def _download_batch_metadata(
         try:
             _pace_requests(api_key)
             logger.info(f"Downloading metadata for {len(batch)} accession(s)")
-            handle = Entrez.efetch(db="sra", id=id_string, retmode="xml")
-            try:
-                xml_text = handle.read().decode()
-            finally:
-                handle.close()
+            with _entrez_credentials(email, api_key):
+                handle = Entrez.efetch(db="sra", id=id_string, retmode="xml")
+                try:
+                    xml_text = handle.read().decode()
+                finally:
+                    handle.close()
 
             packages = _split_efetch_packages(xml_text, wanted)
             successes = {
@@ -381,10 +412,9 @@ def _download_accessions_metadata(
     Returns:
         Dictionary mapping accessions to metadata file paths, for successes only.
     """
-    # See the note on _download_single_metadata about Bio.Entrez's None-typed attributes.
-    Entrez.email = email  # type: ignore[assignment]
-    Entrez.api_key = api_key  # type: ignore[assignment]
-
+    # Each batch (and any per-accession fallback within it) sets Entrez.email/api_key
+    # itself, under _ENTREZ_LOCK, only for the duration of its own efetch call; see
+    # _entrez_credentials. No blanket assignment is made here.
     result_files: Dict[str, Path] = {}
     failures: Dict[str, str] = {}
     batches = [accessions_to_download[i : i + batch_size] for i in range(0, len(accessions_to_download), batch_size)]
