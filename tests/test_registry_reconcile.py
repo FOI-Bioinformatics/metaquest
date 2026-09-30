@@ -245,6 +245,19 @@ class TestApplyRechecksAgainstTheRegistryItIsGiven:
         assert rb.extraction_block(fresh, "SRR3", "GCF_1").mapped_reads == 42
         assert ("SRR3", "GCF_1") not in report.untracked_extractions
 
+    def test_a_download_finished_after_the_scan_is_not_marked_missing(self, tmp_path, fixed_clock):
+        registry, paths = _drifted_project(tmp_path)
+        plan = scan_reconcile(registry, paths)
+        # Another process downloads SRR8 and records it once the scan has listed the folders.
+        _fastq(paths.fastq / "SRR8" / "SRR8_1.fastq")
+        fresh = copy.deepcopy(registry)
+        reg.record_download(fresh, "SRR8", "downloaded", paths.fastq)
+
+        report = apply_reconcile(fresh, plan)
+
+        assert rb.download_block(fresh, "SRR8").state == "downloaded"
+        assert report.recorded_missing == ["SRR2"]
+
     def test_a_verdict_is_used_only_for_the_spot_count_it_was_computed_for(self, tmp_path, fixed_clock):
         registry, paths = _drifted_project(tmp_path)
         plan = scan_reconcile(registry, paths)

@@ -39,7 +39,7 @@ from metaquest.data.registry import (
     scan_extractions,
     set_download_verdict,
 )
-from metaquest.data.sra import count_fastq_reads, verify_download
+from metaquest.data.sra import accession_has_fastq, count_fastq_reads, verify_download
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,10 @@ def _reconcile(registry: Registry, plan: ReconcilePlan, compute: bool) -> Reconc
     for acc in registry.datasets:
         download = rb.download_block(registry, acc)
         if download is not None and download.state == "downloaded" and acc not in plan.on_disk:
+            # A download another process finished after the scan is not in the scan's listing;
+            # one look at its folder (a few stat calls) keeps it from being marked missing.
+            if accession_has_fastq(plan.paths.fastq / acc):
+                continue
             download.state, download.date = "missing", _registry._now()
             rb.set_download_block(registry, acc, download)
             report.recorded_missing.append(acc)
