@@ -954,6 +954,7 @@ class TestDownloadSraCommand:
             "use_prefetch": True,
             "keep_sra": False,
             "compress": True,
+            "lock_wait": 0.0,
         }
 
     @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")

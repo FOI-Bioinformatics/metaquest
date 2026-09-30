@@ -569,6 +569,12 @@ By default, `download_sra` runs `prefetch` before `fasterq-dump` (`--no-prefetch
 plain; pigz is used for compression when installed, otherwise Python's gzip module). `--sra-cache DIR`
 sets where prefetch keeps its downloaded `.sra` archives (default `<fastq-folder>/.sra-cache`); pass
 `--keep-sra` to retain a verified archive instead of deleting it after conversion.
+A project without a shared store also takes a per-accession lock (`<fastq-folder>/.locks/<ACCESSION>.lock`,
+same heartbeat and 10-minute takeover as the store's, bounded by `--lock-wait`), so two runs on one
+project download each accession once. Each download is built, verified and compressed under
+`<fastq-folder>/.metaquest-tmp/` and then moved into `<fastq-folder>/<ACCESSION>` with one rename, so
+another run never sees a partly written folder. Both hidden folders are ignored by `status` and the
+download inventory. A `--sra-cache` folder shared by two projects without a store is not locked.
 `--verify-downloads` (on by default; `--no-verify-downloads` turns it off) compares each download's
 read count against NCBI's recorded spot count and records a verdict in the registry: `complete` (ratio
 at or above 0.99), `truncated` (fewer reads than expected), or `unverified` (the expected spot count is

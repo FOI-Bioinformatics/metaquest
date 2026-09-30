@@ -56,6 +56,24 @@ from metaquest.utils.security import SecureSubprocess
 from helpers_extraction import _fake_tools
 
 
+def _staging_download(*results):
+    """A ``download_accession`` stand-in that writes one FASTQ file into its output folder.
+
+    Without a store, ``download_sra`` publishes the folder ``download_accession`` built, so a
+    stand-in that reports success must also leave that folder behind. ``results`` are the
+    ``(success, message)`` pairs returned, one per call in call order.
+    """
+    remaining = list(results)
+
+    def _download(accession, output_folder, *args, **kwargs):
+        acc_dir = Path(output_folder) / accession
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    return _download
+
+
 class TestReadBlacklistFiles:
     """Test _read_blacklist_files function."""
 
@@ -1988,7 +2006,7 @@ class TestDownloadSra:
         acc.write_text("SRR1\nSRR2\n")
         with patch(
             "metaquest.data.sra.accession.download_accession",
-            side_effect=[(True, "Downloaded 2 files"), (False, "Download failed: x")],
+            side_effect=_staging_download((True, "Downloaded 2 files"), (False, "Download failed: x")),
         ):
             stats = download_sra(tmp_path / "fastq", acc, max_workers=2, max_retries=0, on_result=on_result)
         assert sorted(a for a, _, _ in seen) == ["SRR1", "SRR2"] and all(on_main for _, _, on_main in seen)
@@ -2005,7 +2023,10 @@ class TestDownloadSra:
 
         acc = tmp_path / "acc.txt"
         acc.write_text("SRR1\nSRR2\n")
-        with patch("metaquest.data.sra.accession.download_accession", return_value=(True, "Downloaded 2 files")):
+        with patch(
+            "metaquest.data.sra.accession.download_accession",
+            side_effect=_staging_download((True, "Downloaded 2 files")),
+        ):
             stats = download_sra(tmp_path / "fastq", acc, max_retries=0, on_result=flaky_on_result)
         assert stats["successful"] == 2
         assert stats["failed"] == 0
@@ -2080,7 +2101,7 @@ class TestDownloadSra:
 
         with patch(
             "metaquest.data.sra.accession.download_accession",
-            return_value=(True, "Downloaded 1 files, complete (2 of 2 spots)"),
+            side_effect=_staging_download((True, "Downloaded 1 files, complete (2 of 2 spots)")),
         ) as mock_download:
             stats = download_sra(fastq_folder, acc, truncated_accessions={"SRR1"})
 
@@ -2423,14 +2444,17 @@ class TestDownloadSraStore:
         assert stats["already_downloaded_accessions"] == []
         assert len(calls) == 1
 
-    def test_without_a_store_nothing_changes(self, tmp_path):
+    def test_without_a_store_the_project_folder_is_used(self, tmp_path):
         fastq_folder = tmp_path / "fastq"
         calls = []
 
         with patch("metaquest.data.sra.accession.download_accession", side_effect=self._fake_download(calls)):
             stats = download_sra(fastq_folder, self._accessions(tmp_path, "SRR1"), max_retries=0)
 
-        assert calls[0][1] == fastq_folder
+        # Built in the project's own staging folder, then published into fastq/SRR1.
+        assert calls[0][1] == fastq_folder / ".metaquest-tmp"
+        assert accession_has_fastq(fastq_folder / "SRR1")
+        assert not (fastq_folder / "SRR1").is_symlink()
         assert stats["results"]["SRR1"] == "Downloaded 1 files, unverified"
 
     @staticmethod
@@ -2907,3 +2931,426 @@ def test_safe_rmtree_logs_an_os_error_and_propagates_a_bug(tmp_path, caplog):
     with patch("metaquest.data.sra.cleanup.shutil.rmtree", side_effect=TypeError("bug")):
         with pytest.raises(TypeError):
             _safe_rmtree(target)
+
+
+# ------------------------------------------------------------------ plain-project per-accession lock
+
+
+def _slow_download_tools(state, dump_seconds=0.2, pigz_seconds=0.05):
+    """A ``run_secure`` stand-in for fasterq-dump (run directly, no prefetch) and pigz.
+
+    fasterq-dump writes a two-file pair into its ``-O`` folder after ``dump_seconds``; pigz
+    compresses one file in place after ``pigz_seconds``, which is the window in which a
+    folder compressed where it is published would show a half-compressed pair.
+    """
+    import threading as threading_module
+
+    lock = threading_module.Lock()
+
+    def run(executable, args, **kwargs):
+        with lock:
+            state.setdefault("calls", []).append((executable, list(args)))
+        if executable == "fasterq-dump":
+            time.sleep(dump_seconds)
+            out_dir = Path(args[args.index("-O") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for mate in ("1", "2"):
+                (out_dir / f"SRR1_{mate}.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        elif executable == "pigz":
+            time.sleep(pigz_seconds)
+            plain = Path(args[-1])
+            with open(plain, "rb") as src, gzip.open(str(plain) + ".gz", "wb") as dest:
+                shutil.copyfileobj(src, dest)
+            plain.unlink()
+        return Mock(returncode=0, stdout="", stderr="")
+
+    return run
+
+
+def _no_prefetch_with_pigz(tool):
+    """``shutil.which`` stand-in: no prefetch (fasterq-dump runs directly), pigz present."""
+    return "/usr/bin/pigz" if tool == "pigz" else None
+
+
+@pytest.fixture
+def fast_project_lock_poll(monkeypatch):
+    """Poll a held project lock every 0.05 s so contention tests stay short."""
+    monkeypatch.setattr(accession_mod, "PROJECT_LOCK_POLL_SECONDS", 0.05)
+
+
+class TestProjectLockPath:
+    def test_the_lock_lives_in_a_hidden_folder_of_the_fastq_folder(self, tmp_path):
+        assert (
+            accession_mod.project_lock_path(tmp_path / "fastq", "SRR1") == tmp_path / "fastq" / ".locks" / "SRR1.lock"
+        )
+
+
+class TestProjectDownload:
+    """_project_download: one download per accession across processes, published with one rename."""
+
+    def _run(self, fastq, state, **kwargs):
+        with patch("metaquest.data.sra.accession.shutil.which", side_effect=lambda tool: None):
+            with patch("metaquest.data.sra.fastq.shutil.which", side_effect=_no_prefetch_with_pigz):
+                with patch(
+                    "metaquest.utils.security.SecureSubprocess.run_secure", side_effect=_slow_download_tools(state)
+                ):
+                    return accession_mod._project_download("SRR1", fastq, 1, compress=True, **kwargs)
+
+    def test_publishes_a_complete_compressed_folder_and_leaves_no_staging(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        state = {}
+        success, message = self._run(fastq, state)
+        assert success is True, message
+        assert sorted(p.name for p in (fastq / "SRR1").iterdir()) == ["SRR1_1.fastq.gz", "SRR1_2.fastq.gz"]
+        assert list((fastq / ".metaquest-tmp").iterdir()) == []
+        assert not (fastq / ".locks" / "SRR1.lock").exists()
+        assert sorted(p.name for p in fastq.iterdir() if not p.name.startswith(".")) == ["SRR1"]
+
+    def test_an_existing_download_found_inside_the_lock_is_not_fetched_again(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        (fastq / "SRR1").mkdir(parents=True)
+        (fastq / "SRR1" / "SRR1_1.fastq.gz").write_bytes(gzip.compress(b"@r\nACGT\n+\nIIII\n"))
+        state = {}
+        assert self._run(fastq, state) == (True, "already exists")
+        assert state.get("calls") is None
+
+    def test_the_prefetch_cache_stays_in_the_fastq_folder(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        seen = {}
+
+        def _download(accession, output_folder, *args, **kwargs):
+            seen["output_folder"] = Path(output_folder)
+            seen["sra_cache"] = kwargs.get("sra_cache")
+            seen["staging_folder"] = kwargs.get("staging_folder")
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            assert accession_mod._project_download("SRR1", fastq, sra_cache=None)[0] is True
+        assert seen["output_folder"] == fastq / ".metaquest-tmp"
+        assert seen["staging_folder"] == fastq / ".metaquest-tmp"
+        assert Path(seen["sra_cache"]) == fastq / ".sra-cache"
+
+    def test_a_forced_download_replaces_the_existing_folder_only_once_the_new_one_is_ready(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        (fastq / "SRR1").mkdir(parents=True)
+        (fastq / "SRR1" / "SRR1_1.fastq").write_text("@old\nACGT\n+\nIIII\n")
+        seen = {}
+
+        def _download(accession, output_folder, *args, **kwargs):
+            seen["old_still_there"] = (fastq / "SRR1" / "SRR1_1.fastq").read_text().startswith("@old")
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@new\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            assert accession_mod._project_download("SRR1", fastq, force=True)[0] is True
+        assert seen["old_still_there"] is True
+        assert (fastq / "SRR1" / "SRR1_1.fastq").read_text().startswith("@new")
+        assert list((fastq / ".metaquest-tmp").iterdir()) == []
+
+    def test_only_accessions_in_the_truncated_set_skip_the_existing_check(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        for accession in ("SRR1", "SRR2"):
+            (fastq / accession).mkdir(parents=True)
+            (fastq / accession / f"{accession}_1.fastq").write_text("@old\nACGT\n+\nIIII\n")
+        calls = []
+
+        def _download(accession, output_folder, *args, **kwargs):
+            calls.append((accession, kwargs.get("redownload_truncated")))
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@new\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        truncated = frozenset({"SRR1"})
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            first = accession_mod._project_download("SRR1", fastq, truncated=truncated, redownload_truncated=True)
+            second = accession_mod._project_download("SRR2", fastq, truncated=truncated, redownload_truncated=True)
+        assert first == (True, "Downloaded 1 files, unverified")
+        assert second == (True, "already exists")
+        assert calls == [("SRR1", True)]
+        assert (fastq / "SRR2" / "SRR2_1.fastq").read_text().startswith("@old")
+
+    def test_a_failed_download_publishes_nothing(self, tmp_path):
+        fastq = tmp_path / "fastq"
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return False, "network: Connection timed out"
+
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            assert accession_mod._project_download("SRR1", fastq) == (False, "network: Connection timed out")
+        assert not (fastq / "SRR1").exists()
+        assert not (fastq / ".metaquest-tmp" / "SRR1").exists()
+
+    def test_a_success_that_staged_no_folder_is_a_failure(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        with patch("metaquest.data.sra.accession.download_accession", return_value=(True, "Downloaded 1 files")):
+            success, message = accession_mod._project_download("SRR1", fastq)
+        assert success is False
+        assert "SRR1" in message
+        assert not (fastq / "SRR1").exists()
+
+    def test_a_lost_lock_publishes_nothing_and_leaves_the_staged_folder_to_the_new_holder(self, tmp_path):
+        from metaquest.utils.lockfile import LockLost
+
+        fastq = tmp_path / "fastq"
+
+        def _download(accession, output_folder, *args, **kwargs):
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            with patch("metaquest.data.sra.accession.verify_held", side_effect=LockLost("Lost the lock x: removed")):
+                success, message = accession_mod._project_download("SRR1", fastq)
+        assert success is False
+        assert "Lost the lock" in message
+        assert not (fastq / "SRR1").exists()
+        assert (fastq / ".metaquest-tmp" / "SRR1").is_dir()
+
+    def test_two_threads_on_one_accession_download_it_once(self, tmp_path, fast_project_lock_poll):
+        import threading as threading_module
+
+        fastq = tmp_path / "fastq"
+        state = {}
+        results = []
+        barrier = threading_module.Barrier(2)
+
+        def _worker():
+            barrier.wait()
+            results.append(accession_mod._project_download("SRR1", fastq, 1, compress=True))
+
+        with patch("metaquest.data.sra.accession.shutil.which", side_effect=lambda tool: None):
+            with patch("metaquest.data.sra.fastq.shutil.which", side_effect=_no_prefetch_with_pigz):
+                with patch(
+                    "metaquest.utils.security.SecureSubprocess.run_secure", side_effect=_slow_download_tools(state)
+                ):
+                    threads = [threading_module.Thread(target=_worker) for _ in range(2)]
+                    for thread in threads:
+                        thread.start()
+                    for thread in threads:
+                        thread.join(timeout=10)
+
+        assert [c[0] for c in state["calls"]].count("fasterq-dump") == 1
+        assert all(success for success, _ in results)
+        messages = [message for _, message in results]
+        assert messages.count("already exists") == 1
+        assert sum(message.startswith("Downloaded 2 files") for message in messages) == 1
+
+    def test_a_watcher_never_sees_an_incomplete_folder(self, tmp_path):
+        import threading as threading_module
+
+        fastq = tmp_path / "fastq"
+        state = {}
+        observations = []
+        done = threading_module.Event()
+
+        def _watch():
+            while not done.is_set():
+                folder = fastq / "SRR1"
+                has_fastq = accession_has_fastq(folder)
+                try:
+                    names = tuple(sorted(p.name for p in folder.iterdir())) if folder.exists() else None
+                except OSError:
+                    names = None
+                observations.append((names, has_fastq))
+                time.sleep(0.002)
+
+        watcher = threading_module.Thread(target=_watch)
+        watcher.start()
+        try:
+            success, message = self._run(fastq, state)
+        finally:
+            done.set()
+            watcher.join(timeout=5)
+
+        assert success is True, message
+        complete = ("SRR1_1.fastq.gz", "SRR1_2.fastq.gz")
+        assert observations
+        for names, has_fastq in observations:
+            assert names is None or names == complete, names
+            # The check ran before the listing, and a published folder never goes away again.
+            assert not has_fastq or names == complete
+
+    def test_lock_wait_gives_up_naming_the_holder(self, tmp_path, fast_project_lock_poll):
+        fastq = tmp_path / "fastq"
+        lock = accession_mod.project_lock_path(fastq, "SRR1")
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps({"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+
+        started = time.monotonic()
+        with patch("metaquest.data.sra.accession.download_accession") as mock_download:
+            stats = download_sra(fastq, acc, max_retries=0, lock_wait=1.0, num_threads=1, max_workers=1)
+        elapsed = time.monotonic() - started
+
+        mock_download.assert_not_called()
+        assert 1.0 <= elapsed < 2.0
+        assert stats["failed"] == 1
+        message = stats["results"]["SRR1"]
+        assert "SRR1" in message and "4242" in message and "otherhost" in message
+        assert json.loads(lock.read_text())["pid"] == 4242
+
+    def test_a_stop_while_waiting_reports_interrupted(self, tmp_path, fast_project_lock_poll):
+        import threading as threading_module
+
+        fastq = tmp_path / "fastq"
+        lock = accession_mod.project_lock_path(fastq, "SRR1")
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps({"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
+        stop = threading_module.Event()
+        stop.set()
+        with patch("metaquest.data.sra.accession.download_accession") as mock_download:
+            assert accession_mod._project_download("SRR1", fastq, stop=stop) == (False, "interrupted")
+        mock_download.assert_not_called()
+
+    def test_download_sra_without_a_store_goes_through_the_project_lock(self, tmp_path):
+        acc = tmp_path / "acc.txt"
+        acc.write_text("SRR1\n")
+        fastq = tmp_path / "fastq"
+        seen = {}
+
+        def _download(accession, output_folder, *args, **kwargs):
+            seen["lock_held"] = accession_mod.project_lock_path(fastq, accession).exists()
+            acc_dir = Path(output_folder) / accession
+            acc_dir.mkdir(parents=True)
+            (acc_dir / f"{accession}_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+            return True, "Downloaded 1 files, unverified"
+
+        with patch("metaquest.data.sra.accession.download_accession", side_effect=_download):
+            stats = download_sra(fastq, acc, max_retries=0)
+        assert stats["successful"] == 1
+        assert seen["lock_held"] is True
+        assert accession_has_fastq(fastq / "SRR1")
+
+
+class TestProjectHiddenFolders:
+    """``.locks`` and ``.metaquest-tmp`` never count as downloaded accessions."""
+
+    @staticmethod
+    def _tree(tmp_path):
+        fastq = tmp_path / "fastq"
+        (fastq / ".locks").mkdir(parents=True)
+        (fastq / ".locks" / "SRR2.lock").write_text("{}")
+        staged = fastq / ".metaquest-tmp" / "SRR2"
+        staged.mkdir(parents=True)
+        (staged / "SRR2_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (fastq / ".metaquest-tmp" / "SRR2_temp").mkdir()
+        (fastq / ".metaquest-tmp" / "SRR2_temp" / "SRR2_1.fastq").write_text("@r\nACGT\n")
+        return fastq
+
+    def test_scan_downloads_ignores_them(self, tmp_path):
+        from metaquest.data.registry import scan_downloads
+
+        assert scan_downloads(self._tree(tmp_path)) == {}
+
+    def test_status_inventory_ignores_them(self, tmp_path):
+        import argparse
+
+        from metaquest.data.registry import Registry
+        from metaquest.processing.status_report import inventory_report
+
+        fastq = self._tree(tmp_path)
+        (tmp_path / "accessions.txt").write_text("SRR2\n.metaquest-tmp\n.locks\n")
+        args = argparse.Namespace(
+            fastq_folder=str(fastq),
+            metadata_folder=str(tmp_path / "metadata"),
+            genomes_folder=str(tmp_path / "genomes"),
+            targeted_folder=str(tmp_path / "targeted"),
+            matches_folder=str(tmp_path / "matches"),
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+            accessions_file=str(tmp_path / "accessions.txt"),
+            parsed_containment=None,
+            stage=None,
+            genome=None,
+            init=False,
+            reconcile=False,
+            export_tsv=None,
+            next=False,
+            list_missing=False,
+            json=True,
+        )
+        report = inventory_report(args, Registry())
+        assert report["on_disk"]["fastq_accessions"] == 0
+        assert report["wanted"]["fastq_present"] == 0
+
+    def test_staging_folders_are_transient_and_counted(self, tmp_path):
+        fastq = self._tree(tmp_path)
+        (fastq / "SRR3_temp").mkdir()
+        (fastq / "SRR3_temp" / "part").write_bytes(b"x" * 7)
+        assert is_transient_folder(".metaquest-tmp") is True
+        staged_bytes = len("@r\nACGT\n+\nIIII\n") + len("@r\nACGT\n")
+        assert transient_bytes(fastq) == staged_bytes + 7
+
+
+class TestPublishFolder:
+    def test_replaces_an_existing_folder(self, tmp_path):
+        from metaquest.data.sra.cleanup import publish_folder
+
+        tmp = tmp_path / "tmp"
+        staged = tmp / "SRR1"
+        staged.mkdir(parents=True)
+        (staged / "new").write_text("new")
+        target = tmp_path / "fastq" / "SRR1"
+        target.mkdir(parents=True)
+        (target / "old").write_text("old")
+        publish_folder(staged, target, tmp)
+        assert [p.name for p in target.iterdir()] == ["new"]
+        assert list(tmp.iterdir()) == []
+
+    def test_a_failed_rename_restores_the_old_folder(self, tmp_path):
+        from metaquest.data.sra import cleanup as cleanup_module
+
+        tmp = tmp_path / "tmp"
+        tmp.mkdir()
+        target = tmp_path / "fastq" / "SRR1"
+        target.mkdir(parents=True)
+        (target / "old").write_text("old")
+        real_replace = os.replace
+
+        def _replace(src, dst):
+            if Path(src).name == "SRR1" and Path(src).parent == tmp:
+                raise OSError("cross-device")
+            return real_replace(src, dst)
+
+        with patch("metaquest.data.sra.cleanup.os.replace", side_effect=_replace):
+            with pytest.raises(OSError):
+                cleanup_module.publish_folder(tmp / "SRR1", target, tmp)
+        assert (target / "old").read_text() == "old"
+
+    def test_replaces_a_dangling_symlink_and_a_link_to_a_folder(self, tmp_path):
+        from metaquest.data.sra.cleanup import publish_folder
+
+        tmp = tmp_path / "tmp"
+        for index, link_target in enumerate((tmp_path / "gone", tmp_path / "elsewhere")):
+            if index == 1:
+                link_target.mkdir()
+                (link_target / "keep").write_text("keep")
+            staged = tmp / "SRR1"
+            staged.mkdir(parents=True)
+            (staged / "new").write_text("new")
+            target = tmp_path / "fastq" / "SRR1"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() or target.exists():
+                shutil.rmtree(target)
+            target.symlink_to(link_target, target_is_directory=True)
+            publish_folder(staged, target, tmp)
+            assert not target.is_symlink()
+            assert [p.name for p in target.iterdir()] == ["new"]
+        # The folder a replaced link pointed at is not touched.
+        assert (tmp_path / "elsewhere" / "keep").read_text() == "keep"
+
+    def test_the_store_keeps_its_old_name(self):
+        from metaquest.data.sra.cleanup import publish_folder
+
+        assert store_handoff_mod._publish_store_dataset is publish_folder

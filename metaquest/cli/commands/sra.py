@@ -197,7 +197,10 @@ class DownloadSraCommand(BaseCommand):
         parser.add_argument(
             "--sra-cache",
             default=None,
-            help="Directory for prefetch's downloaded .sra archives (default: <fastq-folder>/.sra-cache)",
+            help=(
+                "Directory for prefetch's downloaded .sra archives (default: <fastq-folder>/.sra-cache); "
+                "without a shared store, a directory shared by two projects is not locked"
+            ),
         )
         parser.add_argument(
             "--no-prefetch",
@@ -252,8 +255,9 @@ class DownloadSraCommand(BaseCommand):
             type=float,
             default=0.0,
             help=(
-                "Seconds to wait for another project's download of the same accession before "
-                "giving up on it (default: 0, wait for as long as the other project keeps working)"
+                "Seconds to wait for another run's download of the same accession before giving up "
+                "on it, whether through a shared store or, without one, this project's own "
+                "per-accession lock (default: 0, wait for as long as the other run keeps working)"
             ),
         )
 
@@ -476,7 +480,9 @@ class DownloadSraCommand(BaseCommand):
     def _transient_folders(self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths]) -> Set[Path]:
         """Folders where ``download_accession`` can leave ``.sra-cache`` archives or
         ``<ACC>_temp`` build directories behind: the FASTQ output folder (always, since
-        that is where ``<ACC>_temp`` lands and, without a store, ``.sra-cache`` too), any
+        that is where ``.metaquest-tmp/<ACC>`` staging folders, old-style ``<ACC>_temp``
+        folders and, without a store, ``.sra-cache`` land; ``transient_bytes`` counts all
+        three), any
         explicit ``--temp-folder`` or ``--sra-cache``, and, with a shared store, the
         store's own ``tmp`` folder (the default home for ``.sra-cache`` when downloading
         through a store)."""
@@ -502,7 +508,8 @@ class DownloadSraCommand(BaseCommand):
             return
         detail = ", ".join(f"{folder} ({size} bytes)" for folder, size in sorted(sized, key=lambda item: str(item[0])))
         self.logger.warning(
-            "Kept .sra-cache archives and <ACC>_temp build folders total %d bytes, over the "
+            "Kept .sra-cache archives, .metaquest-tmp staging and <ACC>_temp build folders total %d bytes, "
+            "over the "
             "%d byte warning threshold: %s",
             total,
             TRANSIENT_BYTES_WARN_THRESHOLD,
@@ -510,14 +517,15 @@ class DownloadSraCommand(BaseCommand):
         )
 
     def _store_options(self, args: argparse.Namespace, store: Optional[StorePaths], registry: Registry) -> dict:
-        """The store-related keyword arguments for ``download_sra``, empty without a store.
+        """The store-related keyword arguments for ``download_sra``; only ``lock_wait`` without a store.
 
         NCBI's spot count for an accession is read from the project's own metadata folder
         when it has one, since that is where ``download_metadata`` writes; the store's
         metadata folder is the fallback.
         """
         if store is None:
-            return {}
+            # Without a store, --lock-wait still applies to the project's per-accession lock.
+            return {"lock_wait": getattr(args, "lock_wait", 0.0)}
         return {
             "store": store,
             "link_mode": getattr(args, "link_mode", "auto"),

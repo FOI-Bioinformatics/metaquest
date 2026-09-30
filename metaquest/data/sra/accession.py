@@ -7,11 +7,13 @@ import subprocess
 import threading
 import zlib
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple, Union
+from typing import AbstractSet, Callable, List, Optional, Tuple, Union
 
+from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
+from metaquest.utils.lockfile import LockHeld, LockLost, LockPolicy, LockWaitStopped, held_lock, verify_held
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,12 @@ _NOT_FOUND_ERROR_RE = re.compile(
 # before each prefetch or fasterq-dump call, so a worker thread that has not yet
 # started a tool returns without starting one, and the retry pass does not run.
 STOP = threading.Event()
+
+
+# A plain project's per-accession lock is <fastq>/.locks/<ACC>.lock; a waiter re-checks a held
+# one this often. Read at call time so tests can shorten it.
+PROJECT_LOCK_FOLDER = ".locks"
+PROJECT_LOCK_POLL_SECONDS = 1.0
 
 
 class _DownloadInterrupted(Exception):
@@ -425,6 +433,114 @@ def download_accession(
         # Clean up auto-created temp directory (from tempfile.mkdtemp)
         if temp_folder_path and not temp_folder:
             cleanup_mod._safe_rmtree(temp_folder_path)
+
+
+def project_lock_path(fastq_folder: Union[str, Path], accession: str) -> Path:
+    """The per-accession lock of a project without a shared store: ``<fastq>/.locks/<ACC>.lock``."""
+    return Path(fastq_folder) / PROJECT_LOCK_FOLDER / f"{accession}.lock"
+
+
+def _project_lock_policy(accession: str, wait_seconds: float) -> LockPolicy:
+    """The dataset lock's policy (stale threshold and heartbeat), applied to a project's accession."""
+    return LockPolicy(
+        what=f"accession {accession}",
+        stale_seconds=DATASET_LOCK_STALE_SECONDS,
+        wait_seconds=wait_seconds,
+        poll_seconds=PROJECT_LOCK_POLL_SECONDS,
+        heartbeat_seconds=LOCK_HEARTBEAT_SECONDS,
+    )
+
+
+def _stage_and_publish(
+    accession: str, fastq: Path, lock: Path, num_threads: int, force: bool, temp_folder, download_kwargs: dict
+) -> Tuple[bool, str]:
+    """Download ``accession`` into the staging folder and publish it to ``<fastq>/<ACC>``.
+
+    Runs with the project lock held. The finished, verified and compressed folder
+    ``<fastq>/.metaquest-tmp/<ACC>`` becomes ``<fastq>/<ACC>`` with one rename, after
+    ``verify_held`` confirms the lock is still this run's. A lost lock raises ``LockLost``
+    and leaves the staged folder alone, since the new holder may be writing it.
+    """
+    staging = fastq / cleanup_mod.PROJECT_STAGING_FOLDER
+    staged = staging / accession
+    # Whatever an earlier interrupted attempt left staged is not a resume point: the download
+    # would otherwise be skipped as "already exists" and that partial copy published.
+    cleanup_mod._safe_rmtree(staged)
+    if staged.exists():
+        return False, f"unknown: could not clear the staged folder {staged}"
+    success, message = download_accession(
+        accession, staging, num_threads, force, temp_folder, staging_folder=staging, **download_kwargs
+    )
+    if not success:
+        cleanup_mod._safe_rmtree(staged)
+        return False, message
+    if not staged.is_dir():
+        return False, f"unknown: the download of {accession} reported success but staged no folder at {staged}"
+    verify_held(lock)
+    cleanup_mod.publish_folder(staged, fastq / accession, staging)
+    return True, message
+
+
+def _project_download(
+    accession: str,
+    output_folder: Union[str, Path],
+    num_threads: int = 4,
+    force: bool = False,
+    temp_folder: Optional[Union[str, Path]] = None,
+    *,
+    lock_wait: float = 0.0,
+    stop: Optional[threading.Event] = None,
+    truncated: Optional[AbstractSet[str]] = None,
+    **download_kwargs,
+) -> Tuple[bool, str]:
+    """Download ``accession`` into a project without a shared store, one process at a time.
+
+    The worker ``download_sra`` uses when no store is configured; it takes
+    ``download_accession``'s arguments. The per-accession lock ``<fastq>/.locks/<ACC>.lock``
+    (the dataset lock's policy: heartbeat, stale takeover, no overall timeout unless
+    ``lock_wait`` is positive) is held for the whole download. Inside it the folder is checked
+    again, since another process may have finished the accession while this one waited, and
+    an accession found complete is reported as "already exists". Otherwise the download is
+    built under ``<fastq>/.metaquest-tmp`` and published with one rename, so a second process
+    never sees a half-moved or half-compressed folder; an existing folder is replaced only
+    once its replacement is complete. The check is skipped for a forced download and for an
+    accession in ``truncated`` (the registry's truncated verdicts); without that set,
+    ``redownload_truncated`` skips it for every accession, as ``download_accession`` does.
+
+    The prefetch cache defaults to ``<fastq>/.sra-cache`` as before. A ``sra_cache`` folder
+    the caller supplies and shares with another project is not covered by this lock (only a
+    shared store locks across projects). ``stop``, when set, ends a wait for the lock with
+    the result ``(False, "interrupted")``.
+    """
+    fastq = Path(output_folder)
+    lock = project_lock_path(fastq, accession)
+    if download_kwargs.get("sra_cache") is None:
+        download_kwargs["sra_cache"] = fastq / ".sra-cache"
+    if truncated is not None:
+        download_kwargs["redownload_truncated"] = accession in truncated
+    redownload = force or bool(download_kwargs.get("redownload_truncated"))
+    policy = _project_lock_policy(accession, lock_wait)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        (fastq / cleanup_mod.PROJECT_STAGING_FOLDER).mkdir(parents=True, exist_ok=True)
+        with held_lock(lock, policy, should_stop=stop.is_set if stop is not None else None):
+            if not redownload and _check_existing_download(fastq / accession, False):
+                logger.info(f"Skipping {accession}, FASTQ files already exist")
+                return True, "already exists"
+            return _stage_and_publish(accession, fastq, lock, num_threads, force, temp_folder, download_kwargs)
+    except LockWaitStopped:
+        logger.info(f"Stopped waiting for the lock on {accession}: the run was interrupted")
+        return False, "interrupted"
+    except LockHeld as e:
+        logger.error(f"Gave up waiting for {accession}: {e}")
+        return False, f"locked: {e}"
+    except LockLost as e:
+        logger.error(f"Not publishing {accession}: {e}")
+        return False, f"lock lost: {e}"
+    except (OSError, DataAccessError) as e:
+        logger.error(f"Error downloading {accession}: {e}")
+        message = f"Download failed: {e}"
+        return False, f"{classify_download_error(message)}: {message}"
 
 
 def fasterq_dump_version() -> str:

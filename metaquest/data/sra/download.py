@@ -1,5 +1,6 @@
 """Download of every SRA accession listed in a file into a project's FASTQ folder (``download_sra``)."""
 
+import functools
 import logging
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence,
 from metaquest.core.constants import DEFAULT_MAX_WORKERS, MAX_CONCURRENT_DOWNLOADS
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import ensure_directory
+from metaquest.data.sra import accession as accession_mod
 from metaquest.data.sra import fastq as fastq_mod
 from metaquest.data.sra import retry as retry_mod
 from metaquest.data.sra import store_handoff as store_handoff_mod
@@ -71,6 +73,10 @@ def _check_existing_downloads(
 ) -> Tuple[List[str], List[str], List[str]]:
     """
     Check which accessions need downloading and which are already downloaded or blacklisted.
+
+    This is an up-front hint that keeps finished accessions out of the worker pool; the
+    decision that counts is taken again inside each accession's lock by the worker, since
+    another process may finish an accession after this check.
 
     Args:
         accessions: List of accessions
@@ -233,9 +239,10 @@ def download_sra(
         store_metadata: One folder, or an ordered list of folders, searched for
             ``<ACC>_metadata.xml`` to record NCBI's spot count in the dataset's sidecar; the
             store's own metadata folder is always tried last
-        lock_wait: Seconds to wait for another project's lock on an accession before giving
-            up on that accession; zero (the default) waits for as long as the other project
-            keeps working, since a download legitimately takes hours
+        lock_wait: Seconds to wait for another run's lock on an accession (the store's dataset
+            lock, or without a store the project's ``<fastq>/.locks/<ACC>.lock``) before giving
+            up on that accession; zero (the default) waits for as long as the other run keeps
+            working, since a download legitimately takes hours
 
     Returns:
         Dictionary with download statistics
@@ -298,9 +305,15 @@ def download_sra(
             accessions_to_download = accessions_to_download[:max_downloads]
 
         # With a shared store, every download goes through it: the store keeps the only copy
-        # and the project gets a link to it.
+        # and the project gets a link to it. Without one, each accession is downloaded under
+        # the project's own per-accession lock and published with one rename.
         downloader = store_handoff_mod._store_downloader(
             store, link_mode, accept_partial, resume_partial, store_metadata, lock_wait
+        ) or functools.partial(
+            accession_mod._project_download,
+            lock_wait=lock_wait,
+            stop=accession_mod.STOP,
+            truncated=frozenset(truncated_accessions) if truncated_accessions is not None else None,
         )
 
         # Download accessions in parallel, with an optional retry pass

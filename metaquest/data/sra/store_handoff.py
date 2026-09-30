@@ -5,7 +5,6 @@ imports this package.
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -15,6 +14,10 @@ from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
 
 logger = logging.getLogger(__name__)
+
+# The publish step moved to ``cleanup.publish_folder`` so plain projects share it; the old
+# name stays for callers and tests that use it.
+_publish_store_dataset = cleanup_mod.publish_folder
 
 
 # Sidecar states that mean the store's copy is usable as it stands: verified against NCBI's
@@ -92,29 +95,6 @@ def _store_precheck(
     return None
 
 
-def _publish_store_dataset(staged: Path, target: Path, tmp: Path) -> None:
-    """Move the finished ``staged`` folder to ``target`` with one rename.
-
-    An older copy at ``target`` is renamed aside into ``<tmp>/<ACC>_old`` first and removed
-    only after the new one is in place, so the accession is never absent from ``sra/`` and a
-    rename that fails puts the old copy back rather than losing both.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    previous: Optional[Path] = None
-    if target.exists():
-        previous = tmp / f"{target.name}_old"
-        cleanup_mod._safe_rmtree(previous)
-        os.replace(target, previous)
-    try:
-        os.replace(staged, target)
-    except OSError:
-        if previous is not None:
-            os.replace(previous, target)
-        raise
-    if previous is not None:
-        cleanup_mod._safe_rmtree(previous)
-
-
 def _store_fetch(
     accession: str,
     project_fastq: Path,
@@ -179,7 +159,7 @@ def _store_fetch(
 
     sidecar = build_sidecar(accession, staged, ncbi, accession_mod.fasterq_dump_version(), compression)
     write_sidecar(staged / f"{accession}.json", sidecar)
-    _publish_store_dataset(staged, target, store.tmp)
+    cleanup_mod.publish_folder(staged, target, store.tmp)
 
     with catalog_write(store) as catalog:
         catalog.upsert_dataset(sidecar)

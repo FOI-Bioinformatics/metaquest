@@ -4,12 +4,16 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 from metaquest.core.exceptions import SecurityError
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
+
+# The hidden folder under a plain project's FASTQ folder where a download is built, verified
+# and compressed before ``publish_folder`` moves it into place with one rename.
+PROJECT_STAGING_FOLDER = ".metaquest-tmp"
 
 
 def is_transient_folder(name: str) -> bool:
@@ -17,11 +21,12 @@ def is_transient_folder(name: str) -> bool:
 
     Covers the ``<acc>_temp`` folder ``download_accession`` builds into (kept on disk after a
     failure for inspection, see its except blocks), the ``<acc>_fqtmp`` scratch folder
-    ``_store_fetch`` points fasterq-dump at, and fasterq-dump's own on-disk cache directory
-    (``.sra-cache``). None of these should be counted as a downloaded accession by
+    ``_store_fetch`` points fasterq-dump at, fasterq-dump's own on-disk cache directory
+    (``.sra-cache``), and a plain project's staging folder (``.metaquest-tmp``), which holds
+    downloads still being built. None of these should be counted as a downloaded accession by
     ``scan_downloads`` or the status command's on-disk inventory.
     """
-    return name.endswith("_temp") or name.endswith("_fqtmp") or name == ".sra-cache"
+    return name.endswith("_temp") or name.endswith("_fqtmp") or name in (".sra-cache", PROJECT_STAGING_FOLDER)
 
 
 def transient_bytes(folder: Union[str, Path]) -> int:
@@ -29,7 +34,8 @@ def transient_bytes(folder: Union[str, Path]) -> int:
 
     Sums the size of every file under each entry of ``folder`` whose name
     ``is_transient_folder`` accepts (an ``<acc>_temp`` build directory kept after a failed
-    download, or a ``.sra-cache`` archive cache), recursing into their contents. Used to warn
+    download, a ``.sra-cache`` archive cache, or the ``.metaquest-tmp`` staging folder with
+    every ``<acc>`` and ``<acc>_temp`` folder inside it), recursing into their contents. Used to warn
     when a download run has left large temporary artifacts on disk. Returns 0 when
     ``folder`` does not exist or holds no such entry; a file that disappears mid-scan (a
     concurrent cleanup) is simply skipped rather than raising.
@@ -125,3 +131,39 @@ def _remove_stale_entry(output_path: Path) -> None:
             shutil.rmtree(output_path)
     except OSError as e:
         logger.warning(f"Could not remove {output_path}: {e}")
+
+
+def _discard(path: Path) -> None:
+    """Remove ``path``: unlink a symlink (never following it), remove a folder tree otherwise."""
+    if path.is_symlink():
+        try:
+            path.unlink()
+        except OSError as e:
+            logger.warning(f"Could not remove {path}: {e}")
+        return
+    _safe_rmtree(path)
+
+
+def publish_folder(staged: Path, target: Path, tmp: Path) -> None:
+    """Move the finished ``staged`` folder to ``target`` with one rename.
+
+    Whatever is at ``target`` already (a folder, a link, or a dangling link) is renamed aside
+    into ``<tmp>/<name>_old`` first and removed only after the new folder is in place, so the
+    accession is never absent and a rename that fails puts the old entry back rather than
+    losing both. A link that is replaced is removed itself; the folder it pointed at is not
+    touched. ``tmp`` must be on the same filesystem as ``target`` for the renames to work.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    previous: Optional[Path] = None
+    if os.path.lexists(target):
+        previous = tmp / f"{target.name}_old"
+        _discard(previous)
+        os.replace(target, previous)
+    try:
+        os.replace(staged, target)
+    except OSError:
+        if previous is not None:
+            os.replace(previous, target)
+        raise
+    if previous is not None:
+        _discard(previous)
