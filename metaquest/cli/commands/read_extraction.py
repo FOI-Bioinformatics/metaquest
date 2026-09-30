@@ -333,11 +333,13 @@ class ExtractTargetReadsCommand(BaseCommand):
                 mapped_total=outcome.mapped_total,
                 coverage=outcome.coverage,
             )
-            detail = f"{outcome.mapped_records} mapped reads"
-            breadth = (outcome.coverage or {}).get("breadth")
-            if breadth is not None:
-                detail += f", breadth {breadth:.3f}"
-            record_usage_safe(store, reg, accession, args.genome_id, "extracted", detail=detail)
+        detail = f"{outcome.mapped_records} mapped reads"
+        breadth = (outcome.coverage or {}).get("breadth")
+        if breadth is not None:
+            detail += f", breadth {breadth:.3f}"
+        # After the registry lock is released: the catalogue has its own lock, and waiting for it
+        # while holding the registry lock would hold up every other registry writer.
+        record_usage_safe(store, reg, accession, args.genome_id, "extracted", detail=detail)
 
     @staticmethod
     def _resolved_extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
@@ -483,9 +485,10 @@ class ExtractTargetReadsCommand(BaseCommand):
                         "preset": args.assembly_preset,
                     },
                 )
-                record_usage_safe(
-                    store, reg, accession, args.genome_id, "assembled", detail=f"{stats.get('contigs', 0)} contigs"
-                )
+            # Outside the registry lock, for the same reason as in _record_result.
+            record_usage_safe(
+                store, reg, accession, args.genome_id, "assembled", detail=f"{stats.get('contigs', 0)} contigs"
+            )
         self.logger.info("Assembled %d sample(s)", len(with_reads))
 
     def _check_required_tools(self, args: argparse.Namespace) -> bool:

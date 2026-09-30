@@ -8,13 +8,15 @@ and validating downloaded datasets. Dataset statistics and quality profiles are
 
 import gzip
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from metaquest.cli.base import BaseCommand, accessions_from_args, read_accessions_file, resolve_command_store
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
-from metaquest.data.registry import Registry, load_registry, record_analysis, save_registry
+from metaquest.data.registry import Registry, load_registry, record_analysis
+from metaquest.data.registry_batch import registry_batch
 from metaquest.data.sra import (
     MATE1_SUFFIXES,
     MATE_SUFFIXES,
@@ -31,7 +33,7 @@ from metaquest.data.sra_metadata import (
 )
 from metaquest.store.sidecar import md5_file, read_sidecar
 from metaquest.store.stats import cached_stats
-from metaquest.store.usage import record_usage_safe
+from metaquest.store.usage import record_usage_many
 
 logger = logging.getLogger(__name__)
 
@@ -416,26 +418,35 @@ class SRAValidateCommand(BaseCommand):
                 self.logger.error("No accession directories found")
                 return 1
 
+            # A snapshot, read without the lock: validation reads every file (and md5s it with
+            # --md5), which can take minutes. The results are recorded afterwards in one
+            # transaction on the registry as it is then, and the catalogue after that lock is released.
             registry = load_registry(args.registry)
             store = resolve_command_store(args, registry)
             check_md5 = getattr(args, "md5", False)
-            validation_results = []
-            for acc_dir in accession_dirs:
-                result = self._validate_directory(acc_dir, registry, args.check_pairs, check_md5)
-                validation_results.append(result)
-                record_analysis(
-                    registry,
-                    result["accession"],
-                    "validate",
-                    "",
-                    {
+            validation_results = [
+                self._validate_directory(acc_dir, registry, args.check_pairs, check_md5) for acc_dir in accession_dirs
+            ]
+            with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
+                for result in validation_results:
+                    summary = {
                         "passed": result["status"] == "PASSED",
                         "files": result.get("num_files", 0),
                         "issues": result.get("issues_list", []),
-                    },
-                )
-                record_usage_safe(store, registry, result["accession"], "", "analysed", detail="validate")
-            save_registry(registry)
+                    }
+                    batch.apply(
+                        partial(
+                            record_analysis,
+                            accession=result["accession"],
+                            analysis="validate",
+                            output="",
+                            summary=summary,
+                        ),
+                        result["accession"],
+                    )
+            if batch.registry is not None:
+                rows = [(r["accession"], "", "analysed", "validate") for r in validation_results]
+                record_usage_many(store, batch.registry, rows)
 
             success = self._print_validation_results(validation_results)
             return 0 if success else 1

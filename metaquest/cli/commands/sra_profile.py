@@ -10,20 +10,22 @@ The command writes one statistics table, one profile JSON per accession, and rec
 
 import argparse
 import json
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand, accessions_from_args, resolve_command_store
 from metaquest.core.exceptions import MetaQuestError, ValidationError
 from metaquest.data.file_io import visible_files
-from metaquest.data.registry import load_registry, record_analysis, save_registry
+from metaquest.data.registry import load_registry, record_analysis
+from metaquest.data.registry_batch import registry_batch
 from metaquest.data.sra import is_transient_folder
 from metaquest.data.sra_metadata import generate_statistics_report
 from metaquest.sra.analytics import QualityProfile, SRADatasetAnalyzer
 from metaquest.sra.dataset_stats import DATASET_READ_ERRORS
 from metaquest.sra.profiles import ProfiledDataset, profile_accession, statistics_row, write_profile_json
 from metaquest.store.stats import DEFAULT_SAMPLE_SIZE
-from metaquest.store.usage import record_usage_safe
+from metaquest.store.usage import record_usage_many
 
 ANALYSIS_NAME = "profile"
 
@@ -203,23 +205,35 @@ class SRAProfileCommand(BaseCommand):
 
     def _record(self, args: argparse.Namespace, profiled: List[ProfiledDataset], output_dir: Path) -> None:
         """Record a "profile" analysis and an "analysed" store usage for every profiled accession."""
-        registry = load_registry(args.registry)
-        store = resolve_command_store(args, registry)
-        for dataset in profiled:
-            profile = dataset.profile
-            summary = {
-                "total_reads": profile.total_reads,
-                "total_bases": profile.total_bases,
-                "reads_sampled": profile.reads_sampled,
-                "sampled": profile.sampled,
-                "gc_percent": profile.gc_percent,
-                "avg_read_length": profile.avg_read_length,
-                "quality_grade": profile.quality_grade,
-            }
-            json_path = output_dir / f"{profile.accession}_quality_profile.json"
-            record_analysis(registry, profile.accession, ANALYSIS_NAME, json_path, summary)
-            record_usage_safe(store, registry, profile.accession, "", "analysed", detail=ANALYSIS_NAME)
-        save_registry(registry)
+        # A snapshot, only to find the store; the records go through a batch that loads the
+        # registry inside the lock, and the catalogue is written once that lock is released.
+        store = resolve_command_store(args, load_registry(args.registry))
+        with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
+            for dataset in profiled:
+                profile = dataset.profile
+                summary = {
+                    "total_reads": profile.total_reads,
+                    "total_bases": profile.total_bases,
+                    "reads_sampled": profile.reads_sampled,
+                    "sampled": profile.sampled,
+                    "gc_percent": profile.gc_percent,
+                    "avg_read_length": profile.avg_read_length,
+                    "quality_grade": profile.quality_grade,
+                }
+                json_path = output_dir / f"{profile.accession}_quality_profile.json"
+                batch.apply(
+                    partial(
+                        record_analysis,
+                        accession=profile.accession,
+                        analysis=ANALYSIS_NAME,
+                        output=json_path,
+                        summary=summary,
+                    ),
+                    profile.accession,
+                )
+        if batch.registry is not None:
+            rows = [(d.profile.accession, "", "analysed", ANALYSIS_NAME) for d in profiled]
+            record_usage_many(store, batch.registry, rows)
 
     def _run(self, args: argparse.Namespace) -> int:
         folder = Path(args.fastq_folder)

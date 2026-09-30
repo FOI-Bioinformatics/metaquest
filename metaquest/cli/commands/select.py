@@ -1,6 +1,7 @@
 """CLI command that turns containment results into an accession list for downloads."""
 
 import argparse
+from functools import partial
 from pathlib import Path
 
 from metaquest.cli.base import BaseCommand
@@ -8,7 +9,8 @@ from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_TOP_
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.defaults import resolve_metadata_table
-from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection, save_registry
+from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection
+from metaquest.data.registry_batch import registry_update
 from metaquest.processing.selection import RunFilters, parse_size, select_accessions_ranked
 
 
@@ -184,6 +186,8 @@ class SelectDatasetsCommand(BaseCommand):
             if args.metadata_column or run_filters.active():
                 metadata_file = resolve_metadata_table(args.metadata_file)
 
+            # A snapshot, read without the lock: ranking can take a while on a large table, and the
+            # selection is recorded afterwards against the registry as it is then (see below).
             registry = load_registry(args.registry)
             if args.no_record and Path(args.output).resolve() in _recorded_selection_files(registry):
                 self.logger.error(
@@ -234,10 +238,10 @@ class SelectDatasetsCommand(BaseCommand):
                 {"accession": accession, "rank": i + 1, "column": column, "value": value}
                 for i, (accession, column, value) in enumerate(ranked)
             ]
-            record_selection(
-                registry,
-                accessions,
-                {
+            record = partial(
+                record_selection,
+                accessions=accessions,
+                criteria={
                     # The column the ranking actually used, which for --genome-ids is the
                     # combined label select_accessions_ranked builds (e.g. "A+B"), not the
                     # single --genome-id this falls back to when nothing was selected.
@@ -261,10 +265,13 @@ class SelectDatasetsCommand(BaseCommand):
                     "max_spots": args.max_spots,
                     "platform": args.platform,
                 },
-                output,
+                output=output,
                 ranked=ranked_records,
             )
-            save_registry(registry)
+            # Loaded again inside the lock, so a download or exclusion another process recorded
+            # while this one was ranking is kept; record_selection unselects earlier selections
+            # against that registry, not against the snapshot.
+            registry_update(registry.path, record)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error selecting datasets: %s", e)

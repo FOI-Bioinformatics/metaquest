@@ -10,6 +10,7 @@ figures in ``sra_report.json``, and a ``"report"`` analysis is recorded per acce
 import argparse
 import json
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,12 +18,13 @@ from metaquest.cli.base import BaseCommand, read_accessions_file, resolve_comman
 from metaquest.cli.commands.sra_profile import add_sampling_arguments
 from metaquest.core.exceptions import MetaQuestError, ValidationError
 from metaquest.core.optional import require
-from metaquest.data.registry import load_registry, record_analysis, save_registry
+from metaquest.data.registry import load_registry, record_analysis
+from metaquest.data.registry_batch import registry_batch
 from metaquest.sra.analytics import AnomalyReport, ComparativeAnalysis, QualityProfile, json_safe
 from metaquest.sra.dataset_stats import DATASET_READ_ERRORS
 from metaquest.sra.profiles import load_quality_profiles, profile_accession
 from metaquest.sra.reporting import SRAReportGenerator
-from metaquest.store.usage import record_usage_safe
+from metaquest.store.usage import record_usage_many
 from metaquest.utils.browser import open_in_browser
 
 ANALYSIS_NAME = "report"
@@ -225,19 +227,26 @@ class SRAReportCommand(BaseCommand):
         groups: Optional[Dict[str, List[str]]],
     ) -> None:
         """Record a "report" analysis and an "analysed" store usage for every reported accession."""
-        registry = load_registry(args.registry)
-        store = resolve_command_store(args, registry)
+        # A snapshot, only to find the store; the records go through a batch that loads the
+        # registry inside the lock, and the catalogue is written once that lock is released.
+        store = resolve_command_store(args, load_registry(args.registry))
         group_of = {acc: name for name, accs in (groups or {}).items() for acc in accs}
-        for accession, profile in profiles.items():
-            summary = {
-                "quality_grade": profile.quality_grade,
-                "gc_percent": profile.gc_percent,
-                "group": group_of.get(accession),
-                "anomalous": accession in anomalies.anomalous_datasets,
-            }
-            record_analysis(registry, accession, ANALYSIS_NAME, output, summary)
-            record_usage_safe(store, registry, accession, "", "analysed", detail=ANALYSIS_NAME)
-        save_registry(registry)
+        with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
+            for accession, profile in profiles.items():
+                summary = {
+                    "quality_grade": profile.quality_grade,
+                    "gc_percent": profile.gc_percent,
+                    "group": group_of.get(accession),
+                    "anomalous": accession in anomalies.anomalous_datasets,
+                }
+                batch.apply(
+                    partial(
+                        record_analysis, accession=accession, analysis=ANALYSIS_NAME, output=output, summary=summary
+                    ),
+                    accession,
+                )
+        if batch.registry is not None:
+            record_usage_many(store, batch.registry, [(acc, "", "analysed", ANALYSIS_NAME) for acc in profiles])
 
     def _open(self, html: Path, no_open: bool) -> None:
         """Print the report's link and open it in a browser unless told not to."""

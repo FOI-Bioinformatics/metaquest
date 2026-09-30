@@ -12,25 +12,48 @@ The report is built by `metaquest.processing.status_report`, the suggested next 
 """
 
 import argparse
+from functools import partial
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.status.render_text import print_report
 from metaquest.cli.commands.status.suggest import next_steps
-from metaquest.core.exceptions import MetaQuestError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import write_csv
 from metaquest.data.registry import (
     ProjectPaths,
     Registry,
     STAGES,
+    ReconcileReport,
     bootstrap_from_disk,
     load_registry,
-    reconcile,
     registry_path,
-    save_registry,
 )
+from metaquest.data.registry_batch import registry_update
+from metaquest.data.registry_reconcile import ReconcilePlan, apply_reconcile, scan_reconcile
 from metaquest.processing.status_report import build_report, to_dataframes
+
+
+def _adopt_bootstrap(registry: Registry, built: Registry) -> Registry:
+    """Fill the empty ``registry`` loaded under the lock with what ``status --init`` rebuilt from disk.
+
+    Raises ``DataAccessError`` when the registry file exists by now: another process created it
+    after this one checked, and overwriting it would lose what that process recorded.
+    """
+    if registry.path is not None and registry.path.exists():
+        raise DataAccessError(
+            f"Registry {registry.path} was created by another process while this one rebuilt it from disk; "
+            "run status --reconcile to update it instead"
+        )
+    for name in ("created", "genomes", "datasets", "project", "store"):
+        setattr(registry, name, getattr(built, name))
+    return registry
+
+
+def _apply_plan(registry: Registry, plan: ReconcilePlan) -> Tuple[ReconcileReport, Registry]:
+    """Apply a reconcile plan to the registry loaded under the lock; return the report and that registry."""
+    return apply_reconcile(registry, plan), registry
 
 
 class StatusCommand(BaseCommand):
@@ -147,13 +170,15 @@ class StatusCommand(BaseCommand):
             else:
                 registry = bootstrap_from_disk(paths, args.accessions_file, args.parsed_containment, registry_file)
                 if args.init:
-                    save_registry(registry)
+                    registry = registry_update(registry_file, partial(_adopt_bootstrap, built=registry))
                     self.logger.info("Registry written to %s", registry_file)
 
             drift = None
             if args.reconcile:
-                drift = reconcile(registry, paths)
-                save_registry(registry)
+                # Reads are counted on a snapshot, without the lock; only the apply runs under it,
+                # on the registry as it is then.
+                plan = scan_reconcile(registry, paths)
+                drift, registry = registry_update(registry_file, partial(_apply_plan, plan=plan))
 
             report = build_report(registry, args, paths, registry_file, existed, drift)
             if args.next:

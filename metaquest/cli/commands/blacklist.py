@@ -7,7 +7,8 @@ from typing import Dict, List
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data import registry_blocks as rb
-from metaquest.data.registry import clear_exclusion, load_registry, query, record_exclusion, save_registry
+from metaquest.data.registry import Registry, clear_exclusion, load_registry, query, record_exclusion
+from metaquest.data.registry_batch import registry_update
 
 
 def read_blacklist_file(path: Path) -> Dict[str, str]:
@@ -61,28 +62,35 @@ class BlacklistCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
-            registry = load_registry(args.registry)
-            blacklist_path = Path(args.blacklist_file)
-            entries = read_blacklist_file(blacklist_path)
             if args.list:
+                registry = load_registry(args.registry)
                 for acc in query(registry, "excluded"):
                     self.emit(f"{acc}\t{(rb.exclusion_block(registry, acc) or rb.ExclusionBlock()).reason}")
                 return 0
-            if args.remove:
-                for acc in args.remove:
-                    clear_exclusion(registry, acc)
-                    entries.pop(acc, None)
-                self.logger.info("Removed %d accession(s) from the blacklist", len(args.remove))
-            else:
+            accessions: List[str] = []
+            if not args.remove:
                 if not args.reason:
                     raise MetaQuestError("--reason is required when adding to the blacklist")
-                accessions: List[str] = args.add or _read_plain_list(Path(args.from_file))
+                accessions = args.add or _read_plain_list(Path(args.from_file))
+            blacklist_path = Path(args.blacklist_file)
+
+            def update(registry: Registry) -> None:
+                # blacklist.txt is read and rewritten inside the registry lock, so two blacklist
+                # runs serialise on that lock and neither loses the other's edits to either file.
+                entries = read_blacklist_file(blacklist_path)
+                for acc in args.remove or []:
+                    clear_exclusion(registry, acc)
+                    entries.pop(acc, None)
                 for acc in accessions:
                     record_exclusion(registry, acc, args.reason)
                     entries[acc] = args.reason
+                write_blacklist_file(blacklist_path, entries)
+
+            registry_update(args.registry, update)
+            if args.remove:
+                self.logger.info("Removed %d accession(s) from the blacklist", len(args.remove))
+            else:
                 self.logger.info("Excluded %d accession(s): %s", len(accessions), args.reason)
-            write_blacklist_file(blacklist_path, entries)
-            save_registry(registry)
             return 0
         except MetaQuestError as e:
             self.logger.error("Error updating the blacklist: %s", e)

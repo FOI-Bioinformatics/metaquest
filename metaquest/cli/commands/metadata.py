@@ -4,11 +4,12 @@ Metadata-related CLI commands.
 
 import argparse
 import logging
+from functools import partial
 import os
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -22,7 +23,8 @@ from metaquest.data.metadata import (
     parse_metadata,
     parse_metadata_xml,
 )
-from metaquest.data.registry import load_registry, nan_to_none, project_root, record_metadata, save_registry
+from metaquest.data.registry import Registry, nan_to_none, record_metadata, registry_path
+from metaquest.data.registry_batch import registry_batch, registry_update
 from metaquest.processing.counts import count_metadata
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.visualization.plots import plot_metadata_counts
@@ -156,25 +158,44 @@ class DownloadMetadataCommand(BaseCommand):
                 batch_size=args.batch_size,
             )
             if not args.dry_run and downloaded:
-                registry = load_registry(args.registry)
-                root = project_root(registry)
+                # Every XML is parsed before the registry lock is taken; the records are then
+                # written in one transaction on the registry as it is at that point.
+                parsed: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
                 for accession, xml_path in downloaded.items():
-                    # Parse the metadata XML and record parsed fields right away
                     try:
-                        parsed_dict = parse_metadata_xml(xml_path)
-                        fields = _metadata_fields(parsed_dict)
+                        fields = _metadata_fields(parse_metadata_xml(xml_path))
                     except (MetaQuestError, ValueError, OSError, ET.ParseError) as e:
                         self.logger.warning(
                             f"Could not parse metadata for {accession}: {e}; recorded the file path only"
                         )
                         fields = {}
-                    record_metadata(registry, accession, xml_path, fields, root=root)
-                save_registry(registry)
+                    parsed[accession] = (xml_path, fields)
+                registry = _record_all_metadata(args.registry, parsed)
                 self._share_with_store(args, registry, downloaded)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error downloading metadata: {e}")
             return 1
+
+
+def _record_all_metadata(registry_arg: Optional[str], parsed: Dict[str, Tuple[Any, Dict[str, Any]]]) -> Registry:
+    """Record every ``accession -> (xml_path, fields)`` in one registry transaction; return the registry written.
+
+    Each record is queued on a batch that writes once, on exit, so the registry is read inside
+    the lock and a download or selection another process recorded meanwhile is kept.
+    """
+    target = registry_path(registry_arg)
+    # Paths are recorded relative to the registry's folder, as project_root would give.
+    root = target.parent.resolve()
+    with registry_batch(target, flush_every=None, flush_seconds=None) as batch:
+        for accession, (xml_path, fields) in parsed.items():
+            batch.apply(
+                partial(record_metadata, accession=accession, xml_path=xml_path, fields=fields, root=root), accession
+            )
+    if batch.registry is None:
+        # Nothing to record: still write the registry, as a run with an empty table always has.
+        return registry_update(target, lambda registry: registry)
+    return batch.registry
 
 
 class ParseMetadataCommand(BaseCommand):
@@ -205,25 +226,27 @@ class ParseMetadataCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
 
-    def _record_row(self, registry, metadata_folder: Path, row: Mapping[str, Any], root: Path) -> None:
+    @staticmethod
+    def _row_record(metadata_folder: Path, row: Mapping[str, Any]) -> Optional[Tuple[str, Path, Dict[str, Any]]]:
         accession = row.get("Run_ID")
         if accession is None or pd.isna(accession):
-            return
-        fields = _metadata_fields(row)
-        record_metadata(registry, str(accession), metadata_folder / f"{accession}_metadata.xml", fields, root=root)
+            return None
+        return str(accession), metadata_folder / f"{accession}_metadata.xml", _metadata_fields(row)
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
             df = parse_metadata(args.metadata_folder, args.metadata_table_file)
-            registry = load_registry(args.registry)
             metadata_folder = Path(args.metadata_folder)
             # Only the columns the registry records, as plain dicts: a wide table (one column per
             # sample attribute) makes a pandas Series per row costly.
             columns = [column for column in _ROW_COLUMNS if column in df.columns]
-            root = project_root(registry)
+            parsed: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
             for row in df[columns].to_dict("records"):
-                self._record_row(registry, metadata_folder, row, root)
-            save_registry(registry)
+                record = self._row_record(metadata_folder, row)
+                if record is not None:
+                    parsed[record[0]] = (record[1], record[2])
+            # Parsed above without the registry lock; recorded here in one transaction.
+            _record_all_metadata(args.registry, parsed)
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error parsing metadata: {e}")
