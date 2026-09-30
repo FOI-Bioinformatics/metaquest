@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Union
+from typing import Dict, FrozenSet, List, Optional, Sequence, Union
 
 from metaquest.core.exceptions import SecurityError
 from metaquest.core.validation import validate_accession
@@ -48,6 +48,9 @@ FASTERQ_DUMP_INTEGER_FLAGS = frozenset({"--threads"})
 PATH_VALUE_FLAGS = frozenset({"-O", "-o", "-d", "--out-dir", "--temp", "--tmp-dir", "-1", "-2", "-0", "-s"})
 # Tools whose positional argument is either an SRA accession or a .sra file path.
 SRA_POSITIONAL_TOOLS = frozenset({"fasterq-dump", "prefetch"})
+# Return code run_secure reports for a child it did not start because the run is stopping: the
+# code of a child killed with SIGKILL, which is what a child started a moment later would get.
+_NOT_STARTED_RETURNCODE = -9
 
 
 def missing_tools(names: Sequence[str]) -> List[str]:
@@ -73,32 +76,46 @@ class SecureSubprocess:
     _extra_roots: List[Path] = []
     _extra_roots_lock = threading.Lock()
 
-    # Child processes started by run_secure that have not yet finished; read by
+    # Child processes started by run_secure that have not yet finished, each mapped to the stop
+    # token of the run that started it (None for a caller that passed none); read by
     # terminate_children so an interrupt can stop tools running in worker threads.
-    _children: Set[subprocess.Popen] = set()
+    _children: Dict[subprocess.Popen, Optional[threading.Event]] = {}
     _children_lock = threading.Lock()
-    # Set by terminate_children; a child started after that is killed as soon as it is
-    # created, so a worker that passed its own stop check just before the interrupt cannot
-    # leave a tool running. Cleared by clear_stopping at the start of the next run.
+    # Process-wide: set by terminate_children called without a token. A child started after
+    # that is killed as soon as it is created, whatever its token, so a worker that passed its
+    # own stop check just before the interrupt cannot leave a tool running. No run clears it;
+    # only clear_stopping does. A run's own token plays the same part for that run alone.
     _stopping = False
 
     @classmethod
     def clear_stopping(cls) -> None:
-        """Allow ``run_secure`` children to run again after ``terminate_children``."""
+        """Allow ``run_secure`` children to run again after ``terminate_children`` without a token."""
         with cls._children_lock:
             cls._stopping = False
 
     @classmethod
-    def terminate_children(cls, grace: float = 5.0) -> int:
-        """Terminate, then kill, every child started by ``run_secure`` that is still running.
+    def _stop_requested(cls, stop: Optional[threading.Event]) -> bool:
+        """Whether a child under ``stop`` must not run: the process-wide flag or the token is set."""
+        return cls._stopping or (stop is not None and stop.is_set())
 
-        Each child is sent SIGTERM; one that has not exited ``grace`` seconds later is
-        sent SIGKILL. Returns the number of tracked children. Any child started after this
-        call is killed at once, until ``clear_stopping`` is called.
+    @classmethod
+    def terminate_children(cls, grace: float = 5.0, stop: Optional[threading.Event] = None) -> int:
+        """Terminate, then kill, the children started by ``run_secure`` that are still running.
+
+        With ``stop`` None every tracked child is stopped, and any child started after this call
+        is killed at once until ``clear_stopping`` is called. With a token only the children
+        ``run_secure`` started under that token are stopped; the token is set, so a child that
+        run starts afterwards is killed at once (or not started), and other runs are unaffected.
+        Each child is sent SIGTERM; one that has not exited ``grace`` seconds later is sent
+        SIGKILL. Returns the number of children stopped.
         """
         with cls._children_lock:
-            cls._stopping = True
-            children = list(cls._children)
+            if stop is None:
+                cls._stopping = True
+                children = list(cls._children)
+            else:
+                stop.set()
+                children = [child for child, owner in cls._children.items() if owner is stop]
         for child in children:
             if child.poll() is None:
                 child.terminate()
@@ -278,6 +295,7 @@ class SecureSubprocess:
         cwd: Optional[Union[str, Path]] = None,
         env: Optional[Dict[str, str]] = None,
         timeout: Optional[int] = None,
+        stop: Optional[threading.Event] = None,
         **kwargs,
     ) -> subprocess.CompletedProcess:
         """
@@ -300,8 +318,11 @@ class SecureSubprocess:
             SecurityError: If any validation fails, or the command times out
             subprocess.CalledProcessError: If the command exits non-zero and ``check`` is True
 
-        The child is started with ``Popen`` and recorded until it finishes, so
-        ``terminate_children`` can stop it from another thread.
+        The child is started with ``Popen`` and recorded, under ``stop``, until it finishes, so
+        ``terminate_children`` can stop it from another thread. When ``stop`` (the calling run's
+        token) is already set, or ``terminate_children`` ran without a token, no child is started:
+        the call fails as a killed child would, with return code -9 (``CalledProcessError``
+        when ``check`` is True).
         """
         cmd = cls._build_validated_command(executable, args)
 
@@ -319,6 +340,11 @@ class SecureSubprocess:
 
         check = kwargs.pop("check", True)
         kwargs.pop("capture_output", None)
+        if cls._stop_requested(stop):
+            logger.debug(f"Not starting {executable}: the run is stopping")
+            if check:
+                raise subprocess.CalledProcessError(_NOT_STARTED_RETURNCODE, cmd, output="", stderr="")
+            return subprocess.CompletedProcess(cmd, _NOT_STARTED_RETURNCODE, "", "")
         try:
             # Use secure defaults
             popen_kwargs = {
@@ -331,12 +357,13 @@ class SecureSubprocess:
             }
             proc = subprocess.Popen(cmd, **popen_kwargs)
             with cls._children_lock:
-                if cls._stopping:
-                    # terminate_children already ran: stop this child too; communicate()
-                    # below then reaps it and the non-zero exit is reported as usual.
+                if cls._stop_requested(stop):
+                    # terminate_children ran for this run (or for every run) after the check
+                    # above: stop this child too; communicate() below then reaps it and the
+                    # non-zero exit is reported as usual.
                     proc.kill()
                 else:
-                    cls._children.add(proc)
+                    cls._children[proc] = stop
             try:
                 out, err = proc.communicate(timeout=timeout or MAX_SUBPROCESS_TIMEOUT)
             except subprocess.TimeoutExpired:
@@ -350,7 +377,7 @@ class SecureSubprocess:
                 raise
             finally:
                 with cls._children_lock:
-                    cls._children.discard(proc)
+                    cls._children.pop(proc, None)
 
             if check and proc.returncode != 0:
                 raise subprocess.CalledProcessError(proc.returncode, cmd, output=out, stderr=err)

@@ -10,6 +10,7 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -391,7 +392,7 @@ def parse_verdict_message(message: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def compress_fastq(path: Path, threads: int) -> Path:
+def compress_fastq(path: Path, threads: int, stop: Optional[threading.Event] = None) -> Path:
     """Gzip-compress ``path`` in place, returning the path to the compressed file.
 
     Uses ``pigz`` (parallel gzip) when it is on PATH, since it is substantially faster
@@ -406,12 +407,15 @@ def compress_fastq(path: Path, threads: int) -> Path:
     once the gzip stream has closed cleanly; a failing ``pigz`` invocation has any
     ``.gz`` it managed to write before dying removed. Either way the original
     exception propagates to the caller.
+
+    ``stop`` is the calling download run's stop token; ``pigz`` is recorded under it so
+    ``SecureSubprocess.terminate_children(stop=stop)`` stops it with the rest of that run.
     """
     target = path.with_suffix(path.suffix + ".gz")
 
     if shutil.which("pigz"):
         try:
-            SecureSubprocess.run_secure("pigz", ["-p", str(threads), "-f", str(path)])
+            SecureSubprocess.run_secure("pigz", ["-p", str(threads), "-f", str(path)], stop=stop)
         except _TOOL_ERRORS:
             if target.exists():
                 try:

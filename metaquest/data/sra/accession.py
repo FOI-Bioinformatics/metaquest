@@ -1,5 +1,6 @@
 """Download of one SRA accession with prefetch and fasterq-dump, and classification of its failures."""
 
+import functools
 import logging
 import re
 import shutil
@@ -32,9 +33,11 @@ _NOT_FOUND_ERROR_RE = re.compile(
 )
 
 
-# Set when the user interrupts a download run (Ctrl-C). download_accession checks it
-# before each prefetch or fasterq-dump call, so a worker thread that has not yet
-# started a tool returns without starting one, and the retry pass does not run.
+# Process-wide emergency stop. Each download run has its own stop token (``download_sra``'s
+# ``stop``), set when that run is interrupted; download_accession checks both before each
+# prefetch or fasterq-dump call, so a worker thread that has not yet started a tool returns
+# without starting one, and the retry pass does not run. Setting STOP stops every run in the
+# process; no run clears it (tests and callers that set it clear it themselves).
 STOP = threading.Event()
 
 
@@ -45,21 +48,28 @@ PROJECT_LOCK_POLL_SECONDS = 1.0
 
 
 class _DownloadInterrupted(Exception):
-    """Raised inside download_accession when STOP is set before a tool call."""
+    """Raised inside download_accession when the run is stopping before a tool call."""
 
 
-def _run_download_tool(executable: str, args: List[str]) -> None:
-    """Run prefetch or fasterq-dump through ``run_secure`` unless STOP is set.
+def stop_requested(stop: Optional[threading.Event] = None) -> bool:
+    """Whether a download should stop: the run's token ``stop`` or the process-wide ``STOP`` is set."""
+    return (stop is not None and stop.is_set()) or STOP.is_set()
 
-    A tool that exits non-zero while STOP is set was stopped by the interrupt (or killed
-    as it started), so its failure is reported as an interruption rather than an error.
+
+def _run_download_tool(executable: str, args: List[str], stop: Optional[threading.Event] = None) -> None:
+    """Run prefetch or fasterq-dump through ``run_secure`` unless the run is stopping.
+
+    The child is recorded under ``stop`` so ``terminate_children(stop=stop)`` stops this run's
+    tools only. A tool that exits non-zero once the run is stopping was stopped by the
+    interrupt (or killed as it started), so its failure is reported as an interruption rather
+    than an error.
     """
-    if STOP.is_set():
+    if stop_requested(stop):
         raise _DownloadInterrupted()
     try:
-        SecureSubprocess.run_secure(executable, args)
+        SecureSubprocess.run_secure(executable, args, stop=stop)
     except subprocess.CalledProcessError as e:
-        if STOP.is_set():
+        if stop_requested(stop):
             raise _DownloadInterrupted() from e
         raise
 
@@ -155,6 +165,7 @@ def _handle_download_output(
     expected_spots: Optional[int] = None,
     compress: bool = False,
     num_threads: int = 4,
+    stop: Optional[threading.Event] = None,
 ):
     """
     Move downloaded files from temp path to output path, then verify completeness.
@@ -166,6 +177,8 @@ def _handle_download_output(
         compress: If True, gzip each downloaded FASTQ file (via ``compress_fastq``)
             after the completeness verdict has been computed on the plain files
         num_threads: Thread count passed to ``compress_fastq`` (for pigz's ``-p``)
+        stop: The run's stop token; once it (or ``STOP``) is set, the files not yet
+            compressed are left uncompressed
 
     Returns:
         Tuple of (success, message); the message carries the completeness verdict
@@ -206,14 +219,14 @@ def _handle_download_output(
     compression_skipped: List[str] = []
     if compress:
         for index, file in enumerate(moved):
-            if STOP.is_set():
+            if stop_requested(stop):
                 # The download itself is complete; leave the rest uncompressed rather than
                 # start pigz after an interrupt.
                 compression_skipped = [f.name for f in moved[index:]]
                 logger.info(f"Compression of {output_path.name} skipped: the run was interrupted")
                 break
             try:
-                fastq_mod.compress_fastq(file, num_threads)
+                fastq_mod.compress_fastq(file, num_threads, stop=stop)
             except fastq_mod._TOOL_ERRORS as e:
                 logger.warning(f"Could not compress {file}: {e}")
                 compression_failures.append(file.name)
@@ -312,6 +325,7 @@ def download_accession(
     keep_sra: bool = False,
     compress: bool = True,
     staging_folder: Optional[Union[str, Path]] = None,
+    stop: Optional[threading.Event] = None,
 ) -> Tuple[bool, str]:
     """
     Download a single SRA accession using prefetch + fasterq-dump --split-3.
@@ -339,6 +353,9 @@ def download_accession(
         staging_folder: Folder the ``<accession>_temp`` build directory is created in;
             defaults to ``output_folder``. The shared store points it at the store's own
             ``tmp`` folder so a half-written download never sits among finished datasets
+        stop: The run's stop token. Once it (or the process-wide ``STOP``) is set no further
+            tool is started and ``(False, "interrupted")`` is returned; the tools that are
+            started are recorded under it for ``SecureSubprocess.terminate_children``
 
     Returns:
         Tuple of (success, message)
@@ -384,6 +401,7 @@ def download_accession(
             _run_download_tool(
                 "prefetch",
                 ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
+                stop,
             )
             source = str(_cached_sra_archive(cache_path / accession, accession))
         else:
@@ -394,11 +412,16 @@ def download_accession(
 
         # Run fasterq-dump command securely
         args = _fasterq_dump_args(source, temp_path, temp_folder_path, num_threads, using_prefetch)
-        _run_download_tool("fasterq-dump", args)
+        _run_download_tool("fasterq-dump", args, stop)
 
         # Handle download output
         success, message = _handle_download_output(
-            temp_path, output_path, expected_spots=expected_spots, compress=compress, num_threads=num_threads
+            temp_path,
+            output_path,
+            expected_spots=expected_spots,
+            compress=compress,
+            num_threads=num_threads,
+            stop=stop,
         )
 
         if success and using_prefetch and not keep_sra:
@@ -452,7 +475,14 @@ def _project_lock_policy(accession: str, wait_seconds: float) -> LockPolicy:
 
 
 def _stage_and_publish(
-    accession: str, fastq: Path, lock: Path, num_threads: int, force: bool, temp_folder, download_kwargs: dict
+    accession: str,
+    fastq: Path,
+    lock: Path,
+    num_threads: int,
+    force: bool,
+    temp_folder,
+    download_kwargs: dict,
+    stop: Optional[threading.Event] = None,
 ) -> Tuple[bool, str]:
     """Download ``accession`` into the staging folder and publish it to ``<fastq>/<ACC>``.
 
@@ -469,7 +499,7 @@ def _stage_and_publish(
     if staged.exists():
         return False, f"unknown: could not clear the staged folder {staged}"
     success, message = download_accession(
-        accession, staging, num_threads, force, temp_folder, staging_folder=staging, **download_kwargs
+        accession, staging, num_threads, force, temp_folder, staging_folder=staging, stop=stop, **download_kwargs
     )
     if not success:
         cleanup_mod._safe_rmtree(staged)
@@ -509,8 +539,9 @@ def _project_download(
 
     The prefetch cache defaults to ``<fastq>/.sra-cache`` as before. A ``sra_cache`` folder
     the caller supplies and shares with another project is not covered by this lock (only a
-    shared store locks across projects). ``stop``, when set, ends a wait for the lock with
-    the result ``(False, "interrupted")``.
+    shared store locks across projects). ``stop`` is the run's stop token: when it (or the
+    process-wide ``STOP``) is set, a wait for the lock ends with the result
+    ``(False, "interrupted")``; it is passed on to ``download_accession``.
     """
     fastq = Path(output_folder)
     lock = project_lock_path(fastq, accession)
@@ -523,11 +554,13 @@ def _project_download(
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
         (fastq / cleanup_mod.PROJECT_STAGING_FOLDER).mkdir(parents=True, exist_ok=True)
-        with held_lock(lock, policy, should_stop=stop.is_set if stop is not None else None):
+        with held_lock(lock, policy, should_stop=functools.partial(stop_requested, stop)):
             if not redownload and _check_existing_download(fastq / accession, False):
                 logger.info(f"Skipping {accession}, FASTQ files already exist")
                 return True, "already exists"
-            return _stage_and_publish(accession, fastq, lock, num_threads, force, temp_folder, download_kwargs)
+            return _stage_and_publish(
+                accession, fastq, lock, num_threads, force, temp_folder, download_kwargs, stop=stop
+            )
     except LockWaitStopped:
         logger.info(f"Stopped waiting for the lock on {accession}: the run was interrupted")
         return False, "interrupted"

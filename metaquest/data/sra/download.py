@@ -3,6 +3,7 @@
 import functools
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
@@ -191,6 +192,7 @@ def download_sra(
     resume_partial: bool = True,
     store_metadata: Optional[Union[str, Path, Sequence[Union[str, Path]]]] = None,
     lock_wait: float = 0.0,
+    stop: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """
     Download multiple SRA datasets.
@@ -243,6 +245,11 @@ def download_sra(
             lock, or without a store the project's ``<fastq>/.locks/<ACC>.lock``) before giving
             up on that accession; zero (the default) waits for as long as the other run keeps
             working, since a download legitimately takes hours
+        stop: This run's stop token; a new one is made when None. It reaches every worker,
+            ``download_accession`` and each prefetch or fasterq-dump child, so setting it, or
+            ``SecureSubprocess.terminate_children(stop=stop)``, stops this run only; another
+            run in the same process keeps going. The process-wide ``accession.STOP`` still
+            stops every run
 
     Returns:
         Dictionary with download statistics
@@ -312,7 +319,6 @@ def download_sra(
         ) or functools.partial(
             accession_mod._project_download,
             lock_wait=lock_wait,
-            stop=accession_mod.STOP,
             truncated=frozenset(truncated_accessions) if truncated_accessions is not None else None,
         )
 
@@ -334,6 +340,7 @@ def download_sra(
                 keep_sra,
                 compress,
                 downloader,
+                stop=stop if stop is not None else threading.Event(),
             )
         )
 

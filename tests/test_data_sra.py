@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 
 import pytest
@@ -1755,6 +1756,7 @@ class TestRetryFailedDownloads:
             use_prefetch=True,
             keep_sra=False,
             compress=True,
+            stop=None,
         )
         assert updated_failed == ["SRR404"]
         assert retried_successful == 1
@@ -2804,20 +2806,22 @@ class TestDownloadInterrupt:
             raise KeyboardInterrupt
 
         worker = Mock(return_value=(True, "ok"))
+        stop = threading.Event()
         with patch.object(SecureSubprocess, "terminate_children", return_value=0) as term:
             with pytest.raises(KeyboardInterrupt):
                 retry_mod._execute_parallel_downloads(
-                    accessions(), tmp_path, 1, 1, False, None, {}, [], downloader=worker
+                    accessions(), tmp_path, 1, 1, False, None, {}, [], downloader=worker, stop=stop
                 )
-        term.assert_called_once()
-        assert accession_mod.STOP.is_set()
+        term.assert_called_once_with(stop=stop)
+        assert stop.is_set()
+        assert not accession_mod.STOP.is_set()
 
-    def test_a_new_run_clears_the_stopping_flag(self, tmp_path):
+    def test_a_new_run_leaves_the_process_wide_stopping_flag_set(self, tmp_path):
 
         SecureSubprocess.terminate_children(grace=0.0)
         worker = Mock(return_value=(True, "ok"))
         retry_mod._execute_parallel_downloads(["SRR1"], tmp_path, 1, 1, False, None, {}, [], downloader=worker)
-        assert SecureSubprocess._stopping is False
+        assert SecureSubprocess._stopping is True
 
     def test_tool_killed_by_the_interrupt_reports_interrupted(self, tmp_path):
         import subprocess as sp
@@ -2880,13 +2884,15 @@ class TestDownloadInterrupt:
                 raise KeyboardInterrupt
             return True, "ok"
 
+        stop = threading.Event()
         with patch.object(SecureSubprocess, "terminate_children", return_value=0) as term:
             with pytest.raises(KeyboardInterrupt):
                 retry_mod._execute_parallel_downloads(
-                    ["SRR1", "SRR2", "SRR3", "SRR4"], tmp_path, 1, 1, False, None, {}, [], downloader=worker
+                    ["SRR1", "SRR2", "SRR3", "SRR4"], tmp_path, 1, 1, False, None, {}, [], downloader=worker, stop=stop
                 )
-        term.assert_called_once()
-        assert accession_mod.STOP.is_set()
+        term.assert_called_once_with(stop=stop)
+        assert stop.is_set()
+        assert not accession_mod.STOP.is_set()
 
     def test_download_accession_runs_no_tool_once_stopped(self, tmp_path):
 

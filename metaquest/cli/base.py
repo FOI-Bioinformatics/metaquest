@@ -132,7 +132,15 @@ class BaseCommand(ABC):
         ``finally`` blocks and ``with`` exits still write what the command has done; later
         signals are logged, not raised (see ``metaquest.utils.termination``). An interrupt that
         leaves ``execute`` is logged, running tools are stopped and 130 is returned. The
-        ``Termination`` is available to ``execute`` as ``args._termination``.
+        ``Termination`` is available to ``execute`` as ``args._termination``; its ``stop`` is
+        this run's stop token.
+
+        On an interrupt only the tools started under that token are terminated
+        (``terminate_children(stop=term.stop)``), so another command running in the same
+        process keeps its own. A tool started without a token on the main thread needs no
+        such call: ``run_secure`` kills its child when the interrupt reaches the waiting
+        thread. The process-wide stopping flag is neither set nor cleared here, so no
+        ``clear_stopping`` call is needed at the start of a run.
         """
         if not self.graceful_shutdown:
             return self.execute(args)
@@ -142,7 +150,7 @@ class BaseCommand(ABC):
                 return self.execute(args)
             except KeyboardInterrupt:
                 self.logger.error("Interrupted (%s)", term.cause)
-                SecureSubprocess.terminate_children()
+                SecureSubprocess.terminate_children(stop=term.stop)
                 return EXIT_INTERRUPTED
 
     # Output. stdout carries the command's result (tables, JSON); stderr carries logging.

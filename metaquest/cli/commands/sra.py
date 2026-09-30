@@ -559,8 +559,12 @@ class DownloadSraCommand(BaseCommand):
         on_result = None
         batch = registry_batch(args.registry)
         body_done = False
+        # The run's stop token: BaseCommand.run's Termination, whose stop is set by the first
+        # signal and targeted by its terminate_children call. Called without run (execute
+        # directly), the context below makes a token of its own.
+        run_term = getattr(args, "_termination", None)
         try:
-            with _termination_raises_interrupt(), batch:
+            with _termination_raises_interrupt(run_term.stop if run_term is not None else None) as term, batch:
                 if not args.dry_run:
                     on_result = self._result_recorder(args, fastq_dir, store, batch)
                 download_stats = download_sra(
@@ -583,6 +587,7 @@ class DownloadSraCommand(BaseCommand):
                     use_prefetch=getattr(args, "use_prefetch", True),
                     keep_sra=getattr(args, "keep_sra", False),
                     compress=getattr(args, "compress", True),
+                    stop=term.stop,
                     **self._store_options(args, store, project_registry),
                 )
                 body_done = True

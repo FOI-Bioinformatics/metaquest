@@ -807,17 +807,33 @@ class TestChildProcessTracking:
         SecureSubprocess.clear_stopping()
 
     def test_child_started_after_terminate_children_is_killed_at_once(self, monkeypatch):
-        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        monkeypatch.setattr(SecureSubprocess, "_children", {})
         assert SecureSubprocess.terminate_children(grace=0.0) == 0
         proc = _fake_proc(returncode=-9)
-        with patch("subprocess.Popen", return_value=proc):
+        # The stopping flag is seen before Popen, so no child is started at all.
+        with patch("subprocess.Popen", return_value=proc) as popen:
+            with pytest.raises(subprocess.CalledProcessError) as raised:
+                SecureSubprocess.run_secure("datasets", ["--version"])
+        popen.assert_not_called()
+        assert raised.value.returncode == -9
+        assert not SecureSubprocess._children
+
+    def test_child_started_as_terminate_children_runs_is_killed_at_once(self, monkeypatch):
+        monkeypatch.setattr(SecureSubprocess, "_children", {})
+        proc = _fake_proc(returncode=-9)
+
+        def popen(*args, **kwargs):
+            SecureSubprocess.terminate_children(grace=0.0)
+            return proc
+
+        with patch("subprocess.Popen", side_effect=popen):
             with pytest.raises(subprocess.CalledProcessError):
                 SecureSubprocess.run_secure("datasets", ["--version"])
         proc.kill.assert_called_once()
         assert not SecureSubprocess._children
 
     def test_clear_stopping_lets_children_run_again(self, monkeypatch):
-        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        monkeypatch.setattr(SecureSubprocess, "_children", {})
         SecureSubprocess.terminate_children(grace=0.0)
         SecureSubprocess.clear_stopping()
         proc = _fake_proc()
@@ -858,13 +874,13 @@ class TestChildProcessTracking:
         child = Mock()
         child.poll.return_value = None
         child.wait.side_effect = subprocess.TimeoutExpired("cmd", 0)
-        monkeypatch.setattr(SecureSubprocess, "_children", {child})
+        monkeypatch.setattr(SecureSubprocess, "_children", {child: None})
         assert SecureSubprocess.terminate_children(grace=0.0) == 1
         child.terminate.assert_called_once()
         child.kill.assert_called_once()
 
     def test_terminate_children_with_nothing_running_returns_zero(self, monkeypatch):
-        monkeypatch.setattr(SecureSubprocess, "_children", set())
+        monkeypatch.setattr(SecureSubprocess, "_children", {})
         assert SecureSubprocess.terminate_children(grace=0.0) == 0
 
     def test_failed_run_raises_calledprocesserror_with_output_and_stderr(self):

@@ -2,6 +2,7 @@
 
 import logging
 import subprocess
+import threading
 import time
 import zlib
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
@@ -64,6 +65,23 @@ def _process_download_results(futures_results, accessions_to_download, download_
     return successful_count, failed_count
 
 
+def _split_not_found(failed_accessions: List[str], download_results: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    """Split failed accessions into (worth retrying, not-found).
+
+    An accession classified as not-found from its last attempt's message will not succeed on
+    retry (the run genuinely does not exist, or the ID is invalid); it is kept in the failed
+    list rather than burning a retry round on it.
+    """
+    retry_batch: List[str] = []
+    not_found: List[str] = []
+    for accession in failed_accessions:
+        if accession_mod.classify_download_error(download_results.get(accession, "")) == "not-found":
+            not_found.append(accession)
+        else:
+            retry_batch.append(accession)
+    return retry_batch, not_found
+
+
 def _retry_failed_downloads(
     failed_accessions,
     max_retries,
@@ -79,6 +97,7 @@ def _retry_failed_downloads(
     keep_sra: bool = False,
     compress: bool = True,
     downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
+    stop: Optional[threading.Event] = None,
 ):
     """
     Retry failed downloads.
@@ -100,6 +119,10 @@ def _retry_failed_downloads(
         downloader: Callable used in place of ``download_accession``; the shared store
             passes one that links the project to the store's copy instead of downloading
             into the project folder
+        stop: The run's stop token, forwarded to every retry. Once it (or the process-wide
+            ``STOP``) is set no further round starts and the pause between rounds is skipped;
+            a retry already queued in the current round returns "interrupted" from the worker
+            without starting a tool
 
     Returns:
         Tuple of (retried_successful, failed_accessions, abort_reason). ``abort_reason`` is
@@ -109,7 +132,7 @@ def _retry_failed_downloads(
         (and notified too) without ever calling ``download_accession``, and no further retry
         round runs. ``abort_reason`` is ``None`` when every round ran to completion normally.
     """
-    if max_retries <= 0 or not failed_accessions or accession_mod.STOP.is_set():
+    if max_retries <= 0 or not failed_accessions or accession_mod.stop_requested(stop):
         return 0, failed_accessions, None
 
     logger.info(f"Retrying {len(failed_accessions)} failed downloads")
@@ -119,21 +142,12 @@ def _retry_failed_downloads(
     abort_reason: Optional[str] = None
 
     for retry in range(max_retries):
-        if not failed_accessions:
+        # A run stopped during the previous round starts no further round; within a round the
+        # worker itself returns "interrupted" without starting a tool.
+        if not failed_accessions or accession_mod.stop_requested(stop):
             break
 
-        # An accession classified as not-found from its last attempt's message will not
-        # succeed on retry (the run genuinely does not exist, or the ID is invalid); skip it
-        # but keep it in the failed list rather than burning a retry round on it.
-        retry_batch = []
-        skipped_not_found = []
-        for accession in failed_accessions:
-            if accession_mod.classify_download_error(download_results.get(accession, "")) == "not-found":
-                skipped_not_found.append(accession)
-            else:
-                retry_batch.append(accession)
-
-        failed_accessions = list(skipped_not_found)
+        retry_batch, failed_accessions = _split_not_found(failed_accessions, download_results)
 
         if not retry_batch:
             break
@@ -155,6 +169,7 @@ def _retry_failed_downloads(
                     use_prefetch=use_prefetch,
                     keep_sra=keep_sra,
                     compress=compress,
+                    stop=stop,
                 )
             except _DOWNLOAD_ERRORS as e:
                 failed_accessions.append(accession)
@@ -187,7 +202,7 @@ def _retry_failed_downloads(
         if abort_reason:
             break
 
-        if failed_accessions and retry < max_retries - 1:
+        if failed_accessions and retry < max_retries - 1 and not accession_mod.stop_requested(stop):
             time.sleep(2**retry)
 
     return retried_successful, failed_accessions, abort_reason
@@ -233,17 +248,22 @@ def _execute_parallel_downloads(
     keep_sra: bool = False,
     compress: bool = True,
     downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
+    stop: Optional[threading.Event] = None,
 ):
     """Download accessions concurrently and tally results. Returns (successful, failed).
 
     ``downloader`` replaces ``download_accession`` when the project reads through a shared
     store; it takes the same arguments so the tally, retries and callbacks are unchanged.
 
-    On ``KeyboardInterrupt`` STOP is set, downloads not yet started are cancelled, every
-    running prefetch or fasterq-dump child is terminated, and the interrupt is re-raised.
+    ``stop`` is the run's stop token (a new one when None), passed to every worker. On
+    ``KeyboardInterrupt`` it is set, downloads not yet started are cancelled, this run's
+    running prefetch or fasterq-dump children are terminated, and the interrupt is re-raised.
+    Other runs in the process are not affected. The process-wide ``STOP`` and
+    ``SecureSubprocess``'s stopping flag are left as they are: a run neither sets nor clears
+    them, so an emergency stop set before the run still applies to it.
     """
-    accession_mod.STOP.clear()
-    SecureSubprocess.clear_stopping()
+    if stop is None:
+        stop = threading.Event()
     expected_spots = expected_spots or {}
     futures_results: list = []
     worker = downloader or accession_mod.download_accession
@@ -263,6 +283,7 @@ def _execute_parallel_downloads(
                     use_prefetch=use_prefetch,
                     keep_sra=keep_sra,
                     compress=compress,
+                    stop=stop,
                 ): acc
                 for acc in accessions
             }
@@ -280,10 +301,10 @@ def _execute_parallel_downloads(
                 success, message = result
                 accession_mod._notify_result(on_result, acc, success, message)
         except KeyboardInterrupt:
-            accession_mod.STOP.set()
+            stop.set()
             logger.warning("Interrupted; cancelling pending downloads and stopping running tools")
             executor.shutdown(wait=False, cancel_futures=True)
-            SecureSubprocess.terminate_children()
+            SecureSubprocess.terminate_children(stop=stop)
             raise
 
     return _process_download_results(futures_results, accessions, download_results, failed_accessions)
@@ -305,13 +326,17 @@ def _download_with_retries(
     keep_sra: bool = False,
     compress: bool = True,
     downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
+    stop: Optional[threading.Event] = None,
 ) -> Tuple[int, int, List[str], Dict[str, Any], Optional[str]]:
     """Run the parallel downloads and optional retry pass.
 
+    ``stop`` is the run's stop token (a new one when None), shared by both passes.
     Returns (successful_count, failed_count, failed_accessions, download_results, abort_reason).
     ``abort_reason`` is ``"disk-full"`` when a retry hit a disk-full error (see
     ``_retry_failed_downloads``), else ``None``.
     """
+    if stop is None:
+        stop = threading.Event()
     failed_accessions: list = []
     download_results: dict = {}
     abort_reason: Optional[str] = None
@@ -332,6 +357,7 @@ def _download_with_retries(
         keep_sra,
         compress,
         downloader,
+        stop=stop,
     )
 
     if max_retries > 0 and failed_accessions:
@@ -350,6 +376,7 @@ def _download_with_retries(
             keep_sra,
             compress,
             downloader,
+            stop=stop,
         )
         successful_count += retried_successful
         failed_count -= retried_successful

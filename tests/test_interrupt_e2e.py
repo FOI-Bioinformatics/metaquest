@@ -64,13 +64,16 @@ def test_sigint_during_parallel_downloads_stops_children_and_releases_locks(tmp_
     cancel = threading.Event()
 
     def worker(acc, *args, **kwargs):
-        with dataset_lock(paths, acc, should_stop=accession_mod.STOP.is_set):
+        # As the real workers do: wait and run tools under the run's stop token, which the
+        # interrupt sets and whose children it terminates.
+        stop = kwargs["stop"]
+        with dataset_lock(paths, acc, should_stop=lambda: accession_mod.stop_requested(stop)):
             with count_lock:
                 running_count["n"] += 1
                 if running_count["n"] == len(ACCESSIONS):
                     both_running.set()
             try:
-                accession_mod._run_download_tool("sleep", ["30"])
+                accession_mod._run_download_tool("sleep", ["30"], stop)
             except accession_mod._DownloadInterrupted:
                 return False, "interrupted"
             return True, "ok"

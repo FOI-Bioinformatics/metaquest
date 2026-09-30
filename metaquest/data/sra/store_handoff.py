@@ -4,7 +4,9 @@ The ``metaquest.store`` imports stay inside the functions because ``metaquest.st
 imports this package.
 """
 
+import functools
 import logging
+import threading
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -205,6 +207,7 @@ def _store_download(
     store_metadata=None,
     force: bool = False,
     lock_wait: float = 0.0,
+    stop: Optional[threading.Event] = None,
     **download_kwargs,
 ) -> Tuple[bool, str]:
     """Get ``accession`` for this project through the shared store.
@@ -217,7 +220,9 @@ def _store_download(
     The lock is held for the whole download (``metaquest.store.locks.dataset_lock``, which
     heartbeats while held), so a second project waits rather than writing the same folder.
     ``lock_wait`` of zero waits for as long as the other project keeps working; a positive
-    value gives up after that many seconds, naming the accession and the holder.
+    value gives up after that many seconds, naming the accession and the holder. ``stop`` is
+    the run's stop token: when it (or the process-wide ``STOP``) is set, a wait for the lock
+    ends with ``(False, "interrupted")``; it is passed on to ``download_accession``.
     """
     from metaquest.store.locks import LockWaitStopped, dataset_lock
 
@@ -231,13 +236,14 @@ def _store_download(
             if settled is not None:
                 return settled
 
-        with dataset_lock(store, accession, wait_seconds=lock_wait, should_stop=accession_mod.STOP.is_set):
+        should_stop = functools.partial(accession_mod.stop_requested, stop)
+        with dataset_lock(store, accession, wait_seconds=lock_wait, should_stop=should_stop):
             if not force:
                 settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
                 if settled is not None:
                     return settled
             return _store_fetch(
-                accession, project_path, store, link_mode, store_metadata, force=force, **download_kwargs
+                accession, project_path, store, link_mode, store_metadata, force=force, stop=stop, **download_kwargs
             )
     except LockWaitStopped:
         logger.info(f"Stopped waiting for the store lock on {accession}: the run was interrupted")

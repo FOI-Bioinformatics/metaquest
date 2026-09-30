@@ -189,10 +189,11 @@ class TestBaseCommandRun:
         def action(args):
             raise KeyboardInterrupt
 
+        args = argparse.Namespace()
         with patch("metaquest.cli.base.SecureSubprocess.terminate_children", return_value=0) as terminate:
             with caplog.at_level(logging.ERROR):
-                assert _FakeCommand(action).run(argparse.Namespace()) == 130
-        terminate.assert_called_once_with()
+                assert _FakeCommand(action).run(args) == 130
+        terminate.assert_called_once_with(stop=args._termination.stop)
         assert any(r.getMessage() == "Interrupted (Ctrl-C)" for r in caplog.records)
 
     def test_a_signal_names_itself_in_the_log(self, caplog):

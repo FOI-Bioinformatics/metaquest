@@ -9,6 +9,7 @@ import argparse
 import logging
 import json
 import os
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -935,6 +936,8 @@ class TestDownloadSraCommand:
         call_kwargs = dict(mock_command.call_args.kwargs)
         on_result = call_kwargs.pop("on_result")
         assert callable(on_result)
+        # Called through execute (not run), the command makes its own stop token for the run.
+        assert isinstance(call_kwargs.pop("stop"), threading.Event)
         assert call_kwargs == {
             "fastq_folder": str(tmp_path / "fastq"),
             "accessions_file": "accessions.txt",
