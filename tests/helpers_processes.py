@@ -26,7 +26,9 @@ FAKE_READS = 4
 # and waits while ``<barrier>/hold-<ACC>`` exists; pigz only records its pid. All three exit 143
 # on SIGTERM, as a real tool killed by that signal is reported by a shell; while
 # ``<barrier>/linger-<ACC>`` exists, a download tool first writes ``<ACC>.<pid>.terminating`` and
-# delays that exit until the file is removed, like a tool that takes a while to shut down.
+# delays that exit until the file is removed, like a tool that takes a while to shut down. While
+# ``<barrier>/ignore-term-<ACC>`` exists, a download tool ignores SIGTERM altogether (it writes
+# ``<ACC>.<pid>.ignored``), so only SIGKILL ends it.
 _FAKE_TOOL_BODY = r"""
 import gzip
 import os
@@ -44,6 +46,10 @@ CURRENT = []
 
 
 def on_term(signum, frame):
+    # A test of the SIGKILL that follows the grace period creates ignore-term-<ACC>.
+    if CURRENT and (BARRIER / f"ignore-term-{CURRENT[0]}").exists():
+        (BARRIER / f"{CURRENT[0]}.{os.getpid()}.ignored").write_text("")
+        return
     # A test that needs the run to still be stopping when it sends a second signal creates
     # linger-<ACC>: the tool then marks that it got the signal and exits once the file is gone.
     if CURRENT and (BARRIER / f"linger-{CURRENT[0]}").exists():
@@ -166,11 +172,19 @@ def cli_env(
     ``PYTHONPATH`` is the repository root, so the child imports this checkout's package. ``HOME``
     and ``XDG_CONFIG_HOME`` point under ``tmp_path``, so no configuration file of the developer's
     is read. ``METAQUEST_DATA`` is ``store`` when given and removed otherwise. ``PATH`` holds
-    ``fake_bin`` and the interpreter's own folder only. ``extra`` entries are added last.
+    ``fake_bin`` and a folder with nothing but ``python``/``python3`` links to this interpreter:
+    not the interpreter's own folder, which in a conda environment also holds the real SRA tools,
+    samtools and minimap2. ``extra`` entries are added last.
     """
     base = Path(tmp_path)
     home = base / "home"
     (home / ".config").mkdir(parents=True, exist_ok=True)
+    python_bin = base / "python-bin"
+    python_bin.mkdir(exist_ok=True)
+    for name in ("python", "python3"):
+        link = python_bin / name
+        if not link.exists():
+            link.symlink_to(sys.executable)
     env = dict(os.environ)
     for name in ("METAQUEST_DATA", "PYTHONSTARTUP", "PYTHONHOME", "VIRTUAL_ENV"):
         env.pop(name, None)
@@ -179,7 +193,7 @@ def cli_env(
             "PYTHONPATH": str(REPO_ROOT),
             "HOME": str(home),
             "XDG_CONFIG_HOME": str(home / ".config"),
-            "PATH": os.pathsep.join([str(fake_bin), str(Path(sys.executable).parent)]),
+            "PATH": os.pathsep.join([str(fake_bin), str(python_bin)]),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -330,3 +344,19 @@ def fake_pids(barrier_dir: Union[str, Path]) -> List[int]:
 def pid_of_started(path: Path) -> int:
     """The fake tool's pid encoded in a ``<ACC>.<pid>.started`` file name."""
     return int(path.name.split(".")[1])
+
+
+def is_fake_tool(pid: int, bin_dir: Union[str, Path]) -> bool:
+    """Whether ``pid`` is still one of the fake tools in ``bin_dir``, judged by its command line.
+
+    A recorded pid can be reused by an unrelated process once the fake has exited; checking the
+    command line (which names the script under ``bin_dir``) keeps cleanup from killing it.
+    """
+    ps = "/bin/ps" if Path("/bin/ps").exists() else "ps"
+    try:
+        result = subprocess.run(
+            [ps, "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return str(Path(bin_dir)) in result.stdout

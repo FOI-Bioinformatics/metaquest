@@ -12,7 +12,8 @@ fixed delay. The scenarios:
 3. ``blacklist`` and ``select_datasets`` run to completion while a download run is in progress,
    and the registry keeps all three commands' records.
 4. SIGTERM, then a second SIGTERM, during a download: exit 130, the finished accession recorded,
-   no tool left running, no lock file left, the unfinished accession not published.
+   no tool left running, no lock file left, the unfinished accession not published. 4b: a tool
+   that ignores SIGTERM is killed once the grace period ends, and the run still exits 130.
 5. A lock holder killed with SIGKILL: the next run takes the lock over at once, naming the pid.
 6. ``store_gc --yes`` while a download holds a dataset's lock: reported ``in_use``, kept.
 
@@ -28,17 +29,26 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
 
+from metaquest.data.registry import REGISTRY_FILENAME
+from metaquest.data.registry_batch import registry_update
+from metaquest.data.registry_blocks import ProjectBlock, StoreBlock, set_project_block, set_store_block
+from metaquest.store.catalog import catalog_write
+from metaquest.store.layout import init_store
 from metaquest.utils.lockfile import read_holder
 from tests.helpers_processes import (
+    FAKE_READS,
     alive,
     cli_env,
     fake_pids,
     install_fake_tools,
+    is_fake_tool,
     pid_of_started,
     run_cli,
     spawn_cli,
@@ -73,15 +83,34 @@ class Harness:
         self.children: List[subprocess.Popen] = []
 
     def project(self, name: str, accessions: List[str]) -> Path:
-        """A project folder holding ``accessions.txt`` and a registry, joined to the store if any."""
+        """A project folder holding ``accessions.txt`` and a registry, joined to the store if any.
+
+        Set up in this process through the library, as ``store_init`` (or ``status --init``)
+        would: only the commands a scenario is about run as separate processes.
+        """
         folder = self.tmp / name
         folder.mkdir()
         (folder / "accessions.txt").write_text("".join(f"{acc}\n" for acc in accessions))
-        if self.store is not None:
-            self.check(run_cli(["store_init", "--data-root", str(self.store)], folder, self.env))
+        registry_file = folder / REGISTRY_FILENAME
+        if self.store is None:
+            registry_update(registry_file, lambda registry: None)
         else:
-            self.check(run_cli(["status", "--init"], folder, self.env))
-        assert (folder / "metaquest_registry.json").is_file()
+            paths = init_store(self.store)
+            project = ProjectBlock(
+                id=str(uuid.uuid4()),
+                name=name,
+                path=str(folder.resolve()),
+                created=datetime.now(timezone.utc).isoformat(),
+            )
+
+            def _join(registry):
+                set_project_block(registry, project)
+                set_store_block(registry, StoreBlock(root=str(self.store.resolve())))
+
+            registry_update(registry_file, _join)
+            with catalog_write(paths) as catalog:
+                catalog.upsert_project(project.id, project.name, project.path, str(registry_file))
+        assert registry_file.is_file()
         return folder
 
     @staticmethod
@@ -133,7 +162,9 @@ class Harness:
         for proc in self.children:
             stop_process(proc)
         for pid in fake_pids(self.barrier):
-            if alive(pid):
+            # A pid is killed only while it still names one of this test's fakes: a fake that
+            # exited long ago may have had its pid reused by an unrelated process.
+            if alive(pid) and is_fake_tool(pid, self.bin):
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -214,6 +245,9 @@ def test_two_runs_download_one_accession_into_one_project_once(harness):
     assert len(started_files(harness.barrier, "SRR1")) == 1, second_log
     assert "Skipping SRR1, FASTQ files already exist" in second_log
     assert _fastq_names(project / "fastq" / "SRR1") == ["SRR1_1.fastq", "SRR1_2.fastq"]
+    for mate in (1, 2):
+        lines = (project / "fastq" / "SRR1" / f"SRR1_{mate}.fastq").read_text().splitlines()
+        assert len(lines) == 4 * FAKE_READS, second_log
     assert _download_state(project, "SRR1") == "downloaded"
     # One fetch, one attempt: the run that waited and found the files counts none.
     assert _datasets(project)["SRR1"]["download"]["attempts"] == 1, second_log
@@ -302,7 +336,7 @@ def test_two_sigterms_during_a_download_stop_the_run_cleanly(tmp_path, with_stor
         )
 
         # The held fake tool delays its exit on SIGTERM while linger-SRR2 exists, so the run is
-        # still stopping when the second signal arrives 0.2 s after the first.
+        # still stopping when the second signal arrives, at least 0.2 s after the first.
         (h.barrier / "linger-SRR2").write_text("")
         stopped_at = time.monotonic()
         os.kill(download.pid, signal.SIGTERM)
@@ -323,7 +357,9 @@ def test_two_sigterms_during_a_download_stop_the_run_cleanly(tmp_path, with_stor
         assert time.monotonic() - stopped_at < 10.0
 
         pids = fake_pids(h.barrier)
-        wait_for(lambda: not any(alive(pid) for pid in pids), timeout=5.0, what="every fake tool to exit")
+        wait_for(
+            lambda: not any(alive(pid) for pid in pids), timeout=5.0, what="every fake tool to exit", detail=lambda: log
+        )
         assert _download_state(project, "SRR1") == "downloaded", log
         assert _download_state(project, "SRR2") != "downloaded", log
         assert not (project / "fastq" / "SRR2").exists()
@@ -334,6 +370,25 @@ def test_two_sigterms_during_a_download_stop_the_run_cleanly(tmp_path, with_stor
         assert _lock_files(*lock_folders) == [], log
     finally:
         h.cleanup()
+
+
+def test_a_tool_that_ignores_sigterm_is_killed_after_the_grace_period(harness):
+    """Scenario 4b: SIGTERM to a run whose tool ignores it; the tool is SIGKILLed, the run exits 130."""
+    project = harness.project("project", ["SRR1"])
+    harness.hold("SRR1")
+    (harness.barrier / "ignore-term-SRR1").write_text("")
+    download = harness.download(project)
+    harness.wait_started("SRR1", proc=download)
+    tool_pid = pid_of_started(started_files(harness.barrier, "SRR1")[0])
+
+    os.kill(download.pid, signal.SIGTERM)
+    log = harness.finish(download, expected=130, timeout=20.0)
+
+    wait_for(lambda: not alive(tool_pid), timeout=5.0, what="the fake tool to be killed", detail=lambda: log)
+    assert any(harness.barrier.glob("SRR1.*.ignored")), log
+    assert _download_state(project, "SRR1") != "downloaded", log
+    assert not (project / "fastq" / "SRR1").exists()
+    assert _lock_files(project / "fastq" / ".locks") == [], log
 
 
 def test_a_killed_lock_holder_is_taken_over_at_once(store_harness):
@@ -349,8 +404,10 @@ def test_a_killed_lock_holder_is_taken_over_at_once(store_harness):
     tool_pid = pid_of_started(started_files(h.barrier, "SRR1")[0])
 
     os.killpg(first.pid, signal.SIGKILL)
-    first.wait(timeout=10.0)
-    wait_for(lambda: not alive(tool_pid), timeout=5.0, what="the killed run's fake tool to exit")
+    first_log = h.finish(first, expected=-signal.SIGKILL, timeout=10.0)
+    wait_for(
+        lambda: not alive(tool_pid), timeout=5.0, what="the killed run's fake tool to exit", detail=lambda: first_log
+    )
     assert lock.exists(), "the killed run's lock file should still be on disk"
 
     h.release("SRR1")
@@ -358,6 +415,8 @@ def test_a_killed_lock_holder_is_taken_over_at_once(store_harness):
     log = h.finish(second, timeout=10.0)
 
     assert f"Took over the lock on SRR1: its holder is no longer running (pid {first.pid} " in log
+    # At once: on the first look at the lock, before a waiter logs that it is waiting (after 1 s).
+    assert not _waiting_logged(second, "SRR1"), log
     assert len(started_files(h.barrier, "SRR1")) == 2
     link = second_project / "fastq" / "SRR1"
     assert link.is_symlink() and "SRR1_1.fastq" in _fastq_names(link)
