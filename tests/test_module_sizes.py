@@ -22,8 +22,9 @@ MIN_MAINTAINABILITY = 20.0
 # path relative to the repository -> (line ceiling, maintainability floor), measured 2026-09-25.
 # Follow-up after 0.5.0: split each of these three into a package, as metaquest/data/sra.py was
 # split in 0.5.0, and drop its entry here once every resulting module meets the ceilings.
+# read_extraction.py was re-measured on 2026-09-30, after its assembly code moved to data/assembly.py.
 KNOWN_EXCEPTIONS: Dict[str, Tuple[int, float]] = {
-    "metaquest/data/read_extraction.py": (1200, MIN_MAINTAINABILITY),
+    "metaquest/data/read_extraction.py": (964, 29.6),
     "metaquest/data/registry.py": (1001, MIN_MAINTAINABILITY),
     "metaquest/visualization/reporting.py": (813, MIN_MAINTAINABILITY),
 }
