@@ -786,6 +786,50 @@ class TestStoreAdoptCommand:
         # The recorded usage keeps this dataset out of gc's removal candidates.
         assert report["datasets"] == []
 
+    def test_signal_between_accessions_stops_before_the_next_one(self, tmp_path, monkeypatch):
+        """A stop noticed after SRR1 is adopted ends the run before SRR2 is ever staged."""
+        import importlib
+
+        # metaquest.store re-exports the ``adopt`` function under the same name, which
+        # shadows the submodule on ``metaquest.store.adopt``; import_module bypasses that.
+        adopt_mod = importlib.import_module("metaquest.store.adopt")
+
+        root = tmp_path / "store"
+        init_store(root)
+        project_dir = tmp_path / "project"
+        for acc in ("SRR1", "SRR2"):
+            entry = project_dir / "fastq" / acc
+            entry.mkdir(parents=True)
+            (entry / f"{acc}.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+
+        cmd = StoreAdoptCommand()
+        args = _adopt_args(data_root=str(root), registry=str(registry_path))
+
+        original = adopt_mod._adopt_one
+        calls = []
+
+        def spy(accession, *a, **kw):
+            result = original(accession, *a, **kw)
+            calls.append(accession)
+            if len(calls) == 1:
+                args._termination.stop.set()
+            return result
+
+        with patch.object(adopt_mod, "_adopt_one", side_effect=spy):
+            rc = cmd.run(args)
+
+        assert rc == 130
+        assert calls == ["SRR1"]
+
+        paths = store_paths(root)
+        assert sra_dir(paths, "SRR1").is_dir()
+        assert not sra_dir(paths, "SRR2").exists()
+        assert (project_dir / "fastq" / "SRR1").is_symlink()
+        assert (project_dir / "fastq" / "SRR2").is_dir()
+        assert not (project_dir / "fastq" / "SRR2").is_symlink()
+
 
 class TestStoreVerifyCommand:
     def test_command_properties(self):

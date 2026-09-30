@@ -157,11 +157,18 @@ class DownloadMetadataCommand(BaseCommand):
                 api_key=args.api_key,
                 batch_size=args.batch_size,
             )
+            term = getattr(args, "_termination", None)
             if not args.dry_run and downloaded:
                 # Every XML is parsed before the registry lock is taken; the records are then
-                # written in one transaction on the registry as it is at that point.
+                # written in one transaction on the registry as it is at that point. Checked
+                # before each accession: a signal stops the loop there, leaving every later
+                # accession's XML on disk (already written atomically by download_metadata)
+                # but not yet recorded; what was parsed so far is still recorded below.
                 parsed: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
                 for accession, xml_path in downloaded.items():
+                    if term is not None and term.stop.is_set():
+                        self.logger.warning("Stopping before %s: interrupted", accession)
+                        break
                     try:
                         fields = _metadata_fields(parse_metadata_xml(xml_path))
                     except (MetaQuestError, ValueError, OSError, ET.ParseError) as e:
@@ -172,6 +179,8 @@ class DownloadMetadataCommand(BaseCommand):
                     parsed[accession] = (xml_path, fields)
                 registry = _record_all_metadata(args.registry, parsed)
                 self._share_with_store(args, registry, downloaded)
+            if term is not None and term.stop.is_set():
+                raise KeyboardInterrupt("download_metadata stopped")
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error downloading metadata: {e}")
@@ -241,12 +250,18 @@ class ParseMetadataCommand(BaseCommand):
             # sample attribute) makes a pandas Series per row costly.
             columns = [column for column in _ROW_COLUMNS if column in df.columns]
             parsed: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
+            term = getattr(args, "_termination", None)
             for row in df[columns].to_dict("records"):
+                if term is not None and term.stop.is_set():
+                    self.logger.warning("Stopping metadata parsing: interrupted")
+                    break
                 record = self._row_record(metadata_folder, row)
                 if record is not None:
                     parsed[record[0]] = (record[1], record[2])
             # Parsed above without the registry lock; recorded here in one transaction.
             _record_all_metadata(args.registry, parsed)
+            if term is not None and term.stop.is_set():
+                raise KeyboardInterrupt("parse_metadata stopped")
             return 0
         except MetaQuestError as e:
             self.logger.error(f"Error parsing metadata: {e}")

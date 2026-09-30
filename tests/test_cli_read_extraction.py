@@ -1440,6 +1440,40 @@ class TestExtractTargetReadsCommand:
         assert after is not None
         assert after["contigs"] > 0
 
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_signal_between_samples_stops_before_the_next_one(self, mock_run):
+        """A stop noticed after SRR1 is recorded ends the run before SRR2 is ever mapped."""
+        mock_run.side_effect = _fake_tools({})
+        cmd = ExtractTargetReadsCommand()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _two_sample_tree(tmp)
+            args = _args(
+                tmp,
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+            )
+            seen = []
+            original = cmd._record_result
+
+            def spy(args_, accession, outcome, store=None):
+                original(args_, accession, outcome, store)
+                seen.append(accession)
+                if len(seen) == 1:
+                    args_._termination.stop.set()
+
+            with patch.object(cmd, "_record_result", side_effect=spy):
+                rc = cmd.run(args)
+
+            assert rc == 130
+            assert seen == ["SRR1"]
+            registry = load_registry(args.registry)
+            assert "SRR1" in registry.datasets
+            assert "SRR2" not in registry.datasets
+            assert not (root / "targeted" / "SRR2").exists()
+
 
 def test_assemble_loads_the_registry_at_most_once(tmp_path):
     """Samples whose assembly megahit skipped are checked against one registry load, not one per sample."""

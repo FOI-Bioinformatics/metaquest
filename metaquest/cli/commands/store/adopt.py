@@ -115,6 +115,7 @@ class StoreAdoptCommand(BaseCommand):
             _no_store_hint()
             return 1
 
+        term = getattr(args, "_termination", None)
         try:
             paths = store_paths(root)
             report = adopt(
@@ -125,6 +126,7 @@ class StoreAdoptCommand(BaseCommand):
                 compress=args.compress,
                 metadata_folders=[Path(args.metadata_folder), paths.metadata],
                 lock_wait=getattr(args, "lock_wait", 0.0),
+                should_stop=None if term is None else term.stop.is_set,
             )
         except DataAccessError as e:
             self.logger.error(str(e))
@@ -142,6 +144,7 @@ class StoreAdoptCommand(BaseCommand):
             ):
                 if accessions:
                     self.emit(f"{label}: {', '.join(sorted(accessions))}")
+            self._raise_if_stopped(term)
             return 0
 
         # Only an accession the project now links to needs its download record pointed at the
@@ -160,7 +163,18 @@ class StoreAdoptCommand(BaseCommand):
             self._record_copied(args, paths, copied)
 
         self._print_report(report)
+        self._raise_if_stopped(term)
         return 0
+
+    @staticmethod
+    def _raise_if_stopped(term: Any) -> None:
+        """Raise ``KeyboardInterrupt`` when a signal stopped ``adopt`` before every accession.
+
+        Called only after everything ``adopt`` actually finished has been recorded above, so
+        ``BaseCommand.run`` converting this to exit 130 never costs the run its bookkeeping.
+        """
+        if term is not None and term.stop.is_set():
+            raise KeyboardInterrupt("store_adopt stopped")
 
     @staticmethod
     def _record_linked(args: argparse.Namespace, paths: StorePaths, newly_linked: List[str]) -> None:

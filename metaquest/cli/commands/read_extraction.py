@@ -341,6 +341,28 @@ class ExtractTargetReadsCommand(BaseCommand):
         # while holding the registry lock would hold up every other registry writer.
         record_usage_safe(store, reg, accession, args.genome_id, "extracted", detail=detail)
 
+    def _record_result_and_check_stop(
+        self,
+        args: argparse.Namespace,
+        accession: str,
+        outcome: ExtractionResult,
+        store: Optional[StorePaths],
+    ) -> None:
+        """Checkpoint one sample, then stop the run if a signal arrived during or after it.
+
+        Checked here -- the boundary between one sample finishing and the next starting --
+        rather than inside ``extract_target_reads``'s loop, a module held at a frozen line
+        ceiling. Raising ``KeyboardInterrupt`` from an ``on_result`` callback is not swallowed
+        by its caller (``_notify_result`` only catches ``Exception``), so it reaches ``execute``
+        and then ``BaseCommand.run``, which logs, stops any running tool and returns 130. The
+        sample just checkpointed above is recorded either way; the next one in
+        ``extract_target_reads``'s ``samples`` list is never started.
+        """
+        self._record_result(args, accession, outcome, store)
+        term = getattr(args, "_termination", None)
+        if term is not None and term.stop.is_set():
+            raise KeyboardInterrupt(f"extract_target_reads stopped after {accession}")
+
     @staticmethod
     def _resolved_extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
         """The recorded extraction for one sample, with its ``genome_fasta`` and ``files``
@@ -540,7 +562,9 @@ class ExtractTargetReadsCommand(BaseCommand):
                 dry_run=args.dry_run,
                 force=args.force,
                 already_done=already_done,
-                on_result=lambda accession, outcome: self._record_result(args, accession, outcome, store),
+                on_result=lambda accession, outcome: self._record_result_and_check_stop(
+                    args, accession, outcome, store
+                ),
                 min_mapq=args.min_mapq,
                 temp_folder=args.temp_folder,
                 allow_truncated=args.allow_truncated,

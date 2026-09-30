@@ -163,10 +163,20 @@ class SRAProfileCommand(BaseCommand):
     def _profile_all(
         self, analyzer: SRADatasetAnalyzer, args: argparse.Namespace, accessions: List[str], output_dir: Path
     ) -> Tuple[List[ProfiledDataset], List[str]]:
-        """Profile every accession, write its JSON, and return (profiled datasets, failed accessions)."""
+        """Profile every accession, write its JSON, and return (profiled datasets, failed accessions).
+
+        Checked before each accession: a signal (``args._termination.stop``) stops the loop
+        there, leaving every later accession unprofiled and its JSON unwritten. ``_run`` records
+        the accessions profiled so far and then raises, so ``BaseCommand.run`` returns 130
+        without costing the run what it already has.
+        """
         profiled: List[ProfiledDataset] = []
         failed: List[str] = []
+        term = getattr(args, "_termination", None)
         for i, accession in enumerate(accessions, 1):
+            if term is not None and term.stop.is_set():
+                self.logger.warning("Stopping before %s: interrupted", accession)
+                break
             self.emit(f"[{i}/{len(accessions)}] Profiling {accession}...")
             dataset = self._profile_one(analyzer, args, accession)
             if dataset is None:
@@ -258,6 +268,9 @@ class SRAProfileCommand(BaseCommand):
             self._record(args, profiled, output_dir)
         self.emit(f"Profiles and summary saved to: {summary_path.parent}")
 
+        term = getattr(args, "_termination", None)
+        if term is not None and term.stop.is_set():
+            raise KeyboardInterrupt("sra_profile stopped")
         if failed:
             self.logger.warning("%d of %d accession(s) could not be profiled", len(failed), len(accessions))
             return 1

@@ -544,6 +544,7 @@ def adopt(
     compress: bool = True,
     metadata_folders: Sequence[Union[str, Path]] = (),
     lock_wait: float = 0.0,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> AdoptReport:
     """Fold every real accession folder in ``project_fastq`` into the shared store.
 
@@ -584,6 +585,14 @@ def adopt(
     stale staging copy); every accession that would otherwise be dedup'd, adopted or restarted is
     instead listed in ``planned``. Conflicts are still detected and reported in ``conflicts`` even
     during a dry run, since detecting one never writes anything.
+
+    ``should_stop`` is checked before each accession; once it returns True the loop stops there,
+    leaving every later accession (in sort order) untouched -- neither staged nor counted in any
+    report list. An accession already staged or adopted when the stop is noticed is left exactly
+    as it finished: staging itself only ever touches ``<store>/tmp/<ACC>_adopt`` and the project's
+    folder is replaced with a link (``--move``) only after the store's copy is verified, so a
+    caller that stops the run here never has to distinguish a finished accession from one that
+    was merely in flight.
     """
     report = AdoptReport()
     project_dir = Path(project_fastq)
@@ -592,6 +601,9 @@ def adopt(
     report.foreign.extend(_scan_foreign_incomplete(paths, real_dirs))
 
     for accession in sorted(real_dirs):
+        if should_stop is not None and should_stop():
+            logger.warning("Stopping before %s: interrupted", accession)
+            break
         entry = real_dirs[accession]
 
         if not fastq_files(entry):

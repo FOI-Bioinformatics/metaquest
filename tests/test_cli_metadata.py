@@ -75,3 +75,71 @@ def test_download_metadata_command_parses_each_downloaded_file_once(tmp_path):
     assert sorted(str(c.args[0]) for c in spy.call_args_list) == sorted(str(p) for p in paths)
     datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
     assert datasets["SRR1000002"]["metadata"]["run_total_spots"] == 1000026
+
+
+def test_download_metadata_signal_between_accessions_stops_before_the_next_one(tmp_path):
+    """A stop noticed after the first downloaded file is parsed ends the run before the
+    second downloaded file's XML is ever parsed, even though both were already fetched."""
+    folder = tmp_path / "metadata"
+    paths = write_metadata_folder(folder, count=2, per_file=14, pool=30)
+    downloaded = {path.name.split("_")[0]: path for path in paths}
+    args = argparse.Namespace(
+        email="a@b.c",
+        matches_folder=str(tmp_path / "matches"),
+        metadata_folder=str(folder),
+        threshold=0.0,
+        dry_run=False,
+        accessions_file=None,
+        api_key=None,
+        batch_size=200,
+        registry=str(tmp_path / "metaquest_registry.json"),
+        data_root=None,
+    )
+
+    real_parse = metadata_module.parse_metadata_xml
+    seen = []
+
+    def spy(xml_path):
+        result = real_parse(xml_path)
+        seen.append(xml_path)
+        if len(seen) == 1:
+            args._termination.stop.set()
+        return result
+
+    with (
+        patch("metaquest.cli.commands.metadata.download_metadata", return_value=downloaded),
+        patch("metaquest.cli.commands.metadata.parse_metadata_xml", side_effect=spy),
+    ):
+        rc = DownloadMetadataCommand().run(args)
+
+    assert rc == 130
+    assert len(seen) == 1
+    datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
+    assert len(datasets) == 1
+
+
+def test_parse_metadata_signal_between_rows_stops_before_the_next_one(tmp_path):
+    """A stop noticed after the first row is parsed ends the run before the second row is
+    ever added to what gets recorded."""
+    folder = tmp_path / "metadata"
+    write_metadata_folder(folder, count=2, per_file=14, pool=30)
+    cmd = ParseMetadataCommand()
+    args = _parse_args(tmp_path, folder)
+
+    real_row_record = cmd._row_record
+    seen = []
+
+    def spy(metadata_folder, row):
+        result = real_row_record(metadata_folder, row)
+        seen.append(row.get("Run_ID"))
+        if len(seen) == 1:
+            args._termination.stop.set()
+        return result
+
+    with patch.object(cmd, "_row_record", side_effect=spy):
+        rc = cmd.run(args)
+
+    assert rc == 130
+    assert len(seen) == 1
+    datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
+    assert len(datasets) == 1

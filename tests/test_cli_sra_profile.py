@@ -92,6 +92,33 @@ def test_accession_restricts_the_run(tmp_path):
     assert set(registry["datasets"]) == {"SRR1"}
 
 
+def test_signal_between_accessions_stops_before_the_next_one(tmp_path):
+    """A stop noticed after SRR1 is profiled ends the run before SRR2 is ever profiled."""
+    _paired_dataset(tmp_path, "SRR1")
+    _paired_dataset(tmp_path, "SRR2")
+    cmd = SRAProfileCommand()
+    args = _args(tmp_path, accession=["SRR1", "SRR2"])
+
+    original = cmd._profile_one
+    seen = []
+
+    def spy(analyzer, args_, accession):
+        result = original(analyzer, args_, accession)
+        seen.append(accession)
+        if len(seen) == 1:
+            args_._termination.stop.set()
+        return result
+
+    with patch.object(cmd, "_profile_one", side_effect=spy):
+        rc = cmd.run(args)
+
+    assert rc == 130
+    assert seen == ["SRR1"]
+    registry = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    assert set(registry["datasets"]) == {"SRR1"}
+    assert not (tmp_path / "profiles" / "SRR2_quality_profile.json").exists()
+
+
 def test_cli_execute_logs_traceback_for_unexpected_error(caplog, monkeypatch, tmp_path):
     """An unexpected error still returns 1, and its traceback is logged."""
     cmd = SRAProfileCommand()
