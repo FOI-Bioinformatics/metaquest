@@ -97,7 +97,7 @@ What each setting does:
 - `min_free_gb`: the free space a download of unknown size needs on each filesystem it writes to;
   0 turns the free-space check off. See "Downloading reads" in the README.
 - `assembly_memory`: the value passed to megahit `--memory`. `auto` gives 90% of the memory limit
-  detected for the job (cgroup v2, cgroup v1, else `SLURM_MEM_PER_NODE`) and leaves megahit's own
+  detected for the job (cgroup v2, cgroup v1, else `SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and leaves megahit's own
   default when no limit is found. A size such as `32G` or `32000M` (binary units) or a whole number of
   bytes is passed in bytes. A fraction such as `0.5` is passed as it is; megahit applies it to the
   whole node's memory, so under a scheduler give a size or `auto` instead.

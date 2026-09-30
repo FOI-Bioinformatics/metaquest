@@ -66,31 +66,35 @@ def _read_text(path: Path) -> Optional[str]:
         return None
 
 
-def _cgroup_v2_path(proc_root: Path) -> Optional[str]:
-    """This process's cgroup v2 path from ``/proc/self/cgroup`` (the ``0::<path>`` line), or None."""
+def _cgroup_path(proc_root: Path, controller: Optional[str]) -> Optional[str]:
+    """This process's cgroup path from ``/proc/self/cgroup``, or None.
+
+    With ``controller`` None the cgroup v2 line (``0::<path>``) is read; otherwise the cgroup v1
+    line whose controller list names it (``4:memory:<path>`` or ``7:cpu,memory:<path>``).
+    """
     text = _read_text(proc_root / "self" / "cgroup")
     if text is None:
         return None
     for line in text.splitlines():
-        if line.startswith("0::"):
-            return line[3:].strip() or "/"
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        if (controller is None and parts[0] == "0" and not parts[1]) or controller in parts[1].split(","):
+            return parts[2].strip() or "/"
     return None
 
 
-def _cgroup_v2_limit(proc_root: Path, sys_root: Path) -> Optional[int]:
-    """The smallest ``memory.max`` from this process's cgroup up to the root; None if all are ``max``.
+def _smallest_limit(base: Path, group: str, filename: str) -> Optional[int]:
+    """The smallest limit in ``filename`` from ``base``/``group`` up to ``base``; None if none is set.
 
     A parent group's limit also binds its children, so every level is read, not only the leaf.
+    A cgroup v2 ``max`` and a cgroup v1 value at or above 2**60 both mean no limit.
     """
-    group = _cgroup_v2_path(proc_root)
-    if group is None:
-        return None
-    base = sys_root / "fs" / "cgroup"
     current = base.joinpath(*[part for part in group.split("/") if part])
     limits = []
     while True:
-        value = _positive_int(_read_text(current / "memory.max"))
-        if value is not None:
+        value = _positive_int(_read_text(current / filename))
+        if value is not None and value < _CGROUP_V1_UNLIMITED:
             limits.append(value)
         if current == base or base not in current.parents:
             break
@@ -98,27 +102,27 @@ def _cgroup_v2_limit(proc_root: Path, sys_root: Path) -> Optional[int]:
     return min(limits) if limits else None
 
 
-def _cgroup_v1_limit(sys_root: Path) -> Optional[int]:
-    """``memory.limit_in_bytes`` of the cgroup v1 memory controller, or None when it means no limit."""
-    value = _positive_int(_read_text(sys_root / "fs" / "cgroup" / "memory" / "memory.limit_in_bytes"))
-    if value is None or value >= _CGROUP_V1_UNLIMITED:
-        return None
-    return value
-
-
 def memory_limit_bytes(proc_root: Union[str, Path] = "/proc", sys_root: Union[str, Path] = "/sys") -> Optional[int]:
     """Memory this process may use, in bytes, or None when no limit can be found.
 
-    Looked up in order: the cgroup v2 ``memory.max`` (smallest along the path to the root), the
-    cgroup v1 ``memory.limit_in_bytes``, and ``SLURM_MEM_PER_NODE`` (megabytes). On macOS, and on
-    a Linux host without a limit, the result is None.
+    Looked up in order: the cgroup v2 ``memory.max`` and then the cgroup v1
+    ``memory.limit_in_bytes``, each the smallest along the path from this process's group (as
+    ``/proc/self/cgroup`` names it; a SLURM job on a v1 host sits in ``slurm/uid_N/job_M``) to the
+    root; then ``SLURM_MEM_PER_NODE``, and ``SLURM_MEM_PER_CPU`` times the available CPUs (both in
+    megabytes). On macOS, and on a Linux host without a limit, the result is None.
     """
     proc_root, sys_root = Path(proc_root), Path(sys_root)
-    limit = _cgroup_v2_limit(proc_root, sys_root)
+    cgroup = sys_root / "fs" / "cgroup"
+    v2_group = _cgroup_path(proc_root, None)
+    limit = _smallest_limit(cgroup, v2_group, "memory.max") if v2_group is not None else None
     if limit is None:
-        limit = _cgroup_v1_limit(sys_root)
+        v1_group = _cgroup_path(proc_root, "memory") or "/"
+        limit = _smallest_limit(cgroup / "memory", v1_group, "memory.limit_in_bytes")
     if limit is None:
         megabytes = _positive_int(os.environ.get("SLURM_MEM_PER_NODE"))
+        if megabytes is None:
+            per_cpu = _positive_int(os.environ.get("SLURM_MEM_PER_CPU"))
+            megabytes = per_cpu * available_cpus() if per_cpu is not None else None
         limit = megabytes * 1024**2 if megabytes is not None else None
     return limit
 

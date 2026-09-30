@@ -18,7 +18,7 @@ GIB = 1024**3
 @pytest.fixture(autouse=True)
 def no_slurm(monkeypatch):
     """Start every test without SLURM job variables, whatever the host sets."""
-    for name in ("SLURM_CPUS_PER_TASK", "SLURM_MEM_PER_NODE"):
+    for name in ("SLURM_CPUS_PER_TASK", "SLURM_MEM_PER_NODE", "SLURM_MEM_PER_CPU"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -98,6 +98,34 @@ class TestMemoryLimit:
         sys_root = tmp_path / "sys"
         _write(sys_root / "fs" / "cgroup" / "memory" / "memory.limit_in_bytes", "9223372036854771712\n")
         assert resources.memory_limit_bytes(proc_root=tmp_path / "proc", sys_root=sys_root) is None
+
+    def test_cgroup_v1_slurm_job_group_below_an_unlimited_root(self, tmp_path):
+        # A SLURM job on a cgroup v1 host without a cgroup namespace: the root says unlimited,
+        # the job's own group holds the limit.
+        proc = tmp_path / "proc"
+        memory = tmp_path / "sys" / "fs" / "cgroup" / "memory"
+        _write(proc / "self" / "cgroup", "11:cpuset:/slurm/uid_1/job_7\n4:memory:/slurm/uid_1/job_7/step_0\n")
+        _write(memory / "memory.limit_in_bytes", "9223372036854771712\n")
+        _write(memory / "slurm" / "uid_1" / "job_7" / "memory.limit_in_bytes", f"{16 * GIB}\n")
+        _write(memory / "slurm" / "uid_1" / "job_7" / "step_0" / "memory.limit_in_bytes", "9223372036854771712\n")
+        assert resources.memory_limit_bytes(proc_root=proc, sys_root=tmp_path / "sys") == 16 * GIB
+
+    def test_cgroup_v1_combined_controller_entry(self, tmp_path):
+        proc = tmp_path / "proc"
+        memory = tmp_path / "sys" / "fs" / "cgroup" / "memory"
+        _write(proc / "self" / "cgroup", "0::/ignored\n6:cpuacct,memory:/job\n")
+        _write(memory / "job" / "memory.limit_in_bytes", f"{3 * GIB}\n")
+        assert resources.memory_limit_bytes(proc_root=proc, sys_root=tmp_path / "sys") == 3 * GIB
+
+    def test_slurm_mem_per_cpu_times_available_cpus(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_MEM_PER_CPU", "4000")
+        monkeypatch.setattr(resources, "available_cpus", lambda: 4)
+        assert resources.memory_limit_bytes(proc_root=tmp_path / "p", sys_root=tmp_path / "s") == 16000 * 1024**2
+
+    def test_slurm_mem_per_node_wins_over_per_cpu(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SLURM_MEM_PER_NODE", "1000")
+        monkeypatch.setenv("SLURM_MEM_PER_CPU", "4000")
+        assert resources.memory_limit_bytes(proc_root=tmp_path / "p", sys_root=tmp_path / "s") == 1000 * 1024**2
 
     def test_slurm_fallback_in_megabytes(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SLURM_MEM_PER_NODE", "16000")

@@ -104,6 +104,12 @@ write; a third stops at once.
 running tool, keeps every sample recorded so far and exits with 130. The sample that was cut off is done
 again by the next run.
 
+Each tool runs in a process group of its own, which MetaQuest signals as a whole on a timeout or a
+termination, so a process the tool started (megahit's `megahit_core`) stops with it. A `SIGKILL` sent
+only to MetaQuest's process group does not reach a running tool. SLURM ends every process of a job
+through its process tracking (`proctrack/cgroup` on most clusters); with `proctrack/pgid` a tool can
+outlive a job that was killed rather than signalled.
+
 To resume after the time limit, submit the same script again. If a log file does not end with
 `Download interrupted by the user`, the job was killed before the final registry write finished;
 give it more time with a larger value than 300.
@@ -235,7 +241,8 @@ exec metaquest --log-file logs/ex_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.l
 ```
 
 `--assembly-memory auto` (the default) passes megahit `--memory` as 90% of the memory limit of the job,
-read from the cgroup (v2, then v1) or from `SLURM_MEM_PER_NODE`. Without it megahit sizes itself from the
+read from the job's cgroup (v2, then v1) or from `SLURM_MEM_PER_NODE` (`--mem`) or
+`SLURM_MEM_PER_CPU` (`--mem-per-cpu`). Without it megahit sizes itself from the
 node's total memory and can be killed for exceeding the job's `--mem`. A fixed size (`--assembly-memory
 56G`) also works; a fraction (`0.9`) does not help under a scheduler, since megahit applies it to the
 whole node. megahit uses `--threads` threads on Linux unless `--assembly-threads` is given.

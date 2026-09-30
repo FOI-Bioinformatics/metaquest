@@ -312,7 +312,8 @@ def stop_process(proc: subprocess.Popen, grace: float = 3.0) -> None:
             proc.wait(timeout=grace)
         except subprocess.TimeoutExpired:
             pass
-    # Whatever is left in the group (a fake tool the child started) is killed outright.
+    # Whatever is left in the group is killed outright (a tool run_secure started is in a group of
+    # its own; the harness kills any such fake tool by pid).
     _signal_group(proc.pid, signal.SIGKILL)
     try:
         proc.wait(timeout=grace)

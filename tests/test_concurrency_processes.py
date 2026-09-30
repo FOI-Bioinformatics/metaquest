@@ -403,7 +403,10 @@ def test_a_killed_lock_holder_is_taken_over_at_once(store_harness):
     assert read_holder(lock).get("pid") == first.pid, stderr_of(first)
     tool_pid = pid_of_started(started_files(h.barrier, "SRR1")[0])
 
+    # run_secure starts each tool in a session of its own, so a kill of the run's process group
+    # does not reach the tool; a scheduler ending the job (SLURM tracks it by cgroup) kills both.
     os.killpg(first.pid, signal.SIGKILL)
+    os.killpg(tool_pid, signal.SIGKILL)
     first_log = h.finish(first, expected=-signal.SIGKILL, timeout=10.0)
     wait_for(
         lambda: not alive(tool_pid), timeout=5.0, what="the killed run's fake tool to exit", detail=lambda: first_log

@@ -526,7 +526,7 @@ is unstable on recent macOS releases (mapping with minimap2/samtools still uses 
 the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
 `--assembly-memory` sets megahit's `--memory`: `auto` (the default; also `METAQUEST_ASSEMBLY_MEMORY` or
 `assembly_memory` in `[runtime]`) gives 90% of the memory limit detected for the job (a cgroup limit, or
-`SLURM_MEM_PER_NODE`) and leaves megahit's own default when no limit is found, as on macOS; a size such
+`SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and leaves megahit's own default when no limit is found, as on macOS; a size such
 as `32G` or `32000M` is passed in bytes; a fraction such as `0.5` is passed as it is, and megahit applies
 it to the whole node's memory, so under a scheduler give a size instead. A
 megahit failure is reported with the tool's own error message (the last few lines of its stderr), not

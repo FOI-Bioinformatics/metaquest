@@ -363,8 +363,8 @@ The plugin system enables extensibility:
   `ConfigurationError` (exit 3) listing every tool that is missing or below its floor, with the
   `conda install` command for each. Commands call it before any work; `doctor` reads the same table
 - **resources** (`utils/resources.py`): `available_cpus` (affinity mask, then `SLURM_CPUS_PER_TASK`,
-  then the CPU count), `memory_limit_bytes` (cgroup v2, cgroup v1, then `SLURM_MEM_PER_NODE`; None on
-  macOS or without a limit) and `parse_memory` for `--assembly-memory`. The default download worker
+  then the CPU count), `memory_limit_bytes` (cgroup v2, cgroup v1, then `SLURM_MEM_PER_NODE` or
+  `SLURM_MEM_PER_CPU`; None on macOS or without a limit) and `parse_memory` for `--assembly-memory`. The default download worker
   count and the megahit `--memory` value come from here
 - **xml** (`utils/xml.py`): `SAFE_PARSER` and `parse_xml_file`, the lxml parser every lxml call site
   uses, with entity resolution, network access and external DTD loading refused. The standard
@@ -376,7 +376,9 @@ The plugin system enables extensibility:
   `SRAMetadataClient` clients. A request that still fails with one of those raises `NetworkError`
 - **security** (`utils/security.py`): `SecureSubprocess.run_secure`, the one way an external tool is
   started, with an argument allow-list, child tracking for termination, and the timeout taken from the
-  `subprocess_timeout` setting (0, the default, is no limit)
+  `subprocess_timeout` setting (0, the default, is no limit). On POSIX each tool starts in a session of
+  its own, and a timeout or a termination signals its whole process group, so a process the tool
+  started (megahit's `megahit_core`) stops with it
 
 ## Data Flow
 

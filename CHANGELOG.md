@@ -35,8 +35,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   fails with `insufficient-space: not enough free space on <mount>: ...`, and the others continue.
 - `--assembly-memory` on `extract_target_reads` (also `METAQUEST_ASSEMBLY_MEMORY`, `[runtime]
   assembly_memory`): `auto`, the default, passes megahit `--memory` as 90% of the memory limit detected
-  for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE`) and omits it when none is found; a size such as
-  `32G` is passed in bytes; a fraction is passed as it is and applies to the node's whole memory.
+  for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and omits it when none is
+  found; a size such as `32G` is passed in bytes; a fraction is passed as it is and applies to the node's whole memory.
 - The default number of parallel downloads is the CPUs available to the job (the affinity mask, which a
   SLURM cpuset limits, else `SLURM_CPUS_PER_TASK`, else the CPU count) divided by `--num-threads`, at
   most 4; `METAQUEST_MAX_WORKERS_CAP` (or `[runtime] max_workers_cap`) changes the cap, which the
@@ -135,6 +135,12 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `NetworkError` before its per-batch handling.
 - megahit under cgroups (a SLURM job, a container) sized its memory from the node's total, not from the
   job's limit, and could be killed for exceeding it; `--assembly-memory auto` now passes the job's limit.
+  On a cgroup v1 host the limit is read from the job's own group (`/proc/self/cgroup`), not only the
+  controller root, and a `--mem-per-cpu` job is sized from `SLURM_MEM_PER_CPU` times its CPUs.
+- `--timeout` and a termination signal did not stop a tool that runs its work in a child process holding
+  the output pipes (the conda `megahit` wrapper runs `megahit_core`): the wrapper was killed and the
+  child ran on until it finished. Each tool now runs in a process group of its own, and the whole group
+  is signalled (Linux and macOS).
 - A disk that filled up during the first download pass did not stop it: every remaining accession was
   still started and failed in turn, and the retry pass tried again. The first result in which a tool
   reports that it ran out of space now cancels the downloads not yet started (recorded as `disk-full:

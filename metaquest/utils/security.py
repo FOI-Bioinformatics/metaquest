@@ -7,6 +7,7 @@ This module provides secure subprocess handling and input validation.
 import logging
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -63,6 +64,40 @@ SRA_POSITIONAL_TOOLS = frozenset({"fasterq-dump", "prefetch"})
 # Return code run_secure reports for a child it did not start because the run is stopping: the
 # code of a child killed with SIGKILL, which is what a child started a moment later would get.
 _NOT_STARTED_RETURNCODE = -9
+# On POSIX each tool runs in its own session, so its process group holds the tool and every
+# process it starts (the conda megahit wrapper runs megahit_core as a child that inherits the
+# output pipes). A timeout or a termination signals the whole group; otherwise the wrapper
+# would die while its child kept the pipes open and ran on.
+_PROCESS_GROUPS = os.name == "posix"
+
+
+def _signal_tool(proc: subprocess.Popen, kill: bool) -> None:
+    """Send SIGTERM (SIGKILL with ``kill``) to ``proc``'s process group, or to ``proc`` alone.
+
+    The direct child is signalled instead when the group is gone or not ours to signal, when the
+    platform has no process groups (Windows), or when ``proc`` is a test double without a pid.
+    """
+    if _PROCESS_GROUPS and isinstance(proc.pid, int):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL if kill else signal.SIGTERM)
+            return
+        except (ProcessLookupError, PermissionError):
+            pass
+    if kill:
+        proc.kill()
+    else:
+        proc.terminate()
+
+
+def _group_running(proc: subprocess.Popen) -> bool:
+    """Whether any process of ``proc``'s group is still running (False without process groups)."""
+    if not (_PROCESS_GROUPS and isinstance(proc.pid, int)):
+        return False
+    try:
+        os.killpg(proc.pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
 
 
 class SecureSubprocess:
@@ -118,8 +153,9 @@ class SecureSubprocess:
         is killed at once until ``clear_stopping`` is called. With a token only the children
         ``run_secure`` started under that token are stopped; the token is set, so a child that
         run starts afterwards is killed at once (or not started), and other runs are unaffected.
-        Each child is sent SIGTERM; one that has not exited ``grace`` seconds later is sent
-        SIGKILL. Returns the number of children stopped.
+        Each child's process group (the child alone on Windows) is sent SIGTERM; a group with a
+        process still running ``grace`` seconds later is sent SIGKILL. Returns the number of
+        children stopped.
         """
         # The third-signal handler calls this on the main thread, which may be inside run_secure
         # holding the (non-reentrant) lock: a bounded wait, then an unlocked snapshot, so the
@@ -136,15 +172,19 @@ class SecureSubprocess:
                 cls._children_lock.release()
         children = [child for child, owner in owners if stop is None or owner is stop]
         for child in children:
-            if child.poll() is None:
-                child.terminate()
+            _signal_tool(child, kill=False)
         deadline = time.monotonic() + grace
         for child in children:
-            remaining = max(0.0, deadline - time.monotonic())
             try:
-                child.wait(timeout=remaining)
+                child.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
-                child.kill()
+                _signal_tool(child, kill=True)
+                continue
+            # The tool itself ended; a process it started may still hold the group.
+            while _group_running(child) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if _group_running(child):
+                _signal_tool(child, kill=True)
         return len(children)
 
     @classmethod
@@ -340,8 +380,9 @@ class SecureSubprocess:
             SecurityError: If any validation fails, or the command times out
             subprocess.CalledProcessError: If the command exits non-zero and ``check`` is True
 
-        The child is started with ``Popen`` and recorded, under ``stop``, until it finishes, so
-        ``terminate_children`` can stop it from another thread. When ``stop`` (the calling run's
+        The child is started with ``Popen`` in a session of its own (POSIX) and recorded, under
+        ``stop``, until it finishes, so ``terminate_children`` can stop it and any process it
+        started from another thread; a timeout kills the same process group. When ``stop`` (the calling run's
         token) is already set, or ``terminate_children`` ran without a token, no child is started:
         the call fails as a killed child would, with return code -9 (``CalledProcessError``
         when ``check`` is True).
@@ -383,6 +424,7 @@ class SecureSubprocess:
                 "cwd": cwd,
                 "env": safe_env,
                 **kwargs,
+                "start_new_session": _PROCESS_GROUPS,
             }
             proc = subprocess.Popen(cmd, **popen_kwargs)
             with cls._children_lock:
@@ -390,18 +432,18 @@ class SecureSubprocess:
                     # terminate_children ran for this run (or for every run) after the check
                     # above: stop this child too; communicate() below then reaps it and the
                     # non-zero exit is reported as usual.
-                    proc.kill()
+                    _signal_tool(proc, kill=True)
                 else:
                     cls._children[proc] = stop
             try:
                 out, err = proc.communicate(timeout=communicate_timeout)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal_tool(proc, kill=True)
                 proc.communicate()
                 raise
             except BaseException:
                 # As subprocess.run does: an interrupt in the waiting thread stops the child.
-                proc.kill()
+                _signal_tool(proc, kill=True)
                 proc.wait()
                 raise
             finally:
