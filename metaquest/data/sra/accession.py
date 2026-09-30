@@ -10,7 +10,7 @@ import zlib
 from pathlib import Path
 from typing import AbstractSet, Callable, List, Optional, Tuple, Union
 
-from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
+from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS, VERSION_PROBE_TIMEOUT
 from metaquest.core.settings import settings_or
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import cleanup as cleanup_mod
@@ -601,7 +601,7 @@ def fasterq_dump_version() -> str:
     line is used.
     """
     try:
-        result = SecureSubprocess.run_secure("fasterq-dump", ["--version"])
+        result = SecureSubprocess.run_secure("fasterq-dump", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
         lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
         return lines[-1] if lines else ""
     except fastq_mod._TOOL_ERRORS as e:

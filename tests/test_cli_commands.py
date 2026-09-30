@@ -864,6 +864,18 @@ class TestDownloadSraCommand:
         assert args.verify_downloads is True
         assert args.redownload_truncated is False
 
+    def test_configure_parser_timeout_flag_defaults_to_none_and_parses(self):
+        """--timeout defaults to None (run_secure then falls back to the active setting)."""
+        command = DownloadSraCommand()
+        parser = argparse.ArgumentParser()
+        command.configure_parser(parser)
+
+        args = parser.parse_args(["--accessions-file", "a.txt"])
+        assert args.timeout is None
+
+        args = parser.parse_args(["--accessions-file", "a.txt", "--timeout", "120"])
+        assert args.timeout == 120.0
+
     def test_configure_parser_verify_downloads_flags(self):
         """--no-verify-downloads flips the default; --redownload-truncated is off by default."""
         command = DownloadSraCommand()

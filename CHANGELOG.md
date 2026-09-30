@@ -30,6 +30,13 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   connect, timed out or got HTTP 429 or 5xx; a wait for the registry or catalogue lock that reached its
   limit; a `download_sra` run whose every failure was a network one), 130 for an interrupt, 1 for any
   other failure. See "Exit codes" in the README.
+- External tool timeout is now configurable and, by default, unlimited: `run_secure` used to give every
+  external tool (`fasterq-dump`, `prefetch`, `minimap2`, `samtools`, `megahit`) a fixed one-hour limit
+  (`MAX_SUBPROCESS_TIMEOUT`) even when a caller passed no timeout at all, and `timeout=0` was silently
+  treated as "use the one-hour limit" instead of "no limit". `--timeout SECONDS` on `download_sra` and
+  `extract_target_reads` (also `METAQUEST_TIMEOUT` or `[runtime] timeout` in `config.toml`) now sets it;
+  0, the default, means no limit. A `--version` probe always uses a fixed 30-second timeout regardless of
+  this setting, so a hung tool cannot stall version detection.
 
 ### Upgrade notes
 

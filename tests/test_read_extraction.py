@@ -26,6 +26,7 @@ from metaquest.data.read_extraction import (
     build_index,
     extract_target_reads,
     fasta_length,
+    megahit_version,
     resolve_assembly_threads,
     resolve_index_path,
     reference_coverage,
@@ -1483,3 +1484,20 @@ class TestOldMinimap2WithoutSamHitOnly:
                 "SRR1", "sr", 4, tmp_path / "out.sam", tmp_path / "g.sr.mmi", tmp_path / "g.fna", [tmp_path / "r.fq"]
             )
         assert len(state["calls"]) == 2
+
+
+class TestMegahitVersion:
+    """The version probe always passes VERSION_PROBE_TIMEOUT, not the run's subprocess_timeout."""
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_passes_the_fixed_probe_timeout(self, mock_run):
+        from metaquest.core.constants import VERSION_PROBE_TIMEOUT
+
+        mock_run.return_value = MagicMock(stdout="MEGAHIT v1.2.9\n")
+        assert megahit_version() == "MEGAHIT v1.2.9"
+        mock_run.assert_called_once_with("megahit", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_returns_empty_when_the_tool_cannot_be_run(self, mock_run):
+        mock_run.side_effect = SecurityError("not installed")
+        assert megahit_version() == ""

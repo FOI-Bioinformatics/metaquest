@@ -19,13 +19,26 @@ from metaquest.core.exceptions import SecurityError
 from metaquest.core.validation import validate_accession
 from metaquest.core.constants import (
     ALLOWED_BIOINFORMATICS_TOOLS,
-    MAX_SUBPROCESS_TIMEOUT,
     DANGEROUS_ENV_VARS,
     SRA_ACCESSION_PATTERN,
     UNSAFE_SHELL_CHARS,
 )
+from metaquest.core import settings as settings_module
 
 logger = logging.getLogger(__name__)
+
+
+class _TimeoutNotGiven:
+    """Sentinel for ``run_secure``'s ``timeout``: not given means use the active setting."""
+
+    def __repr__(self) -> str:
+        return "<not given>"
+
+
+# A run_secure call that does not pass timeout gets the active run's subprocess_timeout
+# setting (--timeout, METAQUEST_TIMEOUT, config [runtime] timeout), resolved at call time
+# rather than at import time, so a test or a later command sees its own settings.
+_TIMEOUT_NOT_GIVEN = _TimeoutNotGiven()
 
 # Per-tool flags that never take a value; any other allowlisted flag for that
 # tool consumes the following token as its value.
@@ -311,7 +324,7 @@ class SecureSubprocess:
         args: List[str],
         cwd: Optional[Union[str, Path]] = None,
         env: Optional[Dict[str, str]] = None,
-        timeout: Optional[int] = None,
+        timeout: Union[float, int, None, _TimeoutNotGiven] = _TIMEOUT_NOT_GIVEN,
         stop: Optional[threading.Event] = None,
         **kwargs,
     ) -> subprocess.CompletedProcess:
@@ -323,7 +336,10 @@ class SecureSubprocess:
             args: List of arguments
             cwd: Working directory
             env: Environment variables
-            timeout: Timeout in seconds
+            timeout: Seconds before the command is killed. Left unset, the active run's
+                ``subprocess_timeout`` setting is used (``--timeout``, ``METAQUEST_TIMEOUT``, or
+                config ``[runtime] timeout``; see ``metaquest.core.settings``). 0 or ``None``,
+                given explicitly or resolved from the setting, means no limit.
             **kwargs: Additional subprocess.Popen arguments; ``check`` (default True)
                 controls whether a non-zero exit raises, and ``capture_output`` is
                 accepted but ignored because output is always captured
@@ -342,6 +358,13 @@ class SecureSubprocess:
         when ``check`` is True).
         """
         cmd = cls._build_validated_command(executable, args)
+        resolved_timeout: Optional[float]
+        if isinstance(timeout, _TimeoutNotGiven):
+            resolved_timeout = settings_module.active().subprocess_timeout
+        else:
+            resolved_timeout = timeout
+        # 0 or None (given or resolved from the setting) means communicate() waits without a limit.
+        communicate_timeout = resolved_timeout if resolved_timeout else None
 
         # Validate working directory if provided
         if cwd:
@@ -382,7 +405,7 @@ class SecureSubprocess:
                 else:
                     cls._children[proc] = stop
             try:
-                out, err = proc.communicate(timeout=timeout or MAX_SUBPROCESS_TIMEOUT)
+                out, err = proc.communicate(timeout=communicate_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
@@ -401,7 +424,9 @@ class SecureSubprocess:
             return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
         except subprocess.TimeoutExpired as e:
-            raise SecurityError(f"Command timed out: {e}")
+            raise SecurityError(
+                f"Command timed out after {resolved_timeout:g} s " "(set --timeout or METAQUEST_TIMEOUT; 0 disables)"
+            ) from e
         except subprocess.CalledProcessError as e:
             # Re-raise as the original exception type for compatibility
             raise e

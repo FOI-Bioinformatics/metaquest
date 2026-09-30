@@ -54,7 +54,14 @@ LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 DEFAULT_LOG_LEVEL = "INFO"
 
 # Security Constraints
-MAX_SUBPROCESS_TIMEOUT = 3600  # 1 hour
+# No limit by default; metaquest.core.settings' subprocess_timeout setting (--timeout,
+# METAQUEST_TIMEOUT, config [runtime] timeout) resolves the value metaquest.utils.security's
+# run_secure actually uses. MAX_SUBPROCESS_TIMEOUT is the old name, kept as an alias.
+DEFAULT_SUBPROCESS_TIMEOUT = 0
+MAX_SUBPROCESS_TIMEOUT = DEFAULT_SUBPROCESS_TIMEOUT
+# Seconds allowed for a `--version` probe of an external tool: always bounded, regardless of
+# the run's own subprocess_timeout setting, so a hung tool cannot stall version detection.
+VERSION_PROBE_TIMEOUT = 30
 DANGEROUS_ENV_VARS = ["LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"]
 
 # Bioinformatics Tool Configuration

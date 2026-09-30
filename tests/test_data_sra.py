@@ -1402,6 +1402,10 @@ class TestClassifyDownloadError:
         "text,expected_class",
         [
             ("Connection timed out", "network"),
+            (
+                "Command timed out after 1 s (set --timeout or METAQUEST_TIMEOUT; 0 disables)",
+                "network",
+            ),
             ("curl: (7) Failed to connect to host", "network"),
             ("Could not resolve host ftp.ncbi.nlm.nih.gov", "network"),
             ("SSL handshake failed", "network"),
@@ -2599,12 +2603,14 @@ class TestFasterqDumpVersion:
     """The tool version recorded in a store dataset's sidecar."""
 
     def test_returns_the_last_non_empty_line(self):
+        from metaquest.core.constants import VERSION_PROBE_TIMEOUT
+
         with patch(
             "metaquest.utils.security.SecureSubprocess.run_secure",
             return_value=Mock(stdout="\nfasterq-dump : 3.0.10\n"),
         ) as mock_run:
             assert fasterq_dump_version() == "fasterq-dump : 3.0.10"
-        mock_run.assert_called_once_with("fasterq-dump", ["--version"])
+        mock_run.assert_called_once_with("fasterq-dump", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
 
     def test_returns_empty_when_the_tool_cannot_be_run(self):
         with patch("metaquest.utils.security.SecureSubprocess.run_secure", side_effect=SecurityError("not installed")):

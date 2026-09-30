@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from metaquest.core.constants import VERSION_PROBE_TIMEOUT
 from metaquest.core.exceptions import ProcessingError, SecurityError
 from metaquest.utils.security import SecureSubprocess
 
@@ -253,7 +254,7 @@ def fasta_length(path: Union[str, Path]) -> int:
 def megahit_version() -> str:
     """The installed megahit's version string, or an empty string if it cannot be run."""
     try:
-        result = SecureSubprocess.run_secure("megahit", ["--version"])
+        result = SecureSubprocess.run_secure("megahit", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
         return (result.stdout or "").strip()
     except (SecurityError, subprocess.SubprocessError, OSError):
         return ""

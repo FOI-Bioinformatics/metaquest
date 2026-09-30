@@ -151,6 +151,19 @@ class TestExtractTargetReadsCommand:
         assert cmd.name == "extract_target_reads"
         assert "target" in cmd.help.lower()
 
+    def test_configure_parser_timeout_flag_defaults_to_none_and_parses(self):
+        """--timeout defaults to None (run_secure then falls back to the active setting)."""
+        cmd = ExtractTargetReadsCommand()
+        parser = argparse.ArgumentParser()
+        cmd.configure_parser(parser)
+        required = ["--parsed-containment", "p.txt", "--genome-id", "GCF_1", "--genome-fasta", "g.fna"]
+
+        args = parser.parse_args(required)
+        assert args.timeout is None
+
+        args = parser.parse_args(required + ["--timeout", "120"])
+        assert args.timeout == 120.0
+
     @patch("metaquest.utils.security.shutil.which", return_value=None)
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_missing_minimap2_or_samtools_exits_1_before_any_work(self, mock_run, _which):

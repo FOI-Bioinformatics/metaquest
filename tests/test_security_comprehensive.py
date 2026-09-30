@@ -7,6 +7,9 @@ adversarial testing for injection attacks and path traversal.
 Run: pytest tests/test_security_comprehensive.py -v
 """
 
+import os
+import sys
+
 import pytest
 import shutil
 import subprocess
@@ -918,6 +921,88 @@ class TestChildProcessTracking:
                 SecureSubprocess.run_secure("datasets", ["--version"], timeout=1)
         proc.kill.assert_called_once()
         assert not SecureSubprocess._children
+
+
+def _write_sleeping_tool(bin_dir: Path, name: str, seconds: float) -> None:
+    """A fake external tool that only sleeps, as a single process (shebang, not a shell wrapper).
+
+    A wrapping ``#!/bin/sh`` script leaves the real sleep as a grandchild that inherits the
+    stdout/stderr pipes; killing the shell then does not close them, so ``communicate()`` keeps
+    reading until the grandchild itself exits. A direct Python-interpreter shebang is the same
+    single process ``run_secure`` kills, so the timeout takes effect immediately.
+    """
+    script = bin_dir / name
+    script.write_text(f"#!{sys.executable}\nimport time\ntime.sleep({seconds})\n")
+    script.chmod(0o755)
+
+
+class TestConfigurableTimeout:
+    """run_secure's timeout: the active subprocess_timeout setting by default; 0/None disables it."""
+
+    def test_explicit_timeout_kills_a_real_child_promptly(self, tmp_path, monkeypatch):
+        """A real sleeping tool is killed at the timeout, not left running to completion."""
+        _write_sleeping_tool(tmp_path, "fasterq-dump", seconds=5.0)
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+        started = time.monotonic()
+        with pytest.raises(
+            SecurityError,
+            match=r"Command timed out after 1 s \(set --timeout or METAQUEST_TIMEOUT; 0 disables\)",
+        ):
+            SecureSubprocess.run_secure("fasterq-dump", ["--version"], timeout=1)
+        # Killed around the 1 s timeout, nowhere near the tool's 5 s sleep.
+        assert time.monotonic() - started < 4.0
+
+    def test_explicit_timeout_message_is_classified_as_a_network_failure(self, tmp_path, monkeypatch):
+        """The timeout message still contains 'timed out', so the download retry logic sees it."""
+        from metaquest.data.sra import classify_download_error
+
+        _write_sleeping_tool(tmp_path, "fasterq-dump", seconds=5.0)
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+        with pytest.raises(SecurityError) as excinfo:
+            SecureSubprocess.run_secure("fasterq-dump", ["--version"], timeout=1)
+        assert classify_download_error(str(excinfo.value)) == "network"
+
+    def test_zero_timeout_means_no_limit(self):
+        """timeout=0 disables the limit: communicate() is called without one."""
+        proc = _fake_proc(stdout="ok")
+        with patch("subprocess.Popen", return_value=proc):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                SecureSubprocess.run_secure("echo", ["hi"], timeout=0)
+        proc.communicate.assert_called_once_with(timeout=None)
+
+    def test_none_timeout_means_no_limit(self):
+        """timeout=None, given explicitly, also disables the limit."""
+        proc = _fake_proc(stdout="ok")
+        with patch("subprocess.Popen", return_value=proc):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                SecureSubprocess.run_secure("echo", ["hi"], timeout=None)
+        proc.communicate.assert_called_once_with(timeout=None)
+
+    def test_unset_timeout_defaults_to_no_limit(self):
+        """No --timeout, no METAQUEST_TIMEOUT, no config: the default setting is no limit."""
+        proc = _fake_proc(stdout="ok")
+        with patch("subprocess.Popen", return_value=proc):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                SecureSubprocess.run_secure("echo", ["hi"])
+        proc.communicate.assert_called_once_with(timeout=None)
+
+    def test_unset_timeout_uses_the_active_setting(self, monkeypatch):
+        """No timeout argument: the value comes from the active run's settings (here, the env var)."""
+        monkeypatch.setenv("METAQUEST_TIMEOUT", "42")
+        proc = _fake_proc(stdout="ok")
+        with patch("subprocess.Popen", return_value=proc):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                SecureSubprocess.run_secure("echo", ["hi"])
+        proc.communicate.assert_called_once_with(timeout=42.0)
+
+    def test_explicit_timeout_overrides_the_active_setting(self, monkeypatch):
+        """A caller-given timeout (the version probes, for example) wins over the setting."""
+        monkeypatch.setenv("METAQUEST_TIMEOUT", "42")
+        proc = _fake_proc(stdout="ok")
+        with patch("subprocess.Popen", return_value=proc):
+            with patch.object(SecureSubprocess, "validate_executable", return_value="echo"):
+                SecureSubprocess.run_secure("echo", ["hi"], timeout=30)
+        proc.communicate.assert_called_once_with(timeout=30)
 
 
 # ============================================================================

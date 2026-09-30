@@ -590,6 +590,14 @@ store (see "Shared data store" above) defaults to `<store>/tmp/<ACCESSION>_fqtmp
 `extract_target_reads` (see "Targeted Read Extraction Before Assembly" above) accepts the same flag for
 megahit's scratch files.
 
+`--timeout SECONDS` bounds how long `prefetch` or `fasterq-dump` (and, for `extract_target_reads`,
+minimap2, samtools or megahit) is allowed to run before it is stopped; the default, 0, means no limit
+(also settable with the `METAQUEST_TIMEOUT` environment variable or `timeout` in `config.toml`'s
+`[runtime]` table). A stopped tool is reported the same way as a network failure, so `download_sra`
+retries it and, if every accession that failed did so for that reason, exits with status 4 (see "Exit
+codes" below). A `--version` probe used to record a tool's version always uses a fixed 30-second
+timeout, regardless of this setting.
+
 On a real run, `download_sra` also honours the project registry: accessions excluded with
 `blacklist` are skipped automatically, without needing `--blacklist blacklist.txt` on every call
 (though that flag still works). `--dry-run` neither reads nor writes the registry, so it does not

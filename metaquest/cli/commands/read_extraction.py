@@ -160,6 +160,16 @@ class ExtractTargetReadsCommand(BaseCommand):
         )
         parser.add_argument("--registry", default=None, help="Registry file (default: found upwards from here)")
         parser.add_argument("--data-root", default=None, help="Shared data store root (overrides discovery)")
+        parser.add_argument(
+            "--timeout",
+            dest="timeout",
+            type=float,
+            default=None,
+            help=(
+                "Seconds before minimap2, samtools or megahit is stopped; 0 (the default) means no "
+                "limit (default: METAQUEST_TIMEOUT, config [runtime] timeout, or 0)"
+            ),
+        )
 
     @staticmethod
     def _resolve_store(args: argparse.Namespace, registry: Registry) -> Optional[StorePaths]:

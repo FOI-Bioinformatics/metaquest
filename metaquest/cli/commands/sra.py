@@ -238,6 +238,16 @@ class DownloadSraCommand(BaseCommand):
                 "wait for as long as the other run keeps working)"
             ),
         )
+        parser.add_argument(
+            "--timeout",
+            dest="timeout",
+            type=float,
+            default=None,
+            help=(
+                "Seconds before prefetch or fasterq-dump is stopped; 0 (the default) means no limit "
+                "(default: METAQUEST_TIMEOUT, config [runtime] timeout, or 0)"
+            ),
+        )
 
     def _log_dry_run_summary(self, args: argparse.Namespace, stats: dict) -> None:
         """Log the summary for a dry run."""
