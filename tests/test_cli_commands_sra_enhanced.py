@@ -185,6 +185,36 @@ class TestSRAInfoCommand:
 
         assert result == 4
 
+    def test_execute_network_error_exits_4_end_to_end(self, monkeypatch):
+        """The same exit-4 path, exercised end to end against a real (faked) HTTP layer.
+
+        Unlike ``test_execute_network_error_exits_4`` above, ``SRAMetadataClient`` and
+        ``create_download_preview`` are not mocked: ``tests/fake_http.py`` fakes the connection
+        pool a persistently-503 NCBI would present, so the real retrying session
+        (``metaquest.utils.http.retrying_session``), ``SRAMetadataClient._make_request`` and
+        ``SRAMetadataClient.get_sra_metadata``'s batch loop are all exercised, confirming a
+        ``NetworkError`` actually propagates out of ``get_sra_metadata`` (it is a
+        ``DataAccessError`` subclass, which that loop otherwise catches and continues past) all
+        the way to ``self.fail``.
+        """
+        from tests.fake_http import serve
+
+        serve(monkeypatch, lambda path: (503, b"unavailable"))
+
+        command = SRAInfoCommand()
+        args = argparse.Namespace(
+            accessions_file="test.txt",
+            email="test@example.com",
+            api_key=None,
+            output_report="report.csv",
+            bandwidth_mbps=100.0,
+        )
+
+        with patch("builtins.open", mock_open(read_data="SRR123456\n")):
+            result = command.execute(args)
+
+        assert result == 4
+
 
 class TestSRAValidateCommand:
     """Test SRAValidateCommand."""

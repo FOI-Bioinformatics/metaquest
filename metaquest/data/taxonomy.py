@@ -134,8 +134,10 @@ class NCBITaxonomyClient:
         response = self._make_request(search_url, params)
 
         # Parse XML response. xml.etree (expat), not metaquest.utils.xml's lxml parser: expat
-        # has refused entity expansion by default since Python 3.7.1, so billion-laughs and XXE
-        # do not apply here the way they apply to lxml's permissive defaults.
+        # does not resolve an external entity or fetch a DTD over the network, so XXE does not
+        # apply here; it is not hardened against entity-expansion ("billion laughs") the way
+        # SAFE_PARSER is, but this parses NCBI's own small API response, not an arbitrary stored
+        # file, so that residual risk is accepted for this call site.
         root = ET.fromstring(response)
         tax_ids = [id_elem.text for id_elem in root.findall(".//Id") if id_elem.text is not None]
 

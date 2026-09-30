@@ -7,10 +7,12 @@ attacks: XXE (an external entity that reads a local file or calls out over the n
 billion laughs (an internal entity that expands into gigabytes of text from a few bytes of
 markup). ``SAFE_PARSER`` turns every one of those features off. The stdlib ``xml.etree`` call
 sites elsewhere in MetaQuest (``data/metadata.py``, ``data/sra_metadata.py``, ``data/taxonomy.py``)
-are not moved onto this module: CPython's expat binding has refused entity expansion by default
-since Python 3.7.1 (a fix for CVE-2013-1753 plus later hardening), so the billion-laughs and XXE
-risk this module guards against does not apply to them the way it applies to lxml's very
-permissive defaults.
+are not moved onto this module: CPython's expat binding does not resolve an external entity or
+fetch a DTD over the network, so XXE does not apply to those sites either, but expat is not
+hardened against entity-expansion ("billion laughs") the way ``SAFE_PARSER`` is. Those sites all
+parse a small API response fetched directly from NCBI for immediate use, not an arbitrary file
+that could have been cached, replayed or written by another process, so that residual risk is
+accepted there rather than moving every XML parse in the package onto lxml.
 """
 
 from pathlib import Path

@@ -108,6 +108,14 @@ class SRAMetadataClient:
 
         Returns:
             Dictionary mapping accessions to SRADatasetInfo objects
+
+        Raises:
+            NetworkError: a batch could not be reached (connection failure, timeout, or a
+                persistent 429/5xx after retries). This is deliberately not caught here and
+                continued past: it is a subclass of DataAccessError (below), but the caller
+                needs to tell "NCBI is unreachable right now" (worth retrying the whole run
+                later, see the ``ExitCode`` docs) apart from "this one batch's data was bad"
+                (worth skipping and continuing with the rest).
         """
         if not accessions:
             return {}
@@ -125,6 +133,11 @@ class SRAMetadataClient:
             try:
                 batch_results = self._fetch_batch_metadata(batch)
                 results.update(batch_results)
+            except NetworkError:
+                # A retryable failure, not a bad batch: let it propagate so the caller (and
+                # ultimately the CLI's exit code) sees it, instead of silently returning
+                # whatever partial results were collected so far as if nothing went wrong.
+                raise
             except (DataAccessError, json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to fetch metadata for batch: {e}")
                 # Continue with other batches
@@ -187,9 +200,11 @@ class SRAMetadataClient:
         raw XML), every RUN in every package is returned, matching the historical behaviour.
         """
         try:
-            # xml.etree (expat), not metaquest.utils.xml's lxml parser: expat has refused entity
-            # expansion by default since Python 3.7.1, so billion-laughs and XXE do not apply
-            # here the way they apply to lxml's permissive defaults.
+            # xml.etree (expat), not metaquest.utils.xml's lxml parser: expat does not resolve
+            # an external entity or fetch a DTD over the network, so XXE does not apply here; it
+            # is not hardened against entity-expansion ("billion laughs") the way SAFE_PARSER is,
+            # but this parses NCBI's own small API response, not an arbitrary stored file, so
+            # that residual risk is accepted for this call site.
             root = ET.fromstring(xml_content)
         except ET.ParseError as e:
             logger.error(f"Failed to parse SRA XML: {e}")
