@@ -80,8 +80,8 @@ Download and assembly steps call command-line tools that are not Python packages
 | Tool (conda package) | Oldest version | Used by |
 |---|---|---|
 | `fasterq-dump`, `prefetch` (sra-tools) | 3.0 | `download_sra` (prefetch first, then fasterq-dump; `--no-prefetch` skips prefetch) |
-| `pigz` (optional) | any | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
-| `datasets` (ncbi-datasets-cli) | any | `genome_download`, `genome_prepare` |
+| `pigz` (optional) | 2.4 | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
+| `datasets` (ncbi-datasets-cli) | 16 | `genome_download`, `genome_prepare` |
 | `minimap2` | 2.17 (first with `--sam-hit-only`) | `extract_target_reads` |
 | `samtools` | 1.10 (first with `samtools coverage`) | `extract_target_reads` |
 | `megahit` | 1.2.9 | `extract_target_reads --assemble` |

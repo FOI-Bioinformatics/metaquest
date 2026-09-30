@@ -66,10 +66,11 @@ _SPECS = (
         optional=True,
         note="without it download_sra runs fasterq-dump directly against NCBI",
     ),
+    # 2.4 is the version environment.yml and docs/packaging.md's bioconda recipe pin.
     ToolSpec(
         "pigz",
         "pigz",
-        None,
+        "2.4",
         ("download_sra", "store_adopt"),
         optional=True,
         note="without it FASTQ files are compressed with gzip",
@@ -86,7 +87,8 @@ _SPECS = (
         optional=True,
         note="needed only for extract_target_reads --assemble",
     ),
-    ToolSpec("datasets", "ncbi-datasets-cli", None, ("genome_download", "genome_prepare")),
+    # 16 is the version environment.yml and docs/packaging.md's bioconda recipe pin.
+    ToolSpec("datasets", "ncbi-datasets-cli", "16", ("genome_download", "genome_prepare")),
     ToolSpec(
         "seqkit",
         "seqkit",

@@ -36,12 +36,12 @@ for the trusted-publisher step, a PyPI account with rights over the project (or 
   stay unchanged, only the *distribution* name `pip install metaquest-bio` changes), and every
   reference to the distribution name in this document and the README's install instructions is
   updated to match.
-- **`ncbi-datasets-cli` 16's flags**: `metaquest/utils/tools.py`'s `TOOLS["datasets"]` records no
-  version floor. `environment.yml` and `docs/packaging.md`'s recipe below both assume the
-  `datasets download genome accession --inputfile ... --no-progressbar` invocation
-  `metaquest/core/constants.py`'s `ALLOWED_BIOINFORMATICS_TOOLS["datasets"]` allows still works
-  unchanged on `ncbi-datasets-cli` 16.x; confirm against that version's `datasets download genome
-  accession --help` before relying on it in a release announcement or a bioconda pin.
+- **`ncbi-datasets-cli` 16's flags**: `metaquest/utils/tools.py`'s `TOOLS["datasets"]` pins a floor
+  of 16 (`environment.yml`'s `ncbi-datasets-cli>=16`, checked by `tests/test_environment_pins.py`).
+  Confirm that the `datasets download genome accession --inputfile ... --no-progressbar`
+  invocation `metaquest/core/constants.py`'s `ALLOWED_BIOINFORMATICS_TOOLS["datasets"]` allows
+  still works unchanged on `ncbi-datasets-cli` 16.x before relying on it in a release announcement
+  or a bioconda pin; that assumption is what set the floor at 16 rather than an older release.
 - **bioconda `megahit` on `osx-arm64`**: confirm a `megahit` build exists for `osx-arm64` on the
   bioconda channel (`conda search -c bioconda megahit` on that platform, or
   <https://bioconda.github.io/recipes/megahit/README.html>) before telling Apple Silicon users
@@ -92,15 +92,13 @@ requirements:
     - lxml >=4.9.3
     - requests >=2.31
     # External tools, from metaquest/utils/tools.py's TOOLS table (the same table
-    # environment.yml is pinned against; see tests/test_environment_pins.py). pigz and
-    # ncbi-datasets-cli carry no version floor there (TOOLS[name].min_version is None: any
-    # version works), so none is pinned here either.
+    # environment.yml is pinned against; see tests/test_environment_pins.py).
     - sra-tools >=3.0
     - minimap2 >=2.17
     - samtools >=1.10
     - megahit >=1.2.9
-    - pigz
-    - ncbi-datasets-cli
+    - pigz >=2.4
+    - ncbi-datasets-cli >=16
 
 test:
   commands:

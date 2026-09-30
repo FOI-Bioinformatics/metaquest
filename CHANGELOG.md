@@ -74,9 +74,11 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   and `genome_prepare` had no check and failed inside the first `datasets` call) when one is missing or
   older than its floor, listing every problem with its `conda install` command.
 - `environment.yml`'s version floors now match `metaquest/utils/tools.py`'s `TOOLS` table exactly
-  (checked by the new `tests/test_environment_pins.py`): `samtools>=1.10` and `megahit>=1.2.9` are
-  now pinned (were unpinned); `pigz`, `ncbi-datasets-cli` and the still-commented-out `seqkit`
-  stay unpinned, since `TOOLS` records no minimum version for any of the three.
+  (checked by the new `tests/test_environment_pins.py`): `samtools>=1.10`, `megahit>=1.2.9`,
+  `pigz>=2.4` and `ncbi-datasets-cli>=16` are now pinned (all four were unpinned before); `TOOLS`
+  itself gains the `pigz`/`datasets` floors, so `metaquest doctor` and every command's
+  `require_tools` check now enforce them too. The still-commented-out `seqkit` stays unpinned,
+  since `TOOLS` records no minimum version for it.
   `DEFAULT_MEMORY_LIMIT_GB`, `MAX_FILE_SIZE_MB`, `DEFAULT_PLUGIN_TIMEOUT`, `ERROR_MESSAGES` and
   `SUCCESS_MESSAGES` are removed from `metaquest/core/constants.py`: none was read anywhere
   outside its own definition. The console log level choices and default, previously spelled out
