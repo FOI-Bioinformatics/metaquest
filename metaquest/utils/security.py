@@ -7,13 +7,12 @@ This module provides secure subprocess handling and input validation.
 import logging
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
+from typing import Dict, FrozenSet, List, Optional, Tuple, Union
 
 from metaquest.core.exceptions import SecurityError
 from metaquest.core.validation import validate_accession
@@ -64,16 +63,6 @@ SRA_POSITIONAL_TOOLS = frozenset({"fasterq-dump", "prefetch"})
 # Return code run_secure reports for a child it did not start because the run is stopping: the
 # code of a child killed with SIGKILL, which is what a child started a moment later would get.
 _NOT_STARTED_RETURNCODE = -9
-
-
-def missing_tools(names: Sequence[str]) -> List[str]:
-    """Names from ``names`` not found on ``PATH``, in the given order, via ``shutil.which``.
-
-    Used for a command's pre-flight check: a missing external tool (minimap2, samtools,
-    megahit, fasterq-dump) should be reported once with an install hint before any work
-    starts, rather than surfacing as a raw subprocess error partway through a run.
-    """
-    return [name for name in names if shutil.which(name) is None]
 
 
 class SecureSubprocess:

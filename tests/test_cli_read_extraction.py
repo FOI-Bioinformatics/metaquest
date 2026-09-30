@@ -1,6 +1,7 @@
 """Tests for the extract_target_reads CLI command."""
 
 import argparse
+import functools
 import gzip
 import json
 import logging
@@ -17,6 +18,7 @@ from metaquest.core.exceptions import ProcessingError, SecurityError
 from metaquest.data.read_extraction import ExtractionResult
 from metaquest.data.registry import load_registry, record_extraction, save_registry
 from helpers_extraction import _fake_tools
+from metaquest.utils import tools
 
 
 def _args(tmp, **kwargs):
@@ -142,8 +144,14 @@ class TestExtractTargetReadsCommand:
         mocked, on a machine that may genuinely lack minimap2/samtools/megahit; the
         pre-flight tool check must not fail them. A test that specifically exercises a
         missing tool applies its own, more specific ``shutil.which`` patch, which takes
-        precedence over this one for its duration."""
-        with patch("metaquest.utils.security.shutil.which", return_value="/usr/bin/tool"):
+        precedence over this one for its duration. Version floors are checked in
+        tests/test_tools.py with fake tools on PATH; here the check looks tools up without
+        running them, so the mocked ``run_secure`` sees only the extraction's own calls."""
+        without_versions = functools.partial(tools.require_tools, check_versions=False)
+        with (
+            patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/tool"),
+            patch("metaquest.cli.commands.read_extraction.require_tools", without_versions),
+        ):
             yield
 
     def test_command_properties(self):
@@ -164,9 +172,9 @@ class TestExtractTargetReadsCommand:
         args = parser.parse_args(required + ["--timeout", "120"])
         assert args.timeout == 120.0
 
-    @patch("metaquest.utils.security.shutil.which", return_value=None)
+    @patch("metaquest.utils.tools.shutil.which", return_value=None)
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_missing_minimap2_or_samtools_exits_1_before_any_work(self, mock_run, _which):
+    def test_missing_minimap2_or_samtools_exits_3_before_any_work(self, mock_run, _which):
         """A missing minimap2/samtools is reported once, with an install hint, before any
         tool ever runs -- not as a raw subprocess error partway through extraction."""
         cmd = ExtractTargetReadsCommand()
@@ -180,10 +188,10 @@ class TestExtractTargetReadsCommand:
                     fastq_folder=str(root / "fastq"),
                 )
             )
-        assert rc == 1
+        assert rc == 3
         mock_run.assert_not_called()
 
-    @patch("metaquest.utils.security.shutil.which")
+    @patch("metaquest.utils.tools.shutil.which")
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_missing_minimap2_logs_install_hint(self, mock_run, mock_which, caplog):
         mock_which.side_effect = lambda name: None if name == "minimap2" else f"/usr/bin/{name}"
@@ -199,11 +207,11 @@ class TestExtractTargetReadsCommand:
                         fastq_folder=str(root / "fastq"),
                     )
                 )
-        assert rc == 1
+        assert rc == 3
         assert "minimap2 not found on PATH" in caplog.text
-        assert "conda install -c bioconda minimap2" in caplog.text
+        assert "conda install -c conda-forge -c bioconda 'minimap2>=2.17'" in caplog.text
 
-    @patch("metaquest.utils.security.shutil.which")
+    @patch("metaquest.utils.tools.shutil.which")
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_missing_megahit_only_checked_when_assembling(self, mock_run, mock_which):
         """megahit is only required (and checked) when --assemble is set."""
@@ -226,9 +234,9 @@ class TestExtractTargetReadsCommand:
         assert rc == 0
         mock_run.assert_called()
 
-    @patch("metaquest.utils.security.shutil.which")
+    @patch("metaquest.utils.tools.shutil.which")
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_missing_megahit_exits_1_when_assembling(self, mock_run, mock_which):
+    def test_missing_megahit_exits_3_when_assembling(self, mock_run, mock_which):
         mock_which.side_effect = lambda name: None if name == "megahit" else f"/usr/bin/{name}"
         cmd = ExtractTargetReadsCommand()
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,10 +252,10 @@ class TestExtractTargetReadsCommand:
                     assemble=True,
                 )
             )
-        assert rc == 1
+        assert rc == 3
         mock_run.assert_not_called()
 
-    @patch("metaquest.utils.security.shutil.which", return_value=None)
+    @patch("metaquest.utils.tools.shutil.which", return_value=None)
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_dry_run_skips_the_tool_check(self, mock_run, _which):
         """--dry-run never touches any tool, so the pre-flight check is skipped entirely."""

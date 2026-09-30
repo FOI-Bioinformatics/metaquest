@@ -32,7 +32,6 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   SLURM cpuset limits, else `SLURM_CPUS_PER_TASK`, else the CPU count) divided by `--num-threads`, at
   most 4; `METAQUEST_MAX_WORKERS_CAP` (or `[runtime] max_workers_cap`) changes the cap, which the
   `--max-workers` help now names. `seqkit stats` in the store statistics uses at most as many threads.
-
 ### Changed
 
 - A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to
@@ -53,6 +52,12 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `extract_target_reads` (also `METAQUEST_TIMEOUT` or `[runtime] timeout` in `config.toml`) now sets it;
   0, the default, means no limit. A `--version` probe always uses a fixed 30-second timeout regardless of
   this setting, so a hung tool cannot stall version detection.
+- One table of external tools (`metaquest/utils/tools.py`) with the oldest supported versions: sra-tools
+  3.0, minimap2 2.17, samtools 1.10 (for `samtools coverage`), megahit 1.2.9. `download_sra`,
+  `extract_target_reads`, `genome_download` and `genome_prepare` check the tools they need before any
+  work starts and exit with 3 (was 1 for `download_sra` and `extract_target_reads`; `genome_download`
+  and `genome_prepare` had no check and failed inside the first `datasets` call) when one is missing or
+  older than its floor, listing every problem with its `conda install` command.
 
 ### Fixed
 
@@ -70,6 +75,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `--log-level DEBUG`. Warnings and errors naming an accession are unchanged.
 - A script that treated every non-zero exit as the same failure keeps working. A script that tested for
   exactly 1 should also accept 3 and 4; 4 means the same command may succeed if run again later.
+- `fasterq-dump`/`prefetch` older than 3.0 (sra-tools 2.x) are now refused by `download_sra` with exit
+  code 3; install sra-tools 3.0 or later (`environment.yml` already does).
 
 ## [0.6.0] - 2026-09-30
 

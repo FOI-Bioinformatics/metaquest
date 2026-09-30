@@ -481,7 +481,7 @@ class TestCliWiring:
             return original_run(parsed)
 
         original_run = command._run
-        with patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump"):
+        with patch("metaquest.cli.commands.sra.require_tools"):
             with patch("metaquest.cli.commands.sra.download_sra", side_effect=fake_download_sra):
                 with patch.object(command, "_run", side_effect=execute):
                     command.run(args)

@@ -10,12 +10,13 @@ import zlib
 from pathlib import Path
 from typing import AbstractSet, Callable, List, Optional, Tuple, Union
 
-from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS, VERSION_PROBE_TIMEOUT
+from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
 from metaquest.core.settings import settings_or
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
 from metaquest.utils.lockfile import LockHeld, LockLost, LockPolicy, LockWaitStopped, held_lock, verify_held
+from metaquest.utils import tools
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -594,16 +595,9 @@ def _project_download(
 
 
 def fasterq_dump_version() -> str:
-    """The installed fasterq-dump's version string, or an empty string if it cannot be run.
+    """The installed fasterq-dump's version line (``fasterq-dump : 3.1.1``), or an empty string.
 
     Recorded in a store dataset's sidecar so a later reader knows which tool produced the
-    files. The tool prints its name and version on separate lines, so the last non-empty
-    line is used.
+    files. Empty when the tool is missing or prints no version (``metaquest.utils.tools.probe_tool``).
     """
-    try:
-        result = SecureSubprocess.run_secure("fasterq-dump", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
-        lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-        return lines[-1] if lines else ""
-    except fastq_mod._TOOL_ERRORS as e:
-        logger.debug(f"Could not read the fasterq-dump version: {e}")
-        return ""
+    return tools.probe_tool("fasterq-dump").version_text

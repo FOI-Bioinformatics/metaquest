@@ -17,6 +17,14 @@ from metaquest.cli.commands.genome import (
 from metaquest.core.exceptions import MetaQuestError
 
 
+@pytest.fixture(autouse=True)
+def _datasets_present():
+    """``download_genomes`` is mocked in these tests, so the ``datasets`` pre-flight check is too;
+    tests/test_tools.py covers a missing ``datasets`` with an empty ``PATH``."""
+    with patch("metaquest.cli.commands.genome.require_tools"):
+        yield
+
+
 class TestGenomeSearchCommand:
     """Tests for GenomeSearchCommand."""
 

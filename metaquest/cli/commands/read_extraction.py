@@ -45,7 +45,7 @@ from metaquest.store.link import dangling_links
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
-from metaquest.utils.security import missing_tools
+from metaquest.utils.tools import require_tools
 
 
 def _non_negative_int(value: str) -> int:
@@ -570,25 +570,19 @@ class ExtractTargetReadsCommand(BaseCommand):
             )
         self.logger.info("Assembled %d sample(s)", len(with_reads))
 
-    def _check_required_tools(self, args: argparse.Namespace) -> bool:
-        """Report any of minimap2/samtools (and megahit when --assemble) missing on PATH.
+    def _check_required_tools(self, args: argparse.Namespace) -> None:
+        """Refuse to start when minimap2/samtools (and megahit with --assemble) are missing or too old.
 
         Checked once before any work starts, rather than surfacing as a raw subprocess
         error partway through extraction; skipped entirely for --dry-run, which never runs
-        an external tool. Returns True when every required tool is present.
+        an external tool. Raises ``ConfigurationError`` (exit code 3) listing every problem.
         """
-        if args.dry_run:
-            return True
-        required = ["minimap2", "samtools"] + (["megahit"] if args.assemble else [])
-        missing = missing_tools(required)
-        for tool in missing:
-            self.logger.error("%s not found on PATH. Install it, for example: conda install -c bioconda %s", tool, tool)
-        return not missing
+        if not args.dry_run:
+            require_tools(["minimap2", "samtools"] + (["megahit"] if args.assemble else []))
 
     def execute(self, args: argparse.Namespace) -> int:
         try:
-            if not self._check_required_tools(args):
-                return 1
+            self._check_required_tools(args)
             self._warn_dangling_links(args)
             registry = load_registry(args.registry)
             store = self._resolve_store(args, registry)

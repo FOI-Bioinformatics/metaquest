@@ -5,7 +5,6 @@ SRA-related CLI commands.
 import argparse
 import csv
 import functools
-import shutil
 import time
 from typing import Callable, List, Optional, Set, Tuple
 
@@ -42,6 +41,7 @@ from metaquest.store.sidecar import sidecar_completeness
 from metaquest.store.usage import ensure_project_identity, record_usage_many
 from metaquest.utils import resources
 from metaquest.utils.termination import graceful_termination
+from metaquest.utils.tools import require_tools
 
 # Marker the data layer puts in a result message for a dataset this run downloaded and
 # saved into the store (as opposed to STORE_LINKED_PREFIX, imported above, for one the
@@ -691,12 +691,8 @@ class DownloadSraCommand(BaseCommand):
 
     def _run(self, args: argparse.Namespace) -> int:
         try:
-            if not args.dry_run and shutil.which("fasterq-dump") is None:
-                self.logger.error(
-                    "fasterq-dump not found on PATH. Install sra-tools, "
-                    "for example: conda install -c bioconda sra-tools"
-                )
-                return 1
+            if not args.dry_run:
+                require_tools(["fasterq-dump"])
 
             max_workers = self._resolve_max_workers(args)
             fastq_dir = Path(args.fastq_folder)

@@ -77,14 +77,20 @@ environment's copy rather than a stale one.
 
 Download and assembly steps call command-line tools that are not Python packages:
 
-| Tool | Used by |
-|---|---|
-| `fasterq-dump`, `prefetch` (sra-tools) | `download_sra` (prefetch first, then fasterq-dump; `--no-prefetch` skips prefetch) |
-| `pigz` (optional) | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
-| `datasets` (ncbi-datasets-cli) | `genome_download`, `genome_prepare`, `download_test_genome` |
-| `minimap2` (2.17 or later, for `--sam-hit-only`), `samtools` | `extract_target_reads` |
-| `megahit` | `extract_target_reads --assemble` |
-| `seqkit` (optional) | `sra_profile`, `sra_report` (faster read statistics; falls back to a plain Python reader when absent) |
+| Tool (conda package) | Oldest version | Used by |
+|---|---|---|
+| `fasterq-dump`, `prefetch` (sra-tools) | 3.0 | `download_sra` (prefetch first, then fasterq-dump; `--no-prefetch` skips prefetch) |
+| `pigz` (optional) | any | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
+| `datasets` (ncbi-datasets-cli) | any | `genome_download`, `genome_prepare` |
+| `minimap2` | 2.17 (first with `--sam-hit-only`) | `extract_target_reads` |
+| `samtools` | 1.10 (first with `samtools coverage`) | `extract_target_reads` |
+| `megahit` | 1.2.9 | `extract_target_reads --assemble` |
+| `seqkit` (optional) | any | `sra_profile`, `sra_report` (faster read statistics; falls back to a plain Python reader when absent) |
+
+`download_test_genome` fetches its genome over HTTPS and needs none of these tools.
+A command checks the tools it needs before it starts any work. A missing tool, or one older than the
+version above, stops the command with exit code 3 and a message that lists every such tool with the
+`conda install` command that provides it.
 
 `environment.yml` installs all of them together with MetaQuest:
 

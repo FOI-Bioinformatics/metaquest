@@ -946,7 +946,7 @@ class TestDownloadSraCommand:
         assert args.dry_run is True
         assert args.force is True
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute(self, mock_command, _which, tmp_path):
         """Test command execution."""
@@ -1007,7 +1007,7 @@ class TestDownloadSraCommand:
             "min_free_gb": 0.0,  # METAQUEST_MIN_FREE_GB=0 from conftest
         }
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_forwards_prefetch_and_compress_flags(self, mock_command, _which, tmp_path):
         """--sra-cache, --keep-sra, --no-prefetch and --no-compress reach download_sra unchanged."""
@@ -1049,7 +1049,7 @@ class TestDownloadSraCommand:
         assert call_kwargs["keep_sra"] is True
         assert call_kwargs["compress"] is False
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_computes_default_max_workers_from_cpu_count(self, mock_command, _which, tmp_path):
         """When --max-workers is not given, it is computed from the CPU count and thread count."""
@@ -1085,7 +1085,7 @@ class TestDownloadSraCommand:
         assert result == 0
         assert mock_command.call_args.kwargs["max_workers"] == 2
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_warns_when_workers_oversubscribe_cpu(self, mock_command, _which, tmp_path, caplog):
         """An explicit --max-workers x --num-threads exceeding the CPU count logs a warning."""
@@ -1122,7 +1122,7 @@ class TestDownloadSraCommand:
         assert result == 0
         assert "exceeds" in caplog.text
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_does_not_warn_about_the_derived_default(self, mock_command, _which, tmp_path, caplog):
         """The CPU-derived default is this tool's own choice; only an explicit --max-workers is warned about."""
@@ -1194,7 +1194,7 @@ class TestDownloadSraCommand:
         assert result == 0
         assert not (tmp_path / "metaquest_registry.json").exists()
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_with_failures_writes_failed_file(self, mock_command, _which, tmp_path, caplog):
         """Failed downloads return 1; the retry hint is logged and the CLI itself writes no file.
@@ -1245,7 +1245,7 @@ class TestDownloadSraCommand:
         # ran; the CLI must not print a second copy of that line itself.
         assert caplog.text.count("Some downloads failed") == 0
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_reports_disk_full_abort(self, mock_command, _which, tmp_path, caplog):
         """A disk-full abort logs the reason distinctly and returns 1, even though outcomes are recorded."""
@@ -1287,7 +1287,7 @@ class TestDownloadSraCommand:
         assert result == 1
         assert "disk-full" in caplog.text
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_metaquest_error(self, mock_command, _which, tmp_path):
         """A MetaQuestError from the backend is caught and returns 1."""
@@ -1312,9 +1312,9 @@ class TestDownloadSraCommand:
         result = command.execute(args)
         assert result == 1
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value=None)
+    @patch("metaquest.utils.tools.shutil.which", return_value=None)
     @patch("metaquest.cli.commands.sra.download_sra")
-    def test_missing_fasterq_dump_exits_1(self, mock_download, _which, tmp_path):
+    def test_missing_fasterq_dump_exits_3(self, mock_download, _which, tmp_path, caplog):
         acc = tmp_path / "acc.txt"
         acc.write_text("SRR1\n")
         args = argparse.Namespace(
@@ -1332,10 +1332,11 @@ class TestDownloadSraCommand:
             registry=str(tmp_path / "metaquest_registry.json"),
             data_root=None,
         )
-        assert DownloadSraCommand().execute(args) == 1
+        assert DownloadSraCommand().execute(args) == 3
         mock_download.assert_not_called()
+        assert "fasterq-dump not found on PATH" in caplog.text and "sra-tools" in caplog.text
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value=None)
+    @patch("metaquest.utils.tools.shutil.which", return_value=None)
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_dry_run_skips_tool_check(self, mock_download, _which, tmp_path):
         mock_download.return_value = {
@@ -1365,7 +1366,7 @@ class TestDownloadSraCommand:
         )
         assert DownloadSraCommand().execute(args) == 0
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra", side_effect=KeyboardInterrupt)
     def test_keyboard_interrupt_returns_130(self, _download, _which, tmp_path, caplog):
         args = argparse.Namespace(
@@ -1387,7 +1388,7 @@ class TestDownloadSraCommand:
             assert DownloadSraCommand().execute(args) == 130
         assert "Download interrupted by the user" in caplog.text
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_report_file_lists_every_status(self, mock_download, _which, tmp_path):
         mock_download.return_value = {
@@ -1428,7 +1429,7 @@ class TestDownloadSraCommand:
             "SRR4,blacklisted,",
         ]
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_execute_records_outcomes_in_registry(self, mock_download, _which, tmp_path):
         """Every accession's outcome ends up in the registry; the CLI never touches failed_accessions.txt."""
@@ -1504,7 +1505,7 @@ class TestDownloadSraCommand:
         # data layer) is untouched by the CLI.
         assert failed_file.read_text() == "SRR2\n"
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_verdict_from_message_is_recorded_in_registry(self, mock_download, _which, tmp_path):
         """The verdict encoded in on_result's message ends up as download.complete in the registry."""
@@ -1547,7 +1548,7 @@ class TestDownloadSraCommand:
         assert datasets["SRR1"]["download"]["complete"]["reads_r1"] == 300000
         assert datasets["SRR1"]["download"]["complete"]["expected_spots"] == 48000000
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_expected_spots_read_from_registry_metadata(self, mock_download, _which, tmp_path):
         """--verify-downloads (the default) reads run_total_spots from the registry into expected_spots."""
@@ -1586,7 +1587,7 @@ class TestDownloadSraCommand:
         DownloadSraCommand().execute(args)
         assert mock_download.call_args.kwargs["expected_spots"] == {"SRR1": 12345}
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_no_verify_downloads_passes_no_expected_spots(self, mock_download, _which, tmp_path):
         registry_path = tmp_path / "metaquest_registry.json"
@@ -1624,7 +1625,7 @@ class TestDownloadSraCommand:
         DownloadSraCommand().execute(args)
         assert mock_download.call_args.kwargs["expected_spots"] is None
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_redownload_truncated_computes_set_from_registry_verdicts(self, mock_download, _which, tmp_path):
         registry_path = tmp_path / "metaquest_registry.json"
@@ -1666,7 +1667,7 @@ class TestDownloadSraCommand:
         assert mock_download.call_args.kwargs["truncated_accessions"] == {"SRR1"}
         assert mock_download.call_args.kwargs["redownload_truncated"] is True
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_blacklisted_accession_keeps_its_downloaded_record(self, mock_download, _which, tmp_path):
         """An accession downloaded earlier and blacklisted later keeps its files and sizes."""
@@ -1714,7 +1715,7 @@ class TestDownloadSraCommand:
         assert after["files"] == before["files"]
         assert after["bytes_total"] == before["bytes_total"] > 0
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_concurrent_registry_edit_survives_the_run(self, mock_download, _which, tmp_path):
         """An exclusion written by another process mid-run is not reverted by the download's writes."""
@@ -1819,7 +1820,7 @@ class TestDownloadSraCommand:
         assert args.accept_partial is True
         assert args.resume_partial is False
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_store_paths_and_link_options_reach_download_sra(self, mock_download, _which, tmp_path):
         from metaquest.store.layout import init_store
@@ -1865,7 +1866,7 @@ class TestDownloadSraCommand:
         assert Path(kwargs["store_metadata"][0]) == tmp_path / "metadata"
         assert Path(kwargs["store_metadata"][1]) == store_root.resolve() / "metadata"
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_no_store_leaves_the_download_call_unchanged(self, mock_download, _which, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
@@ -1903,7 +1904,7 @@ class TestDownloadSraCommand:
         "message,attempts",
         [("linked from store, 1 files", 0), ("Downloaded 1 files, complete (1 of 1 spots); stored", 1)],
     )
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_store_backed_results_record_source_and_linked_list(
         self, mock_download, _which, tmp_path, message, attempts
@@ -1988,7 +1989,7 @@ class TestDownloadSraCommand:
         ],
         ids=["complete-to-complete", "truncated-to-complete", "complete-to-truncated"],
     )
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_relink_carries_read_count_only_between_equal_verdicts(
         self, mock_download, _which, tmp_path, previous, sidecar_verdict, sidecar_ratio, expected
@@ -2064,7 +2065,7 @@ class TestDownloadSraCommand:
         complete = written["datasets"]["SRR1"]["download"]["complete"]
         assert {key: complete.get(key) for key in expected} == expected
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_a_plain_download_is_not_recorded_as_store_backed(self, mock_download, _which, tmp_path):
         from metaquest.store.layout import init_store
@@ -2112,7 +2113,7 @@ class TestDownloadSraCommand:
         assert "source" not in written["datasets"]["SRR1"]["download"]
         assert written["store"].get("linked", []) == []
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_an_already_linked_dataset_is_recorded_as_store_backed(self, mock_download, _which, tmp_path):
         """A link left by an earlier run is recorded with its source, not as a plain download."""
@@ -2183,7 +2184,7 @@ class TestDownloadSraCommand:
                 for r in catalog.conn.execute("SELECT accession, project_id, genome_id, stage FROM usage").fetchall()
             ]
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_fresh_store_download_records_usage_stage_downloaded(self, mock_download, _which, tmp_path):
         from metaquest.store.layout import init_store
@@ -2228,7 +2229,7 @@ class TestDownloadSraCommand:
         rows = self._usage_rows(store_root)
         assert rows == [{"accession": "SRR1", "project_id": "proj1", "genome_id": "", "stage": "downloaded"}]
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_linked_from_store_records_usage_stage_linked(self, mock_download, _which, tmp_path):
         from metaquest.store.layout import init_store
@@ -2273,7 +2274,7 @@ class TestDownloadSraCommand:
         rows = self._usage_rows(store_root)
         assert rows == [{"accession": "SRR1", "project_id": "proj1", "genome_id": "", "stage": "linked"}]
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_already_downloaded_store_backed_records_usage_stage_linked(self, mock_download, _which, tmp_path):
         from metaquest.store.layout import init_store
@@ -2322,7 +2323,7 @@ class TestDownloadSraCommand:
         rows = self._usage_rows(store_root)
         assert rows == [{"accession": "SRR1", "project_id": "proj1", "genome_id": "", "stage": "linked"}]
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_catalog_failure_leaves_download_outcome_unchanged(self, mock_download, _which, tmp_path):
         """A broken catalogue write never changes the download's exit code or registry record."""
@@ -2376,7 +2377,7 @@ class TestDownloadSraCommand:
 
     # ------------------------------------------------------- download summary logging
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_cli_logs_no_second_download_summary(self, mock_download, _which, tmp_path, caplog):
         """The data layer prints the run summary; the CLI must not print a second block whose
@@ -2417,7 +2418,7 @@ class TestDownloadSraCommand:
 
     # ------------------------------------------------------- transient bytes warning
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_warns_when_transient_bytes_exceed_threshold(self, mock_download, _which, tmp_path, caplog, monkeypatch):
         """A kept .sra-cache bigger than the (patched, small) threshold is named in a warning."""
@@ -2457,7 +2458,7 @@ class TestDownloadSraCommand:
         assert str(fastq_folder) in caplog.text
         assert "100 bytes" in caplog.text
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_no_warning_when_transient_bytes_under_threshold(self, mock_download, _which, tmp_path, caplog):
         """The default 1 GB threshold is not tripped by a small leftover cache file."""
@@ -3031,7 +3032,7 @@ class TestDownloadSraMintsAProjectIdentity:
             catalog.migrate()
             return [dict(r) for r in catalog.conn.execute("SELECT accession, project_id, stage FROM usage").fetchall()]
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_a_project_without_store_init_still_records_usage(self, mock_download, _which, tmp_path, monkeypatch):
         from metaquest.data.registry import load_registry
@@ -3200,7 +3201,7 @@ class TestDownloadSraRegistryWrites:
         assert rb.download_block(registry, "SRR4").complete.verdict == "complete"
         assert rb.download_block(registry, "SRR4").source == "store"
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_download_results_are_batched(self, mock_download, _which, tmp_path):
         import metaquest.data.registry as registry_mod
@@ -3218,7 +3219,7 @@ class TestDownloadSraRegistryWrites:
         registry = load_registry(args.registry)
         assert all(rb.download_block(registry, f"SRR{i}").state == "failed" for i in range(20))
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_result_recorder_flushes_on_interrupt(self, mock_download, _which, tmp_path):
         """A result recorded before Ctrl-C is in the registry file after the run returns 130."""
@@ -3235,7 +3236,7 @@ class TestDownloadSraRegistryWrites:
         assert rb.download_block(load_registry(args.registry), "SRR1").state == "downloaded"
         assert not (tmp_path / "metaquest_registry.json.lock").exists()
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_already_exists_after_waiting_is_not_an_attempt(self, mock_download, _which, tmp_path):
         """A run that waited for another run's download and found the files counts no attempt."""
@@ -3290,7 +3291,7 @@ class TestDownloadSraTerminationAndFinalFlush:
             kwargs["on_result"](f"SRR{index}", False, "Download failed: t")
         return {"total": 3, "successful": 0, "failed": 0, "failed_accessions": [], "skipped_accessions": ["SRR9"]}
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_handlers_are_installed_for_the_batch_and_restored(self, mock_download, _which, tmp_path):
         import signal
@@ -3313,7 +3314,7 @@ class TestDownloadSraTerminationAndFinalFlush:
         assert all(c[1] is before[c[0]] for c in calls[3:])
         assert {s: signal.getsignal(s) for s in before} == before
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_sigterm_during_the_run_flushes_and_returns_130(self, mock_download, _which, tmp_path, caplog):
         import signal
@@ -3360,7 +3361,7 @@ class TestDownloadSraTerminationAndFinalFlush:
         worker.join()
         assert errors == []
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_final_flush_failing_once_is_retried(self, mock_download, _which, tmp_path, monkeypatch):
         calls = self._failing_transactions(monkeypatch, failures=1)
@@ -3373,7 +3374,7 @@ class TestDownloadSraTerminationAndFinalFlush:
         assert rb.download_block(registry, "SRR9").message == "--max-downloads"
         assert len(calls) == 3
 
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_final_flush_failing_twice_logs_the_queued_accessions(
         self, mock_download, _which, tmp_path, monkeypatch, caplog

@@ -241,7 +241,7 @@ def _stats(results):
 )
 def test_download_sra_returns_4_only_when_every_failure_is_network(results, code, tmp_path):
     with (
-        patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump"),
+        patch("metaquest.cli.commands.sra.require_tools"),
         patch("metaquest.cli.commands.sra.download_sra", return_value=_stats(results)),
     ):
         assert DownloadSraCommand().execute(_download_args(tmp_path)) == code

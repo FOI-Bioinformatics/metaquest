@@ -15,6 +15,7 @@ from metaquest.data.gtdb import (
     get_accessions_for_species,
 )
 from metaquest.data.registry import record_genome, registry_transaction, resolve_project_path
+from metaquest.utils.tools import require_tools
 
 
 def _genome_name(filename: str) -> str:
@@ -218,6 +219,7 @@ class GenomeDownloadCommand(BaseCommand):
                 self.logger.info("All %d genome(s) already present", len(accessions))
                 return 0
 
+            require_tools(["datasets"])
             self.logger.info("Downloading %d genome(s) to %s", len(to_download), output_dir)
             zip_path = download_genomes(
                 to_download,
@@ -363,6 +365,7 @@ class GenomePrepareCommand(BaseCommand):
                     self.logger.warning("No accessions found")
                     return 0
 
+                require_tools(["datasets"])
                 self.logger.info("Downloading %d genome(s) to %s", len(accessions), output_dir)
 
                 zip_path = download_genomes(accessions, output_dir)

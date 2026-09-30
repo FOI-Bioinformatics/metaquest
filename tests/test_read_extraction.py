@@ -1489,15 +1489,17 @@ class TestOldMinimap2WithoutSamHitOnly:
 class TestMegahitVersion:
     """The version probe always passes VERSION_PROBE_TIMEOUT, not the run's subprocess_timeout."""
 
+    @patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/megahit")
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_passes_the_fixed_probe_timeout(self, mock_run):
+    def test_passes_the_fixed_probe_timeout(self, mock_run, _which):
         from metaquest.core.constants import VERSION_PROBE_TIMEOUT
 
-        mock_run.return_value = MagicMock(stdout="MEGAHIT v1.2.9\n")
+        mock_run.return_value = MagicMock(stdout="MEGAHIT v1.2.9\n", stderr="", returncode=0)
         assert megahit_version() == "MEGAHIT v1.2.9"
-        mock_run.assert_called_once_with("megahit", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
+        mock_run.assert_called_once_with("megahit", ["--version"], timeout=VERSION_PROBE_TIMEOUT, check=False)
 
+    @patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/megahit")
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_returns_empty_when_the_tool_cannot_be_run(self, mock_run):
+    def test_returns_empty_when_the_tool_cannot_be_run(self, mock_run, _which):
         mock_run.side_effect = SecurityError("not installed")
         assert megahit_version() == ""

@@ -2610,16 +2610,30 @@ class TestFasterqDumpVersion:
     def test_returns_the_last_non_empty_line(self):
         from metaquest.core.constants import VERSION_PROBE_TIMEOUT
 
-        with patch(
-            "metaquest.utils.security.SecureSubprocess.run_secure",
-            return_value=Mock(stdout="\nfasterq-dump : 3.0.10\n"),
-        ) as mock_run:
+        with (
+            patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/fasterq-dump"),
+            patch(
+                "metaquest.utils.security.SecureSubprocess.run_secure",
+                return_value=Mock(stdout="\nfasterq-dump : 3.0.10\n", stderr="", returncode=0),
+            ) as mock_run,
+        ):
             assert fasterq_dump_version() == "fasterq-dump : 3.0.10"
-        mock_run.assert_called_once_with("fasterq-dump", ["--version"], timeout=VERSION_PROBE_TIMEOUT)
+        mock_run.assert_called_once_with("fasterq-dump", ["--version"], timeout=VERSION_PROBE_TIMEOUT, check=False)
 
     def test_returns_empty_when_the_tool_cannot_be_run(self):
-        with patch("metaquest.utils.security.SecureSubprocess.run_secure", side_effect=SecurityError("not installed")):
+        with (
+            patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/fasterq-dump"),
+            patch("metaquest.utils.security.SecureSubprocess.run_secure", side_effect=SecurityError("not installed")),
+        ):
             assert fasterq_dump_version() == ""
+
+    def test_returns_empty_when_the_tool_is_not_on_path(self):
+        with (
+            patch("metaquest.utils.tools.shutil.which", return_value=None),
+            patch("metaquest.utils.security.SecureSubprocess.run_secure") as mock_run,
+        ):
+            assert fasterq_dump_version() == ""
+        mock_run.assert_not_called()
 
 
 class TestStoreDownloadLockWait:
@@ -3011,11 +3025,12 @@ def test_fasterq_dump_version_is_empty_on_a_tool_error_and_propagates_a_bug():
     """Kind (b): the narrow error yields the default; a TypeError propagates."""
     from metaquest.data.sra import fasterq_dump_version
 
-    with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=SecurityError("not found")):
-        assert fasterq_dump_version() == ""
-    with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=TypeError("bug")):
-        with pytest.raises(TypeError):
-            fasterq_dump_version()
+    with patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/fasterq-dump"):
+        with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=SecurityError("not found")):
+            assert fasterq_dump_version() == ""
+        with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=TypeError("bug")):
+            with pytest.raises(TypeError):
+                fasterq_dump_version()
 
 
 def test_accession_has_fastq_ignores_a_sidecar_that_is_not_an_object(tmp_path):

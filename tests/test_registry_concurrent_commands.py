@@ -440,7 +440,7 @@ def test_read_extraction_records_usage_after_releasing_the_registry_lock(tmp_pat
     # The external tools are faked, and the pre-flight check is told they are present, so the test
     # runs on a machine without minimap2, samtools or megahit.
     with (
-        patch("metaquest.utils.security.shutil.which", return_value="/usr/bin/tool"),
+        patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/tool"),
         patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools({})),
     ):
         assert ExtractTargetReadsCommand().execute(args) == 0
