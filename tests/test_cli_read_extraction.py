@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1473,6 +1474,60 @@ class TestExtractTargetReadsCommand:
             assert "SRR1" in registry.datasets
             assert "SRR2" not in registry.datasets
             assert not (root / "targeted" / "SRR2").exists()
+
+    @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
+    def test_concurrent_runs_skip_the_loser_and_record_only_the_winner(self, mock_run):
+        """Two commands extracting the same sample at once (overlapping SLURM shards): the
+        one that loses the per-sample lock is skipped, not recorded, and the registry ends up
+        with exactly the winner's extraction."""
+        state = {}
+        base_run = _fake_tools(state)
+        holding = threading.Event()
+        release = threading.Event()
+
+        def run(executable, args, **kwargs):
+            if executable == "minimap2" and "-o" in args:
+                holding.set()
+                release.wait(timeout=5)
+            return base_run(executable, args, **kwargs)
+
+        mock_run.side_effect = run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root, table, genome = _tree(tmp)
+            registry_file = root / "registry.json"
+            kwargs = dict(
+                parsed_containment=str(table),
+                genome_fasta=str(genome),
+                fastq_folder=str(root / "fastq"),
+                output_folder=str(root / "targeted"),
+                threshold=0.5,
+                registry=str(registry_file),
+            )
+            return_codes = {}
+
+            def worker(name):
+                return_codes[name] = ExtractTargetReadsCommand().run(_args(tmp, **kwargs))
+
+            first = threading.Thread(target=worker, args=("first",))
+            first.start()
+            assert holding.wait(timeout=5)
+
+            second = threading.Thread(target=worker, args=("second",))
+            second.start()
+            second.join(timeout=5)
+            assert not second.is_alive()  # the per-sample lock is non-blocking
+
+            release.set()
+            first.join(timeout=5)
+
+            assert sorted(return_codes.values()) == [0, 1]
+            data = json.loads(registry_file.read_text())
+
+        extraction = data["datasets"]["SRR1"]["extractions"]["GCF_1"]
+        assert extraction["mapped_reads"] > 0
+        map_calls = [c for c in state["calls"] if c[0] == "minimap2" and "-o" in c[1]]
+        assert len(map_calls) == 1
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_signal_between_assembly_samples_stops_before_the_next_one(self, mock_run):

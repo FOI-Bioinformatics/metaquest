@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Un
 import pandas as pd
 
 from metaquest.core.exceptions import ConfigurationError, DataAccessError, ProcessingError, SecurityError
+from metaquest.data.extraction_locks import LockHeld, index_build_lock, sample_extraction_lock
 from metaquest.data.file_io import atomic_path, ensure_directory, write_text_atomic
 from metaquest.data.sra import MATE1_SUFFIXES, fastq_files, fastq_stem, orphan_fastq, primary_fastq
 from metaquest.utils.security import SecureSubprocess
@@ -131,7 +132,7 @@ def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[st
 
     The build writes to a unique temporary name and is moved into place, so a second
     run against the same output folder either sees the previous index or none at all, never
-    a half-written one. A build that fails leaves no index behind.
+    a half-written one; it also runs under a lock, so two processes never build it at once.
     """
     genome_path = Path(genome_fasta)
     index_root = ensure_directory(index_dir)
@@ -140,10 +141,13 @@ def build_index(genome_fasta: Union[str, Path], preset: str, index_dir: Union[st
     if _index_is_current(index_path, source):
         return index_path
 
-    with atomic_path(index_path) as staged:
-        SecureSubprocess.run_secure("minimap2", _minimap2_index_args(preset, staged, genome_path))
-    write_text_atomic(index_path.with_suffix(index_path.suffix + ".json"), json.dumps(source, indent=2))
-    return index_path
+    with index_build_lock(index_path):
+        if _index_is_current(index_path, source):
+            return index_path
+        with atomic_path(index_path) as staged:
+            SecureSubprocess.run_secure("minimap2", _minimap2_index_args(preset, staged, genome_path))
+        write_text_atomic(index_path.with_suffix(index_path.suffix + ".json"), json.dumps(source, indent=2))
+        return index_path
 
 
 def _run_minimap2(
@@ -404,19 +408,18 @@ def _map_and_extract(
 ) -> ExtractionResult:
     """Map one sample's reads to the target genome and write the mapped reads.
 
-    ``reference`` is the prebuilt minimap2 index shared across every sample of this
-    ``extract_target_reads`` call; ``genome_fasta`` is the FASTA it was built from, used as
-    a one-time fallback if aligning against the index fails. ``force_single_end`` (set when
-    the caller already knows the two mate files disagree in read count) maps each mate file
-    in its own minimap2 run and merges the two alignments afterwards, deliberately as
-    single-end, rather than relying on minimap2's own after-the-fact stderr warning.
+    ``reference`` is the prebuilt minimap2 index shared across every sample of this call;
+    ``genome_fasta`` is the FASTA it was built from, used as a one-time fallback if aligning
+    against the index fails. ``force_single_end`` (set when the caller already knows the two
+    mate files disagree in read count) maps each mate file in its own minimap2 run and merges
+    the two alignments afterwards, deliberately as single-end, rather than relying on
+    minimap2's own after-the-fact stderr warning.
 
-    Returns the FASTQ files written (two for paired input, one otherwise, none when
-    nothing mapped) together with the mapped-record counts and the reference coverage
-    (``reference_coverage``; its table is written beside the FASTQ). The SAM alignment(s) live
-    under ``sam_dir`` (or ``out_dir`` when not given) and are removed once the filtered BAM
-    exists, unless ``keep_sam``; the BAM is always removed once the FASTQ export and the
-    coverage table are written.
+    Returns the FASTQ files written (two for paired input, one otherwise, none when nothing
+    mapped) with the mapped-record counts and the reference coverage (its table is written
+    beside the FASTQ). The SAM alignment(s) live under ``sam_dir`` (or ``out_dir``) and are
+    removed once the filtered BAM exists, unless ``keep_sam``; the BAM is always removed once
+    the FASTQ export and the coverage table are written.
     """
     ensure_directory(out_dir)
     sam_root = ensure_directory(sam_dir) if sam_dir is not None else out_dir
@@ -538,11 +541,9 @@ def reference_coverage(
     per-sequence table to ``out_dir/<genome>_coverage.tsv``. The sorted BAM is always removed.
     Only the kept alignments count (unmapped, secondary and supplementary records, and any
     below ``--min-mapq``, were filtered out earlier), and ``samtools coverage`` additionally
-    skips duplicate and QC-fail reads by default.
-
-    Coverage is supplementary to the extracted reads, so a tool or parsing failure is logged
-    as a warning, any partial table is removed, and None is returned rather than failing the
-    sample.
+    skips duplicate and QC-fail reads by default. Coverage is supplementary to the extracted
+    reads, so a tool or parsing failure is logged as a warning, any partial table is removed,
+    and None is returned rather than failing the sample.
 
     Returns:
         The ``summarise_coverage_table`` summary plus ``coverage_tsv`` (the table's path), or
@@ -622,7 +623,9 @@ def _extract_one_sample(
     """Handle one selected sample: an already-done skip, missing reads, dry-run reporting,
     or a real mapping run. Returns None when the sample contributes nothing to ``results``
     (no FASTQ files found for it). The shared minimap2 index is built on first use here and
-    cached in ``reference_holder["reference"]`` for every later sample of this call.
+    cached in ``reference_holder["reference"]`` for every later sample of this call. The
+    mapping run itself holds this sample's own lock; one already held elsewhere (an
+    overlapping SLURM shard extracting the same sample) is reported skipped, not run twice.
     """
     done = _resolve_done_state(accession, record, genome_path, preset, threshold, force, min_mapq=min_mapq)
     if done and not dry_run:
@@ -657,20 +660,25 @@ def _extract_one_sample(
 
     counts = mate_counts.get(accession)
     force_single_end = bool(counts is not None and len(reads) >= 2 and counts[0] != counts[1])
-    outcome = _map_and_extract(
-        accession,
-        reads,
-        reference_holder["reference"],
-        genome_path,
-        output_root / accession,
-        genome_id,
-        preset,
-        threads,
-        min_mapq=min_mapq,
-        sam_dir=sam_dir,
-        keep_sam=keep_sam,
-        force_single_end=force_single_end,
-    )
+    try:
+        with sample_extraction_lock(output_root, accession, genome_id):
+            outcome = _map_and_extract(
+                accession,
+                reads,
+                reference_holder["reference"],
+                genome_path,
+                output_root / accession,
+                genome_id,
+                preset,
+                threads,
+                min_mapq=min_mapq,
+                sam_dir=sam_dir,
+                keep_sam=keep_sam,
+                force_single_end=force_single_end,
+            )
+    except LockHeld:
+        logger.info("%s: extraction against %s is in progress elsewhere; skipped", accession, genome_id)
+        return ExtractionResult(files=[], mapped_records=0, skipped=True)
     if outcome.files:
         logger.info(
             "Extracted %d mapped records for %s -> %s",
@@ -704,6 +712,10 @@ def extract_target_reads(
 ) -> Dict[str, ExtractionResult]:
     """Extract reads mapping to a target genome for every qualifying sample.
 
+    A sample already locked by another process or thread (an overlapping SLURM shard that
+    selected it independently) is reported skipped rather than mapped twice; dry runs, which
+    touch no file, take no lock.
+
     Args:
         parsed_containment: Parsed containment table (samples x genomes).
         genome_id: Target genome to extract against (a column in the table).
@@ -715,34 +727,28 @@ def extract_target_reads(
         threads: Threads for minimap2 and samtools.
         dry_run: If True, report the qualifying samples without running any tool.
         force: If True, redo extraction even for a sample already recorded in ``already_done``.
-        already_done: Accession -> the registry's extraction record for this genome. A sample
-            already recorded there is skipped (unless ``force``) when the record's genome FASTA,
-            preset and threshold match this call and its files are still on disk (or it mapped 0).
-        on_result: Called on the main thread with (accession, result) after every sample of a
-            real run, skipped samples included, so the caller can checkpoint each result as it
-            lands. A callback that raises is logged and does not stop the run. Dry runs never
-            call it.
-        min_mapq: Minimum mapping quality (samtools ``-q``) a record must meet to be kept, in
-            addition to dropping secondary/supplementary alignments. 0 keeps every mapped
-            record regardless of quality; a divergent strain of the target genome can map with
-            a genuinely low MAPQ, so a nonzero value is best reserved for close relatives.
+        already_done: Accession -> the registry's extraction record for this genome; skipped
+            (unless ``force``) when its genome FASTA, preset and threshold still match this
+            call and its files are still on disk (or it mapped 0).
+        on_result: Called on the main thread with (accession, result) after each real-run
+            sample, skipped ones included, so the caller can checkpoint as it lands. A raising
+            callback is logged, not fatal. Dry runs never call it.
+        min_mapq: Minimum mapping quality (samtools ``-q``) kept, beyond dropping
+            secondary/supplementary alignments. 0 keeps every mapped record, since a divergent
+            strain of the target genome can map with a genuinely low MAPQ.
         temp_folder: Where the intermediate SAM alignment(s) are written; defaults to the
-            sample's own output folder when not given.
-        allow_truncated: If True, extract even for a sample whose registry download verdict is
-            "truncated" (via ``truncated_downloads``); otherwise that sample is skipped.
-        mate_counts: Accession -> (mate 1 reads, mate 2 reads). When the two counts differ,
-            the sample's mate files are mapped independently as single-end reads rather than
-            as a pair, deliberately rather than relying on minimap2's own stderr warning.
-        truncated_downloads: Accession -> the registry's download completeness verdict, for
-            samples whose verdict is "truncated". Such a sample is skipped unless
-            ``allow_truncated``.
-        keep_sam: If True, keep the intermediate SAM alignment(s) instead of removing them
-            once the filtered BAM exists (for debugging).
-        available: The accessions that actually have FASTQ files on disk. When given, a
-            selected sample that is not in it is left out of the run and counted rather than
-            logged individually, so a dry run over many thousands of screened-but-not-
-            downloaded samples prints one summary line instead of one warning per sample.
-            ``None`` (the default) checks each selected sample's FASTQ files as before.
+            sample's own output folder.
+        allow_truncated: If True, extract even a sample whose download verdict (via
+            ``truncated_downloads``) is "truncated"; otherwise that sample is skipped.
+        mate_counts: Accession -> (mate 1 reads, mate 2 reads). A mismatch maps the two mate
+            files independently as single-end, rather than relying on minimap2's own warning.
+        truncated_downloads: Accession -> download verdict, for every accession whose verdict
+            is "truncated"; skipped unless ``allow_truncated``.
+        keep_sam: If True, keep the intermediate SAM alignment(s) for debugging.
+        available: Accessions with FASTQ files on disk. A selected sample not in it is left
+            out and counted rather than logged individually, so a dry run over many thousands
+            of screened-but-not-downloaded samples prints one summary line. ``None`` checks
+            each selected sample's FASTQ files individually instead.
 
     Returns:
         Mapping of accession to an ``ExtractionResult`` (empty files in dry-run).
@@ -974,13 +980,11 @@ def assemble_extracted_reads(
 ) -> Tuple[Path, bool]:
     """Assemble a set of extracted FASTQ files with megahit.
 
-    Single-end input (one file) uses megahit ``-r``; paired input (two files) uses
-    ``-1``/``-2``. The reads are expected to be a small, target-filtered set.
-
-    If ``output_dir`` already holds contigs, the assembly is considered done and
-    megahit is not rerun unless ``force`` is set. If the folder exists but holds no
-    contigs (an interrupted run), an error is raised unless ``force`` is set, in
-    which case the folder is removed before megahit runs.
+    Single-end input (one file) uses megahit ``-r``; paired input (two files) uses ``-1``/``-2``. The
+    reads are expected to be a small, target-filtered set. If ``output_dir`` already holds contigs, the
+    assembly is considered done and megahit is not rerun unless ``force`` is set; if the folder exists
+    but holds no contigs (an interrupted run), an error is raised unless ``force`` is set, in which case
+    the folder is removed before megahit runs.
 
     Args:
         reads: One or two FASTQ files to assemble.
@@ -988,30 +992,26 @@ def assemble_extracted_reads(
         threads: CPU threads.
         min_contig_len: Optional minimum contig length.
         force: If True, redo the assembly even if it already ran.
-        preset: megahit ``--presets`` value (e.g. ``meta-sensitive``, ``meta-large``).
-            ``None`` or ``"default"`` omits the flag and uses megahit's own defaults.
-        keep_intermediate: If True, keep megahit's ``intermediate_contigs/`` folder
-            instead of removing it once the assembly succeeds (useful for debugging a
-            specific k-mer step, at the cost of extra disk space).
-        k_flags: Explicit ``--k-min``/``--k-max``/``--k-step`` values (keys without the
-            leading dashes, e.g. ``{"k-min": 21}``), used instead of a preset. Combining
-            this with a preset is rejected, since megahit's own k-mer choices for a
-            preset and an explicit k-mer schedule cannot both apply.
-        tmp_dir: Where megahit writes its scratch files (``--tmp-dir``); defaults to
-            megahit's own choice (a folder under ``output_dir``) when not given. megahit
-            needs FIFOs for its scratch files, so a default that lands on a filesystem
-            without them (e.g. ExFAT) fails; pointing this at a POSIX filesystem works
-            around it.
+        preset: megahit ``--presets`` value (e.g. ``meta-sensitive``, ``meta-large``); ``None`` or
+            ``"default"`` omits the flag and uses megahit's own defaults.
+        keep_intermediate: If True, keep megahit's ``intermediate_contigs/`` folder instead of
+            removing it once the assembly succeeds (useful for debugging a k-mer step, at the cost
+            of extra disk space).
+        k_flags: Explicit ``--k-min``/``--k-max``/``--k-step`` values (keys without the leading
+            dashes, e.g. ``{"k-min": 21}``), used instead of a preset; combining the two is rejected.
+        tmp_dir: Where megahit writes its scratch files (``--tmp-dir``); defaults to megahit's own
+            choice under ``output_dir`` when not given. megahit needs FIFOs for its scratch files, so
+            a default landing on a filesystem without them (e.g. ExFAT) fails; a POSIX filesystem
+            works around it.
 
     Returns:
-        The megahit output directory and whether megahit actually ran (False when the
-        assembly was already there), so the caller can leave an existing record alone.
+        The megahit output directory and whether megahit actually ran (False when the assembly was
+        already there), so the caller can leave an existing record alone.
 
     Raises:
-        ProcessingError: If the number of reads is unsupported, the output directory
-            exists without contigs and ``force`` is not set, ``k_flags`` is given
-            together with a preset, ``tmp_dir`` is ``output_dir`` or a folder inside it,
-            or megahit itself fails.
+        ProcessingError: If the number of reads is unsupported, the output directory exists without
+            contigs and ``force`` is not set, ``k_flags`` is given together with a preset, ``tmp_dir``
+            is ``output_dir`` or a folder inside it, or megahit itself fails.
     """
     out_dir = Path(output_dir)
     contigs_path = out_dir / "final.contigs.fa"
@@ -1151,19 +1151,15 @@ def assembly_coverage(
 ) -> Dict[str, Any]:
     """Estimate assembly coverage by mapping the extracted reads back onto its contigs.
 
-    Aligns ``reads`` against ``contigs`` with minimap2, filters unmapped/secondary/
-    supplementary alignments the same way extraction does, and counts what remains.
-    ``mapped_reads`` is the sample's mapped-read count from extraction, used to compute
-    what fraction of those reads the assembly recruits; pass ``None`` (or 0) when that
-    count is not known, and ``mapping_rate`` comes back ``None``.
-
-    The SAM and BAM written under ``work_dir`` are removed before returning, whether or
-    not the caller ever reads them.
+    Aligns ``reads`` against ``contigs`` with minimap2, filters unmapped/secondary/supplementary
+    alignments the same way extraction does, and counts what remains. ``mapped_reads`` is the
+    sample's mapped-read count from extraction, used for what fraction of those reads the assembly
+    recruits; pass ``None`` (or 0) when that count is not known, and ``mapping_rate`` comes back
+    ``None``. The SAM and BAM written under ``work_dir`` are removed before returning either way.
 
     Returns:
-        ``{"reads_mapped": int, "mapping_rate": Optional[float],
-        "mean_depth_estimate": Optional[float]}``, with ``mean_depth_estimate`` None when the
-        assembly has no contigs to spread the mapped bases over.
+        ``{"reads_mapped": int, "mapping_rate": Optional[float], "mean_depth_estimate":
+        Optional[float]}``, the last None when the assembly has no contigs to spread reads over.
     """
     work_root = Path(work_dir)
     sam_path = work_root / "coverage.sam"
