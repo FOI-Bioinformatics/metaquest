@@ -88,7 +88,7 @@ class TestLoadSave:
     def test_stale_lock_is_removed_and_fresh_lock_times_out(self, tmp_path, monkeypatch):
         target = tmp_path / "metaquest_registry.json"
         lock = tmp_path / "metaquest_registry.json.lock"
-        monkeypatch.setattr(reg, "LOCK_STALE_SECONDS", 0.3)
+        monkeypatch.setattr(reg, "LOCK_STALE_SECONDS", 5.0)  # well apart from the wait window
         monkeypatch.setattr(reg, "LOCK_WAIT_SECONDS", 0.3)
         lock.write_text("1")
         os.utime(lock, (0, 0))  # ancient -> stale -> removed
