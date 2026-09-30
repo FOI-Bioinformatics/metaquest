@@ -2,6 +2,128 @@
 
 All notable changes to MetaQuest are documented in this file. Dates are in YYYY-MM-DD format.
 
+## [0.6.0] - 2026-09-30
+
+### Added
+
+- `registry_update(path, mutation)`: loads the registry, applies a mutation to it and writes it back, all
+  under one lock, returning the mutation's result. Several commands were migrated onto it; see Changed.
+- Process-level concurrency tests (`tests/test_concurrency_processes.py`, `tests/helpers_processes.py`):
+  spawn the real CLI as a subprocess with fake tools on `PATH` and exercise same-accession contention for
+  a plain project and for a store, registry contention during a download, two `SIGTERM`s during a
+  download, a `SIGKILL`ed lock holder, and `store_gc` against a dataset another run is downloading.
+- An atomic-writes gate in `make check` (`scripts/check_atomic_writes.sh`): fails on a direct
+  `.write_text`, `.write_bytes`, `.to_csv`, or `open(path, "w...")` call outside the small allowlist in
+  `scripts/atomic_writes_allowlist.txt`.
+- A `multiprocess` pytest marker for tests that start real subprocesses; it runs as part of the default
+  suite.
+- Locks for a shared minimap2 index build and for per-sample read extraction
+  (`<index>.lock`; `<output-folder>/.locks/<ACCESSION>.<GENOME_ID>.lock`), so two overlapping processes
+  building the same index or extracting the same sample no longer duplicate the work; a sample already
+  being extracted elsewhere is reported skipped rather than mapped twice.
+
+### Changed
+
+- One lock mechanism (`metaquest/utils/lockfile.py`) now backs the registry lock, the store catalogue
+  lock, every per-accession dataset lock, the new plain-project download lock, and the new index-build
+  and per-sample-extraction locks. Every lock file carries a holder record (pid, host, start time, a
+  random token) refreshed by a heartbeat thread. A lock judged stale is reclaimed only under a second,
+  short-lived guard file, so two waiters judging one lock stale at the same instant still produce exactly
+  one winner, and a holder that stalls past its stale window (a slow write, a sleeping laptop) is not
+  destroyed as long as its heartbeat keeps running. A holder whose process has since died on the same
+  host is taken over at once instead of waiting out the stale window.
+- The registry lock's stale window is now 120 seconds (was 30), refreshed by the heartbeat every 5
+  seconds; the wait before a writer gives up is unchanged at 30 seconds. The store catalogue lock waits
+  up to 60 seconds and is itself judged stale after 120 seconds. Every lock's "gave up waiting" message is
+  now one format across every lock kind, naming what is locked, the holder's pid and host, and since when.
+- A plain project's downloads (no shared store) now take a per-accession lock the same way a store does,
+  so two runs on one project no longer both write into `fastq/<ACCESSION>_temp` and delete each other's
+  in-flight output. Each download is built, verified and compressed under
+  `fastq/.metaquest-tmp/<ACCESSION>` and published into `fastq/<ACCESSION>` with one rename.
+  `--lock-wait` now bounds this wait too, the same as it already bounded the store's lock.
+- `store_gc` treats a dataset used (linked or downloaded) within the last day as in use even when nothing
+  currently holds its lock, and re-checks each candidate's lock, usage, and link state again immediately
+  before removing it, not only at classification time; a dataset kept for either reason is listed under
+  `in_use` with the specific reason. `store_verify --fix-state` re-reads the sidecar under the dataset
+  lock immediately before writing it back, and skips the write if another process changed it meanwhile or
+  if the dataset is locked.
+- A store catalogue write that fails after a dataset has already been published and linked no longer
+  fails the download: the result is reported as a success with "; catalogue pending; stored" in its
+  message, and `store_reindex` repairs the missing catalogue row from the sidecar already on disk.
+- Every command now handles `SIGINT`, `SIGTERM`, and `SIGHUP`. The first turns into a `KeyboardInterrupt`
+  so a `finally` block or a registry batch can flush what has been done; a second signal is logged rather
+  than raised, so it cannot cut a final write short; a third abandons the write, terminates any running
+  tool, and exits with status 130.
+- `import metaquest` no longer calls `setup_logging()`; a library host now configures its own logging, or
+  calls `metaquest.utils.logging.setup_logging()` itself for console or file output. The CLI is
+  unaffected, since `metaquest.cli.main.main()` already calls it explicitly. A second call to
+  `setup_logging()` (for example a host application reconfiguring it) now removes only the handlers it
+  installed itself, leaving a host's own handlers, or pytest's `caplog` handler, untouched.
+- Seven commands that used to load the registry, do their work, and write it back under a lock covering
+  only the write (`select`, `blacklist`, `download_metadata`, `parse_metadata`, `sra_profile`,
+  `sra_report`, `sra_validate`, and `status --init`/`--reconcile`) now read a snapshot for their own work
+  and record their outcome through `registry_update` or a batch, so the file they write is re-read under
+  the lock and never overwrites a concurrent `download_sra`'s committed outcome. `status --reconcile` now
+  splits its filesystem scan (no lock held) from applying the resulting plan (under the lock), so read
+  counting no longer runs while the registry lock is held.
+- Every tabular and text output file metaquest writes is now written atomically, through a uniquely named
+  temporary file replaced into place with `os.replace`: CSV and TSV tables, the registry, store sidecars,
+  the minimap2 index and its record, per-accession metadata XML, and every HTML report; the registry and
+  sidecar writes also call `fsync`. Temporary file names are dot-prefixed and carry the hostname, pid, and
+  a random token, so they no longer collide between two SLURM nodes writing into the same folder, and
+  stay invisible to every folder listing. Text metaquest writes is now explicit UTF-8 rather than the
+  platform's default locale encoding.
+- `--lock-wait` and `--sra-cache`'s help text now cover a plain project's own per-accession lock, not only
+  the store's.
+
+### Fixed
+
+- A concurrent write from `download_sra` could be lost when `select`, `blacklist`, `download_metadata`,
+  `parse_metadata`, `sra_profile`, `sra_report`, `sra_validate`, or `status --init`/`--reconcile` ran at
+  the same time and wrote back a registry snapshot loaded before the download's outcome was recorded.
+- Two downloads of the same accession into one plain project could stage into the same
+  `<ACCESSION>_temp` folder and delete each other's in-flight output.
+- `store_gc --yes` and `store_verify --fix-state` could remove or rewrite a dataset another process had
+  since started using, because each checked the lock only once, before doing its own work, rather than
+  again immediately before writing.
+- A second `Ctrl-C` (or `SIGTERM`/`SIGHUP`) during a command's final registry flush could abandon the
+  write outright; it is now logged and the flush is allowed to finish.
+- The store catalogue could be written while a process held the project registry lock, so a slow or
+  contended catalogue write held up every other command waiting on the registry; `sra_profile`,
+  `sra_report`, and `sra_validate` now record store usage after the registry batch that recorded their
+  analysis results has already released the lock.
+- `terminate_children()`, called after an interrupted download, left the whole process's stop flag set
+  for the rest of that process's life, so an in-process caller that ran a second download after an
+  interrupted one found its tools refused to start. Each download run now carries its own stop token;
+  interrupting one run's tools no longer affects a concurrent run in the same process.
+- `pigz`, started to compress a finished download, was not stopped by an interrupt and could keep
+  running after its parent command exited; it now receives the same per-run stop token as the download
+  tools and is terminated with them.
+
+### Testing
+
+- `make test`: 2655 passed, 4 deselected, 95% coverage (was 2449 passed at 0.5.1).
+- `make check` and `make pipeline` pass on the final state of the branch.
+
+### Upgrade notes
+
+- Lock and log wording changed. A waiter now logs "waiting for <what>: held by <holder>" while it waits;
+  a dead-holder takeover logs "Took over the lock on <what>: its holder is no longer running (pid N on
+  host H)"; a repeated signal logs "Received SIGTERM again; N more will abandon the write" (or `SIGINT`
+  or `SIGHUP` in place of `SIGTERM`). A script that greps metaquest's logs for the old "Gave up waiting
+  for ..." wording needs to match the new "<what> is locked by pid N on host H since T: <lock>" message
+  instead.
+- `fastq/<ACCESSION>_temp` leftovers from a version before this one are still recognized, counted as
+  transient bytes, and cleaned up on the next download; new downloads stage under
+  `fastq/.metaquest-tmp/` instead.
+- A registry lock orphaned by a holder killed on a different host is now judged stale only after 120
+  seconds (up from 30), so a writer can be blocked behind an orphaned lock for up to 120 seconds; each
+  waiter still gives up and reports a failure after its own 30 second wait, so a busy project can see a
+  burst of "locked" results that a retry resolves once the 120 seconds pass. A holder that died on the
+  same host is still taken over at once.
+- A `--sra-cache` folder shared by two projects without a store is still not locked; avoiding concurrent
+  prefetch runs into a shared cache directory remains the caller's responsibility, as before this release.
+
 ## [0.5.1] - 2026-09-26
 
 ### Performance

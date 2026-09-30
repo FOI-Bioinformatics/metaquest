@@ -146,6 +146,116 @@ Nothing outside `metaquest/store` depends on its internal layout; other layers c
 functions (`resolve_store_root`, `link_dataset`, `record_usage_safe`, and so on) and otherwise treat a
 project with no store configured exactly as it behaved before the store existed.
 
+#### Locking
+
+Every lock file in metaquest is built on one mechanism, `metaquest/utils/lockfile.py`, rather than each
+caller managing its own `O_EXCL` file:
+
+- **Holder record**: creating a lock (`O_EXCL`) writes a JSON record of `{pid, host, started, token,
+  pidns}` (`token` a random hex string; `pidns` the inode of `/proc/self/ns/pid` on Linux, absent
+  elsewhere). The record lets a waiter describe who holds a lock ("pid N on host H since T") and tell a
+  dead holder from a live one.
+- **Heartbeat**: one daemon thread per process refreshes the mtime of every lock this process holds, at
+  an interval set by the lock's policy, so a holder doing slow work is not mistaken for dead.
+  `os.register_at_fork` replaces the heartbeat and its thread-local bookkeeping in a forked child, so a
+  fork never refreshes or releases the parent's lock.
+- **Guarded reclaim**: a waiter that judges a lock stale (its mtime older than the policy's
+  `stale_seconds`) or its holder's process dead (same host, `os.kill(pid, 0)` raising
+  `ProcessLookupError`) does not unlink it directly. It first creates `<lock>.reclaim` with `O_EXCL`;
+  only the process holding that guard re-observes the lock and removes it, and only if the holder record
+  and inode still match what was observed and the lock is still stale or dead. This is what keeps two
+  waiters judging one lock stale at the same instant from both "winning": only one of them can create
+  the guard file.
+- **Release**: a lock is removed only by the process whose token matches the one written in the file, so
+  a process that took over a lock never removes a later holder's lock on the same path.
+
+Three `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `poll_seconds`,
+`heartbeat_seconds`) cover every lock kind:
+
+| Policy | Stale | Wait | Heartbeat |
+|---|---|---|---|
+| Registry | 120 s | 30 s | 5 s |
+| Catalogue | 120 s | 60 s | 5 s |
+| Dataset | 600 s | see below | 10 s |
+
+The registry policy covers `<registry>.lock`; the catalogue policy covers
+`<store>/catalog.sqlite.lock`; the dataset policy covers four lock files: a store dataset lock
+(`<store>/locks/<ACCESSION>.lock`), a plain project's per-accession download lock
+(`<fastq>/.locks/<ACCESSION>.lock`), an index build lock (`<index>.lock`), and a per-sample extraction
+lock (`<output>/.locks/<ACCESSION>.<GENOME_ID>.lock`).
+
+The dataset policy's wait varies by caller: a store dataset lock and an index build lock wait without a
+time limit (for as long as the holder's heartbeat shows it is alive); a plain project's per-accession
+download lock is bounded by `--lock-wait` (0, the default, means no limit); a per-sample extraction lock
+never waits (`blocking=False`), so a second process or thread finding a sample already locked reports it
+skipped instead of mapping it twice.
+
+Compatibility shims keep every existing caller unchanged: `metaquest/store/locks.py` re-exports the
+dataset-lock API (`dataset_lock`, `lock_is_held`, `read_holder`, `LockHeld`, `LockWaitStopped`) built on
+`held_lock` with the dataset policy, and `metaquest/data/registry.py`'s `_acquire_lock` is a thin
+context manager over `held_lock` with the registry policy.
+
+#### Registry write model
+
+To keep a long command from holding the registry lock across slow work (read counting, profiling,
+catalogue writes), the registry is written through one of three patterns, never by loading the file,
+doing minutes of work, and writing it back under a single lock:
+
+- **`registry_transaction(path)`**: the low-level context manager, used inside the two helpers below and
+  directly by a handful of call sites, that loads the registry under the lock, yields it for one quick
+  mutation, and writes it back before releasing the lock.
+- **`registry_update(path, mutation)`** (`metaquest/data/registry_batch.py`): loads the registry,
+  applies `mutation` to it and writes it back, all under one `registry_transaction`, and returns the
+  mutation's result. The pattern for a command that works on a read-only snapshot first (ranking,
+  parsing, profiling) and then records what it found: `registry_update(path, partial(record_something,
+  ...))`. A raising mutation writes nothing.
+- **`RegistryBatch`** (`registry_batch(path)`): queues many small mutations (one per accession, for
+  example) and applies them in a few transactions instead of one each, flushing on a count or a time
+  interval and on `__exit__`; a failing flush is logged rather than raised, since the block's own
+  exception, if any, must propagate instead.
+
+`select`, `blacklist`, `download_metadata`, `parse_metadata`, `sra_profile`, `sra_report`,
+`sra_validate`, and `status --init`/`--reconcile` all follow this shape: do their own work against a
+snapshot loaded without the lock, then record the outcome through `registry_update` or a batch, so the
+file they write is re-read under the lock and never overwrites a concurrent `download_sra`'s committed
+outcome. `status --reconcile` splits into `registry_reconcile.scan_reconcile` (lists the filesystem once,
+no lock, and rehearses the reconcile on a deep copy of the snapshot) and `apply_reconcile` (re-evaluates
+the plan's conditions against the registry `registry_update` hands it, reading no files); `reconcile()`
+is `apply(scan(...))` for a caller that wants the old one-call behaviour.
+
+#### Atomic writes and temp names
+
+`metaquest/data/file_io.py` provides `atomic_path`, `write_text_atomic`, `write_bytes_atomic`,
+`open_atomic`, and `write_csv`, every one of them writing into a uniquely named temporary file next to
+the target (`.{name}.{host}.{pid}.{token}.tmp`, dot-prefixed so it is invisible to every folder listing
+built on `visible_files`) and publishing it with `os.replace`, so a reader never sees a partially
+written file and a crash leaves at most an orphaned, clearly-named temp file. The registry and store
+sidecar writes also call `fsync` before replacing; other outputs do not. `scripts/check_atomic_writes.sh`,
+run as part of `make check`, fails on a direct `.write_text`, `.write_bytes`, `.to_csv`, or `open(path,
+"w...")` call outside the allowlist in `scripts/atomic_writes_allowlist.txt`, which holds only
+`file_io.py` itself.
+
+#### Termination
+
+`metaquest/utils/termination.py` installs a signal handler for `SIGINT`, `SIGTERM`, and `SIGHUP` (and
+`SIGBREAK` in place of the latter two on Windows) for the length of one command, through
+`graceful_termination()`. The first signal sets a `Termination.stop` event and raises
+`KeyboardInterrupt`, so `finally` blocks and `with` exits (a registry batch flush, a tool shutdown) run
+normally; a second signal is logged and counted, not raised, so it cannot cut that flush short; after
+`ABANDON_AFTER_SIGNALS` (3) signals in total the process terminates any running child and exits at once
+with status 130 (`EXIT_INTERRUPTED`). `BaseCommand.run` (`metaquest/cli/base.py`) opens this context
+around every command's `execute()`, unless a command sets `graceful_shutdown = False`, puts the
+`Termination` on `args._termination`, and on a caught `KeyboardInterrupt` logs, calls
+`SecureSubprocess.terminate_children()`, and returns 130.
+
+A per-run stop token (an `Event`, not the process-wide `STOP`) follows a download from `download_sra`
+through `_project_download`/`_store_download`, `download_accession`, and `compress_fastq` down to
+`SecureSubprocess.run_secure`, so interrupting one run's tools (`terminate_children(stop=token)`) does
+not affect a concurrent run's tools in the same process. `STOP` and `SecureSubprocess._stopping` remain
+the process-wide emergency stop, set only by the final abandon path and never cleared at the start of an
+ordinary run, so an in-process caller that starts a further run after an interrupted one must clear it
+itself if it wants that further run's own tools to start.
+
 #### Plugin System
 The plugin system enables extensibility:
 - Format plugins for different file formats

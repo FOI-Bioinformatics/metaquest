@@ -602,6 +602,34 @@ metaquest blacklist --list
 metaquest blacklist --remove SRR2517418
 ```
 
+### Running several instances at once
+
+Two or more `metaquest` processes can work on the same project, or the same shared store, at once, on
+one machine or on several machines sharing a network filesystem. Every long-running command installs a
+graceful signal handler: the first `SIGINT`, `SIGTERM`, or `SIGHUP` it receives stops cleanly, letting
+whatever unit of work was already in progress (an accession, a sample, a registry write) finish and be
+recorded rather than being cut off mid-write; a second signal is logged rather than acted on, so it
+cannot interrupt that final write; a third abandons the run at once, stops any running external tool,
+and exits with status 130.
+
+Downloads are locked per accession, both into a shared store (`<data-root>/locks/<ACCESSION>.lock`) and
+into a plain project with no store (`<fastq-folder>/.locks/<ACCESSION>.lock`), so two runs racing to
+fetch the same accession cooperate instead of corrupting each other's output: the second run waits for
+the first, then finds the finished files and reports them already present. `--lock-wait SECONDS` bounds
+how long a run waits for another run's lock on the same accession before giving up, for both a store and
+a plain project; the default, 0, waits without a time limit for as long as the lock's heartbeat keeps
+showing its holder is still working. A lock whose heartbeat stops for 10 minutes (a crashed or killed
+process) is taken over by the next waiter; a holder that has already died on the same machine is taken
+over at once, without waiting out that window. The project registry is locked the same way, with a
+120-second stale window, so a command that is slow to write (a large batch, a contended filesystem) is
+not mistaken for dead by another command waiting to record its own results.
+
+`store_gc` keeps a dataset for one day after it was last linked or downloaded even when nothing
+currently holds its lock, on top of never removing a dataset a live project still uses or links.
+
+See "Shared data store" above for the store's own locking and `store_gc`/`store_verify` behaviour, and
+"Downloading reads" above for `--lock-wait` and `--sra-cache`.
+
 ### SRA Quality Profiling
 
 `sra_profile` computes statistics and a quality profile for each downloaded dataset. It reads the
