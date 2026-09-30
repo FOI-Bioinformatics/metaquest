@@ -47,9 +47,13 @@ def _instrumented(
     """``worker`` with a free-space check before it starts and its run time recorded.
 
     Both download passes call the returned function in place of ``worker``, with the same
-    arguments. Before the worker starts, ``guard.reserve`` must find room for the accession;
-    when it does not, the worker is not called and ``(False, <disk-full message>)`` is returned.
-    The reservation is released when the worker returns or raises. Each call the worker makes
+    arguments. Before the worker starts, ``guard.reserve`` must find room for the accession,
+    waiting for running downloads to release theirs when that would be enough; the wait ends
+    when the run's stop token (the ``stop`` keyword) or the process-wide ``STOP`` is set. When
+    it finds no room (``insufficient-space: ...``) or is interrupted, the worker is not called
+    and ``(False, <message>)`` is returned; an ``insufficient-space`` failure concerns that
+    accession alone and does not stop the run. The reservation is released when the worker
+    returns or raises. Each call the worker makes
     is timed into ``timings[accession] = (started, seconds)``, written in the worker thread
     before the result reaches the main thread's ``on_result``, so a later attempt overwrites an
     earlier one. ``guard`` or ``timings`` may be None to skip that part.
@@ -57,9 +61,15 @@ def _instrumented(
 
     def _run(accession: str, *args: Any, **kwargs: Any) -> Tuple[bool, str]:
         if guard is not None:
-            refusal = guard.reserve(accession)
+            stop = kwargs.get("stop")
+            refusal = guard.reserve(accession, should_stop=lambda: accession_mod.stop_requested(stop))
             if refusal is not None:
-                logger.error("Not starting %s: %s", accession, refusal)
+                logger.log(
+                    logging.INFO if refusal == "interrupted" else logging.ERROR,
+                    "Not starting %s: %s",
+                    accession,
+                    refusal,
+                )
                 return False, refusal
         started = datetime.now(timezone.utc)
         clock = time.monotonic()
@@ -320,8 +330,8 @@ def _execute_parallel_downloads(
     ``SecureSubprocess``'s stopping flag are left as they are: a run neither sets nor clears
     them, so an emergency stop set before the run still applies to it.
 
-    The first result classified as disk-full (a tool that ran out of space, or the free-space
-    guard refusing to start one) cancels every download not yet started: each is recorded as
+    The first result classified as disk-full (a tool that ran out of space) cancels every
+    download not yet started: each is recorded as
     failed with ``"disk-full: not attempted"`` and notified at once, while downloads already
     running finish. The stop token is not used for this, so running tools are not stopped.
 

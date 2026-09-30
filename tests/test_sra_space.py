@@ -2,6 +2,7 @@
 
 import argparse
 import threading
+import time
 from collections import Counter, namedtuple
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -89,35 +90,73 @@ class TestReserve:
         fake_disks.free.update({1: 100 * GB, 2: 3 * GB, 3: 100 * GB})
         guard = space_mod.SpaceGuard(_locations(tmp_path), GB, {"SRR1": GB // 2}, use_prefetch=True)
         message = guard.reserve("SRR1")
-        assert message == f"disk-full: insufficient free space on {tmp_path / 'tmp'}: 3.0 GB free, about 4.0 GB needed"
-        assert retry_mod.accession_mod.classify_download_error(message) == "disk-full"
+        assert message == (
+            f"insufficient-space: not enough free space on {tmp_path / 'tmp'}: 3.0 GB free, about 4.0 GB needed"
+        )
+        # Not a disk-full message: it fails this accession only and does not stop the run.
+        assert retry_mod.accession_mod.classify_download_error(message) != "disk-full"
 
-    def test_reservations_are_subtracted_and_released(self, tmp_path, fake_disks):
+    def test_short_only_because_of_reservations_waits(self, tmp_path, fake_disks):
         fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 1})
         fake_disks.free[1] = 10 * GB
         guard = space_mod.SpaceGuard(_locations(tmp_path), 6 * GB, {}, use_prefetch=True)
         assert guard.reserve("SRR1") is None
-        assert guard.reserve("SRR2").startswith("disk-full: insufficient free space")
+        # SRR2 would fit once SRR1's reservation is returned, so it waits rather than refusing;
+        # a stop request ends the wait without reserving anything.
+        assert guard.reserve("SRR2", should_stop=lambda: True) == "interrupted"
         guard.release("SRR1")
         assert guard.reserve("SRR2") is None
 
-    def test_two_workers_reserving_at_once_cannot_both_have_the_space(self, tmp_path, fake_disks):
+    def test_larger_than_free_plus_reservations_is_refused_at_once(self, tmp_path, fake_disks):
+        fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 1})
+        fake_disks.free[1] = 10 * GB
+        guard = space_mod.SpaceGuard(_locations(tmp_path), 6 * GB, {"SRR2": 2 * GB}, use_prefetch=True)
+        assert guard.reserve("SRR1") is None
+        stop = Mock(return_value=False)
+        assert guard.reserve("SRR2", should_stop=stop).startswith("insufficient-space:")
+        stop.assert_not_called()
+
+    def test_two_workers_reserving_at_once_cannot_both_have_the_space(self, tmp_path, fake_disks, monkeypatch):
+        monkeypatch.setattr(space_mod, "WAIT_POLL_SECONDS", 0.05)
         fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 1})
         fake_disks.free[1] = 10 * GB
         guard = space_mod.SpaceGuard(_locations(tmp_path), 6 * GB, {}, use_prefetch=True)
         barrier = threading.Barrier(2)
         results = {}
+        first = threading.Event()
 
         def worker(accession):
             barrier.wait()
             results[accession] = guard.reserve(accession)
+            first.set()
 
         threads = [threading.Thread(target=worker, args=(acc,)) for acc in ("SRR1", "SRR2")]
         for thread in threads:
             thread.start()
+        assert first.wait(5)
+        time.sleep(0.2)
+        assert len(results) == 1  # the other one is waiting, not refused
+        guard.release(next(iter(results)))
         for thread in threads:
-            thread.join()
-        assert sorted(value is None for value in results.values()) == [False, True]
+            thread.join(5)
+        assert results == {"SRR1": None, "SRR2": None}
+
+    def test_wait_ends_on_the_stop_token(self, tmp_path, fake_disks, monkeypatch):
+        monkeypatch.setattr(space_mod, "WAIT_POLL_SECONDS", 0.05)
+        fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 1})
+        fake_disks.free[1] = 10 * GB
+        guard = space_mod.SpaceGuard(_locations(tmp_path), 6 * GB, {}, use_prefetch=True)
+        assert guard.reserve("SRR1") is None
+        stop = threading.Event()
+        wrapped = retry_mod._instrumented(Mock(return_value=(True, "ok")), guard, None)
+        result = {}
+        thread = threading.Thread(target=lambda: result.setdefault("r", wrapped("SRR2", stop=stop)))
+        thread.start()
+        time.sleep(0.2)
+        assert thread.is_alive()
+        stop.set()
+        thread.join(5)
+        assert result["r"] == (False, "interrupted")
 
     def test_unknown_size_below_the_floor_is_refused(self, tmp_path, fake_disks):
         fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 1})
@@ -272,39 +311,24 @@ class TestFirstPassDiskFullAbort:
         assert calls == ["SRR1"]
         assert failed == ["SRR1"]
 
-    def test_guard_refusal_aborts_the_run(self, tmp_path):
+    def test_guard_refusal_does_not_abort_the_run(self, tmp_path):
         guard = Mock()
-        guard.reserve.side_effect = lambda acc: "disk-full: insufficient free space on /x" if acc == "SRR1" else None
-        gate = threading.Event()
-
-        def worker(accession, *args, **kwargs):
-            gate.wait(5)
-            return True, "ok"
-
-        def on_result(accession, success, message):
-            if message == retry_mod.DISK_FULL_NOT_ATTEMPTED:
-                gate.set()
-
-        timings = {}
-        _, _, failed, results, abort = retry_mod._download_with_retries(
-            ["SRR1", "SRR2", "SRR3"],
-            tmp_path,
-            1,
-            1,
-            False,
-            None,
-            1,
-            on_result=on_result,
-            downloader=worker,
-            guard=guard,
-            timings=timings,
+        guard.reserve.side_effect = lambda acc, **kwargs: (
+            "insufficient-space: not enough free space on /x" if acc == "SRR1" else None
         )
-        assert abort == "disk-full"
-        assert results["SRR1"] == "disk-full: insufficient free space on /x"
-        assert "SRR1" in failed
+        worker = Mock(return_value=(True, "ok"))
+        timings = {}
+        successful, _, failed, results, abort = retry_mod._download_with_retries(
+            ["SRR1", "SRR2", "SRR3"], tmp_path, 1, 1, False, None, 1, downloader=worker, guard=guard, timings=timings
+        )
+        assert abort is None
+        assert successful == 2
+        assert failed == ["SRR1"]
         assert "SRR1" not in timings
-        # SRR2 may have started on the single worker before the abort; SRR3 cannot have.
-        assert results["SRR3"] == "disk-full: not attempted"
+        assert results["SRR2"] == results["SRR3"] == "ok"
+        # The retry pass still ran and asked the guard again.
+        assert [c.args[0] for c in guard.reserve.call_args_list].count("SRR1") == 2
+        assert results["SRR1"].startswith("Retry 1: insufficient-space:")
 
     def test_retry_pass_uses_the_instrumented_worker(self, tmp_path):
         attempts = Counter()
@@ -324,6 +348,57 @@ class TestFirstPassDiskFullAbort:
         assert guard.reserve.call_count == 2
         assert guard.release.call_count == 2
         assert "SRR1" in timings
+
+
+class TestGuardInARun:
+    """The real SpaceGuard in the real download loops, on a fake 100 GB filesystem."""
+
+    def _guard(self, tmp_path, fake_disks, monkeypatch, sizes):
+        monkeypatch.setattr(space_mod, "WAIT_POLL_SECONDS", 0.05)
+        fake_disks.devices.update({"out": 1})
+        fake_disks.free[1] = 100 * GB  # constant: the fake downloads write nothing
+        return space_mod.SpaceGuard({space_mod.OUTPUT: tmp_path / "out"}, 10 * GB, sizes, use_prefetch=False)
+
+    def _counting_worker(self):
+        state = {"running": 0, "peak": 0, "order": []}
+        lock = threading.Lock()
+
+        def worker(accession, *args, **kwargs):
+            with lock:
+                state["running"] += 1
+                state["peak"] = max(state["peak"], state["running"])
+            time.sleep(0.1)
+            with lock:
+                state["running"] -= 1
+                state["order"].append(accession)
+            return True, "Downloaded 2 files, complete"
+
+        return worker, state
+
+    def test_downloads_that_each_fit_run_one_after_another(self, tmp_path, fake_disks, monkeypatch):
+        # Three accessions of about 60 GB each (8 x 7.5 GB) on a 100 GB disk with 2 workers.
+        sizes = {acc: int(7.5 * GB) for acc in ("A", "B", "C")}
+        guard = self._guard(tmp_path, fake_disks, monkeypatch, sizes)
+        worker, state = self._counting_worker()
+        successful, failed_count, failed, results, abort = retry_mod._download_with_retries(
+            ["A", "B", "C"], tmp_path, 1, 2, False, None, 2, downloader=worker, guard=guard
+        )
+        assert (successful, failed_count, failed, abort) == (3, 0, [], None)
+        assert state["peak"] == 1
+        assert sorted(state["order"]) == ["A", "B", "C"]
+
+    def test_an_accession_larger_than_the_disk_fails_alone(self, tmp_path, fake_disks, monkeypatch):
+        sizes = {"A": GB, "HUGE": 20 * GB, "C": GB}  # HUGE needs 160 GB
+        guard = self._guard(tmp_path, fake_disks, monkeypatch, sizes)
+        worker, state = self._counting_worker()
+        successful, failed_count, failed, results, abort = retry_mod._download_with_retries(
+            ["A", "HUGE", "C"], tmp_path, 1, 2, False, None, 1, downloader=worker, guard=guard
+        )
+        assert abort is None
+        assert (successful, failed_count, failed) == (2, 1, ["HUGE"])
+        assert "insufficient-space: not enough free space" in results["HUGE"]
+        assert "about 160.0 GB needed" in results["HUGE"]
+        assert sorted(state["order"]) == ["A", "C"]
 
 
 class TestDownloadSraGuard:
@@ -363,7 +438,7 @@ class TestDownloadSraGuard:
 
 
 class TestCommand:
-    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
     def test_run_sizes_and_min_free_gb_reach_download_sra(self, mock_download, _which, tmp_path):
         registry_path = tmp_path / "metaquest_registry.json"
