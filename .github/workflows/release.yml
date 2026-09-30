@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     name: Build, verify and publish GitHub release
     runs-on: ubuntu-latest
     steps:
@@ -58,10 +58,33 @@ jobs:
           generate_release_notes: true
           body_path: release_notes.md
 
-      # Publishing to PyPI is a separate decision: it needs either a PyPI trusted-publisher
-      # setup for this repository or a PYPI_API_TOKEN secret. Uncomment once one of those is
-      # in place.
-      # - name: Publish to PyPI
-      #   uses: pypa/gh-action-pypi-publish@release/v1
-      #   with:
-      #     password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Upload the built distribution for the pypi job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    if: vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distribution built by the build job
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # Publishing to PyPI needs a PyPI trusted-publisher configured for this repository and
+      # workflow (https://docs.pypi.org/trusted-publishers/), so no token or secret is passed
+      # here; the `id-token: write` permission above is what lets pypa/gh-action-pypi-publish
+      # request the short-lived credential that trusted publishing uses. This job only runs
+      # once the repository variable PYPI_PUBLISH is set to "true" (Settings > Secrets and
+      # variables > Actions > Variables); see docs/packaging.md for the steps before turning it
+      # on (name registration, trusted-publisher setup, README/floor checks).
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

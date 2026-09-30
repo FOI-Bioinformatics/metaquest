@@ -973,6 +973,7 @@ For comprehensive documentation including advanced features and technical detail
 - **[SRA Information, Statistics and Validation](docs/SRA_ENHANCED_FEATURES.md)** - Dataset information, read statistics and validation commands supporting `download_sra`
 - **[Branchwater Workflow](docs/branchwater_workflow.md)** - Detailed workflow guide for branchwater functionality
 - **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions
+- **[Packaging](docs/packaging.md)** - PyPI and bioconda distribution, and the checklist before turning on PyPI publishing
 - **[CLAUDE.md](CLAUDE.md)** - Development guidelines, testing strategies, and architectural patterns for contributors
 
 ## Development & Testing
@@ -1051,6 +1052,12 @@ Pushing a tag of the form `vX.Y.Z` (for example `v0.5.0`) triggers the release w
 (`.github/workflows/release.yml`), which builds the sdist and wheel, checks them with `twine` and
 `check-wheel-contents`, and publishes a GitHub release with the built packages attached. See
 [CHANGELOG.md](CHANGELOG.md) for the changes in each release.
+
+A second job in that workflow, `pypi`, publishes the built distribution to PyPI; it is skipped
+until the repository variable `PYPI_PUBLISH` is set to `true`. See
+[docs/packaging.md](docs/packaging.md) for the checklist before turning that on, and for a
+bioconda recipe template (submitted, once PyPI publishing works, to the separate
+`bioconda-recipes` repository; this repository does not carry a recipe folder itself).
 
 ## Contributing
 

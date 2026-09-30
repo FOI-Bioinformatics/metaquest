@@ -40,6 +40,12 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   (10 s each), `--for COMMAND` turns a missing tool that command needs into a failure, `--json` writes
   one JSON document. Exit code 0 without a failed check, 3 with one. It still runs, and reports the
   error, when `config.toml` does not parse. See "Checking the environment" in the README.
+- `pypi`, a second job in the release workflow (`.github/workflows/release.yml`), publishes the
+  distribution the `build` job already produces to PyPI via PyPI's trusted-publisher mechanism (no
+  token in the repository). It only runs once the repository variable `PYPI_PUBLISH` is set to
+  `true`; see the new `docs/packaging.md` for the checklist before that (PyPI name availability,
+  trusted-publisher setup) and a bioconda `meta.yaml` recipe template for the separate
+  `bioconda-recipes` submission that follows a working PyPI release.
 
 ### Changed
 
@@ -67,9 +73,39 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   work starts and exit with 3 (was 1 for `download_sra` and `extract_target_reads`; `genome_download`
   and `genome_prepare` had no check and failed inside the first `datasets` call) when one is missing or
   older than its floor, listing every problem with its `conda install` command.
+- `environment.yml`'s version floors now match `metaquest/utils/tools.py`'s `TOOLS` table exactly
+  (checked by the new `tests/test_environment_pins.py`): `samtools>=1.10` and `megahit>=1.2.9` are
+  now pinned (were unpinned); `pigz`, `ncbi-datasets-cli` and the still-commented-out `seqkit`
+  stay unpinned, since `TOOLS` records no minimum version for any of the three.
+  `DEFAULT_MEMORY_LIMIT_GB`, `MAX_FILE_SIZE_MB`, `DEFAULT_PLUGIN_TIMEOUT`, `ERROR_MESSAGES` and
+  `SUCCESS_MESSAGES` are removed from `metaquest/core/constants.py`: none was read anywhere
+  outside its own definition. The console log level choices and default, previously spelled out
+  separately in `metaquest/cli/base.py` and `metaquest/core/settings.py`, now both come from
+  `constants.LOG_LEVELS`/`DEFAULT_LOG_LEVEL`.
+- The NCBI taxonomy client's and the GTDB client's retry-session construction (a `requests.Session`
+  with a mounted `urllib3.util.retry.Retry`) is consolidated into one
+  `metaquest.utils.http.retrying_session()`, instead of each client building its own
+  `HTTPAdapter`/`Retry` pair; `NCBITaxonomyClient` keeps its historical
+  `taxonomy._build_retrying_session()` entry point as a thin wrapper over it. `SRAMetadataClient`
+  (`sra_info`, and the dataset preview it shares) now builds one of these sessions in `__init__`
+  too, instead of calling the module-level `requests.get` on every request, so an NCBI connection
+  failure, 429 or 5xx is retried with backoff before `NetworkError` is raised.
+
+### Security
+
+- NCBI and store metadata XML is now parsed with a hardened lxml parser
+  (`metaquest/utils/xml.py`'s `SAFE_PARSER`/`parse_xml_file`, used by `data/metadata.py`'s
+  per-file parse): entity resolution, network access and DTD loading are all refused, closing an
+  XXE (external entity reading a local file or the network) and "billion laughs" (entity
+  expansion) risk that lxml's permissive defaults otherwise leave open. The stdlib
+  `xml.etree.ElementTree` parse sites elsewhere (`data/metadata.py`'s batch parse,
+  `data/sra_metadata.py`, `data/taxonomy.py`) are unchanged: CPython's expat binding has refused
+  entity expansion by default since Python 3.7.1, so the same risk does not apply to them.
 
 ### Fixed
 
+- `sra_info` exits with 4, not 1, when NCBI cannot be reached after retries: its `except Exception`
+  used to catch and flatten every failure, including a retryable `NetworkError`, into exit code 1.
 - megahit under cgroups (a SLURM job, a container) sized its memory from the node's total, not from the
   job's limit, and could be killed for exceeding it; `--assembly-memory auto` now passes the job's limit.
 - A disk that filled up during the first download pass did not stop it: every remaining accession was
