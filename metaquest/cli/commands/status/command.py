@@ -194,5 +194,4 @@ class StatusCommand(BaseCommand):
             self._emit(args, report, registry)
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error building status report: %s", e)
-            return 1
+            return self.fail(e, "Error building status report")

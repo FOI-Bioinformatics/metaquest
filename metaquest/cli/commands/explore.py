@@ -75,8 +75,7 @@ class EnrichTaxonomyCommand(BaseCommand):
             )
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error enriching taxonomy: %s", e)
-            return 1
+            return self.fail(e, "Error enriching taxonomy")
 
 
 class ExploreContainmentCommand(BaseCommand):
@@ -187,8 +186,7 @@ class ExploreContainmentCommand(BaseCommand):
 
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error generating explorer: %s", e)
-            return 1
+            return self.fail(e, "Error generating explorer")
 
 
 class FindByTaxonomyCommand(BaseCommand):
@@ -302,5 +300,4 @@ class FindByTaxonomyCommand(BaseCommand):
 
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error filtering by taxonomy: %s", e)
-            return 1
+            return self.fail(e, "Error filtering by taxonomy")

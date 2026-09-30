@@ -281,8 +281,7 @@ class SRAProfileCommand(BaseCommand):
         try:
             return self._run(args)
         except (MetaQuestError, OSError) as e:
-            self.logger.error("Profiling failed: %s", e)
-            return 1
+            return self.fail(e, "Profiling failed")
         except Exception as e:  # noqa: B902 - top-level catch: keep the traceback, return 1
             self.logger.exception("Profiling failed: %s", e)
             return 1

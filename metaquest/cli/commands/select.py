@@ -275,5 +275,4 @@ class SelectDatasetsCommand(BaseCommand):
             registry_update(registry.path, record)
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error selecting datasets: %s", e)
-            return 1
+            return self.fail(e, "Error selecting datasets")

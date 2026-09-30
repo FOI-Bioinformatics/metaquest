@@ -100,8 +100,7 @@ class GenomeSearchCommand(BaseCommand):
 
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error searching genomes: %s", e)
-            return 1
+            return self.fail(e, "Error searching genomes")
 
 
 class GenomeDownloadCommand(BaseCommand):
@@ -240,8 +239,7 @@ class GenomeDownloadCommand(BaseCommand):
 
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error downloading genomes: %s", e)
-            return 1
+            return self.fail(e, "Error downloading genomes")
 
 
 class GenomePrepareCommand(BaseCommand):
@@ -373,5 +371,4 @@ class GenomePrepareCommand(BaseCommand):
             self._create_manifest(output_dir, args.manifest_file, args.registry)
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error preparing genomes: %s", e)
-            return 1
+            return self.fail(e, "Error preparing genomes")

@@ -2,6 +2,21 @@
 
 All notable changes to MetaQuest are documented in this file. Dates are in YYYY-MM-DD format.
 
+## [0.7.0] - unreleased
+
+### Changed
+
+- Exit codes: 3 for a configuration problem (`ConfigurationError`: a missing optional package or NCBI
+  email address, a malformed `config.toml`), 4 for a retryable failure (an NCBI request that could not
+  connect, timed out or got HTTP 429 or 5xx; a wait for the registry or catalogue lock that reached its
+  limit; a `download_sra` run whose every failure was a network one), 130 for an interrupt, 1 for any
+  other failure. See "Exit codes" in the README.
+
+### Upgrade notes
+
+- A script that treated every non-zero exit as the same failure keeps working. A script that tested for
+  exactly 1 should also accept 3 and 4; 4 means the same command may succeed if run again later.
+
 ## [0.6.0] - 2026-09-30
 
 ### Added

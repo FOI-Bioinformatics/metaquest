@@ -189,8 +189,7 @@ class DownloadMetadataCommand(BaseCommand):
                 raise KeyboardInterrupt("download_metadata stopped")
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error downloading metadata: {e}")
-            return 1
+            return self.fail(e, "Error downloading metadata")
 
 
 def _record_all_metadata(registry_arg: Optional[str], parsed: Dict[str, Tuple[Any, Dict[str, Any]]]) -> Registry:
@@ -280,8 +279,7 @@ class ParseMetadataCommand(BaseCommand):
                 raise KeyboardInterrupt("parse_metadata stopped")
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error parsing metadata: {e}")
-            return 1
+            return self.fail(e, "Error parsing metadata")
 
 
 class CheckMetadataAttributesCommand(BaseCommand):
@@ -316,8 +314,7 @@ class CheckMetadataAttributesCommand(BaseCommand):
             check_metadata_attributes(str(resolve_metadata_table(args.file_path)), args.output_file)
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error checking metadata attributes: {e}")
-            return 1
+            return self.fail(e, "Error checking metadata attributes")
 
 
 class CountMetadataCommand(BaseCommand):
@@ -376,8 +373,7 @@ class CountMetadataCommand(BaseCommand):
             )
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error counting metadata: {e}")
-            return 1
+            return self.fail(e, "Error counting metadata")
 
 
 class PlotMetadataCountsCommand(BaseCommand):
@@ -425,5 +421,4 @@ class PlotMetadataCountsCommand(BaseCommand):
             )
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error plotting metadata counts: {e}")
-            return 1
+            return self.fail(e, "Error plotting metadata counts")

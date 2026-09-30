@@ -630,6 +630,26 @@ currently holds its lock, on top of never removing a dataset a live project stil
 See "Shared data store" above for the store's own locking and `store_gc`/`store_verify` behaviour, and
 "Downloading reads" above for `--lock-wait` and `--sra-cache`.
 
+### Exit codes
+
+Every command exits with one of these codes, so a batch script (a SLURM job, for example) can decide
+whether to resubmit:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| 0 | Success | |
+| 1 | Failure: bad input, missing file, a dataset not found, a tool error | Fix the cause; a rerun alone will not help |
+| 2 | Usage error: an unknown flag or command, or a renamed command | Correct the command line |
+| 3 | Configuration: the environment lacks something the command needs | Fix the environment or configuration |
+| 4 | Retryable: a network failure, or a lock wait that reached its limit | Rerun later |
+| 130 | Interrupted by `SIGINT`, `SIGTERM` or `SIGHUP` | Rerun; finished work is kept |
+
+Code 3 covers a missing optional package, a missing NCBI email address and a malformed `config.toml`.
+Code 4 covers an NCBI request that could not connect, timed out or got HTTP 429 or 5xx, and a wait for
+another run's lock on the project registry or the store catalogue that gave up.
+`download_sra` exits with 4 only when every accession that failed did so for a network reason; if any
+failed for another reason (not found, disk full, locked by another run, interrupted) it exits with 1.
+
 ### SRA Quality Profiling
 
 `sra_profile` computes statistics and a quality profile for each downloaded dataset. It reads the

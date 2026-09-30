@@ -304,8 +304,7 @@ class SRAReportCommand(BaseCommand):
         try:
             return self._run(args)
         except (MetaQuestError, OSError) as e:
-            self.logger.error("Report failed: %s", e)
-            return 1
+            return self.fail(e, "Report failed")
         except Exception as e:  # noqa: B902 - top-level catch: keep the traceback, return 1
             self.logger.exception("Report failed: %s", e)
             return 1

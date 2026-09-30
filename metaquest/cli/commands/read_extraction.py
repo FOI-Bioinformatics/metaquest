@@ -608,5 +608,4 @@ class ExtractTargetReadsCommand(BaseCommand):
                     raise KeyboardInterrupt("extract_target_reads assembly stopped")
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error extracting target reads: %s", e)
-            return 1
+            return self.fail(e, "Error extracting target reads")

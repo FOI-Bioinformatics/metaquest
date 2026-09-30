@@ -405,8 +405,7 @@ class StoreVerifyCommand(BaseCommand):
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if root is None:
             _no_store_hint()
@@ -427,8 +426,7 @@ class StoreVerifyCommand(BaseCommand):
                     self._fix_state_locked(result, paths)
                 results.append(result)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         self._print_table(results)
         failed = any(r["verdict"] in ("corrupt", "truncated", "missing") for r in results)

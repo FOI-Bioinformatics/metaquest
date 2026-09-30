@@ -94,8 +94,7 @@ class BlacklistCommand(BaseCommand):
                 self.logger.info("Excluded %d accession(s): %s", len(accessions), args.reason)
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error updating the blacklist: %s", e)
-            return 1
+            return self.fail(e, "Error updating the blacklist")
 
 
 def _read_plain_list(path: Path) -> List[str]:

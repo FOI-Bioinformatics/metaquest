@@ -104,5 +104,4 @@ class ResultsTableCommand(BaseCommand):
             self.logger.info("Next: open %s in a spreadsheet, or read it with pandas.read_csv(sep='\\t')", output)
             return 0
         except (MetaQuestError, OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as e:
-            self.logger.error("Error writing the results table: %s", e)
-            return 1
+            return self.fail(e, "Error writing the results table")

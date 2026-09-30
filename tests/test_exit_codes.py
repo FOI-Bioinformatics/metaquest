@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from metaquest.cli.base import BaseCommand
+from metaquest.cli.commands.sra import DownloadSraCommand
 from metaquest.core.exceptions import (
     ConfigurationError,
     DataAccessError,
@@ -21,6 +22,7 @@ from metaquest.core.exceptions import (
     ValidationError,
     exit_code_for,
 )
+from metaquest.data import registry as reg
 from metaquest.utils.lockfile import LockHeld, LockLost, LockPolicy, held_lock
 
 
@@ -164,6 +166,82 @@ def test_main_keyboard_interrupt_without_graceful_shutdown(tmp_path, monkeypatch
 def test_main_malformed_config_is_a_configuration_error(tmp_path, monkeypatch):
     monkeypatch.setenv("METAQUEST_PROGRESS_EVERY", "not-a-number")
     assert _main(["blacklist", "--list"]) == 3
+
+
+def test_registry_lock_timeout_through_a_command_gives_4(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(reg, "LOCK_STALE_SECONDS", 600.0)
+    monkeypatch.setattr(reg, "LOCK_WAIT_SECONDS", 0.2)
+    registry = tmp_path / "metaquest_registry.json"
+    registry.write_text("{}")
+    (tmp_path / "metaquest_registry.json.lock").write_text("1")
+    argv = ["blacklist", "--add", "SRR1", "--reason", "test", "--registry", str(registry)]
+    assert _main(argv) == 4
+
+
+# --- download_sra -------------------------------------------------------------
+
+
+def _download_args(tmp_path):
+    return argparse.Namespace(
+        accessions_file="accessions.txt",
+        fastq_folder=str(tmp_path / "fastq"),
+        max_downloads=None,
+        num_threads=4,
+        max_workers=4,
+        dry_run=False,
+        force=False,
+        max_retries=1,
+        temp_folder=None,
+        blacklist=None,
+        report_file=None,
+        registry=str(tmp_path / "metaquest_registry.json"),
+        data_root=None,
+    )
+
+
+def _stats(results):
+    failed = [acc for acc, (ok, _) in results.items() if not ok]
+    return {
+        "total": len(results),
+        "to_download": len(results),
+        "already_downloaded": 0,
+        "successful": len(results) - len(failed),
+        "failed": len(failed),
+        "failed_accessions": failed,
+        "results": {acc: message for acc, (_, message) in results.items()},
+    }
+
+
+@pytest.mark.parametrize(
+    "results, code",
+    [
+        (
+            {
+                "SRR1": (False, "network: Download failed: Connection timed out"),
+                "SRR2": (False, "network: Download failed: Connection reset by peer"),
+                "SRR3": (True, "ok"),
+            },
+            4,
+        ),
+        (
+            {
+                "SRR1": (False, "network: Download failed: Connection timed out"),
+                "SRR2": (False, "not-found: Download failed: no data for accession"),
+            },
+            1,
+        ),
+        ({"SRR1": (False, "network: Download failed: timed out"), "SRR2": (False, "interrupted")}, 1),
+        ({"SRR1": (False, "locked: Accession SRR1 is locked by pid 1")}, 1),
+        ({"SRR1": (True, "ok")}, 0),
+    ],
+)
+def test_download_sra_returns_4_only_when_every_failure_is_network(results, code, tmp_path):
+    with (
+        patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump"),
+        patch("metaquest.cli.commands.sra.download_sra", return_value=_stats(results)),
+    ):
+        assert DownloadSraCommand().execute(_download_args(tmp_path)) == code
 
 
 # --- NCBI requests --------------------------------------------------------------

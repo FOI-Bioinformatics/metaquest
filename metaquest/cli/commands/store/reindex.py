@@ -72,8 +72,7 @@ class StoreReindexCommand(BaseCommand):
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if root is None:
             _no_store_hint()
@@ -109,8 +108,7 @@ class StoreReindexCommand(BaseCommand):
             if projects == 0:
                 self._warn_no_projects_restored(paths, has_datasets)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         self.emit(f"Reindexed {count} dataset(s); restored {projects} project(s) and {usage} usage record(s)")
         return 0

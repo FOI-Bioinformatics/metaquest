@@ -382,8 +382,7 @@ class StoreGcCommand(BaseCommand):
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if root is None:
             _no_store_hint(getattr(args, "json", False))
@@ -410,8 +409,7 @@ class StoreGcCommand(BaseCommand):
                     "Cleared the flag set when the catalogue was rebuilt without projects on %s", rebuilt
                 )
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         dataset_candidates = buckets["candidates"]
         leftover_candidates = self._leftover_candidates(paths)

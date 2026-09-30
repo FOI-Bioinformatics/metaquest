@@ -110,8 +110,7 @@ class StoreAdoptCommand(BaseCommand):
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if root is None:
             _no_store_hint()
@@ -131,8 +130,7 @@ class StoreAdoptCommand(BaseCommand):
                 should_stop=None if term is None else term.stop.is_set,
             )
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if args.dry_run:
             self.emit(f"Would adopt {len(report.planned)} dataset(s)")

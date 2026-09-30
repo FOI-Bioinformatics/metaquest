@@ -14,7 +14,7 @@ from metaquest.cli.base import BaseCommand
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
-from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.core.exceptions import DataAccessError, ExitCode, MetaQuestError
 from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import open_atomic
@@ -30,6 +30,7 @@ from metaquest.data.registry_batch import RegistryBatch, registry_batch
 from metaquest.data.sra import (
     ALREADY_EXISTS,
     STORE_LINKED_PREFIX,
+    classify_download_error,
     default_max_workers,
     download_sra,
     parse_verdict_message,
@@ -263,6 +264,19 @@ class DownloadSraCommand(BaseCommand):
             f"--accessions-file {failed_file} "
             f"--fastq-folder {args.fastq_folder}"
         )
+
+    @staticmethod
+    def _failure_exit_code(stats: dict) -> int:
+        """4 (retryable) when every failed accession failed for a network reason, else 1.
+
+        A not-found, disk-full, lock or interrupted failure among them means a rerun alone
+        would not succeed, so the run is a plain failure.
+        """
+        results = stats.get("results", {})
+        failed = stats.get("failed_accessions", [])
+        if failed and all(classify_download_error(results.get(acc, "")) == "network" for acc in failed):
+            return int(ExitCode.TRANSIENT)
+        return int(ExitCode.FAILURE)
 
     @staticmethod
     def _write_report(report_file: str, stats: dict) -> None:
@@ -677,10 +691,9 @@ class DownloadSraCommand(BaseCommand):
 
             if not args.dry_run and download_stats["failed"] > 0:
                 self._report_failed_downloads(args, download_stats)
-                return 1
+                return self._failure_exit_code(download_stats)
 
             return 0
 
         except MetaQuestError as e:
-            self.logger.error(f"Error downloading SRA data: {e}")
-            return 1
+            return self.fail(e, "Error downloading SRA data")

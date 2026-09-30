@@ -36,5 +36,4 @@ class DownloadTestGenomeCommand(BaseCommand):
             download_test_genome(args.output_folder)
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error downloading test genome: {e}")
-            return 1
+            return self.fail(e, "Error downloading test genome")

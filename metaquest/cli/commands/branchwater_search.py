@@ -111,5 +111,4 @@ class BranchwaterSearchCommand(BaseCommand):
                 cap_screening(registry, source.stem, args.registry_max_screened)
             return 0
         except MetaQuestError as e:
-            self.logger.error("Error searching Branchwater: %s", e)
-            return 1
+            return self.fail(e, "Error searching Branchwater")

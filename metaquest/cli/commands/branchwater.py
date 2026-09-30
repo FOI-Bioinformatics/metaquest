@@ -52,8 +52,7 @@ class UseBranchwaterCommand(BaseCommand):
             self.logger.info("Next: metaquest parse_containment --matches-folder %s", args.matches_folder)
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error processing Branchwater files: {e}")
-            return 1
+            return self.fail(e, "Error processing Branchwater files")
 
 
 class ExtractBranchwaterMetadataCommand(BaseCommand):
@@ -96,5 +95,4 @@ class ExtractBranchwaterMetadataCommand(BaseCommand):
                 return 1
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error extracting metadata: {e}")
-            return 1
+            return self.fail(e, "Error extracting metadata")

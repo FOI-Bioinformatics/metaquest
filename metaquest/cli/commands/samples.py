@@ -75,5 +75,4 @@ class SingleSampleCommand(BaseCommand):
 
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error analyzing single sample: {e}")
-            return 1
+            return self.fail(e, "Error analyzing single sample")

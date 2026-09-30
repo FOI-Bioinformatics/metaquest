@@ -243,7 +243,7 @@ def test_a_missing_interactive_extra_fails_before_any_work_or_output(tmp_path, m
     monkeypatch.setitem(sys.modules, package, None)
     with patch.object(SRADatasetAnalyzer, "profile_dataset_quality") as profile_call:
         with caplog.at_level(logging.ERROR):
-            assert SRAReportCommand().execute(_args(tmp_path, groups_file=_groups_file(tmp_path))) == 1
+            assert SRAReportCommand().execute(_args(tmp_path, groups_file=_groups_file(tmp_path))) == 3
     profile_call.assert_not_called()
     assert "metaquest[interactive]" in caplog.text
     assert not (tmp_path / "reports").exists()

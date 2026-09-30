@@ -103,8 +103,7 @@ class ParseContainmentCommand(BaseCommand):
             self.logger.info(hint)
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error parsing containment: {e}")
-            return 1
+            return self.fail(e, "Error parsing containment")
 
 
 class PlotContainmentCommand(BaseCommand):
@@ -165,5 +164,4 @@ class PlotContainmentCommand(BaseCommand):
                 self.logger.info("Next: open %s to view the plot", output_path)
             return 0
         except MetaQuestError as e:
-            self.logger.error(f"Error plotting containment: {e}")
-            return 1
+            return self.fail(e, "Error plotting containment")

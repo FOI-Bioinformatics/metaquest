@@ -180,8 +180,7 @@ class StoreUsageCommand(BaseCommand):
             registry = load_registry(args.registry)
             root = resolve_store_root(args.data_root, rb.store_block(registry).root)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if root is None:
             _no_store_hint(getattr(args, "json", False))
@@ -212,8 +211,7 @@ class StoreUsageCommand(BaseCommand):
                     selector = "bytes-by-organism"
                     rows = self._rows_bytes_by_organism(catalog)
         except DataAccessError as e:
-            self.logger.error(str(e))
-            return 1
+            return self.fail(e, self.name)
 
         if args.json:
             self.emit_json({"selector": selector, "rows": rows})
