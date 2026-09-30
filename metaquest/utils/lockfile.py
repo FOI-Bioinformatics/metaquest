@@ -14,9 +14,11 @@ not how long it has been working. A waiter removes a lock only when that age exc
 ``stale_seconds`` or when the holder is known to be dead (same host, same pid namespace,
 and no process with its pid). The removal happens under a second ``O_EXCL`` file,
 ``<lock>.reclaim``, and only if the lock file is still the one the waiter judged, so two
-waiters can never both remove a lock and one of them remove the other's new lock.
+waiters can never both remove a lock and one of them remove the other's new lock: the lock
+is moved aside with ``rename`` and compared again before it is discarded.
 
-Release compares the token and never removes a lock that now belongs to someone else. A
+Release compares the token under the same guard and never removes a lock that now belongs to
+someone else. The heartbeat reads the token and touches the file through one descriptor. A
 holder record that is not JSON (a bare pid written by an older version, or a test fixture)
 is never judged dead; it follows the age rule alone.
 """
@@ -32,7 +34,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from metaquest.core.exceptions import DataAccessError
 
@@ -44,6 +46,11 @@ FIRST_WAIT_LOG_SECONDS = 1.0
 LOCK_WAIT_LOG_SECONDS = 30.0
 # A reclaim guard is held for a few file operations; one this old was left by a crash.
 RECLAIM_GUARD_STALE_SECONDS = 60.0
+# A release compares its token under the reclaim guard and waits this long for a guard in use.
+RELEASE_GUARD_WAIT_SECONDS = 5.0
+# Errors a heartbeat refresh may raise beyond the OSError it handles itself; any of them marks
+# that one lock lost and leaves the heartbeat thread refreshing the others.
+_REFRESH_FAILURES = (ArithmeticError, AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError)
 
 __all__ = [
     "LockHeld",
@@ -221,39 +228,83 @@ def _take_guard(guard: Path) -> bool:
     return False
 
 
+def _matches(current: Optional[_Observation], observed: _Observation) -> bool:
+    """Whether ``current`` is the same lock file, with the same holder, as ``observed``."""
+    return current is not None and current.inode == observed.inode and current.holder == observed.holder
+
+
+def _restore(aside: Path, lock: Path) -> None:
+    """Put a lock moved aside by mistake back under its name, unless a new lock took the name."""
+    try:
+        os.link(aside, lock)
+    except FileExistsError:
+        logger.warning(
+            "Cannot restore %s: a new lock was created meanwhile; its earlier holder will find it lost", lock
+        )
+    except OSError as e:
+        logger.warning("Cannot restore %s: %s; its holder will find it lost", lock, e)
+
+
 def _reclaim(lock: Path, observed: _Observation, policy: LockPolicy) -> bool:
     """Remove ``lock`` if it is still the file ``observed`` and is stale or has a dead holder.
 
     Runs under ``<lock>.reclaim``, so only one waiter decides at a time, and re-reads the
     lock under it: a lock replaced since the observation (another waiter reclaimed it and
-    took it) is left alone. Returns True when this call removed the lock.
+    took it) is left alone. The lock is then moved aside with ``rename`` and the moved file
+    compared once more, because a guard removed as crashed by two waiters at once can admit
+    both; a file that turns out not to be the observed one is put back with ``os.link``.
+    Returns True when this call removed the lock.
     """
     guard = lock.with_name(lock.name + ".reclaim")
     if not _take_guard(guard):
         return False
     try:
         current = _observe(lock)
-        if current is None or current.inode != observed.inode or current.holder != observed.holder:
+        if current is None or not _matches(current, observed):
             return False
-        if holder_is_dead(current.holder):
+        dead = holder_is_dead(current.holder)
+        if not dead and not _judged_stale(current.age, policy):
+            return False
+        aside = lock.with_name(f"{lock.name}.reclaimed.{secrets.token_hex(4)}")
+        try:
+            os.rename(lock, aside)
+        except FileNotFoundError:
+            return False
+        except OSError as e:
+            raise DataAccessError(f"Cannot move the stale lock {lock} aside: {e}") from e
+        try:
+            if not _matches(_observe(aside), observed):
+                _restore(aside, lock)
+                return False
+        finally:
+            aside.unlink(missing_ok=True)
+        if dead:
             logger.warning(
-                "Taking over the lock on %s: its holder is no longer running (%s)",
+                "Took over the lock on %s: its holder is no longer running (%s)",
                 policy.what,
                 describe_holder(current.holder),
             )
-        elif _judged_stale(current.age, policy):
+        else:
             logger.warning(
-                "Removing the stale lock on %s (no heartbeat for %.0f s): held by %s",
+                "Removed the stale lock on %s (no heartbeat for %.0f s): held by %s",
                 policy.what,
                 current.age,
                 describe_holder(current.holder),
             )
-        else:
-            return False
-        lock.unlink(missing_ok=True)
         return True
     finally:
         guard.unlink(missing_ok=True)
+
+
+def _wait_for_guard(guard: Path) -> bool:
+    """Take ``guard`` for a release, waiting up to ``RELEASE_GUARD_WAIT_SECONDS``; False if not taken."""
+    deadline = time.monotonic() + RELEASE_GUARD_WAIT_SECONDS
+    while not _take_guard(guard):
+        if time.monotonic() >= deadline:
+            logger.warning("Releasing without the reclaim guard %s, which stays taken", guard)
+            return False
+        time.sleep(0.005)
+    return True
 
 
 # --------------------------------------------------------------------- heartbeat
@@ -261,54 +312,112 @@ def _reclaim(lock: Path, observed: _Observation, policy: LockPolicy) -> bool:
 
 @dataclass
 class _Held:
-    """One lock held by this process: its file, token and heartbeat state."""
+    """One acquisition held by this process: its file, resolved path, token and heartbeat state."""
 
     path: Path
+    key: str
     token: str
     interval: float
     refreshed: float = field(default_factory=time.monotonic)
     lost: bool = False
+    warned: bool = False
+
+
+def _read_token(handle: int) -> Optional[str]:
+    """The token in the holder record open on ``handle``, or None when it has none."""
+    chunks = []
+    while True:
+        chunk = os.read(handle, 65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    try:
+        data = json.loads(b"".join(chunks))
+    except ValueError:
+        return None
+    token = data.get("token") if isinstance(data, dict) else None
+    return str(token) if token is not None else None
+
+
+def _mark_lost(entry: _Held, reason: str) -> None:
+    if not entry.lost:
+        logger.warning("Lost the lock %s: %s", entry.path, reason)
+    entry.lost = True
+
+
+def _warn_once(entry: _Held, error: OSError) -> None:
+    """Log a refresh failure the first time it happens for ``entry``; later ones go to debug."""
+    if entry.warned:
+        logger.debug("Cannot refresh the lock %s: %s", entry.path, error)
+        return
+    entry.warned = True
+    logger.warning("Cannot refresh the lock %s: %s (further failures are logged at debug level)", entry.path, error)
 
 
 def _refresh(entry: _Held) -> None:
-    """Touch ``entry``'s lock file, or mark it lost when it is gone or holds another token."""
+    """Touch ``entry``'s lock file, or mark it lost when it is gone or holds another token.
+
+    The token is read, and the mtime set, through one open descriptor, so a lock replaced
+    between the two steps is never refreshed on the new holder's behalf.
+    """
     entry.refreshed = time.monotonic()
-    if read_holder(entry.path).get("token") != entry.token:
-        if not entry.lost:
-            logger.warning("Lost the lock %s: it was removed or taken over", entry.path)
-        entry.lost = True
+    try:
+        handle = os.open(entry.path, os.O_RDONLY)
+    except FileNotFoundError:
+        _mark_lost(entry, "it was removed")
+        return
+    except OSError as e:
+        _warn_once(entry, e)
         return
     try:
-        os.utime(entry.path, None)
-    except FileNotFoundError:
-        entry.lost = True
+        if _read_token(handle) != entry.token:
+            _mark_lost(entry, "it was taken over")
+            return
+        os.utime(handle if os.utime in os.supports_fd else entry.path, None)
     except OSError as e:
-        logger.warning("Cannot refresh the lock %s: %s", entry.path, e)
+        _warn_once(entry, e)
+    finally:
+        os.close(handle)
 
 
 class _Heartbeat:
-    """The one daemon thread per process that refreshes every held lock's mtime."""
+    """The one daemon thread per process that refreshes every held lock's mtime.
+
+    Entries are keyed by token, not path, so two acquisitions of one path in this process
+    (a holder whose lock was taken over by a sibling thread, and that sibling) never share
+    or remove each other's entry.
+    """
 
     def __init__(self) -> None:
         self.cond = threading.Condition()
         self.held: Dict[str, _Held] = {}
         self.thread: Optional[threading.Thread] = None
 
-    def add(self, key: str, entry: _Held) -> None:
+    def _ensure_thread(self) -> None:
+        """Start the thread if it is not running; the caller holds ``cond``."""
+        if self.thread is None or not self.thread.is_alive():
+            self.thread = threading.Thread(target=self._run, name="metaquest-lock-heartbeat", daemon=True)
+            self.thread.start()
+
+    def add(self, entry: _Held) -> None:
         with self.cond:
-            self.held[key] = entry
-            if self.thread is None or not self.thread.is_alive():
-                self.thread = threading.Thread(target=self._run, name="metaquest-lock-heartbeat", daemon=True)
-                self.thread.start()
+            self.held[entry.token] = entry
+            self._ensure_thread()
             self.cond.notify_all()
 
-    def remove(self, key: str) -> None:
+    def remove(self, entry: _Held) -> None:
         with self.cond:
-            self.held.pop(key, None)
+            if self.held.get(entry.token) is entry:
+                del self.held[entry.token]
 
-    def get(self, key: str) -> Optional[_Held]:
+    def ensure_running(self) -> None:
         with self.cond:
-            return self.held.get(key)
+            if self.held:
+                self._ensure_thread()
+
+    def entries_for(self, key: str) -> List[_Held]:
+        with self.cond:
+            return [entry for entry in self.held.values() if entry.key == key]
 
     def held_count(self) -> int:
         with self.cond:
@@ -333,18 +442,23 @@ class _Heartbeat:
             # File I/O happens outside the condition, so a slow network file system never
             # blocks another thread taking or releasing a lock.
             for entry in due:
-                _refresh(entry)
+                try:
+                    _refresh(entry)
+                except _REFRESH_FAILURES as e:
+                    # One broken entry must not stop the refresh of every other held lock.
+                    entry.lost = True
+                    logger.warning("Stopped refreshing the lock %s after an unexpected error: %s", entry.path, e)
 
 
 _HEARTBEAT = _Heartbeat()
 _THREAD_STATE = threading.local()
 
 
-def _thread_held() -> Set[str]:
-    """Paths of the locks the calling thread holds right now."""
-    held: Optional[Set[str]] = getattr(_THREAD_STATE, "held", None)
+def _thread_entries() -> Dict[str, _Held]:
+    """The calling thread's held acquisitions, keyed by the lock's resolved path."""
+    held: Optional[Dict[str, _Held]] = getattr(_THREAD_STATE, "held", None)
     if held is None:
-        held = set()
+        held = {}
         _THREAD_STATE.held = held
     return held
 
@@ -387,7 +501,7 @@ def _acquire(
         if holder is not None:
             return holder
         waited = time.monotonic() - started
-        if key in _thread_held():
+        if key in _thread_entries():
             # A stop the caller asked for is what it gets; otherwise the wait could never end.
             _check_stop(policy, should_stop, waited)
             raise LockReentry(f"{policy.what} is already locked by this thread: {lock}")
@@ -409,15 +523,26 @@ def _acquire(
 
 
 def _release(lock: Path, entry: _Held) -> None:
-    """Remove ``lock`` only while it still carries this acquisition's token."""
-    current = read_holder(lock)
-    if current.get("token") == entry.token:
-        lock.unlink(missing_ok=True)
-        return
-    if lock.exists():
-        logger.warning("Not removing %s: it is now held by %s", lock, describe_holder(current))
-    else:
-        logger.warning("The lock %s was removed while it was held", lock)
+    """Remove ``lock`` only while it still carries this acquisition's token.
+
+    The token is compared under the reclaim guard, the only place a lock is otherwise
+    removed, so a lock reclaimed and taken by someone else after the comparison cannot be
+    removed by it.
+    """
+    guard = lock.with_name(lock.name + ".reclaim")
+    guarded = _wait_for_guard(guard)
+    try:
+        current = read_holder(lock)
+        if current.get("token") == entry.token:
+            lock.unlink(missing_ok=True)
+            return
+        if lock.exists():
+            logger.warning("Not removing %s: it is now held by %s", lock, describe_holder(current))
+        else:
+            logger.warning("The lock %s was removed while it was held", lock)
+    finally:
+        if guarded:
+            guard.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -433,34 +558,45 @@ def held_lock(
     limit), then raises ``LockHeld``; ``blocking=False`` raises it at once instead, after
     any stale or dead-holder takeover. ``should_stop`` ends a wait with ``LockWaitStopped``
     as soon as it returns True; a free lock is taken regardless. A thread asking for a lock
-    it already holds gets ``LockReentry`` at once; other threads contend normally. The
-    parent folder must exist.
+    it already holds (by its resolved path) gets ``LockReentry`` at once; other threads
+    contend normally. The parent folder must exist.
     """
     lock = Path(lock)
-    key = os.path.abspath(lock)
+    key = os.path.realpath(lock)
     holder = _acquire(lock, key, policy, should_stop, blocking)
     owner = os.getpid()
-    entry = _Held(lock, str(holder["token"]), policy.heartbeat_seconds)
-    _thread_held().add(key)
-    _HEARTBEAT.add(key, entry)
+    entry = _Held(lock, key, str(holder["token"]), policy.heartbeat_seconds)
     try:
+        _thread_entries()[key] = entry
+        _HEARTBEAT.add(entry)
         yield lock
     finally:
         # A forked child leaves the block too, but the lock is its parent's to release.
         if os.getpid() == owner:
-            _thread_held().discard(key)
-            _HEARTBEAT.remove(key)
+            if _thread_entries().get(key) is entry:
+                del _thread_entries()[key]
+            _HEARTBEAT.remove(entry)
             _release(lock, entry)
 
 
 def verify_held(lock: Path) -> None:
-    """Raise ``LockLost`` unless this process still holds ``lock`` under its own token."""
-    entry = _HEARTBEAT.get(os.path.abspath(lock))
-    if entry is None:
+    """Raise ``LockLost`` unless this process still holds ``lock`` under its own token.
+
+    The calling thread's own acquisition is checked when it has one, so a holder whose lock
+    a sibling thread took over is told so; otherwise any acquisition by this process counts.
+    Restarts the heartbeat thread if it has died.
+    """
+    key = os.path.realpath(lock)
+    _HEARTBEAT.ensure_running()
+    own = _thread_entries().get(key)
+    candidates = [own] if own is not None else _HEARTBEAT.entries_for(key)
+    if not candidates:
         raise LockLost(f"{lock} is not held by this process")
     current = read_holder(Path(lock))
-    if current.get("token") != entry.token:
-        entry.lost = True
-    if entry.lost:
-        detail = f"now held by {describe_holder(current)}" if current else "removed"
-        raise LockLost(f"Lost the lock {lock}: {detail}")
+    for candidate in candidates:
+        if candidate.token != current.get("token"):
+            candidate.lost = True
+        elif not candidate.lost:
+            return
+    detail = f"now held by {describe_holder(current)}" if current else "removed"
+    raise LockLost(f"Lost the lock {lock}: {detail}")

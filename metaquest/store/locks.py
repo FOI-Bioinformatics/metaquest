@@ -88,7 +88,7 @@ def lock_is_held(paths: StorePaths, accession: str) -> bool:
     lock = lock_path(paths, accession)
     try:
         age = time.time() - lock.stat().st_mtime
-    except FileNotFoundError:
+    except OSError:
         return False
     return age <= DATASET_LOCK_STALE_SECONDS and not holder_is_dead(read_holder(lock))
 

@@ -13,7 +13,6 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store
 from metaquest.store.sidecar import Sidecar
-import metaquest.data.registry as registry_module
 
 
 def _sidecar(accession="SRR1", state="complete", bytes_r1=1000, bytes_r2=1000, spots=10, bases=1400):
@@ -391,7 +390,6 @@ def test_catalog_write_serializes_two_writers(paths):
 
 
 def test_catalog_write_raises_when_lock_never_released(paths, monkeypatch):
-    monkeypatch.setattr(registry_module, "LOCK_WAIT_SECONDS", 0.2)
     monkeypatch.setattr("metaquest.store.catalog.CATALOG_LOCK_WAIT_SECONDS", 0.2)
 
     # Simulate another process holding the lock: a fresh, non-stale lock file.

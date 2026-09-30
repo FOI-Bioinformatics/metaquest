@@ -238,14 +238,16 @@ class TestHoldingAndRelease:
 
     def test_heartbeat_keeps_a_holder_past_the_stale_window(self, tmp_path):
         lock = tmp_path / "a.lock"
-        policy = _policy(stale_seconds=0.3, heartbeat_seconds=0.05, poll_seconds=0.02, wait_seconds=0.0)
+        # A stale window twenty heartbeats wide, so a stall of the shared heartbeat thread on a
+        # loaded runner cannot let the waiter in early.
+        policy = _policy(stale_seconds=1.0, heartbeat_seconds=0.05, poll_seconds=0.02, wait_seconds=0.0)
         events = []
         inside = threading.Event()
 
         def holder():
             with held_lock(lock, policy):
                 inside.set()
-                time.sleep(1.2)
+                time.sleep(2.5)
                 verify_held(lock)
                 events.append("holder-release")
 
@@ -341,6 +343,174 @@ class TestHoldingAndRelease:
         finally:
             context.__exit__(None, None, None)
         assert not lock.exists()
+
+
+class TestRoundOneFixes:
+    """Same-process takeover, reclaim by rename, and a heartbeat that survives failures."""
+
+    def test_same_process_takeover_is_reported_to_the_first_holder(self, tmp_path, monkeypatch):
+        """A sibling thread takes over a lock whose heartbeat stalled: the first holder's
+        verify_held raises, and the sibling's lock keeps its heartbeat after the first leaves."""
+        lock = tmp_path / "a.lock"
+        real_refresh = lockfile._refresh
+        monkeypatch.setattr(lockfile, "_refresh", lambda entry: None)
+        policy = _policy(stale_seconds=0.2, heartbeat_seconds=0.02, poll_seconds=0.01)
+        state = {}
+        thief_inside = threading.Event()
+        holder_left = threading.Event()
+
+        def thief():
+            with held_lock(lock, policy):
+                monkeypatch.setattr(lockfile, "_refresh", real_refresh)
+                thief_inside.set()
+                holder_left.wait(timeout=5)
+                before = lock.stat().st_mtime
+                time.sleep(0.3)
+                state["refreshed"] = lock.stat().st_mtime > before
+                state["entries"] = len(lockfile._HEARTBEAT.entries_for(os.path.realpath(lock)))
+                verify_held(lock)
+                state["thief_verify"] = "ok"
+
+        with held_lock(lock, policy):
+            time.sleep(0.4)
+            thread = threading.Thread(target=thief)
+            thread.start()
+            assert thief_inside.wait(timeout=5)
+            with pytest.raises(LockLost):
+                verify_held(lock)
+        holder_left.set()
+        thread.join(timeout=10)
+
+        assert state == {"refreshed": True, "entries": 1, "thief_verify": "ok"}
+        assert not lock.exists()
+
+    def test_contenders_admitted_together_still_have_one_winner(self, tmp_path, monkeypatch):
+        """Even when the reclaim guard admits every contender (two waiters removed a crashed
+        guard at once), the move-aside-and-compare step lets exactly one reclaim."""
+        monkeypatch.setattr(lockfile, "_judged_stale", lambda age, policy: True)
+        monkeypatch.setattr(lockfile, "_take_guard", lambda guard: True)
+        policy = _policy()
+        for round_number in range(20):
+            lock = tmp_path / f"race{round_number}.lock"
+            _write_holder(lock, {"pid": 1, "host": "elsewhere.example", "token": "old"}, age=3600)
+            observed = lockfile._observe(lock)
+            barrier = threading.Barrier(12)
+            winners = []
+
+            def contender(index):
+                barrier.wait()
+                if lockfile._reclaim(lock, observed, policy):
+                    winners.append(lockfile._create(lock))
+
+            threads = [threading.Thread(target=contender, args=(i,)) for i in range(12)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+            assert len(winners) == 1 and winners[0] is not None
+            assert read_holder(lock)["token"] == winners[0]["token"]
+            assert sorted(p.name for p in tmp_path.glob(f"race{round_number}.lock*")) == [lock.name]
+
+    def test_a_replaced_lock_moved_aside_is_put_back(self, tmp_path, monkeypatch):
+        lock = tmp_path / "a.lock"
+        _write_holder(lock, {"pid": 1, "host": "elsewhere.example", "token": "old"}, age=3600)
+        observed = lockfile._observe(lock)
+        real_observe = lockfile._observe
+        calls = []
+
+        def observe_then_replace(path):
+            calls.append(path)
+            if len(calls) == 1:
+                result = real_observe(path)
+                # Another waiter replaces the lock between the check and the move.
+                lock.unlink()
+                _write_holder(lock, {"pid": 2, "host": "elsewhere.example", "token": "new"})
+                return result
+            return real_observe(path)
+
+        monkeypatch.setattr(lockfile, "_observe", observe_then_replace)
+        assert lockfile._reclaim(lock, observed, _policy()) is False
+        assert read_holder(lock)["token"] == "new"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.lock"]
+
+    def test_heartbeat_survives_an_unexpected_refresh_error(self, tmp_path, monkeypatch):
+        broken, healthy = tmp_path / "broken.lock", tmp_path / "healthy.lock"
+        real_refresh = lockfile._refresh
+
+        def refresh(entry):
+            if entry.path == broken:
+                raise RuntimeError("unexpected")
+            real_refresh(entry)
+
+        monkeypatch.setattr(lockfile, "_refresh", refresh)
+        policy = _policy(heartbeat_seconds=0.02)
+        with held_lock(broken, policy), held_lock(healthy, policy):
+            before = healthy.stat().st_mtime
+            time.sleep(0.3)
+            assert lockfile._HEARTBEAT.thread is not None and lockfile._HEARTBEAT.thread.is_alive()
+            assert healthy.stat().st_mtime > before
+            verify_held(healthy)
+            with pytest.raises(LockLost):
+                verify_held(broken)
+
+    def test_verify_held_restarts_a_dead_heartbeat_thread(self, tmp_path):
+        lock = tmp_path / "a.lock"
+        with held_lock(lock, _policy(heartbeat_seconds=0.02)):
+            dead = threading.Thread(target=lambda: None)
+            dead.start()
+            dead.join()
+            lockfile._HEARTBEAT.thread = dead
+            verify_held(lock)
+            assert lockfile._HEARTBEAT.thread is not dead and lockfile._HEARTBEAT.thread.is_alive()
+
+    def test_a_persistent_refresh_failure_is_logged_once(self, tmp_path, monkeypatch, caplog):
+        lock = tmp_path / "a.lock"
+
+        def refuse(*args, **kwargs):
+            raise PermissionError("read-only file system")
+
+        with caplog.at_level(logging.WARNING, logger="metaquest.utils.lockfile"):
+            with held_lock(lock, _policy(heartbeat_seconds=0.02)):
+                monkeypatch.setattr(lockfile.os, "utime", refuse)
+                time.sleep(0.3)
+                monkeypatch.undo()
+        assert caplog.text.count("Cannot refresh the lock") == 1
+
+    def test_lock_is_held_is_false_when_the_lock_cannot_be_read(self, tmp_path):
+        from unittest.mock import patch
+
+        from metaquest.store.layout import init_store
+        from metaquest.store.locks import lock_is_held
+
+        paths = init_store(tmp_path / "store")
+        with patch.object(Path, "stat", side_effect=PermissionError("denied")):
+            assert lock_is_held(paths, "SRR1") is False
+
+    def test_reentry_through_a_symlinked_folder_is_recognised(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        with held_lock(real / "a.lock", _policy()):
+            with pytest.raises(LockReentry):
+                with held_lock(link / "a.lock", _policy(wait_seconds=0.0)):
+                    pass
+
+    def test_a_failed_registration_leaves_no_lock_behind(self, tmp_path, monkeypatch):
+        lock = tmp_path / "a.lock"
+
+        def refuse(entry):
+            raise RuntimeError("cannot start a thread")
+
+        monkeypatch.setattr(lockfile._HEARTBEAT, "add", refuse)
+        with pytest.raises(RuntimeError):
+            with held_lock(lock, _policy()):
+                pass
+        assert not lock.exists()
+        monkeypatch.undo()
+        with held_lock(lock, _policy(), blocking=False):
+            assert lock.exists()
 
 
 class TestStress:
