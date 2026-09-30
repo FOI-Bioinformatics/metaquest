@@ -16,6 +16,7 @@ from metaquest.data.registry import load_registry, project_root
 from metaquest.data.sra import count_fastq_reads, fastq_files, orphan_fastq, primary_fastq, verify_download
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, sidecar_path, sra_dir, store_paths
+from metaquest.store.locks import LockHeld, dataset_lock
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import (
     Sidecar,
@@ -30,7 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 class StoreVerifyCommand(BaseCommand):
-    """Command to verify store datasets against their sidecars, optionally by md5 or spot count."""
+    """Command to verify store datasets against their sidecars, optionally by md5 or spot count.
+
+    A check never takes any lock (it only reads). ``--fix-state``'s write-back does, one
+    accession at a time and without waiting: see ``_fix_state_locked``.
+    """
 
     @property
     def name(self) -> str:
@@ -356,6 +361,38 @@ class StoreVerifyCommand(BaseCommand):
             catalog.upsert_dataset(sidecar)
         result["state"] = new_state
 
+    def _fix_state_locked(self, result: Dict[str, Any], paths: StorePaths) -> None:
+        """Apply ``_fix_state`` only under ``accession``'s lock, and only if nothing else has
+        touched its sidecar since ``_verify_one`` read it.
+
+        Held without waiting (``blocking=False``): another run already working on this
+        accession, or one that grabs the lock first, means the write-back would race a write
+        of its own, so it is skipped rather than raced. The lock alone is not enough, since a
+        write could have already happened and finished before this call even reaches the
+        lock; the sidecar is re-read under it and compared against what ``_verify_one`` saw.
+        ``downloaded`` is compared for every run; ``files`` only when this run did not pass
+        ``--rescan``, since a rescan's whole point is to make ``result["sidecar"].files``
+        differ from what is still on disk in ``downloaded``'s sidecar file.
+        """
+        accession = result["accession"]
+        sidecar_before = result.get("sidecar")
+        if sidecar_before is None:
+            self._fix_state(result, paths)
+            return
+        try:
+            with dataset_lock(paths, accession, blocking=False):
+                current = read_sidecar(sidecar_path(paths, accession))
+                if current is None or current.downloaded != sidecar_before.downloaded:
+                    changed = True
+                else:
+                    changed = not result.get("rescanned") and current.files != sidecar_before.files
+                if changed:
+                    self.logger.warning("%s: sidecar changed since the check; not updated", accession)
+                    return
+                self._fix_state(result, paths)
+        except LockHeld:
+            self.logger.warning("%s: in use, not updated", accession)
+
     def _print_table(self, results: List[Dict[str, Any]]) -> None:
         self.emit(f"{'accession':<15s} {'state':<10s} {'bytes_ok':<9s} {'md5_ok':<7s} verdict")
         for r in results:
@@ -387,7 +424,7 @@ class StoreVerifyCommand(BaseCommand):
                     accession, paths, args.md5, args.spots, metadata_dirs=metadata_dirs, rescan=args.rescan
                 )
                 if args.fix_state:
-                    self._fix_state(result, paths)
+                    self._fix_state_locked(result, paths)
                 results.append(result)
         except DataAccessError as e:
             self.logger.error(str(e))

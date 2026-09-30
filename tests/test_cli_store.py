@@ -8,7 +8,9 @@ tests/test_store_resolve.py.
 import argparse
 import gzip
 import json
+import logging
 import subprocess
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +30,7 @@ from metaquest.core.constants import STORE_ENV
 from metaquest.data.registry import load_registry, save_registry
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, read_marker, sidecar_path, sra_dir, store_paths
+from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
 from metaquest.utils.security import SecureSubprocess
 
@@ -1188,6 +1191,130 @@ class TestStoreVerifyCommand:
         fixed = read_sidecar(sidecar_path(paths, "SRR1"))
         assert fixed.state == "complete"
         assert fixed.files == original_files
+
+    def test_fix_state_skipped_when_the_dataset_is_locked(self, tmp_path, monkeypatch, capsys, caplog):
+        """--fix-state's write-back takes the accession's lock without waiting; another run
+        already holding it (a real dataset_lock here, not a fabricated lock file) means the
+        sidecar is left exactly as it was, and the accession is logged as in use."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        locked = threading.Event()
+        release = threading.Event()
+
+        def _hold():
+            with dataset_lock(paths, "SRR1"):
+                locked.set()
+                assert release.wait(timeout=5), "the main thread never released the holder"
+
+        holder = threading.Thread(target=_hold)
+        holder.start()
+        try:
+            assert locked.wait(timeout=5), "the holder thread never took the lock"
+            with caplog.at_level(logging.WARNING):
+                rc = StoreVerifyCommand().execute(
+                    _verify_args(
+                        data_root=str(root),
+                        registry=str(project_dir / "metaquest_registry.json"),
+                        spots=True,
+                        fix_state=True,
+                    )
+                )
+        finally:
+            release.set()
+            holder.join(timeout=5)
+        out = capsys.readouterr().out
+
+        assert rc == 1  # the truncated verdict is still reported; only the write-back is skipped
+        assert "truncated" in out
+        assert any("in use, not updated" in record.message for record in caplog.records)
+        unchanged = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert unchanged.state == "complete"
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1")["state"] == "complete"
+
+    def test_fix_state_skipped_when_the_sidecar_changed_since_the_check(self, tmp_path, caplog):
+        """A sidecar replaced by another run between _verify_one's read and the locked
+        write-back (patched in here to stand in for that race) must not be clobbered by a
+        write-back computed from the stale copy this run read."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        cmd = StoreVerifyCommand()
+        result = cmd._verify_one("SRR1", paths, check_md5=False, check_spots=True, metadata_dirs=[], rescan=False)
+
+        # Another run replaces the sidecar between the check above and the write-back below.
+        replaced = _sidecar("SRR1", state="failed")
+        replaced.error = "replaced by another run"
+        write_sidecar(sidecar_path(paths, "SRR1"), replaced)
+
+        with caplog.at_level(logging.WARNING):
+            cmd._fix_state_locked(result, paths)
+
+        assert any("changed since the check" in record.message for record in caplog.records)
+        current = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert current.state == "failed"
+        assert current.error == "replaced by another run"
+
+    def test_fix_state_not_skipped_when_nothing_changed(self, tmp_path):
+        """The baseline: with no lock held and no change to the sidecar, _fix_state_locked
+        still applies the write-back exactly as the unlocked _fix_state would."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        cmd = StoreVerifyCommand()
+        result = cmd._verify_one("SRR1", paths, check_md5=False, check_spots=True, metadata_dirs=[], rescan=False)
+        cmd._fix_state_locked(result, paths)
+
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "partial"
+        assert fixed.completeness["verdict"] == "truncated"
 
 
 class TestStoreLinkCommand:

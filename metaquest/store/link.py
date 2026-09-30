@@ -16,6 +16,7 @@ from typing import List, Union
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.store.layout import StorePaths, sra_dir
+from metaquest.store.locks import touch_dataset_use
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,9 @@ def link_dataset(
     ``copy``, which copies the dataset folder instead of linking it (for a project that must
     keep working when the store is unmounted). An existing symlink at the target is replaced;
     a real directory is never replaced, since it may hold reads this project downloaded
-    itself.
+    itself. On success, records ``accession`` as just used
+    (``metaquest.store.locks.touch_dataset_use``), so ``store_gc`` keeps it for a grace
+    period even before this project's usage row reaches the catalogue.
     """
     if mode not in LINK_MODES:
         raise DataAccessError(f"Unknown link mode '{mode}'; expected one of {', '.join(LINK_MODES)}")
@@ -122,6 +125,7 @@ def link_dataset(
 
     if mode == "copy":
         shutil.copytree(store_dataset, link)
+        touch_dataset_use(paths, accession)
         logger.info("Copied %s from the store into %s", accession, link)
         return link
 
@@ -133,6 +137,7 @@ def link_dataset(
         os.symlink(target, link, target_is_directory=True)
     except OSError as e:
         raise DataAccessError(f"Cannot link {accession} into {project_path}: {e}") from e
+    touch_dataset_use(paths, accession)
     logger.info("Linked %s to the store copy at %s", link, target)
     return link
 

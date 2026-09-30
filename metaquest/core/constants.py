@@ -243,6 +243,12 @@ STORE_LAYOUT = "sra-v1"
 LOCK_HEARTBEAT_SECONDS = 10.0
 DATASET_LOCK_STALE_SECONDS = 600.0
 
+# store_gc keeps a dataset for this long after metaquest.store.locks.touch_dataset_use last
+# recorded a project starting to use it (a link, a store_link, an adopt), even when that
+# project's own usage row has not (yet, or ever) been recorded in the catalogue: a dataset
+# just handed to a project must not be removed out from under it by a concurrent gc run.
+GC_RECENT_USE_GRACE_SECONDS = 86400.0
+
 # Short-lived locks (metaquest.utils.lockfile): the project registry and the store catalogue.
 # Their holders write for well under a second, poll quickly while waiting, and refresh the
 # lock file every SHORT_LOCK_HEARTBEAT_SECONDS so a slow write is never judged stale. The

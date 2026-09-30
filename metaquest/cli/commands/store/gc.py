@@ -4,13 +4,16 @@
 
 import argparse
 import logging
+import os
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand, emit_error_json
 from metaquest.cli.commands.store._shared import _no_store_hint, _stale_project_row
+from metaquest.core.constants import GC_RECENT_USE_GRACE_SECONDS
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import is_hidden_name
@@ -18,7 +21,7 @@ from metaquest.data.registry import load_registry
 from metaquest.data.sra import is_transient_folder
 from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, Catalog, catalog_write
 from metaquest.store.layout import StorePaths, sra_dir, store_paths
-from metaquest.store.locks import lock_holder, lock_is_held
+from metaquest.store.locks import LockHeld, dataset_lock, last_dataset_use, lock_holder, lock_is_held
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.usage import linked_by, stale_projects
 
@@ -68,9 +71,17 @@ class StoreGcCommand(BaseCommand):
 
     Leftover temp artifacts (``<store>/tmp/*_temp`` from an interrupted download,
     ``<store>/tmp/*_adopt`` from an interrupted adopt, ``<store>/tmp/*_old`` from a publish,
-    the ``.sra-cache`` archive cache under ``tmp`` or ``sra``) are reported and removed
-    independently of the dataset check, minus anything whose accession lock is held. Nothing
-    is removed unless ``--yes`` is given; the default is a dry-run report only.
+    ``<store>/tmp/*_gc`` from an interrupted removal by this command, the ``.sra-cache``
+    archive cache under ``tmp`` or ``sra``) are reported and removed independently of the
+    dataset check, minus anything whose accession lock is held. Nothing is removed unless
+    ``--yes`` is given; the default is a dry-run report only.
+
+    With ``--yes``, a candidate is removed only under its own accession lock, taken without
+    waiting, and only once a fresh re-check right before removal still agrees with the
+    classification above; either the lock being held by then or that re-check failing (another
+    run started using it, or ``metaquest.store.locks.touch_dataset_use`` recorded it within
+    the grace period) adds the accession to ``in_use`` instead, alongside one already found
+    there during classification (see ``_still_removable``).
     """
 
     @property
@@ -284,15 +295,25 @@ class StoreGcCommand(BaseCommand):
             bucket, reason = cls._classify_dataset(row, paths, catalog, project_ids, stale_names, include_stale)
             if bucket == "keep":
                 continue
-            buckets[bucket_names[bucket]].append(
-                {"accession": row["accession"], "bytes": row["bytes"], "reason": reason}
-            )
+            entry = {"accession": row["accession"], "bytes": row["bytes"], "reason": reason}
+            if bucket == "candidate":
+                # Carried through to _remove_candidates, which re-checks this against the
+                # catalogue right before removal: a dataset re-downloaded between this
+                # read-only pass and that later removal must not be removed on the strength
+                # of a classification that no longer holds.
+                entry["downloaded"] = row["downloaded"]
+            buckets[bucket_names[bucket]].append(entry)
         return buckets
 
     @staticmethod
     def _accession_of_leftover(name: str) -> str:
-        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp`` or ``SRR1_fqtmp``."""
-        for suffix in ("_temp", "_fqtmp", "_adopt", "_old"):
+        """The accession a leftover folder belongs to, e.g. ``SRR1`` for ``SRR1_temp`` or ``SRR1_fqtmp``.
+
+        ``_gc`` is a dataset ``_remove_candidates`` moved aside but did not finish removing
+        (a crash between the rename and the catalogue delete, or between the delete and the
+        final cleanup); a later ``store_gc`` run picks it up here as an ordinary leftover.
+        """
+        for suffix in ("_temp", "_fqtmp", "_adopt", "_old", "_gc"):
             if name.endswith(suffix):
                 return name[: -len(suffix)]
         return name
@@ -319,7 +340,7 @@ class StoreGcCommand(BaseCommand):
                     continue
                 if not entry.is_dir():
                     continue
-                if not (is_transient_folder(entry.name) or entry.name.endswith(("_adopt", "_old"))):
+                if not (is_transient_folder(entry.name) or entry.name.endswith(("_adopt", "_old", "_gc"))):
                     continue
                 if lock_is_held(paths, cls._accession_of_leftover(entry.name)):
                     continue
@@ -426,6 +447,79 @@ class StoreGcCommand(BaseCommand):
             self._print_report(report, args.yes)
         return 0
 
+    @staticmethod
+    def _still_removable(paths: StorePaths, accession: str, candidate: Dict[str, Any]) -> Tuple[bool, str]:
+        """Re-check ``accession`` right before it is removed, with its lock already held.
+
+        The read-only classification pass that produced ``candidate`` ran before the lock was
+        taken, and for ``--yes`` against a large store the removal loop itself can take a
+        while to reach any one accession; both are windows in which another run could start
+        using the dataset. Re-checks everything a lock does not by itself protect against:
+        the sidecar was not re-downloaded (``downloaded`` unchanged), no live project has
+        recorded usage since, no project still symlinks it, and it was not just handed to a
+        project (``metaquest.store.locks.touch_dataset_use``) within the grace period. Returns
+        ``(True, "")`` when removal may proceed, else ``(False, <reason>)``.
+        """
+        with Catalog(paths) as catalog:
+            row = catalog.conn.execute("SELECT downloaded FROM datasets WHERE accession = ?", (accession,)).fetchone()
+            if row is None:
+                return False, "no longer catalogued"
+            if row["downloaded"] != candidate.get("downloaded"):
+                return False, "downloaded again since the check"
+            usage_ids = {
+                r["project_id"]
+                for r in catalog.conn.execute(
+                    "SELECT DISTINCT project_id FROM usage WHERE accession = ?", (accession,)
+                ).fetchall()
+            }
+            if usage_ids:
+                stale_ids = {stale_row["project_id"] for stale_row in stale_projects(catalog)}
+                if not usage_ids <= stale_ids:
+                    return False, "now used by a live project"
+            if linked_by(paths, catalog, accession):
+                return False, "now linked by a live project"
+        last_use = last_dataset_use(paths, accession)
+        if last_use is not None and (time.time() - last_use) < GC_RECENT_USE_GRACE_SECONDS:
+            return False, "recently used"
+        return True, ""
+
+    def _remove_one_dataset(
+        self, paths: StorePaths, candidate: Dict[str, Any], report: Dict[str, Any], aside_by_accession: Dict[str, Path]
+    ) -> None:
+        """Remove one candidate under its own non-blocking lock, or report why it was kept.
+
+        A folder actually removed is first renamed aside (``<store>/tmp/<ACC>_gc``), not
+        deleted outright: the catalogue row is only dropped afterwards, in one batched write
+        shared by every dataset removed this run (see ``_remove_candidates``), so a catalogue
+        failure can still restore every folder this call renamed.
+        """
+        accession = candidate["accession"]
+        try:
+            with dataset_lock(paths, accession, blocking=False):
+                removable, reason = self._still_removable(paths, accession, candidate)
+                if not removable:
+                    report["in_use"].append(
+                        {"accession": accession, "bytes": candidate["bytes"], "reason": f"in use: {reason}"}
+                    )
+                    return
+                aside = paths.tmp / f"{accession}_gc"
+                try:
+                    _remove_path(aside)
+                    paths.tmp.mkdir(parents=True, exist_ok=True)
+                    os.replace(sra_dir(paths, accession), aside)
+                except OSError as e:
+                    self.logger.warning("%s: could not move it aside for removal: %s", accession, e)
+                    return
+                aside_by_accession[accession] = aside
+        except LockHeld:
+            report["in_use"].append(
+                {
+                    "accession": accession,
+                    "bytes": candidate["bytes"],
+                    "reason": f"in use: {lock_holder(paths, accession)}",
+                }
+            )
+
     def _remove_candidates(
         self,
         paths: StorePaths,
@@ -433,25 +527,54 @@ class StoreGcCommand(BaseCommand):
         leftover_candidates: List[Dict[str, Any]],
         report: Dict[str, Any],
     ) -> int:
-        """Remove the candidate datasets and leftovers, recording what went in ``report``."""
-        removed_datasets: List[str] = []
+        """Remove the candidate datasets and leftovers, recording what went in ``report``.
+
+        Each dataset is only ever removed under its own per-accession lock, taken without
+        waiting (``blocking=False``): a candidate whose lock another run holds by the time
+        removal reaches it, or whose ``_still_removable`` re-check no longer holds, is
+        reported in ``report["in_use"]`` instead, with a reason distinguishing the two, and
+        its folder is left untouched. Every folder actually removed is renamed aside first;
+        the catalogue rows for all of them are then deleted in one ``catalog_write`` session,
+        and only once that commits are the aside folders themselves removed. If the catalogue
+        write fails, every folder this call renamed aside is put back under its original name
+        and the failure is logged, so a catalogue problem never leaves a dataset's files gone
+        with no record of it ever existing. Leftovers take the same non-blocking lock, mapped
+        back to an accession by ``_accession_of_leftover``.
+        """
+        aside_by_accession: Dict[str, Path] = {}
         for candidate in dataset_candidates:
-            accession = candidate["accession"]
-            _remove_path(sra_dir(paths, accession))
-            removed_datasets.append(accession)
-        if removed_datasets:
+            self._remove_one_dataset(paths, candidate, report, aside_by_accession)
+
+        if aside_by_accession:
             try:
                 with catalog_write(paths) as catalog:
-                    for accession in removed_datasets:
+                    for accession in aside_by_accession:
                         catalog.delete_dataset(accession)
             except DataAccessError as e:
                 self.logger.error(str(e))
+                for accession, aside in aside_by_accession.items():
+                    try:
+                        os.replace(aside, sra_dir(paths, accession))
+                    except OSError as restore_error:
+                        self.logger.error(
+                            "%s: could not restore it after a catalogue failure: %s", accession, restore_error
+                        )
                 return 1
+            for aside in aside_by_accession.values():
+                _remove_path(aside)
+
+        removed_datasets = list(aside_by_accession)
 
         removed_leftovers: List[str] = []
         for candidate in leftover_candidates:
-            _remove_path(candidate["path"])
-            removed_leftovers.append(str(candidate["path"]))
+            path = candidate["path"]
+            accession = self._accession_of_leftover(path.name)
+            try:
+                with dataset_lock(paths, accession, blocking=False):
+                    _remove_path(path)
+                    removed_leftovers.append(str(path))
+            except LockHeld:
+                continue
 
         report["removed_datasets"] = removed_datasets
         report["removed_leftovers"] = removed_leftovers

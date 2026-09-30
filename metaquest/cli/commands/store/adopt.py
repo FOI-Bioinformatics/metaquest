@@ -14,6 +14,7 @@ from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry, record_download, registry_transaction, update_linked
 from metaquest.store.adopt import adopt
 from metaquest.store.layout import StorePaths, store_paths
+from metaquest.store.locks import touch_dataset_use
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.usage import ensure_project_identity, record_usage_many
 
@@ -195,12 +196,17 @@ class StoreAdoptCommand(BaseCommand):
         (``report.deduplicated`` when ``args.move`` is False) points the project's download
         record at the store or touches ``registry.store["linked"]``, since the project's
         folder is real, not a link. Without a usage row, store_gc would still see the store's
-        copy as unused, even though this project depends on it.
+        copy as unused, even though this project depends on it. These accessions also never
+        go through ``link_dataset`` (there is nothing to link under --copy), so their "just
+        used" marker is set here instead, the same protection a linked accession gets from
+        ``link_dataset`` itself.
         """
         with registry_transaction(args.registry) as reg:
             ensure_project_identity(reg)
             usage_registry = reg
         record_usage_many(paths, usage_registry, [(acc, "", "copied", "store_adopt --copy") for acc in copied])
+        for acc in copied:
+            touch_dataset_use(paths, acc)
 
     def _print_report(self, report: Any) -> None:
         self.emit(

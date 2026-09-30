@@ -9,11 +9,20 @@ alive, with no overall timeout (giving up on a legitimate multi-hour download wo
 bug, not the wait). A lock whose heartbeat stopped more than ``DATASET_LOCK_STALE_SECONDS``
 ago, or whose holder is known to have exited on this host, is taken over with a warning. A
 caller that would rather not wait passes ``wait_seconds``; the resulting error names the
-accession and the holder.
+accession and the holder. A caller that would rather skip a held lock than wait for it at
+all (``store_gc`` and ``store_verify``, which touch the store opportunistically rather than
+as a project's main job) passes ``blocking=False``, which raises ``LockHeld`` at once.
+
+``touch_dataset_use``/``last_dataset_use`` are a second, unrelated marker under the same
+``<store>/locks/`` folder, ``<ACC>.used``: its mtime records when a project last started
+using the dataset (a link, an adopt), independent of whether the accession's own lock is
+held right now. ``store_gc`` keeps a dataset touched within ``GC_RECENT_USE_GRACE_SECONDS``
+even when nothing currently holds its lock and its catalogue usage row has not caught up yet.
 
 The limits are read from this module at call time, so tests can shrink them.
 """
 
+import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +32,7 @@ from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_
 from metaquest.store.layout import StorePaths, lock_path
 from metaquest.utils.lockfile import (
     LOCK_WAIT_LOG_SECONDS,
+    LockHeld,
     LockPolicy,
     LockWaitStopped,
     describe_holder,
@@ -31,6 +41,8 @@ from metaquest.utils.lockfile import (
     read_holder,
 )
 
+logger = logging.getLogger(__name__)
+
 # How often a waiter re-checks a lock it is waiting for.
 LOCK_POLL_SECONDS = 1.0
 
@@ -38,11 +50,14 @@ __all__ = [
     "DATASET_LOCK_STALE_SECONDS",
     "LOCK_HEARTBEAT_SECONDS",
     "LOCK_WAIT_LOG_SECONDS",
+    "LockHeld",
     "LockWaitStopped",
     "dataset_lock",
+    "last_dataset_use",
     "lock_holder",
     "lock_is_held",
     "read_holder",
+    "touch_dataset_use",
 ]
 
 
@@ -63,6 +78,7 @@ def dataset_lock(
     accession: str,
     wait_seconds: float = 0.0,
     should_stop: Optional[Callable[[], bool]] = None,
+    blocking: bool = True,
 ) -> Iterator[Path]:
     """Hold ``<store>/locks/<ACC>.lock`` for the length of the block.
 
@@ -70,11 +86,14 @@ def dataset_lock(
     alive, since a download legitimately runs for hours; a positive value gives up after
     that many seconds with a ``DataAccessError`` naming the accession and the holder.
     ``should_stop``, when given, ends a wait for a held lock with ``LockWaitStopped`` as
-    soon as it returns True; a free lock is taken regardless.
+    soon as it returns True; a free lock is taken regardless. ``blocking=False`` raises
+    ``LockHeld`` at once instead of waiting (after any stale or dead-holder takeover), for a
+    caller such as ``store_gc`` or ``store_verify`` that would rather skip a dataset another
+    run is working on than wait for it.
     """
     lock = lock_path(paths, accession)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with held_lock(lock, _dataset_policy(accession, wait_seconds), should_stop=should_stop) as held:
+    with held_lock(lock, _dataset_policy(accession, wait_seconds), should_stop=should_stop, blocking=blocking) as held:
         yield held
 
 
@@ -96,3 +115,39 @@ def lock_is_held(paths: StorePaths, accession: str) -> bool:
 def lock_holder(paths: StorePaths, accession: str) -> str:
     """One-line description of whoever holds ``accession``'s lock, for a message."""
     return describe_holder(read_holder(lock_path(paths, accession)))
+
+
+def _use_marker_path(paths: StorePaths, accession: str) -> Path:
+    """Path to the file whose mtime records when ``accession`` was last handed to a project."""
+    return paths.locks / f"{accession}.used"
+
+
+def touch_dataset_use(paths: StorePaths, accession: str) -> None:
+    """Record that a project just started using ``accession``, for ``store_gc``'s grace period.
+
+    Sets ``<store>/locks/<ACC>.used``'s mtime to now, creating the file if it does not exist
+    yet. Called wherever a project is handed a dataset from the store (linked, adopted or
+    copied), so a dataset that a project has just started using is never removed by a
+    concurrent ``store_gc`` run before that project's own usage row makes it into the
+    catalogue. Never raises: this is bookkeeping, and a store on a read-only or otherwise
+    uncooperative filesystem must not turn it into a failure of the link or download it
+    accompanies.
+    """
+    marker = _use_marker_path(paths, accession)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=True)
+    except OSError as e:
+        logger.debug("Could not record use of %s at %s: %s", accession, marker, e)
+
+
+def last_dataset_use(paths: StorePaths, accession: str) -> Optional[float]:
+    """When ``touch_dataset_use`` last recorded a use of ``accession``, as a Unix timestamp.
+
+    None when it was never recorded (including a store predating this mechanism) or the
+    marker cannot be read; callers then fall back to their other checks alone.
+    """
+    try:
+        return _use_marker_path(paths, accession).stat().st_mtime
+    except OSError:
+        return None

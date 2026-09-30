@@ -7,6 +7,8 @@ tests/test_cli_store.py and tests/test_store_resolve.py.
 
 import argparse
 import json
+import logging
+import threading
 
 import pytest
 
@@ -18,9 +20,11 @@ from metaquest.cli.commands.store import (
     StoreReindexCommand,
 )
 from metaquest.core.constants import STORE_ENV
+from metaquest.core.exceptions import DataAccessError
 from metaquest.data.registry import load_registry
 from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, Catalog, catalog_write
 from metaquest.store.layout import init_store, sidecar_path, sra_dir, store_paths
+from metaquest.store.locks import dataset_lock, touch_dataset_use
 from metaquest.store.sidecar import Sidecar, write_sidecar
 
 
@@ -749,3 +753,158 @@ class TestStoreGcAfterARebuildWithoutProjects:
 
         assert rc == 0
         assert self._flag(paths) is None
+
+
+class TestStoreGcRemovalUnderTheLock:
+    """--yes only ever removes a dataset under its own per-accession lock, re-checked right
+    before removal: something that starts using an accession after the read-only
+    classification pass, but before removal reaches it, must still keep the dataset."""
+
+    def test_dataset_locked_between_classification_and_removal_is_kept_and_reported(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """A real dataset_lock, taken by another thread only after classification has
+        already finished (so the read-only pass sees it free), must still stop removal: the
+        lock is re-taken, non-blocking, right before a candidate's folder is moved."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            cat.upsert_dataset(_sidecar("SRR1"))
+
+        classified = threading.Event()
+        locked = threading.Event()
+        release = threading.Event()
+        original = StoreGcCommand._dataset_candidates.__func__
+
+        def _classify_then_wait(cls, *args, **kwargs):
+            result = original(cls, *args, **kwargs)
+            classified.set()
+            assert locked.wait(timeout=5), "the holder thread never took the lock"
+            return result
+
+        monkeypatch.setattr(StoreGcCommand, "_dataset_candidates", classmethod(_classify_then_wait))
+
+        def _hold():
+            assert classified.wait(timeout=5), "classification never ran"
+            with dataset_lock(paths, "SRR1"):
+                locked.set()
+                assert release.wait(timeout=5), "the main thread never released the holder"
+
+        holder = threading.Thread(target=_hold)
+        holder.start()
+        try:
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        finally:
+            release.set()
+            holder.join(timeout=5)
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["removed_datasets"] == []
+        assert [row["accession"] for row in report["in_use"]] == ["SRR1"]
+        assert sra_dir(paths, "SRR1").is_dir()
+        assert (sra_dir(paths, "SRR1") / "SRR1.fastq.gz").is_file()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
+    def test_a_recently_touched_dataset_is_kept(self, tmp_path, capsys):
+        """touch_dataset_use (set by a link, an adopt, or a store_link) keeps a dataset out
+        of removal for GC_RECENT_USE_GRACE_SECONDS, even with no usage row recorded yet."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            cat.upsert_dataset(_sidecar("SRR1"))
+        touch_dataset_use(paths, "SRR1")
+
+        # The read-only classification pass does not know about touch_dataset_use, so SRR1
+        # is still offered as an ordinary candidate here.
+        dry = StoreGcCommand().execute(_gc_args(data_root=str(root), json=True))
+        dry_report = json.loads(capsys.readouterr().out)
+        assert dry == 0
+        assert [row["accession"] for row in dry_report["datasets"]] == ["SRR1"]
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["removed_datasets"] == []
+        in_use = {row["accession"]: row["reason"] for row in report["in_use"]}
+        assert "recently used" in in_use["SRR1"]
+        assert sra_dir(paths, "SRR1").is_dir()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
+    def test_an_old_touch_no_longer_keeps_a_dataset(self, tmp_path, capsys):
+        """Once the grace period has elapsed, a touch from long ago no longer protects the
+        dataset from an otherwise ordinary removal."""
+        import os
+
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            cat.upsert_dataset(_sidecar("SRR1"))
+        touch_dataset_use(paths, "SRR1")
+        marker = paths.locks / "SRR1.used"
+        old = marker.stat().st_mtime - 90000  # just over a day ago
+        os.utime(marker, (old, old))
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["removed_datasets"] == ["SRR1"]
+        assert not sra_dir(paths, "SRR1").exists()
+
+    def test_catalog_write_failure_after_the_rename_restores_the_folder(self, tmp_path, monkeypatch, caplog):
+        """A catalogue write failure that happens after a candidate's folder has already been
+        moved aside for removal must not leave that folder gone with no record of it: it is
+        put back under its original name and the failure is logged."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = _write_dataset_dir(paths, "SRR1")
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            cat.upsert_dataset(_sidecar("SRR1"))
+
+        def _boom(paths):
+            raise DataAccessError("catalogue exploded")
+
+        monkeypatch.setattr("metaquest.cli.commands.store.gc.catalog_write", _boom)
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True))
+
+        assert rc == 1
+        assert acc_dir.is_dir()
+        assert (acc_dir / "SRR1.fastq.gz").is_file()
+        assert not (paths.tmp / "SRR1_gc").exists()
+        assert any("catalogue exploded" in record.message for record in caplog.records)
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1") is not None
+
+    def test_leftover_aside_from_an_interrupted_gc_is_swept_up_next_run(self, tmp_path, capsys):
+        """A `<ACC>_gc` folder left behind by an interrupted removal (the rename succeeded,
+        the catalogue delete or final cleanup did not) is picked up as an ordinary leftover
+        by the next run, via the added `_gc` suffix in _accession_of_leftover."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
+        aside = paths.tmp / "SRR1_gc"
+        aside.mkdir(parents=True)
+        (aside / "SRR1.fastq.gz").write_bytes(b"x" * 10)
+
+        assert StoreGcCommand._accession_of_leftover("SRR1_gc") == "SRR1"
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert any("SRR1_gc" in entry for entry in report["removed_leftovers"])
+        assert not aside.exists()
