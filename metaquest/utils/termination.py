@@ -141,9 +141,13 @@ def graceful_termination(
     previous = {}
     try:
         for signum in handled_signals():
-            if signal.getsignal(signum) is signal.SIG_IGN:
+            old = signal.getsignal(signum)
+            if old is signal.SIG_IGN:
                 continue
-            previous[signum] = signal.signal(signum, handler)
+            # Stored before the new handler goes in: a signal arriving as signal.signal returns
+            # runs the handler at once, and the old one must already be known to be restored.
+            previous[signum] = old
+            signal.signal(signum, handler)
         _active = term
         yield term
     finally:

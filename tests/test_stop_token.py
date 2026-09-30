@@ -366,12 +366,18 @@ class TestRunLevelStop:
 def test_cancelling_one_download_run_leaves_a_concurrent_run_running(tmp_path, allow_sleep):
     """Two download_sra runs in two threads: stopping A's token ends A's tool and worker only; B finishes."""
     token_a, token_b = threading.Event(), threading.Event()
+    a_starting = threading.Event()
     seen = {}
 
     def fake_project_download(accession, output_folder, num_threads=4, force=False, temp_folder=None, **kwargs):
         stop = kwargs.get("stop")
         seen[accession] = stop
-        # Run A's tool would run for 30 s; run B's finishes by itself after 3 s.
+        # Run A's tool would run for 30 s; run B's finishes by itself after 3 s. B starts its
+        # tool only once A is starting its own, so B's 3 s cannot run out before both are seen.
+        if accession == "SRRA1":
+            a_starting.set()
+        else:
+            assert a_starting.wait(10), "run A never started its tool"
         seconds = "30" if accession == "SRRA1" else "3"
         try:
             accession_mod._run_download_tool("sleep", [seconds], stop)

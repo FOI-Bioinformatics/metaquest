@@ -246,10 +246,12 @@ def download_sra(
             up on that accession; zero (the default) waits for as long as the other run keeps
             working, since a download legitimately takes hours
         stop: This run's stop token; a new one is made when None. It reaches every worker,
-            ``download_accession`` and each prefetch or fasterq-dump child, so setting it, or
-            ``SecureSubprocess.terminate_children(stop=stop)``, stops this run only; another
-            run in the same process keeps going. The process-wide ``accession.STOP`` still
-            stops every run
+            ``download_accession`` and each prefetch, fasterq-dump or pigz child. Setting it
+            prevents this run from starting further tools and ends its lock waits, but a tool
+            already running keeps going until it ends; ``SecureSubprocess.terminate_children(
+            stop=stop)`` also stops those. Either way only this run is affected; another run in
+            the same process keeps going. The process-wide ``accession.STOP`` still stops every
+            run from starting further tools
 
     Returns:
         Dictionary with download statistics

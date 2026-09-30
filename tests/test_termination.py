@@ -50,6 +50,25 @@ class TestGracefulTermination:
         fake_exit.assert_called_once_with(130)
         assert _current_handlers() == before
 
+    def test_a_signal_as_the_first_handler_goes_in_still_restores_it(self):
+        """The handler can run as ``signal.signal`` returns; the old handler must already be recorded."""
+        before = _current_handlers()
+        real_signal = signal.signal
+        calls = []
+
+        def install_then_interrupt(signum, handler):
+            old = real_signal(signum, handler)
+            calls.append(signum)
+            if len(calls) == 1:
+                raise KeyboardInterrupt  # what the new handler does when a signal is pending
+            return old
+
+        with patch.object(term_mod.signal, "signal", side_effect=install_then_interrupt):
+            with pytest.raises(KeyboardInterrupt):
+                with graceful_termination():
+                    pass  # pragma: no cover - the install is interrupted
+        assert _current_handlers() == before
+
     def test_abandon_after_one_repeat(self):
         with (
             patch.object(term_mod.os, "_exit") as fake_exit,
@@ -205,6 +224,19 @@ class TestBaseCommandRun:
             with caplog.at_level(logging.ERROR):
                 assert _FakeCommand(action).run(argparse.Namespace()) == 130
         assert any(r.getMessage() == "Interrupted (SIGTERM)" for r in caplog.records)
+
+    def test_an_interrupt_while_handlers_are_installed_returns_130_without_a_traceback(self, caplog):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def interrupted_install():
+            raise KeyboardInterrupt
+            yield  # pragma: no cover - never reached
+
+        with patch("metaquest.cli.base.graceful_termination", interrupted_install):
+            with caplog.at_level(logging.ERROR):
+                assert _FakeCommand(lambda args: 0).run(argparse.Namespace()) == 130
+        assert any(r.getMessage() == "Interrupted" for r in caplog.records)
 
     def test_graceful_shutdown_false_installs_nothing(self):
         with patch.object(term_mod.signal, "signal") as spy:

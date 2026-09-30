@@ -162,6 +162,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - `store_gc --yes` removing several datasets could delete the catalogue row of one that a download
   published again after gc had moved the old copy aside; such a dataset now keeps its new copy and row
   and is reported `in_use` with "published again during removal".
+- A signal arriving while a command was installing or restoring its signal handlers escaped as a
+  traceback and could leave a handler installed; the command now logs "Interrupted" and exits 130, and
+  every earlier handler is recorded before the new one goes in, so it is always restored.
 - An atomic write onto a read-only file (mode 0o444) failed with `PermissionError`; the target's mode is
   now copied onto the temporary file only just before the rename, so such a file is replaced and stays
   read-only.

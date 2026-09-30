@@ -144,14 +144,19 @@ class BaseCommand(ABC):
         """
         if not self.graceful_shutdown:
             return self.execute(args)
-        with graceful_termination() as term:
-            args._termination = term
-            try:
-                return self.execute(args)
-            except KeyboardInterrupt:
-                self.logger.error("Interrupted (%s)", term.cause)
-                SecureSubprocess.terminate_children(stop=term.stop)
-                return EXIT_INTERRUPTED
+        try:
+            with graceful_termination() as term:
+                args._termination = term
+                try:
+                    return self.execute(args)
+                except KeyboardInterrupt:
+                    self.logger.error("Interrupted (%s)", term.cause)
+                    SecureSubprocess.terminate_children(stop=term.stop)
+                    return EXIT_INTERRUPTED
+        except KeyboardInterrupt:
+            # A signal while the handlers were being installed or restored, outside execute.
+            self.logger.error("Interrupted")
+            return EXIT_INTERRUPTED
 
     # Output. stdout carries the command's result (tables, JSON); stderr carries logging.
     # These methods and ``emit_error_json`` are the only places in the package that write to
