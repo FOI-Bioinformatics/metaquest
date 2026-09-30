@@ -5,14 +5,15 @@ counting) on a ``threading.Event``, records a download for SRR9 from another thr
 ``registry_transaction``, then lets the command finish, and checks that the registry file holds
 both the command's change and SRR9. Before these commands recorded through ``registry_update``
 or a registry batch, they wrote back the snapshot they had loaded before the long step, and SRR9
-was lost. The writer is given a second to finish before the command is released; it finishes at
-once unless the command holds the registry lock at that point (``blacklist`` does its whole
-read-modify-write under the lock), in which case it waits for the lock and still lands.
+was lost. The writer must finish before the command is released, which shows the long step runs
+without the registry lock; ``blacklist`` is the exception, since it does its whole read-modify-write
+under the lock, so there the writer waits for the lock and still lands.
 """
 
 import argparse
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict
 
@@ -32,6 +33,8 @@ from metaquest.data.registry import load_registry, record_download, registry_tra
 from tests.perf_fixtures import write_metadata_folder
 
 WAIT = 20.0
+# Upper bound on how long a command may take to reach its gate or finish after it (coverage runs).
+CAP = 300.0
 
 
 class _Gate:
@@ -58,8 +61,13 @@ def _record_srr9(registry_file: Path, errors: list) -> None:
         errors.append(e)
 
 
-def _race(gate: _Gate, run: Callable[[], int], registry_file: Path) -> int:
-    """Run ``run`` in a thread, record SRR9 while it is held at the gate, release it, return its code."""
+def _race(gate: _Gate, run: Callable[[], int], registry_file: Path, command_holds_lock: bool = False) -> int:
+    """Run ``run`` in a thread, record SRR9 while it is held at the gate, release it, return its code.
+
+    With ``command_holds_lock`` False the writer must finish while the command is still held,
+    which proves the command's long step runs without the registry lock. ``blacklist`` holds the
+    lock at its gate, so there the writer is given a second and then waits for the lock.
+    """
     outcome: Dict[str, Any] = {}
 
     def command() -> None:
@@ -70,14 +78,26 @@ def _race(gate: _Gate, run: Callable[[], int], registry_file: Path) -> int:
 
     worker = threading.Thread(target=command)
     worker.start()
-    assert gate.entered.wait(WAIT), "the command never reached its long step"
+    deadline = time.monotonic() + CAP
+    while not gate.entered.wait(0.2):
+        if not worker.is_alive() or time.monotonic() > deadline:
+            break
+    if not gate.entered.is_set():
+        worker.join(CAP)
+        if "error" in outcome:
+            raise outcome["error"]
+        pytest.fail(f"the command returned rc={outcome.get('rc')} before its long step")
     errors: list = []
     writer = threading.Thread(target=_record_srr9, args=(registry_file, errors))
     writer.start()
-    writer.join(timeout=1.0)
+    if command_holds_lock:
+        writer.join(timeout=1.0)
+    else:
+        writer.join(WAIT)
+        assert not writer.is_alive(), "the writer waited for a registry lock the long step should not hold"
     gate.release.set()
-    worker.join(WAIT)
-    writer.join(WAIT)
+    worker.join(CAP)
+    writer.join(CAP)
     assert not worker.is_alive() and not writer.is_alive()
     assert not errors, errors
     if "error" in outcome:
@@ -160,7 +180,7 @@ def test_blacklist_runs_its_read_modify_write_under_the_registry_lock(tmp_path, 
     gate = _Gate()
     monkeypatch.setattr(blacklist_module, "read_blacklist_file", gate.wrap(blacklist_module.read_blacklist_file))
 
-    assert _race(gate, lambda: BlacklistCommand().execute(args), registry_file) == 0
+    assert _race(gate, lambda: BlacklistCommand().execute(args), registry_file, command_holds_lock=True) == 0
 
     assert _datasets(registry_file)["SRR1"]["exclusion"]["excluded"] is True
     assert (tmp_path / "blacklist.txt").read_text() == "SRR1  # contaminated\n"
@@ -417,7 +437,12 @@ def test_read_extraction_records_usage_after_releasing_the_registry_lock(tmp_pat
         registry=str(registry_file),
         data_root=str(store_root),
     )
-    with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools({})):
+    # The external tools are faked, and the pre-flight check is told they are present, so the test
+    # runs on a machine without minimap2, samtools or megahit.
+    with (
+        patch("metaquest.utils.security.shutil.which", return_value="/usr/bin/tool"),
+        patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools({})),
+    ):
         assert ExtractTargetReadsCommand().execute(args) == 0
 
     # One write for the extraction and one for the assembly, neither under the registry lock.
