@@ -18,6 +18,7 @@ import requests
 
 from metaquest.core.exceptions import DataAccessError, NetworkError
 from metaquest.data.file_io import write_csv
+from metaquest.utils.http import retrying_session
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,11 @@ class SRAMetadataClient:
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
         self.last_request_time: float = 0
         self.request_delay = 0.34 if api_key else 0.5  # Conservative rate limiting
+        # One retrying session per client, reused across every esearch/efetch call it makes: a
+        # connection failure, a 429 or a 5xx from NCBI is retried with backoff before
+        # _make_request ever sees it; a NetworkError below is raised only once retries (and the
+        # transport-level connection attempts they cover) are exhausted.
+        self.session = retrying_session()
 
     def _make_request(self, url: str, params: Dict[str, str]) -> str:
         """Make rate-limited request to NCBI API."""
@@ -83,7 +89,7 @@ class SRAMetadataClient:
             params["api_key"] = self.api_key
 
         try:
-            response = requests.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
             self.last_request_time = time.time()
             return response.text
@@ -181,6 +187,9 @@ class SRAMetadataClient:
         raw XML), every RUN in every package is returned, matching the historical behaviour.
         """
         try:
+            # xml.etree (expat), not metaquest.utils.xml's lxml parser: expat has refused entity
+            # expansion by default since Python 3.7.1, so billion-laughs and XXE do not apply
+            # here the way they apply to lxml's permissive defaults.
             root = ET.fromstring(xml_content)
         except ET.ParseError as e:
             logger.error(f"Failed to parse SRA XML: {e}")

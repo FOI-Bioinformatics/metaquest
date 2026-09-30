@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from metaquest.cli.base import BaseCommand, accessions_from_args, read_accessions_file, resolve_command_store
+from metaquest.core.exceptions import MetaQuestError
 from metaquest.core.settings import require_email, setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
@@ -150,8 +151,10 @@ class SRAInfoCommand(BaseCommand):
 
             return 0
 
-        except Exception as e:
-            logger.error(f"SRA info command failed: {e}")
+        except (MetaQuestError, OSError) as e:
+            return self.fail(e, "SRA info command failed")
+        except Exception as e:  # noqa: B902 - top-level catch: keep the traceback, return 1
+            self.logger.exception("SRA info command failed: %s", e)
             return 1
 
 

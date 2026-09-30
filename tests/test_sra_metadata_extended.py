@@ -645,7 +645,7 @@ class TestAPIRequestErrorHandling:
         """Test request with API key."""
         client = SRAMetadataClient("test@example.com", "api_key_123")
 
-        with patch("requests.get") as mock_get:
+        with patch.object(client.session, "get") as mock_get:
             mock_response = Mock()
             mock_response.text = "response"
             mock_response.raise_for_status = Mock()
@@ -662,7 +662,7 @@ class TestAPIRequestErrorHandling:
         """Test rate limiting between requests."""
         client = SRAMetadataClient("test@example.com")
 
-        with patch("requests.get") as mock_get:
+        with patch.object(client.session, "get") as mock_get:
             with patch("time.sleep") as mock_sleep:
                 mock_response = Mock()
                 mock_response.text = "response"
@@ -680,7 +680,7 @@ class TestAPIRequestErrorHandling:
         """Test handling of request exceptions."""
         client = SRAMetadataClient("test@example.com")
 
-        with patch("requests.get") as mock_get:
+        with patch.object(client.session, "get") as mock_get:
             # Need to raise requests.RequestException (not plain Exception) for code to catch it
             mock_get.side_effect = requests.RequestException("Network error")
 

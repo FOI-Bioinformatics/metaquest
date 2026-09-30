@@ -11,14 +11,13 @@ import requests
 import time
 import xml.etree.ElementTree as ET
 import pandas as pd
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from typing import Dict, List, Optional, Union
 from pathlib import Path
 import re
 
 from metaquest.core.exceptions import ProcessingError
 from metaquest.data.file_io import open_atomic, write_csv
+from metaquest.utils.http import retrying_session
 
 logger = logging.getLogger(__name__)
 
@@ -55,19 +54,16 @@ def _build_retrying_session() -> requests.Session:
     Each NCBITaxonomyClient owns one of these (it already keeps per-instance rate-limit
     state), reused across every esearch/efetch call that client makes. When every retry fails the
     last response is returned, so raise_for_status() reports the HTTP error rather than a RetryError.
+
+    A thin wrapper (re-exported under its historical name) over
+    ``metaquest.utils.http.retrying_session``, which every other HTTP-polling client shares.
     """
-    session = requests.Session()
-    retry = Retry(
+    return retrying_session(
         total=RETRY_TOTAL,
         backoff_factor=RETRY_BACKOFF_FACTOR,
         status_forcelist=RETRY_STATUS_FORCELIST,
         allowed_methods=["GET"],
-        raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
 
 
 class NCBITaxonomyClient:
@@ -137,7 +133,9 @@ class NCBITaxonomyClient:
 
         response = self._make_request(search_url, params)
 
-        # Parse XML response
+        # Parse XML response. xml.etree (expat), not metaquest.utils.xml's lxml parser: expat
+        # has refused entity expansion by default since Python 3.7.1, so billion-laughs and XXE
+        # do not apply here the way they apply to lxml's permissive defaults.
         root = ET.fromstring(response)
         tax_ids = [id_elem.text for id_elem in root.findall(".//Id") if id_elem.text is not None]
 
@@ -194,6 +192,7 @@ class NCBITaxonomyClient:
 
         response = self._make_request(fetch_url, params)
 
+        # xml.etree (expat): see the comment in search_taxonomy above.
         root = ET.fromstring(response)
         return [self._parse_taxon_element(taxon) for taxon in root.findall("./Taxon")]
 

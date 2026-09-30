@@ -5,10 +5,9 @@ import threading
 from typing import Dict, List, Optional
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from metaquest.core.exceptions import DataAccessError
+from metaquest.utils.http import retrying_session
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +37,12 @@ def get_session() -> requests.Session:
     if _session is None:
         with _SESSION_LOCK:
             if _session is None:
-                new_session = requests.Session()
-                retry = Retry(
+                _session = retrying_session(
                     total=RETRY_TOTAL,
                     backoff_factor=RETRY_BACKOFF_FACTOR,
                     status_forcelist=RETRY_STATUS_FORCELIST,
                     allowed_methods=["GET"],
-                    raise_on_status=False,
                 )
-                adapter = HTTPAdapter(max_retries=retry)
-                new_session.mount("https://", adapter)
-                new_session.mount("http://", adapter)
-                _session = new_session
     return _session
 
 

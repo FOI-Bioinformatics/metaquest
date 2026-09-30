@@ -25,6 +25,7 @@ from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import ensure_directory, list_files, write_csv, write_text_atomic
 from metaquest.utils.progress import ProgressReporter, item_level
+from metaquest.utils.xml import parse_xml_file
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,9 @@ def _split_efetch_packages(xml_text: str, wanted: Set[str]) -> Dict[str, str]:
     Returns ``{accession: xml_string}`` for the wanted accessions actually found; accessions
     absent from the response are simply missing from the result.
     """
+    # xml.etree (expat) is used here, not metaquest.utils.xml's lxml parser: CPython's expat
+    # binding has refused to expand entities by default since 3.7.1, so billion-laughs and XXE
+    # do not apply to it the way they apply to lxml's permissive defaults.
     root = ET.fromstring(xml_text)
     found: Dict[str, str] = {}
 
@@ -635,7 +639,7 @@ def _parse_metadata_file(xml_file: Union[str, Path]) -> Tuple[Dict[str, Any], Di
 
     Raises OSError when the file cannot be read and ``lxml.etree.XMLSyntaxError`` on malformed XML.
     """
-    root = etree.parse(str(xml_file)).getroot()
+    root = parse_xml_file(xml_file)
     return _extract_metadata_fields(root, xml_file), _extract_sample_attributes(root)
 
 

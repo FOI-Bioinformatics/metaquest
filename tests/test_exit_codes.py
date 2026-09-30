@@ -276,7 +276,7 @@ def test_ncbi_request_failures_are_network_errors_only_when_retryable(error, exp
     from metaquest.data.sra_metadata import SRAMetadataClient
 
     client = SRAMetadataClient("someone@example.org")
-    with patch("metaquest.data.sra_metadata.requests.get", side_effect=error):
+    with patch.object(client.session, "get", side_effect=error):
         with pytest.raises(DataAccessError) as excinfo:
             client._make_request("https://example.org/efetch", {})
     assert type(excinfo.value) is expected

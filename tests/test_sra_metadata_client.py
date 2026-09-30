@@ -50,26 +50,22 @@ class TestSRAMetadataClient:
         assert client.api_key == "api_key_123"
         assert client.request_delay < 0.5  # Should be faster with API key
 
-    @patch("requests.get")
-    def test_make_request_success(self, mock_get):
+    def test_make_request_success(self):
         """Test successful API request."""
         mock_response = MagicMock()
         mock_response.text = '{"test": "data"}'
         mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
-
-        result = self.client._make_request("http://test.com", {"param": "value"})
+        with patch.object(self.client.session, "get", return_value=mock_response) as mock_get:
+            result = self.client._make_request("http://test.com", {"param": "value"})
 
         assert result == '{"test": "data"}'
         mock_get.assert_called_once()
 
-    @patch("requests.get")
-    def test_make_request_failure(self, mock_get):
+    def test_make_request_failure(self):
         """Test failed API request."""
-        mock_get.side_effect = Exception("Network error")
-
-        with pytest.raises(Exception):
-            self.client._make_request("http://test.com", {"param": "value"})
+        with patch.object(self.client.session, "get", side_effect=Exception("Network error")):
+            with pytest.raises(Exception):
+                self.client._make_request("http://test.com", {"param": "value"})
 
     def test_dataset_info_creation(self):
         """Test SRADatasetInfo creation."""
@@ -225,6 +221,52 @@ class TestSRAIntegration:
         # This should not raise an exception
         mock_save(metadata, "test_report.csv")
         mock_save.assert_called_once()
+
+
+class TestSRAMetadataClientRetries:
+    """``SRAMetadataClient`` retries a transient NCBI failure before raising ``NetworkError``.
+
+    Uses ``tests/fake_http.py``, the same urllib3-connection-pool-level fake the taxonomy and
+    GTDB retry tests use, so the client's real retrying session (not a mock of ``requests.get``)
+    is exercised end to end.
+    """
+
+    def test_persistent_503_raises_network_error_after_retrying(self, monkeypatch):
+        from metaquest.core.exceptions import NetworkError
+        from tests.fake_http import serve
+
+        requested = serve(monkeypatch, lambda path: (503, b"unavailable"))
+        client = SRAMetadataClient("test@example.com")
+        client.request_delay = 0
+
+        with pytest.raises(NetworkError, match="Failed to query NCBI"):
+            client._make_request(client.base_url + "esearch.fcgi", {"db": "sra"})
+
+        # One first attempt plus 3 retries (metaquest.utils.http.RETRY_TOTAL).
+        assert len(requested) == 4
+
+    def test_success_after_one_503_returns_the_response_body(self, monkeypatch):
+        from tests.fake_http import serve
+
+        attempts = {"n": 0}
+
+        def handler(path):
+            attempts["n"] += 1
+            if attempts["n"] < 2:
+                return (503, b"unavailable")
+            return (200, b'{"esearchresult": {"idlist": []}}')
+
+        serve(monkeypatch, handler)
+        client = SRAMetadataClient("test@example.com")
+        client.request_delay = 0
+
+        result = client._make_request(client.base_url + "esearch.fcgi", {"db": "sra"})
+
+        assert result == '{"esearchresult": {"idlist": []}}'
+
+    def test_client_owns_a_retrying_session(self):
+        client = SRAMetadataClient("test@example.com")
+        assert client.session.adapters["https://"].max_retries.raise_on_status is False
 
 
 if __name__ == "__main__":

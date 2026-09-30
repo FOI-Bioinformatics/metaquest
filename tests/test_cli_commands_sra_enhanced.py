@@ -142,10 +142,9 @@ class TestSRAInfoCommand:
         assert result == 1
         assert "Could not fetch metadata for any accessions" in caplog.text
 
-    @patch("metaquest.cli.commands.sra_enhanced.logger")
     @patch("builtins.open", side_effect=FileNotFoundError())
-    def test_execute_file_error(self, mock_open, mock_logger):
-        """Test execution with file reading error."""
+    def test_execute_file_error(self, mock_open, caplog):
+        """Test execution with file reading error: a DataAccessError reaches self.fail (exit 1)."""
         command = SRAInfoCommand()
         args = argparse.Namespace(
             accessions_file="nonexistent.txt",
@@ -158,7 +157,33 @@ class TestSRAInfoCommand:
         result = command.execute(args)
 
         assert result == 1
-        mock_logger.error.assert_called_once()
+        assert "SRA info command failed" in caplog.text
+
+    @patch("metaquest.cli.commands.sra_enhanced.create_download_preview")
+    @patch("metaquest.cli.commands.sra_enhanced.SRAMetadataClient")
+    def test_execute_network_error_exits_4(self, mock_client_class, mock_create_preview):
+        """A NetworkError from the metadata client reaches ``self.fail`` with exit code 4, not 1.
+
+        Regression test for the broad ``except Exception`` this command used to have, which
+        turned a retryable NCBI failure (``NetworkError``, ``metaquest.core.exceptions``) into
+        the same exit code 1 as any other failure.
+        """
+        from metaquest.core.exceptions import NetworkError
+
+        command = SRAInfoCommand()
+        args = argparse.Namespace(
+            accessions_file="test.txt",
+            email="test@example.com",
+            api_key=None,
+            output_report="report.csv",
+            bandwidth_mbps=100.0,
+        )
+        mock_create_preview.side_effect = NetworkError("Failed to query NCBI: too many retries")
+
+        with patch("builtins.open", mock_open(read_data="SRR123456\n")):
+            result = command.execute(args)
+
+        assert result == 4
 
 
 class TestSRAValidateCommand:
