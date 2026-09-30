@@ -29,8 +29,15 @@ _NETWORK_ERROR_RE = re.compile(r"timeout|timed out|connection|could not resolve 
 # "storage exhausted" and "disk-limit exeeded" (sic) are fasterq-dump's own out-of-space messages.
 _DISK_FULL_ERROR_RE = re.compile(r"no space left|enospc|disk[ -]full|storage exhausted|disk-limit", re.IGNORECASE)
 _NOT_FOUND_ERROR_RE = re.compile(
-    r"not[ -]found|invalid accession|cannot be found|403|404|does not exist", re.IGNORECASE
+    r"not[ -]found|invalid accession|cannot be found|\b403\b|\b404\b|does not exist", re.IGNORECASE
 )
+# A lock message names the holder's pid, start time and lock path, any of which can contain
+# "403" or "404"; it is classified before the other patterns are tried.
+_LOCK_MESSAGE_RE = re.compile(r"(?:^|: )(?:locked|lock lost): | is locked by pid ")
+
+
+# The result message for an accession whose FASTQ files were already in place, so nothing ran.
+ALREADY_EXISTS = "already exists"
 
 
 # Process-wide emergency stop. Each download run has its own stop token (``download_sra``'s
@@ -82,11 +89,13 @@ def classify_download_error(text: str) -> str:
     messages and to decide, in ``_retry_failed_downloads``, which accessions are worth
     retrying.
 
-    ``not-found`` is tested before ``network`` because a prefetch not-found message mentions
-    resolving a query, and each class name classifies back to its own class so an already
-    prefixed message (``"disk-full: not attempted"``) keeps its class on a second pass.
+    A lock message (``locked: ...``, ``lock lost: ...``, a store lock that could not be taken) is
+    ``unknown`` whatever pid or path it names. ``not-found`` is tested before ``network``
+    because a prefetch not-found message mentions resolving a query, and each class name
+    classifies back to its own class so an already prefixed message
+    (``"disk-full: not attempted"``) keeps its class on a second pass.
     """
-    if not text:
+    if not text or _LOCK_MESSAGE_RE.search(text):
         return "unknown"
     if _NOT_FOUND_ERROR_RE.search(text):
         return "not-found"
@@ -375,7 +384,7 @@ def download_accession(
     redownload = force or redownload_truncated
     if _check_existing_download(output_path, redownload):
         logger.info(f"Skipping {accession}, FASTQ files already exist")
-        return True, "already exists"
+        return True, ALREADY_EXISTS
 
     # A redownload must not reuse a cached archive: prefetch treats an existing <acc>.sra as
     # already fetched, so a truncated archive would be dumped again and stay truncated.
@@ -563,7 +572,7 @@ def _project_download(
         with held_lock(lock, policy, should_stop=functools.partial(stop_requested, stop)):
             if not redownload and _check_existing_download(fastq / accession, False):
                 logger.info(f"Skipping {accession}, FASTQ files already exist")
-                return True, "already exists"
+                return True, ALREADY_EXISTS
             return _stage_and_publish(
                 accession, fastq, lock, num_threads, force, temp_folder, download_kwargs, stop=stop
             )

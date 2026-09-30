@@ -1433,6 +1433,17 @@ class TestClassifyDownloadError:
             ("not-found: Download failed: no data", "not-found"),
             ("network: Download failed: connection reset by peer", "network"),
             ("unknown: Download failed: something else entirely", "unknown"),
+            # A lock message names a pid, a time and a path that can contain 403 or 404.
+            (
+                "locked: Accession SRR1 is locked by pid 40404 on host node403 since "
+                "2026-09-30T10:04:03.404000+00:00: /data/fastq/.locks/SRR1.lock",
+                "unknown",
+            ),
+            ("Retry 2: locked: Accession SRR1 is locked by pid 404 on host h since t: x.lock", "unknown"),
+            ("lock lost: Lost the lock /p/404/SRR1.lock: now held by pid 403", "unknown"),
+            ("store error: Store dataset SRR1 is locked by pid 404 on host h since t: l", "unknown"),
+            # Error codes count only as whole numbers.
+            ("Download failed after 14041 bytes", "unknown"),
         ],
     )
     def test_classify_download_error_table(self, text, expected_class):
@@ -2274,6 +2285,7 @@ class TestDownloadSraStore:
         assert "catalogue pending" in result
         assert (fastq_folder / "SRR1").is_symlink()
         assert "store_reindex" in caplog.text
+        assert str(paths.root) in caplog.text
 
         with Catalog(paths) as catalog:
             assert catalog.get_dataset("SRR1") is None
@@ -2888,17 +2900,20 @@ class TestDownloadInterrupt:
         assert (tmp_path / "SRR1" / "SRR1_1.fastq").exists()
 
     def test_store_download_waiting_on_a_held_lock_returns_interrupted(self, tmp_path):
-        from metaquest.store.layout import init_store
-        from metaquest.store.locks import dataset_lock
+        from metaquest.store.layout import init_store, lock_path
 
         store = init_store(tmp_path / "store")
+        # A live holder in another process (another host, so it is never judged dead).
+        lock = lock_path(store, "SRR1")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00"}))
         accession_mod.STOP.set()
-        with dataset_lock(store, "SRR1"):
-            with patch("metaquest.data.sra.store_handoff._store_precheck", return_value=None):
-                with patch("metaquest.data.sra.store_handoff._store_fetch") as fetch:
-                    started = time.monotonic()
-                    result = store_handoff_mod._store_download("SRR1", tmp_path / "fastq", store, lock_wait=0.0)
+        with patch("metaquest.data.sra.store_handoff._store_precheck", return_value=None):
+            with patch("metaquest.data.sra.store_handoff._store_fetch") as fetch:
+                started = time.monotonic()
+                result = store_handoff_mod._store_download("SRR1", tmp_path / "fastq", store, lock_wait=0.0)
         assert result == (False, "interrupted")
+        assert json.loads(lock.read_text())["pid"] == 4242
         assert time.monotonic() - started < 1.0
         fetch.assert_not_called()
 

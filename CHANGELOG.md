@@ -147,6 +147,17 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   dot-prefixed folder inside the sample's output folder, and each file is renamed into place only once
   the sample is complete. A rerun that writes fewer files than an earlier run also removes the earlier
   run's other FASTQ files for that genome.
+- A run that waited for another run's download of the same accession and then found the files counted
+  a download attempt and replaced the other run's result message with "already exists"; it now records
+  no attempt and leaves an existing record as it was.
+- A "locked: ..." or "lock lost: ..." result whose holder pid, time or lock path contained "403" or "404"
+  was classified not-found and skipped by the retry pass; lock messages are now classified before the
+  error codes, and 403 and 404 count only as whole numbers.
+- `store_gc --yes` removing several datasets could delete the catalogue row of one that a download
+  published again after gc had moved the old copy aside; such a dataset now keeps its new copy and row
+  and is reported `in_use` with "published again during removal".
+- The warning for a catalogue write that failed after a store publish names the store root and the
+  `store_reindex --data-root` command to repair it.
 - The copy made by `store_link --mode copy` (and by `download_sra` with a copy link mode) is built under a
   dot-prefixed name and renamed into place, so an interrupted copy no longer leaves a partial dataset
   folder in the project.

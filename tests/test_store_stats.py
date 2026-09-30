@@ -5,6 +5,7 @@ on its own.
 """
 
 import gzip
+import threading
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -277,12 +278,18 @@ class TestStoreStatsConcurrency:
         observed = {}
         real_write = stats_module._write_stats
 
-        def write_while_another_writer_tries(path, stats):
+        def other_writer():
             try:
-                with dataset_lock(paths, "SRR1", wait_seconds=0.002):
+                with dataset_lock(paths, "SRR1", wait_seconds=0.2):
                     observed["other_writer"] = "acquired the lock"
             except DataAccessError:
                 observed["other_writer"] = "blocked"
+
+        def write_while_another_writer_tries(path, stats):
+            # Another writer, in a thread of its own, waits for the lock and gives up.
+            thread = threading.Thread(target=other_writer)
+            thread.start()
+            thread.join()
             real_write(path, stats)
 
         with patch.object(stats_module, "_write_stats", side_effect=write_while_another_writer_tries):

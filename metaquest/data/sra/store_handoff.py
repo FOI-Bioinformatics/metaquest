@@ -119,9 +119,12 @@ def _catalogue_published(store, sidecar) -> bool:
         return True
     except DataAccessError as e:
         logger.warning(
-            "Could not record %s in the store catalogue: %s; run metaquest store_reindex to repair it",
+            "Could not record %s in the store catalogue at %s: %s; run metaquest store_reindex "
+            "--data-root %s to repair it",
             sidecar.accession,
+            store.root,
             e,
+            store.root,
         )
         return False
 

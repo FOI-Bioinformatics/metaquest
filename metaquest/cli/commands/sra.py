@@ -27,6 +27,7 @@ from metaquest.data.registry import (
 )
 from metaquest.data.registry_batch import RegistryBatch, registry_batch
 from metaquest.data.sra import (
+    ALREADY_EXISTS,
     STORE_LINKED_PREFIX,
     default_max_workers,
     download_sra,
@@ -408,6 +409,14 @@ class DownloadSraCommand(BaseCommand):
         batch.add_flush_hook(_record_usage)
 
         def _record_result(accession: str, success: bool, message: str) -> None:
+            if success and message == ALREADY_EXISTS:
+                # Found in place (typically after waiting for another run that downloaded it):
+                # not an attempt, and an existing record keeps the other run's message.
+                present = functools.partial(
+                    self._record_present, acc=accession, fastq_dir=fastq_dir, from_store=False, complete=None
+                )
+                batch.apply(present, label=accession)
+                return
             linked = bool(success) and message.startswith(STORE_LINKED_PREFIX)
             from_store = linked or (bool(success) and message.endswith(STORE_SAVED_SUFFIX))
             if from_store:

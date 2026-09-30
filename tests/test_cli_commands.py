@@ -3188,6 +3188,30 @@ class TestDownloadSraRegistryWrites:
         assert rb.download_block(load_registry(args.registry), "SRR1").state == "downloaded"
         assert not (tmp_path / "metaquest_registry.json.lock").exists()
 
+    @patch("metaquest.cli.commands.sra.shutil.which", return_value="/usr/bin/fasterq-dump")
+    @patch("metaquest.cli.commands.sra.download_sra")
+    def test_already_exists_after_waiting_is_not_an_attempt(self, mock_download, _which, tmp_path):
+        """A run that waited for another run's download and found the files counts no attempt."""
+        from metaquest.data.registry import record_download, registry_transaction
+
+        args = self._args(tmp_path)
+        (tmp_path / "fastq" / "SRR1").mkdir(parents=True)
+        with registry_transaction(args.registry) as reg:
+            record_download(reg, "SRR1", "downloaded", tmp_path / "fastq", "Downloaded 2 files, unverified")
+
+        def fake_download_sra(**kwargs):
+            kwargs["on_result"]("SRR1", True, "already exists")
+            kwargs["on_result"]("SRR2", True, "already exists")
+            return {"total": 2, "successful": 2, "failed": 0, "failed_accessions": []}
+
+        mock_download.side_effect = fake_download_sra
+        assert DownloadSraCommand().execute(args) == 0
+        registry = load_registry(args.registry)
+        first = rb.download_block(registry, "SRR1")
+        assert (first.state, first.attempts, first.message) == ("downloaded", 1, "Downloaded 2 files, unverified")
+        second = rb.download_block(registry, "SRR2")
+        assert (second.state, second.attempts) == ("downloaded", 0)
+
 
 class TestDownloadSraTerminationAndFinalFlush:
     """SIGTERM/SIGHUP take the interrupt path, and a failed final registry flush is retried once."""

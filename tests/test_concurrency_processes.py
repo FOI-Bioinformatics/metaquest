@@ -215,6 +215,8 @@ def test_two_runs_download_one_accession_into_one_project_once(harness):
     assert "Skipping SRR1, FASTQ files already exist" in second_log
     assert _fastq_names(project / "fastq" / "SRR1") == ["SRR1_1.fastq", "SRR1_2.fastq"]
     assert _download_state(project, "SRR1") == "downloaded"
+    # One fetch, one attempt: the run that waited and found the files counts none.
+    assert _datasets(project)["SRR1"]["download"]["attempts"] == 1, second_log
     assert _temp_names(project) == []
     assert _lock_files(project / "fastq" / ".locks") == []
 

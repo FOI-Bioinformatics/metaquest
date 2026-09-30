@@ -888,6 +888,43 @@ class TestStoreGcRemovalUnderTheLock:
         with Catalog(paths) as cat:
             assert cat.get_dataset("SRR1") is not None
 
+    def test_a_dataset_republished_after_its_rename_keeps_its_catalogue_row(self, tmp_path, capsys, monkeypatch):
+        """Between a candidate's rename (lock released) and the batched catalogue delete, a
+        download publishes the accession again: the new folder and its row must stay."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_dataset_dir(paths, "SRR1")
+        _write_dataset_dir(paths, "SRR2")
+        with catalog_write(paths) as cat:
+            cat.upsert_project("p1", "Proj", str(tmp_path / "proj"), str(tmp_path / "proj" / "metaquest_registry.json"))
+            cat.upsert_dataset(_sidecar("SRR1"))
+            cat.upsert_dataset(_sidecar("SRR2"))
+        original = StoreGcCommand._remove_one_dataset
+
+        def _remove_then_republish(self, paths_arg, candidate, report, aside_by_accession):
+            original(self, paths_arg, candidate, report, aside_by_accession)
+            if candidate["accession"] == "SRR1":
+                # A download_sra of SRR1 takes the now free lock and publishes a new copy.
+                with dataset_lock(paths, "SRR1"):
+                    _write_dataset_dir(paths, "SRR1")
+                    with catalog_write(paths) as cat:
+                        cat.upsert_dataset(_sidecar("SRR1", downloaded="2026-09-30T00:00:00+00:00"))
+
+        monkeypatch.setattr(StoreGcCommand, "_remove_one_dataset", _remove_then_republish)
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["removed_datasets"] == ["SRR2"]
+        assert {row["accession"]: row["reason"] for row in report["in_use"]} == {
+            "SRR1": "in use: published again during removal"
+        }
+        assert (sra_dir(paths, "SRR1") / "SRR1.fastq.gz").is_file()
+        assert not (paths.tmp / "SRR1_gc").exists()
+        with Catalog(paths) as cat:
+            assert cat.get_dataset("SRR1")["downloaded"] == "2026-09-30T00:00:00+00:00"
+            assert cat.get_dataset("SRR2") is None
+
     def test_leftover_aside_from_an_interrupted_gc_is_swept_up_next_run(self, tmp_path, capsys):
         """A `<ACC>_gc` folder left behind by an interrupted removal (the rename succeeded,
         the catalogue delete or final cleanup did not) is picked up as an ordinary leftover

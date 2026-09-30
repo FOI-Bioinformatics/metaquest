@@ -538,17 +538,25 @@ class StoreGcCommand(BaseCommand):
         and only once that commits are the aside folders themselves removed. If the catalogue
         write fails, every folder this call renamed aside is put back under its original name
         and the failure is logged, so a catalogue problem never leaves a dataset's files gone
-        with no record of it ever existing. Leftovers take the same non-blocking lock, mapped
-        back to an accession by ``_accession_of_leftover``.
+        with no record of it ever existing. A dataset whose folder was published again after its
+        lock was released (a download that ran in between) keeps its catalogue row; only the old
+        copy moved aside is removed, and the accession is reported in use. Leftovers take the
+        same non-blocking lock, mapped back to an accession by ``_accession_of_leftover``.
         """
         aside_by_accession: Dict[str, Path] = {}
         for candidate in dataset_candidates:
             self._remove_one_dataset(paths, candidate, report, aside_by_accession)
 
+        republished: List[str] = []
         if aside_by_accession:
             try:
                 with catalog_write(paths) as catalog:
                     for accession in aside_by_accession:
+                        # Each dataset lock was released after its rename; a download may have
+                        # published the accession again since, and its new row must stay.
+                        if sra_dir(paths, accession).exists():
+                            republished.append(accession)
+                            continue
                         catalog.delete_dataset(accession)
             except DataAccessError as e:
                 self.logger.error(str(e))
@@ -562,8 +570,13 @@ class StoreGcCommand(BaseCommand):
                 return 1
             for aside in aside_by_accession.values():
                 _remove_path(aside)
+            for accession in republished:
+                self.logger.warning("%s: published again during removal; the new copy is kept", accession)
+                report["in_use"].append(
+                    {"accession": accession, "bytes": 0, "reason": "in use: published again during removal"}
+                )
 
-        removed_datasets = list(aside_by_accession)
+        removed_datasets = [accession for accession in aside_by_accession if accession not in republished]
 
         removed_leftovers: List[str] = []
         for candidate in leftover_candidates:

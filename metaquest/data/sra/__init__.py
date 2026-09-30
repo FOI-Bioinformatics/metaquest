@@ -36,11 +36,18 @@ from metaquest.data.sra.fastq import (
 )
 from metaquest.data.sra.sampling import sample_records
 from metaquest.data.sra.cleanup import is_transient_folder, transient_bytes
-from metaquest.data.sra.accession import STOP, classify_download_error, download_accession, fasterq_dump_version
+from metaquest.data.sra.accession import (
+    ALREADY_EXISTS,
+    STOP,
+    classify_download_error,
+    download_accession,
+    fasterq_dump_version,
+)
 from metaquest.data.sra.store_handoff import STORE_LINKED_PREFIX, STORE_READY_STATES
 from metaquest.data.sra.download import default_max_workers, download_sra
 
 __all__ = [
+    "ALREADY_EXISTS",
     "COMPLETE_RATIO_THRESHOLD",
     "FastqDigest",
     "MATE1_SUFFIXES",
