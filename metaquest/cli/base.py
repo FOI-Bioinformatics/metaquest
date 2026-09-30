@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
+from metaquest.core.constants import DEFAULT_LOG_LEVEL, LOG_LEVELS
 from metaquest.core.exceptions import DataAccessError, exit_code_for
 from metaquest.utils.security import SecureSubprocess
 from metaquest.utils.termination import EXIT_INTERRUPTED, graceful_termination
@@ -68,7 +69,9 @@ class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return super()._get_help_string(action) or ""
 
 
-LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+# The level names argparse accepts for --log-level; metaquest.core.constants.LOG_LEVELS is the
+# one place this list (and its default) is spelled out.
+LOG_LEVEL_NAMES = tuple(LOG_LEVELS)
 GLOBAL_OPTIONS_TITLE = "logging and progress"
 
 
@@ -107,8 +110,8 @@ def add_global_options(parser: argparse.ArgumentParser, suppress_defaults: bool)
             metavar="LEVEL",
             default=default(None),
             help=(
-                "Console logging level (one of DEBUG, INFO, WARNING, ERROR, CRITICAL; "
-                "default: METAQUEST_LOG_LEVEL, config [runtime] log_level, or INFO)"
+                f"Console logging level (one of {', '.join(LOG_LEVEL_NAMES)}; "
+                f"default: METAQUEST_LOG_LEVEL, config [runtime] log_level, or {DEFAULT_LOG_LEVEL})"
             ),
         )
     if "--log-file" not in taken:

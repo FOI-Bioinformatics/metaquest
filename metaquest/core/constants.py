@@ -273,28 +273,7 @@ CATALOG_LOCK_STALE_SECONDS = 120.0
 CATALOG_BUSY_TIMEOUT_SECONDS = 30.0
 
 # Memory and Resource Limits
-DEFAULT_MEMORY_LIMIT_GB = 8
-MAX_FILE_SIZE_MB = 1024  # 1GB max file size for uploads
 MAX_CONCURRENT_DOWNLOADS = 10
-
-# Error Messages
-ERROR_MESSAGES = {
-    "invalid_accession": "Invalid SRA accession format: {}",
-    "security_violation": "Security violation detected: {}",
-    "file_not_found": "Required file not found: {}",
-    "permission_denied": "Permission denied accessing: {}",
-    "timeout_exceeded": "Operation timed out after {} seconds",
-    "invalid_format": "Unsupported file format: {}",
-}
-
-# Success Messages
-SUCCESS_MESSAGES = {
-    "download_complete": "Successfully downloaded: {}",
-    "processing_complete": "Processing completed for: {}",
-    "assembly_complete": "Assembly completed for: {}",
-    "validation_passed": "Validation passed for: {}",
-}
 
 # Plugin System Constants
 PLUGIN_REGISTRY_NAME = "metaquest_plugins"
-DEFAULT_PLUGIN_TIMEOUT = 300  # 5 minutes

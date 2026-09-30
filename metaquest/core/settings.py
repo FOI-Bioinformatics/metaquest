@@ -32,7 +32,9 @@ from metaquest.core.constants import (
     CONFIG_DIRNAME,
     CONFIG_FILENAME,
     DATASET_LOCK_STALE_SECONDS,
+    DEFAULT_LOG_LEVEL,
     LOCK_HEARTBEAT_SECONDS,
+    LOG_LEVELS,
     SHORT_LOCK_HEARTBEAT_SECONDS,
 )
 from metaquest.core.exceptions import ConfigurationError
@@ -41,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 ENV_PREFIX = "METAQUEST_"
 RUNTIME_TABLE = "runtime"
-LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 # The registry's own lock limits; metaquest.data.registry keeps the same numbers as module
 # attributes (a test checks they agree), since core must not import the data layer.
 REGISTRY_LOCK_WAIT_SECONDS = 30.0
@@ -279,7 +280,7 @@ _SPECS = (
     ),
     _spec("temp_folder", _path, None, "Folder for temporary files of external tools", cli_dest="temp_folder"),
     _spec("log_file", _path, None, "File that receives a copy of every log line", cli_dest="log_file"),
-    _spec("log_level", _log_level, "INFO", "Console logging level", cli_dest="log_level"),
+    _spec("log_level", _log_level, DEFAULT_LOG_LEVEL, "Console logging level", cli_dest="log_level"),
     _spec("progress_every", _non_negative_int, 50, "Items between progress summaries", cli_dest="progress_every"),
     _spec("log_host", _boolean, False, "Put the host name on every log line"),
     _spec("min_free_gb", _non_negative_number, 10.0, "Free space to keep, in GB; 0 disables", cli_dest="min_free_gb"),
