@@ -13,8 +13,8 @@ MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic dat
 - `make help` - Show all available commands
 
 ### Testing and Quality
-- `make test` - Run pytest with coverage (currently 88%+ overall coverage)
-- `make lint` - Run flake8 linting (currently passing)
+- `make test` - Run pytest with coverage
+- `make lint` - Run flake8 linting
 - `make format` - Format code with black
 - `make check` - Full quality check (format, lint, type check)
 - `make pipeline` - Run full test pipeline via local_test.sh
@@ -42,11 +42,11 @@ MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic dat
 
 ## Architecture
 
-MetaQuest follows a layered architecture with clear separation of concerns. As of 0.5.0,
-`metaquest --help` lists 41 commands across six pipeline-step groups (Containment, Metadata,
-Genomes, Reads, Store, Analysis); the four commands `sra_profile`/`sra_report` replaced
-(`sra_stats`, `sra_profile_quality`, `sra_dashboard`, `sra_compare`) still parse but are hidden
-from that listing (see "Advanced SRA Commands" below).
+MetaQuest follows a layered architecture with clear separation of concerns. As of 0.7.0,
+`metaquest --help` lists 42 commands in seven groups (Containment, Metadata, Genomes, Reads,
+Store, Analysis, Environment; `doctor` is the one Environment command); the four commands
+`sra_profile`/`sra_report` replaced (`sra_stats`, `sra_profile_quality`, `sra_dashboard`,
+`sra_compare`) still parse but are hidden from that listing (see "Advanced SRA Commands" below).
 
 ### Core Components
 - **CLI Layer** (`metaquest/cli/`): Command-line interface with modular command architecture using a
@@ -58,10 +58,15 @@ from that listing (see "Advanced SRA Commands" below).
 - **Core Logic** (`metaquest/core/`): Domain models, validation, exceptions, and constants.
   `core/optional.py` is the one place an optional dependency (scikit-learn, scipy, plotly, jinja2,
   cartopy, sourmash) is imported, at the point of use, raising `ConfigurationError` naming its extra
-  when the package is missing.
+  when the package is missing. `core/settings.py` resolves every runtime setting (flag,
+  `METAQUEST_<NAME>`, `config.toml [runtime]`, default); see `docs/configuration.md`.
+- **Utilities** (`metaquest/utils/`): `tools.py` (the external tool table, `require_tools`),
+  `resources.py` (CPUs and memory limit of the job), `progress.py` (progress summaries), `logging.py`,
+  `xml.py` (the hardened lxml parser), `http.py` (retrying HTTP sessions), `security.py`
+  (`SecureSubprocess.run_secure`), `lockfile.py`, `termination.py`.
 - **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA
   operations. `data/sra/` is a package (`fastq`, `cleanup`, `accession`, `retry`, `store_handoff`,
-  `download`), not a single module. `data/registry.py` is the project journal;
+  `download`, `space`), not a single module. `data/registry.py` is the project journal;
   `data/registry_blocks.py` holds the typed dataclass for each block the registry file stores, with
   unknown-key preservation on a round trip.
 - **Advanced SRA Package** (`metaquest/sra/`): Quality profiling and interactive reporting, described
@@ -202,6 +207,28 @@ Store discovery rules for agents:
   with fake tools on `PATH`, no real tool or network); a test that starts a real subprocess carries the
   `multiprocess` pytest marker, which runs by default.
 
+### Settings, errors, logging and tools rules
+- **Errors**: a command reports an expected error with `return self.fail(error, "context")`
+  (`BaseCommand.fail`, `cli/base.py`), never `self.logger.error(...); return 1`. `fail` logs one line
+  with the traceback attached for the log file and returns the exception's exit code: 1 for a
+  `MetaQuestError`, 3 for `ConfigurationError`, 4 for `TransientError` (`NetworkError`,
+  `LockTimeoutError`), 130 for an interrupt. Raise the matching class rather than choosing a number;
+  exit codes other than 0, 1, 2, 3, 4 and 130 are not used.
+- **Per-item logging**: a line logged once per accession, sample or request is logged at
+  `metaquest.utils.progress.item_level(settings.active().progress_every)` (DEBUG by default), and a long
+  loop reports through a `ProgressReporter`; INFO is for summaries and for what a user acts on.
+  Warnings and errors about one item keep their level.
+- **Settings**: a new tunable value is one entry in `SETTINGS` (`_SPECS` in `core/settings.py`) plus a
+  field in `RuntimeSettings`, read with `settings.active().<name>` or, in a command,
+  `setting_for(args, name)`; a flag for it uses `default=None` and the spec's `cli_dest`. Never read a
+  `METAQUEST_*` variable or the config file directly; the store root is the one exception
+  (`store/resolve.py`). Add the setting to the table in `docs/configuration.md`.
+- **External tools**: a command checks the tools it needs with
+  `metaquest.utils.tools.require_tools([...])` before any work (skipped for `--dry-run`); a new tool, or
+  a new floor, is one entry in `TOOLS` (`utils/tools.py`), which `doctor`, the README's tool table and
+  `environment.yml` (checked by `tests/test_environment_pins.py`) must agree with. Tools are run only
+  through `SecureSubprocess.run_secure`, whose default timeout is the `subprocess_timeout` setting.
+
 ### Plugin Development
 - Format plugins inherit from base Plugin class in `plugins/base.py`
 - Register with `format_registry` for file format handlers
@@ -276,9 +303,10 @@ command shown.
 4. **Consider pre-commit hooks** for automated quality checks
 
 ### Error Handling
-- Custom exception hierarchy starts with `MetaQuestError` in `core/exceptions.py`
+- Custom exception hierarchy starts with `MetaQuestError` in `core/exceptions.py`; each class carries
+  its exit code (`ExitCode`: 0, 1, 2, 3, 4, 130), see "Exit-code policy" in `docs/ARCHITECTURE.md`
 - Each layer handles errors appropriate to its level
-- CLI layer formats errors for user display
+- CLI layer formats errors for user display through `BaseCommand.fail`
 
 ## Testing Strategy & Current Status
 
@@ -413,7 +441,7 @@ When working on MetaQuest, follow this priority order:
 - **Architecture consistency**: Follow established patterns for new features
 
 #### 2. Current Focus Areas (Optional Enhancement)
-- **Remaining visualization modules**: interactive.py, reporting.py, plots.py (currently 0%)
+- **Remaining visualization modules**: interactive.py, reporting.py, plots.py
 - **Processing enhancements**: containment.py optimizations, diversity.py extensions
 - **Plugin system expansion**: Additional format handler testing
 - **Documentation**: Add testing guides and workflow documentation
@@ -466,11 +494,11 @@ When working on MetaQuest, follow this priority order:
 **Test Files**: Extensive test suites in `tests/test_*_extended.py`, `tests/test_integration_simple.py`, and `tests/test_performance_simple.py` provide patterns for comprehensive testing with mocking, fixtures, and edge cases.
 
 #### Remaining Enhancement Opportunities
-- `metaquest/visualization/reporting.py` - Core reporting functionality (currently 0%)
-- `metaquest/visualization/plots.py` - Plotting functionality (currently 0%)
-- `metaquest/visualization/interactive.py` - Interactive plotting (currently 0%)
+- `metaquest/visualization/reporting.py` - Core reporting functionality
+- `metaquest/visualization/plots.py` - Plotting functionality
+- `metaquest/visualization/interactive.py` - Interactive plotting
 - `metaquest/processing/containment.py` - Core containment algorithms
-- `metaquest/processing/diversity.py` - Diversity analysis (currently 0%)
+- `metaquest/processing/diversity.py` - Diversity analysis
 
 ### Success Metrics for Development Work
 
@@ -493,17 +521,16 @@ When working on MetaQuest, follow this priority order:
 - [x] **CLI Integration** - Two SRA analysis commands (sra_profile, sra_report) fully functional
 
 #### Current Development Priorities (Low Priority)
-- [ ] **Remaining visualization modules** - interactive.py, reporting.py, plots.py (currently 0%)
+- [ ] **Remaining visualization modules** - interactive.py, reporting.py, plots.py
 - [ ] **Processing layer completion** - containment.py, diversity.py enhancements
 - [ ] **Additional plugin testing** - Expand format handler test coverage
 - [ ] **Large-scale performance testing** - Production-size dataset validation
 
 #### Long-term Goals
-- [x] **Production-ready coverage** (88%+ achieved)
 - [x] **Performance benchmarking** implementation (pytest-benchmark integrated)
 - [ ] **Complete plugin validation** across all format handlers
 - [ ] **Advanced feature optimization** for large datasets
-- [ ] **Continuous quality maintenance** - Keep test coverage above 85%
+- [ ] **Continuous quality maintenance** - Keep `make check` and `make test` passing
 
 ### Recent Architecture Enhancements
 

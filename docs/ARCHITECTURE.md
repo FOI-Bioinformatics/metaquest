@@ -111,8 +111,9 @@ interpreter to install it into; a command that catches broad exceptions re-raise
 each other and each is small enough to test alone:
 
 - **resolve**: finds the store root, in order, from `--data-root`, `METAQUEST_DATA`, `store.root` in
-  the project registry, and `[store] data_root` in `~/.config/metaquest/config.toml`; also reads and
-  writes that config file.
+  the project registry, and `[store] data_root` in `~/.config/metaquest/config.toml`, and writes the
+  `[store]` table of that file (see "Configuration" below; the file reader itself lives in
+  `core/settings.py` and is re-exported here).
 - **layout**: the store's on-disk shape (`metaquest_store.json` marker, `catalog.sqlite`, `locks/`,
   `tmp/`, `sra/<accession>/`) and the paths derived from it.
 - **sidecar**: reads and writes `<accession>.json` next to each dataset's files: state, layout,
@@ -120,8 +121,9 @@ each other and each is small enough to test alone:
   completeness verdict, and the cached `stats` block described below.
 - **catalog**: the SQLite database (`datasets`, `files`, `projects`, `usage` tables, plus an
   `unused_datasets` view) that lets a query answer "which projects used this accession" or "how many
-  bytes belong to this organism" without walking every sidecar; falls back from WAL to a rollback
-  journal on filesystems (network shares in particular) that do not support WAL.
+  bytes belong to this organism" without walking every sidecar. It journals in `DELETE` mode, never
+  WAL, since a store is expected to live on a network share and SQLite documents WAL as unsafe there;
+  writers are serialised by `catalog.sqlite.lock`.
 - **link**: creates and removes the per-accession symlink from a project's `fastq/` folder into the
   store, chooses a relative or absolute target, and detects a dangling link.
 - **adopt**: folds an existing per-project `fastq/` folder into the store: copies each accession in
@@ -194,6 +196,13 @@ registry lock orphaned by a holder killed on another host (or in another pid nam
 be judged dead) blocks every registry writer for about 120 s, until the lock goes stale, while each
 waiter gives up after its own 30 s and reports the registry as locked. A retry after the 120 s succeeds.
 A holder that died on the same host is taken over at once.
+
+The stale, wait and heartbeat values in the table are defaults. Each policy builder reads the runtime
+settings (`registry_lock_wait`, `registry_lock_stale`, `catalog_lock_wait`, `dataset_lock_stale`,
+`lock_heartbeat`, `lock_wait`) at call time through `settings.setting_or(name, MODULE_CONSTANT)`: a value
+the user set by flag, variable or config file wins, otherwise the module constant is used, so a test that
+patches the constant still takes effect. A wait that reaches its limit raises `LockWaitTimeout`, a
+subclass of both `LockHeld` (so existing handlers keep catching it) and `LockTimeoutError` (exit code 4).
 
 The registry policy covers `<registry>.lock`; the catalogue policy covers
 `<store>/catalog.sqlite.lock`; the dataset policy covers four lock files: a store dataset lock
@@ -302,6 +311,17 @@ The plugin system enables extensibility:
   re-checks presence against the filesystem
 - **registry_blocks**: Typed dataclasses for every block the registry file holds, described in
   "Project registry" above
+- **registry_timing**: `started`/`seconds` for the download, extraction and assembly blocks
+  (`set_download_timing` and its two siblings, `Stopwatch`, and `timing_summary` for `status`), kept
+  out of `registry.py`, which is at its size ceiling
+- **sra/space** (`metaquest/data/sra/space.py`): the free-space guard of `download_sra`. `SpaceGuard`
+  groups the output, temporary and `.sra` cache folders by filesystem and reserves, per accession,
+  8 times its registry run size for output and again for temporary files (`FASTQ_EXPANSION`), or
+  `min_free_gb` when the size is unknown. A reservation that does not fit waits for running downloads
+  to release theirs; one that could not fit even then fails that accession alone
+  (`insufficient-space: ...`). Only a tool's own out-of-space error aborts a download pass
+- **assembly**: the megahit step of `extract_target_reads` (`assemble_extracted_reads`,
+  `_megahit_args`, `summarise_contigs`), split out of `read_extraction.py` and re-exported from it
 - **store** (`metaquest/store/`): The shared data store package, described in "Shared data store"
   below; a project that never runs `store_init` never touches it
 
@@ -315,6 +335,9 @@ The plugin system enables extensibility:
   filtering, store link status) from the registry and the filesystem; kept in `processing/` rather
   than `cli/` so it has no dependency on the CLI layer, and returns data that `cli/commands/status/`
   formats for text or JSON output
+- **doctor_report**: the checks of `metaquest doctor` (Python, tools, config file and settings, store,
+  free space, registry, resources, optionally the network), each a `Check(name, status, detail, data)`;
+  `cli/commands/doctor.py` renders them as text or JSON and exits with 3 when one failed
 
 #### Visualization Components
 
@@ -329,8 +352,31 @@ The plugin system enables extensibility:
 
 #### Utility Components
 
-- **logging**: Logging configuration and utilities
-- **config**: Configuration management
+- **logging** (`utils/logging.py`): `setup_logging` with a console handler and an optional file
+  handler; see "Logging policy" below
+- **progress** (`utils/progress.py`): `ProgressReporter`, the thread-safe summary line of a long loop
+  (every `progress_every` items and at least every 5 minutes, then a closing line), and `item_level`,
+  the level for per-item lines (DEBUG, or INFO when summaries are turned off)
+- **tools** (`utils/tools.py`): the one table of external tools, `TOOLS` (tool, conda package, oldest
+  supported version, commands that use it, whether it is optional); `probe_tool` finds a tool on
+  `PATH` and reads its version with a fixed 30 s timeout; `require_tools(names)` raises one
+  `ConfigurationError` (exit 3) listing every tool that is missing or below its floor, with the
+  `conda install` command for each. Commands call it before any work; `doctor` reads the same table
+- **resources** (`utils/resources.py`): `available_cpus` (affinity mask, then `SLURM_CPUS_PER_TASK`,
+  then the CPU count), `memory_limit_bytes` (cgroup v2, cgroup v1, then `SLURM_MEM_PER_NODE`; None on
+  macOS or without a limit) and `parse_memory` for `--assembly-memory`. The default download worker
+  count and the megahit `--memory` value come from here
+- **xml** (`utils/xml.py`): `SAFE_PARSER` and `parse_xml_file`, the lxml parser every lxml call site
+  uses, with entity resolution, network access and external DTD loading refused. The standard
+  library `ElementTree` call sites use expat, which does not resolve external entities (so XXE does
+  not apply) but is not hardened against entity expansion; they parse only small responses fetched
+  directly from NCBI
+- **http** (`utils/http.py`): `retrying_session`, a `requests.Session` that retries GET requests on
+  connection errors and HTTP 429 and 5xx with backoff; used by the NCBI taxonomy, GTDB and
+  `SRAMetadataClient` clients. A request that still fails with one of those raises `NetworkError`
+- **security** (`utils/security.py`): `SecureSubprocess.run_secure`, the one way an external tool is
+  started, with an argument allow-list, child tracking for termination, and the timeout taken from the
+  `subprocess_timeout` setting (0, the default, is no limit)
 
 ## Data Flow
 
@@ -374,14 +420,77 @@ The application uses a comprehensive error handling approach:
 6. **Graceful Degradation**: Robust handling of degenerate cases and boundary conditions
 7. **User-Friendly Display**: CLI layer catches and formats errors for user display
 
-## Configuration Management
+### Exit-code policy
 
-The application manages configuration through:
+Each exception class carries the process exit code it gives (`MetaQuestError.exit_code`,
+`core/exceptions.py`), and `exit_code_for(error)` maps an exception to a code:
 
-1. Default configuration values
-2. Configuration file in user's home directory
-3. Environment variables
-4. Command-line overrides
+| Code | `ExitCode` | Raised as |
+|---|---|---|
+| 0 | `OK` | |
+| 1 | `FAILURE` | `MetaQuestError` and every subclass not below; any other exception |
+| 2 | `USAGE` | argparse usage errors; a renamed command (`cli/commands/renamed.py`) |
+| 3 | `CONFIGURATION` | `ConfigurationError` (see below) |
+| 4 | `TRANSIENT` | `TransientError`: `LockTimeoutError`, `NetworkError` (see below) |
+| 130 | `INTERRUPTED` | `KeyboardInterrupt`, which the first `SIGINT`, `SIGTERM` or `SIGHUP` becomes |
+
+`ConfigurationError` covers a missing optional package, a missing or too old external tool
+(`require_tools`), a malformed config file or setting, no NCBI email address, and a log file that
+cannot be opened. `LockTimeoutError` is a lock wait that reached its limit; `NetworkError` is a
+connection error, a timeout, or HTTP 429 or 5xx after the retries of `utils/http.py`.
+
+A command reports an expected error with `return self.fail(error, "context")` (`BaseCommand.fail`,
+`cli/base.py`), which logs one line with the exception attached and returns `exit_code_for(error)`.
+`main()` does the same for an exception a command lets through. No code 5 or higher is used.
+
+Two commands decide their code from a set of per-item outcomes: `download_sra` returns 4 only when
+every accession that failed was classified `network` by `classify_download_error`, and 1 otherwise.
+`download_metadata` logs each accession NCBI did not return and exits 0; a rerun fetches only the
+missing ones.
+
+### Logging policy
+
+- A command's result goes to stdout through `BaseCommand.emit`/`emit_raw`/`emit_json`; everything else
+  is logged to stderr. `make check` fails on any other `print(`.
+- `setup_logging` (`utils/logging.py`) installs a console handler and, with `--log-file`, a file
+  handler that appends, records host and process ID on every line
+  (`%(asctime)s %(hostname)s[%(process)d] %(levelname)s %(name)s: %(message)s`) and receives INFO and
+  above even when the console is at WARNING. Only handlers it installed itself are replaced on a
+  second call.
+- Tracebacks go to the log file only. `ConsoleFormatter` hides the exception text on the console
+  unless the level is DEBUG, so an expected failure is one line there.
+- Per-item lines (one per accession or request) are logged at `progress.item_level(every)`, which is
+  DEBUG; a `ProgressReporter` logs one summary line every `progress_every` items and at least every
+  5 minutes at INFO. `--progress-every 0` turns the summaries off and puts the per-item lines back at
+  INFO. Warnings and errors about one item keep their level. `data/sra/retry.py` and
+  `data/metadata.py` follow this; the per-accession INFO lines left in `data/sra/accession.py` and
+  `store/link.py` are being moved to DEBUG.
+- At DEBUG `main()` logs the version, the command line (with the `--api-key` value hidden), host,
+  process ID, the SLURM job and array task IDs when set, and every runtime setting with its source.
+
+## Configuration
+
+Two modules resolve configuration, with different orders of precedence (see
+[configuration.md](configuration.md) for the user-facing description):
+
+- **Runtime settings** (`core/settings.py`): `SETTINGS` holds one `SettingSpec` per value a run can be
+  tuned with (name, parser, default, environment variable, description, flag `dest`, config key). Each
+  is resolved from the flag (when given), then `METAQUEST_<NAME>` (and any alias such as
+  `NCBI_API_KEY`), then the `[runtime]` table of `$XDG_CONFIG_HOME/metaquest/config.toml`, then the
+  default; `Resolved.source` records which. `main()` calls `settings.activate(args)` once, before
+  logging is set up; code reads `settings.active()`, or `setting_for(args, name)` inside a command so a
+  flag in a hand-built namespace is honoured. `active()` without `activate()` (library use) resolves
+  from the environment and file alone. A value that does not parse, a malformed file, or two lock
+  limits that contradict each other raise `ConfigurationError`; `main()` then stops every command
+  except `doctor`, which runs on the defaults (`activate_defaults`) and reports the error as a failed
+  check. Unknown `[runtime]` keys are kept in `RuntimeSettings.warnings` and logged once logging is up.
+- **Store root** (`store/resolve.py`): `resolve_store_root` takes the first of `--data-root`,
+  `METAQUEST_DATA`, the registry's `store.root` and `[store] data_root` in the same file, and requires
+  the store marker. The registry comes before the per-user file because a project that joined a store
+  records it, and every command in that project must find the same store; a runtime setting has no
+  project-level record. `store_init --set-default` writes the `[store]` table.
+
+`config_path` and `read_config` live in `core/settings.py` and are re-exported from `store/resolve.py`.
 
 ## Future Extensions
 

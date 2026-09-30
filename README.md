@@ -88,9 +88,14 @@ Download and assembly steps call command-line tools that are not Python packages
 | `seqkit` (optional) | any | `sra_profile`, `sra_report` (faster read statistics; falls back to a plain Python reader when absent) |
 
 `download_test_genome` fetches its genome over HTTPS and needs none of these tools.
-A command checks the tools it needs before it starts any work. A missing tool, or one older than the
-version above, stops the command with exit code 3 and a message that lists every such tool with the
-`conda install` command that provides it.
+A command checks the tools it needs before it starts any work (`download_sra` checks `fasterq-dump`;
+`extract_target_reads` checks minimap2 and samtools, and megahit with `--assemble`; `genome_download`
+and `genome_prepare` check `datasets`). A missing tool, or one older than the version above, stops the
+command with exit code 3 and a message that lists every such tool with the `conda install` command that
+provides it. The optional tools (`prefetch`, `pigz`, `seqkit`) are not checked by the commands, which
+work without them; `metaquest doctor` (below) reports every tool in the table, and a tool older than
+its oldest supported version is a failed check there. The table lives in `metaquest/utils/tools.py`,
+and `environment.yml` pins the same versions.
 
 `environment.yml` installs all of them together with MetaQuest:
 
@@ -125,6 +130,17 @@ that does not parse, a store without its marker, an unreadable registry and, wit
 unreachable service are failures. `doctor` exits with 0 when nothing failed (warnings allowed) and
 with 3 otherwise. It still runs when the config file is malformed, which stops every other command,
 and reports the parse error as a failed check. `make doctor` runs it from a checkout.
+
+### Configuration
+
+Run-time settings (tool timeout, free-space floor, lock limits, NCBI email and API key, logging,
+megahit memory, the download worker cap) are taken from a flag, then a `METAQUEST_<NAME>` environment
+variable, then the `[runtime]` table of `~/.config/metaquest/config.toml` (or
+`$XDG_CONFIG_HOME/metaquest/config.toml`), then a built-in default. The shared data store root has its
+own order: `--data-root`, `METAQUEST_DATA`, the project registry, then `[store] data_root` in the same
+file. [docs/configuration.md](docs/configuration.md) lists every setting with its type, default,
+variable and flag. With an email address set there (`METAQUEST_NCBI_EMAIL` or `ncbi_email`), `--email`
+can be left out of `download_metadata`, `sra_info` and `validate_taxonomy`.
 
 ### Development Commands
 ```bash
@@ -353,6 +369,12 @@ exclusion, download, run size, the dataset profile of `sra_profile` (total reads
 quality grade), mapped reads, reference coverage and assembly statistics. A registry written before
 0.5.0 still fills the profile columns from its `sra_stats` and `quality` analyses. It records the
 export in the project registry when one exists, and does not create a registry when there is none.
+The last three columns, `download_seconds`, `extraction_seconds` and `assembly_seconds`, are the
+recorded run times, empty where a step was not timed (data recorded before 0.7.0, or a dataset linked
+from the store). The extraction time of a sample is measured from the end of the previous sample, so
+for the first sample it includes building the minimap2 index; the assembly time is the megahit run.
+`status --json` summarises the same times under `timing` (counts, totals and medians), the text report
+adds one timing line when anything was timed, and `status --export-tsv` adds the same columns.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
 and threshold; pass `--force` to redo them.
@@ -592,7 +614,9 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 ```
 
 `--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`,
-`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). To see sizes and sequencing
+`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). The last column, `seconds`, is how
+long that accession's download took in this run; it is empty for a dataset linked from the store and
+for accessions that were not downloaded. To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
 `docs/SRA_ENHANCED_FEATURES.md`. `sra_info` filters per experiment package, not per run: it lists every
 run of each experiment package that a requested run, experiment, sample, study, BioProject or BioSample
@@ -646,12 +670,15 @@ the `.sra` cache. An accession whose run size is in the registry (from `download
 8 times that size for its uncompressed FASTQ files and again for the temporary files, plus the size
 itself for the cache; locations on one filesystem add up, and downloads already running are counted.
 An accession of unknown size needs `--min-free-gb` (default 10; also `METAQUEST_MIN_FREE_GB` or
-`min_free_gb` in `[runtime]`) on each filesystem. A download that does not fit is not started and is
-recorded as failed with a `disk-full: insufficient free space on ...` message; as with a disk that
-fills up during a download, the downloads not yet started are then recorded as
-`disk-full: not attempted`, the running ones finish, no retry pass runs, and the command exits with
-status 1. `--min-free-gb 0` turns the check off. A filesystem whose free space cannot be read is
-assumed to have room.
+`min_free_gb` in `[runtime]`) on each filesystem. A download that does not fit while others are running
+waits until they finish and release their space. One that would not fit even with nothing else running
+is not started and fails alone, with an `insufficient-space: not enough free space on ...` message;
+the other accessions continue. `--min-free-gb 0` turns the check off. A filesystem whose free space
+cannot be read is assumed to have room.
+
+A disk that fills up during a download (the tool itself reports that it is out of space) stops the
+pass: the downloads not yet started are recorded as `disk-full: not attempted`, the running ones
+finish, no retry pass runs, and the command exits with status 1.
 
 On a real run, `download_sra` also honours the project registry: accessions excluded with
 `blacklist` are skipped automatically, without needing `--blacklist blacklist.txt` on every call
@@ -707,11 +734,23 @@ whether to resubmit:
 | 4 | Retryable: a network failure, or a lock wait that reached its limit | Rerun later |
 | 130 | Interrupted by `SIGINT`, `SIGTERM` or `SIGHUP` | Rerun; finished work is kept |
 
-Code 3 covers a missing optional package, a missing NCBI email address and a malformed `config.toml`.
-Code 4 covers an NCBI request that could not connect, timed out or got HTTP 429 or 5xx, and a wait for
-another run's lock on the project registry or the store catalogue that gave up.
-`download_sra` exits with 4 only when every accession that failed did so for a network reason; if any
-failed for another reason (not found, disk full, locked by another run, interrupted) it exits with 1.
+Code 3 covers a missing optional package; an external tool that is missing or older than the version in
+"External tools" above; a malformed `config.toml` or a setting that does not parse; a missing NCBI
+email address; and a `--log-file` that cannot be opened.
+Code 4 covers an NCBI request of `sra_info` that could not connect, timed out or got HTTP 429 or 5xx
+after its retries, and a wait for another run's lock on the project registry or the store catalogue
+that gave up.
+
+Two commands decide from the outcome of each accession:
+
+- `download_sra` exits with 4 only when every accession that failed did so for a network reason
+  (including a tool stopped by `--timeout`). If any failed for another reason (not found, disk full,
+  not enough free space, locked by another run, interrupted) it exits with 1. An accession given up
+  after `--lock-wait` counts as locked, so it gives 1, not 4.
+- `download_metadata` logs each accession NCBI did not return, including when NCBI could not be
+  reached, and exits with 0. Run it again to fetch only the missing ones.
+
+See [docs/hpc.md](docs/hpc.md) for a resubmission loop on code 4 under SLURM.
 
 ### Logging
 
@@ -733,7 +772,9 @@ Each option can also be set with an environment variable (`METAQUEST_LOG_LEVEL`,
 `METAQUEST_PROGRESS_EVERY`) or in the `[runtime]` table of `~/.config/metaquest/config.toml`
 (`log_level`, `log_file`, `progress_every`); a flag takes precedence over both.
 
-The log file is opened for appending, so several runs (or several SLURM array tasks) can share one file.
+The log file is opened for appending, so several runs on one machine can share one file on a local
+disk. Give each process its own file on a network filesystem (for example one per SLURM array task, as
+in [docs/hpc.md](docs/hpc.md)): appends from several hosts to one NFS file can interleave or be lost.
 It receives every line at INFO or above, also when the console is quiet, and DEBUG lines when the
 console is at DEBUG. Each line names the host and process ID that wrote it:
 
@@ -756,9 +797,21 @@ download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left
 download_sra: finished 2000/2000 (1990 ok, 10 failed) in 10 h 45 min
 ```
 
-The line for each accession is logged at DEBUG; `--progress-every 0` turns the summaries off and logs
-one INFO line per accession instead. Warnings and errors about an accession are logged at their own
-level either way.
+The line for each finished download, retry and NCBI metadata request is logged at DEBUG;
+`--progress-every 0` turns the summaries off and logs one INFO line per accession instead. Warnings and
+errors about an accession are logged at their own level either way. The intended default is summary
+lines only at INFO; a few per-accession lines ("Downloading SRA for ...", "Skipping ..., FASTQ files
+already exist", and "Linked ... to the store copy" for a store) are still logged at INFO in this release
+and are being moved to DEBUG.
+
+### Running on a cluster
+
+[docs/hpc.md](docs/hpc.md) describes running `download_sra` and `extract_target_reads` as SLURM jobs:
+checking a node with `metaquest doctor --for download_sra`, an array job template that splits the
+accession list, what is written when the walltime signal arrives and how a rerun resumes, chaining jobs
+with `--dependency=afterok` and resubmitting on exit code 4, a shared data store on a group
+filesystem, the caveats of NFS (locks, clock skew, temporary files, log files), and megahit's memory
+under a job limit.
 
 ### SRA Quality Profiling
 
@@ -972,6 +1025,10 @@ For comprehensive documentation including advanced features and technical detail
 - **[Pipeline Overview](docs/pipeline_overview.md)** - The six stages (screen, select, download, analyse, extract, assemble), the commands of each, and what the project registry records
 - **[SRA Information, Statistics and Validation](docs/SRA_ENHANCED_FEATURES.md)** - Dataset information, read statistics and validation commands supporting `download_sra`
 - **[Branchwater Workflow](docs/branchwater_workflow.md)** - Detailed workflow guide for branchwater functionality
+- **[Running on a cluster](docs/hpc.md)** - SLURM array jobs, walltime signals, exit codes and
+  resubmission, a shared store and NFS
+- **[Configuration](docs/configuration.md)** - Every runtime setting with its type, default,
+  environment variable and flag
 - **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions
 - **[Packaging](docs/packaging.md)** - PyPI and bioconda distribution, and the checklist before turning on PyPI publishing
 - **[CLAUDE.md](CLAUDE.md)** - Development guidelines, testing strategies, and architectural patterns for contributors

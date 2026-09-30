@@ -8,6 +8,10 @@ Welcome to the MetaQuest documentation! This directory contains comprehensive gu
 - **[Pipeline Overview](pipeline_overview.md)** - The six stages from screening to assembly, the commands of each, and what the project registry records
 - **[SRA Enhanced Features](SRA_ENHANCED_FEATURES.md)** - Comprehensive guide for downloading and analyzing SRA data with enhanced features
 - **[Branchwater Workflow](branchwater_workflow.md)** - Step-by-step workflow for using sourmash branchwater functionality
+- **[Running on a cluster](hpc.md)** - SLURM array jobs, walltime signals, exit codes and resubmission,
+  a shared store and NFS
+- **[Configuration](configuration.md)** - Every runtime setting with its type, default, environment
+  variable and flag
 
 ### Developer Resources
 - **[Architecture](ARCHITECTURE.md)** - Technical architecture and design decisions for MetaQuest
