@@ -78,6 +78,7 @@ class StoreVerifyCommand(BaseCommand):
                 "(use after files were added or removed by hand)"
             ),
         )
+        parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
 
     @staticmethod
     def _accessions_to_check(args: argparse.Namespace, paths: StorePaths) -> List[str]:
@@ -123,10 +124,13 @@ class StoreVerifyCommand(BaseCommand):
     def _missing_result(accession: str, detail: Optional[str] = None) -> Dict[str, Any]:
         """The result shape for an accession this check cannot find anything usable for:
         no sidecar at all, or (with ``--rescan``) a store folder with no FASTQ files left to
-        describe. ``sidecar`` is left None so ``_fix_state`` leaves whatever is on disk alone."""
+        describe. ``sidecar`` is left None so ``_fix_state`` leaves whatever is on disk alone.
+        ``state_before`` mirrors ``state`` here and is never rewritten by a later fix, so a
+        caller can always tell what this accession looked like before ``--fix-state`` ran."""
         return {
             "accession": accession,
             "state": "missing",
+            "state_before": "missing",
             "bytes_ok": False,
             "md5_ok": None,
             "verdict": "missing",
@@ -220,6 +224,7 @@ class StoreVerifyCommand(BaseCommand):
         return {
             "accession": accession,
             "state": sidecar.state,
+            "state_before": sidecar.state,
             "bytes_ok": bytes_ok,
             "md5_ok": md5_ok,
             "verdict": verdict,
@@ -235,11 +240,20 @@ class StoreVerifyCommand(BaseCommand):
         """Rewrite ``sidecar`` to ``state="failed"`` with ``error``, unless it already is.
 
         The result is reported as ``corrupt`` either way, so the printed table and the exit
-        status agree with the state the sidecar is left in.
+        status agree with the state the sidecar is left in. Sets ``result["fix"]`` to
+        ``"updated"`` when the sidecar was actually rewritten, else ``"unchanged"`` (it was
+        already ``"failed"`` with this same error).
         """
+        state_before = sidecar.state
         result["verdict"] = "corrupt"
         result["state"] = "failed"
         if sidecar.state == "failed" and sidecar.error == error:
+            result["fix"] = {
+                "action": "unchanged",
+                "state_before": state_before,
+                "state_after": "failed",
+                "error": error,
+            }
             return
         sidecar.state = "failed"
         sidecar.error = error
@@ -247,6 +261,7 @@ class StoreVerifyCommand(BaseCommand):
         with catalog_write(paths) as catalog:
             catalog.upsert_dataset(sidecar)
         result["state"] = "failed"
+        result["fix"] = {"action": "updated", "state_before": state_before, "state_after": "failed", "error": error}
 
     def _read_through_error(self, store_dir: Path, sidecar: Sidecar, skip: Collection[str] = ()) -> Optional[str]:
         """Open and decompress every file ``sidecar.files`` records, except those named in
@@ -311,10 +326,12 @@ class StoreVerifyCommand(BaseCommand):
         as the new error, the same as a bytes/md5 mismatch. Once all of that checks out, a
         spots verdict of ``complete``/``truncated`` decides ``complete``/``partial``; with no
         spot count anywhere, the dataset is promoted to ``complete`` with an ``unverified``
-        completeness, clearing any stale error.
+        completeness, clearing any stale error. Every return path sets ``result["fix"]``
+        (``"updated"`` or ``"unchanged"``; ``_mark_failed`` sets its own on the failure paths).
         """
         sidecar = result.get("sidecar")
         if sidecar is None:
+            result["fix"] = {"action": "unchanged", "state_before": "missing", "state_after": "missing", "error": None}
             return
 
         if not result.get("bytes_ok") or result.get("md5_ok") is False:
@@ -328,6 +345,12 @@ class StoreVerifyCommand(BaseCommand):
         if result.get("ncbi_found") and not sidecar.ncbi.get("spots"):
             sidecar.ncbi = dict(result["ncbi_found"])
         if result.get("spots_verdict") == "corrupt":
+            result["fix"] = {
+                "action": "unchanged",
+                "state_before": sidecar.state,
+                "state_after": sidecar.state,
+                "error": None,
+            }
             return
         read_error = None
         if result.get("spots_verdict") is None and sidecar.ncbi.get("spots"):
@@ -337,6 +360,7 @@ class StoreVerifyCommand(BaseCommand):
             self._mark_failed(result, paths, sidecar, read_error)
             return
 
+        state_before = sidecar.state
         spots_verdict = result.get("spots_verdict")
         state_for_verdict = {"complete": "complete", "truncated": "partial"}
         if spots_verdict in state_for_verdict:
@@ -352,6 +376,12 @@ class StoreVerifyCommand(BaseCommand):
             or sidecar.error
         )
         if not changed:
+            result["fix"] = {
+                "action": "unchanged",
+                "state_before": state_before,
+                "state_after": state_before,
+                "error": None,
+            }
             return
         sidecar.state = new_state
         sidecar.completeness = completeness
@@ -360,6 +390,7 @@ class StoreVerifyCommand(BaseCommand):
         with catalog_write(paths) as catalog:
             catalog.upsert_dataset(sidecar)
         result["state"] = new_state
+        result["fix"] = {"action": "updated", "state_before": state_before, "state_after": new_state, "error": None}
 
     def _fix_state_locked(self, result: Dict[str, Any], paths: StorePaths) -> None:
         """Apply ``_fix_state`` only under ``accession``'s lock, and only if nothing else has
@@ -372,7 +403,9 @@ class StoreVerifyCommand(BaseCommand):
         lock; the sidecar is re-read under it and compared against what ``_verify_one`` saw.
         ``downloaded`` is compared for every run; ``files`` only when this run did not pass
         ``--rescan``, since a rescan's whole point is to make ``result["sidecar"].files``
-        differ from what is still on disk in ``downloaded``'s sidecar file.
+        differ from what is still on disk in ``downloaded``'s sidecar file. When the write-back
+        is skipped here, ``result["fix"]`` records why (``"skipped-changed"`` or
+        ``"skipped-in-use"``) instead of ``_fix_state``'s own ``"updated"``/``"unchanged"``.
         """
         accession = result["accession"]
         sidecar_before = result.get("sidecar")
@@ -388,16 +421,75 @@ class StoreVerifyCommand(BaseCommand):
                     changed = not result.get("rescanned") and current.files != sidecar_before.files
                 if changed:
                     self.logger.warning("%s: sidecar changed since the check; not updated", accession)
+                    result["fix"] = {
+                        "action": "skipped-changed",
+                        "state_before": sidecar_before.state,
+                        "state_after": current.state if current is not None else None,
+                        "error": None,
+                    }
                     return
                 self._fix_state(result, paths)
         except LockHeld:
             self.logger.warning("%s: in use, not updated", accession)
+            result["fix"] = {
+                "action": "skipped-in-use",
+                "state_before": sidecar_before.state,
+                "state_after": sidecar_before.state,
+                "error": None,
+            }
 
     def _print_table(self, results: List[Dict[str, Any]]) -> None:
         self.emit(f"{'accession':<15s} {'state':<10s} {'bytes_ok':<9s} {'md5_ok':<7s} verdict")
         for r in results:
             md5_col = "-" if r["md5_ok"] is None else str(r["md5_ok"])
             self.emit(f"{r['accession']:<15s} {r['state']:<10s} {str(r['bytes_ok']):<9s} {md5_col:<7s} {r['verdict']}")
+
+    def _print_fixes(self, results: List[Dict[str, Any]]) -> None:
+        """Print one line per dataset ``--fix-state`` actually rewrote (``fix.action ==
+        "updated"``); a dataset left unchanged, or skipped because it was locked or had
+        changed since the check, prints nothing here."""
+        for r in results:
+            fix = r.get("fix")
+            if fix and fix["action"] == "updated":
+                self.emit(f"{r['accession']}: fixed ({fix['state_before']} -> {fix['state_after']})")
+
+    @staticmethod
+    def _json_row(result: Dict[str, Any]) -> Dict[str, Any]:
+        """One dataset's check result in JSON-safe form: every field but the ``Sidecar``
+        object and the raw ``ncbi_found`` lookup, neither of which a script reading
+        ``--json`` output needs or can decode."""
+        return {key: value for key, value in result.items() if key not in ("sidecar", "ncbi_found")}
+
+    def _json_document(self, root: Path, args: argparse.Namespace, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The one document ``--json`` prints: the checks that ran, a tally of verdicts, every
+        dataset's row, and the datasets ``--fix-state`` actually rewrote. ``counts`` and
+        ``fixed`` are meant to be read back out of this document by a caller summarizing the
+        run (a project's run log, say) without re-deriving them from ``datasets``."""
+        counts: Dict[str, int] = {}
+        for r in results:
+            counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+        fixed = [
+            {
+                "accession": r["accession"],
+                "state_before": r["fix"]["state_before"],
+                "state_after": r["fix"]["state_after"],
+                "error": r["fix"]["error"],
+            }
+            for r in results
+            if r.get("fix", {}).get("action") == "updated"
+        ]
+        return {
+            "root": str(root),
+            "checks": {
+                "md5": bool(args.md5),
+                "spots": bool(args.spots),
+                "rescan": bool(args.rescan),
+                "fix_state": bool(args.fix_state),
+            },
+            "counts": counts,
+            "datasets": [self._json_row(r) for r in results],
+            "fixed": fixed,
+        }
 
     def execute(self, args: argparse.Namespace) -> int:
         """Run the command; return the exit code."""
@@ -408,7 +500,7 @@ class StoreVerifyCommand(BaseCommand):
             return self.fail(e, self.name)
 
         if root is None:
-            _no_store_hint()
+            _no_store_hint(args.json)
             return 1
 
         try:
@@ -428,6 +520,11 @@ class StoreVerifyCommand(BaseCommand):
         except DataAccessError as e:
             return self.fail(e, self.name)
 
-        self._print_table(results)
+        if args.json:
+            self.emit_json(self._json_document(root, args, results))
+        else:
+            self._print_table(results)
+            if args.fix_state:
+                self._print_fixes(results)
         failed = any(r["verdict"] in ("corrupt", "truncated", "missing") for r in results)
         return 1 if failed else 0

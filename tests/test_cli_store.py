@@ -97,6 +97,7 @@ def _verify_args(accessions=None, **overrides):
         spots=False,
         fix_state=False,
         rescan=False,
+        json=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -1359,6 +1360,174 @@ class TestStoreVerifyCommand:
         fixed = read_sidecar(sidecar_path(paths, "SRR1"))
         assert fixed.state == "partial"
         assert fixed.completeness["verdict"] == "truncated"
+
+    def test_no_store_configured_with_json_prints_json_error(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        rc = StoreVerifyCommand().execute(_verify_args(registry=str(tmp_path / "metaquest_registry.json"), json=True))
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert payload["error"].startswith("No store configured")
+
+    def test_json_reports_corrupt_dataset_with_counts_and_no_sidecar_object(self, tmp_path, monkeypatch, capsys):
+        """A size mismatch reports one "corrupt" dataset; --json prints exactly one document
+        whose dataset row drops the Sidecar object and ncbi_found lookup _json_row is meant
+        to drop, and whose counts tally the verdict."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                # Wrong recorded size on purpose: the file on disk does not match.
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size + 1,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(data_root=str(root), registry=str(project_dir / "metaquest_registry.json"), json=True)
+        )
+        doc = json.loads(capsys.readouterr().out)
+
+        assert rc == 1
+        assert doc["root"] == str(root.resolve())
+        assert doc["checks"] == {"md5": False, "spots": False, "rescan": False, "fix_state": False}
+        assert doc["counts"] == {"corrupt": 1}
+        assert doc["fixed"] == []
+        assert len(doc["datasets"]) == 1
+        row = doc["datasets"][0]
+        assert row["accession"] == "SRR1"
+        assert row["verdict"] == "corrupt"
+        assert "sidecar" not in row
+        assert "ncbi_found" not in row
+        assert "size mismatch" in row["mismatch_detail"]
+
+    def test_fix_state_json_records_before_and_after_states(self, tmp_path, monkeypatch, capsys):
+        """--fix-state --json: the document's "fixed" list and each dataset's nested "fix"
+        both carry the state the sidecar had before the write-back and the state it was
+        promoted/demoted to, matching what was actually written to disk."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        # Only 1 read on disk, but the sidecar's recorded NCBI spot count says there should be 5.
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        rc = StoreVerifyCommand().execute(
+            _verify_args(
+                data_root=str(root),
+                registry=str(project_dir / "metaquest_registry.json"),
+                spots=True,
+                fix_state=True,
+                json=True,
+            )
+        )
+        doc = json.loads(capsys.readouterr().out)
+
+        assert rc == 1
+        assert doc["checks"]["fix_state"] is True
+        assert doc["counts"] == {"truncated": 1}
+        assert doc["fixed"] == [
+            {"accession": "SRR1", "state_before": "complete", "state_after": "partial", "error": None}
+        ]
+        row = doc["datasets"][0]
+        assert row["state"] == "partial"
+        assert row["state_before"] == "complete"
+        assert row["fix"] == {
+            "action": "updated",
+            "state_before": "complete",
+            "state_after": "partial",
+            "error": None,
+        }
+
+        fixed = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert fixed.state == "partial"
+
+    def test_fix_state_json_reports_skipped_in_use_when_locked(self, tmp_path, monkeypatch, capsys, caplog):
+        """--fix-state --json: an accession another run holds the lock for is reported in the
+        document as "skipped-in-use", not folded into "fixed" (nothing was actually written)."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(acc_dir / "SRR1.fastq.gz", text="@r\nACGT\n+\nIIII\n")
+        sidecar = _sidecar("SRR1", state="complete")
+        sidecar.files = [
+            {
+                "name": "SRR1.fastq.gz",
+                "bytes": acc_dir.joinpath("SRR1.fastq.gz").stat().st_size,
+                "md5": "ignored",
+                "reads": 1,
+            }
+        ]
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        locked = threading.Event()
+        release = threading.Event()
+
+        def _hold():
+            with dataset_lock(paths, "SRR1"):
+                locked.set()
+                assert release.wait(timeout=5), "the main thread never released the holder"
+
+        holder = threading.Thread(target=_hold)
+        holder.start()
+        try:
+            assert locked.wait(timeout=5), "the holder thread never took the lock"
+            with caplog.at_level(logging.WARNING):
+                rc = StoreVerifyCommand().execute(
+                    _verify_args(
+                        data_root=str(root),
+                        registry=str(project_dir / "metaquest_registry.json"),
+                        spots=True,
+                        fix_state=True,
+                        json=True,
+                    )
+                )
+        finally:
+            release.set()
+            holder.join(timeout=5)
+        doc = json.loads(capsys.readouterr().out)
+
+        assert rc == 1
+        assert doc["fixed"] == []
+        row = doc["datasets"][0]
+        assert row["fix"]["action"] == "skipped-in-use"
+        assert row["fix"]["state_before"] == "complete"
+        assert row["fix"]["state_after"] == "complete"
+
+        unchanged = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert unchanged.state == "complete"
 
 
 class TestStoreLinkCommand:
