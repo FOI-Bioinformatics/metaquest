@@ -42,9 +42,9 @@ MetaQuest is a command-line bioinformatics toolkit for analyzing metagenomic dat
 
 ## Architecture
 
-MetaQuest follows a layered architecture with clear separation of concerns. As of 0.7.0,
-`metaquest --help` lists 42 commands in seven groups (Containment, Metadata, Genomes, Reads,
-Store, Analysis, Environment; `doctor` is the one Environment command); the four commands
+MetaQuest follows a layered architecture with clear separation of concerns. As of 0.9.0,
+`metaquest --help` lists 44 commands in seven groups (Containment, Metadata, Genomes, Reads,
+Store, Analysis, Environment; the Environment group holds `doctor`, `runs` and `project_report`); the four commands
 `sra_profile`/`sra_report` replaced (`sra_stats`, `sra_profile_quality`, `sra_dashboard`,
 `sra_compare`) still parse but are hidden from that listing (see "Advanced SRA Commands" below).
 
@@ -66,16 +66,22 @@ Store, Analysis, Environment; `doctor` is the one Environment command); the four
   (`SecureSubprocess.run_secure`), `lockfile.py`, `termination.py`.
 - **Data Layer** (`metaquest/data/`): File I/O, Branchwater processing, metadata handling, basic SRA
   operations. `data/sra/` is a package (`fastq`, `cleanup`, `accession`, `retry`, `store_handoff`,
-  `download`, `space`), not a single module. `data/registry.py` is the project journal;
+  `download`, `space`, `spots`, `run_report`), not a single module; `run_report` builds the
+  `download_sra` report CSV and `download_run.json`. `data/registry.py` is the project journal;
   `data/registry_blocks.py` holds the typed dataclass for each block the registry file stores, with
-  unknown-key preservation on a round trip.
+  unknown-key preservation on a round trip. `data/run_log.py` is the per-project run log
+  (`<project>/.metaquest/runs/`, see "Run log rules" below).
 - **Advanced SRA Package** (`metaquest/sra/`): Quality profiling and interactive reporting, described
   under "Advanced SRA Commands" below.
 - **Processing** (`metaquest/processing/`): Containment analysis, statistical processing, counting
   algorithms, and `status_report.py` (builds the `status` command's report from the registry and the
-  filesystem, with no dependency on the CLI layer).
+  filesystem, with no dependency on the CLI layer). `project_funnel.py` (the cross-stage funnel of
+  `status` and `project_report`), `run_diff.py` (run comparison for `runs`), `project_report.py` (the
+  `project_report` dict) and `project_report_markdown.py` (its Markdown rendering) follow the same rule.
 - **Plugins** (`metaquest/plugins/`): Extensible plugin system for formats and visualizers
-- **Visualization** (`metaquest/visualization/`): Plotting and reporting functionality
+- **Visualization** (`metaquest/visualization/`): Plotting functionality; `project_report.py` renders
+  the `project_report` HTML page (the `interactive` extra). The unused report generator
+  `visualization/reporting.py` was removed in 0.9.0.
 
 ### Key Design Patterns
 - **Command Registry**: All CLI commands inherit from base classes and register themselves via `command_registry`
@@ -218,6 +224,23 @@ Store discovery rules for agents:
 - Process-level concurrency tests live in `tests/test_concurrency_processes.py` (spawning the real CLI
   with fake tools on `PATH`, no real tool or network); a test that starts a real subprocess carries the
   `multiprocess` pytest marker, which runs by default.
+
+### Run log rules
+- A command opts in to the run log by overriding `BaseCommand.records_run(args)` (False by default),
+  returning False for an invocation that should leave no record (a dry run, `--no-record`, a read-only
+  mode); read flags there with `getattr(args, name, False)`. `cli/main.py` writes the record after the
+  command returns; a command never calls `record_run` itself.
+- Note figures from `execute` with `metaquest.data.run_log.note_run(args, summary=..., detail=...)`, or
+  `note_rows(args, rows, *section)` for rows noted one item at a time. Keep the summary small: counts,
+  totals and a few settings, never one entry per accession.
+- A detail holds rows only: mappings of plain values (no nested mapping inside a row) keyed by the
+  accession or by `accession/genome`, under one section per command, for example
+  `{"analyses": {"profile": {"SRR1": {...}}}}`. Put no other flat mapping (settings, counts, totals) in a
+  detail; `processing/run_diff.py` would read it as a row. Keep field names stable between releases,
+  since `runs --diff` and `runs --accession` compare by field name.
+- Nothing is written in a folder without a project registry, or when the `run_log` setting is off, and
+  a failure to record is a warning that never changes the command's exit code. Do not add a list of runs
+  to the registry.
 
 ### Settings, errors, logging and tools rules
 - **Errors**: a command reports an expected error with `return self.fail(error, "context")`
@@ -453,7 +476,7 @@ When working on MetaQuest, follow this priority order:
 - **Architecture consistency**: Follow established patterns for new features
 
 #### 2. Current Focus Areas (Optional Enhancement)
-- **Remaining visualization modules**: interactive.py, reporting.py, plots.py
+- **Remaining visualization modules**: interactive.py, plots.py
 - **Processing enhancements**: containment.py optimizations, diversity.py extensions
 - **Plugin system expansion**: Additional format handler testing
 - **Documentation**: Add testing guides and workflow documentation
@@ -506,7 +529,6 @@ When working on MetaQuest, follow this priority order:
 **Test Files**: Extensive test suites in `tests/test_*_extended.py`, `tests/test_integration_simple.py`, and `tests/test_performance_simple.py` provide patterns for comprehensive testing with mocking, fixtures, and edge cases.
 
 #### Remaining Enhancement Opportunities
-- `metaquest/visualization/reporting.py` - Core reporting functionality
 - `metaquest/visualization/plots.py` - Plotting functionality
 - `metaquest/visualization/interactive.py` - Interactive plotting
 - `metaquest/processing/containment.py` - Core containment algorithms
@@ -533,7 +555,7 @@ When working on MetaQuest, follow this priority order:
 - [x] **CLI Integration** - Two SRA analysis commands (sra_profile, sra_report) fully functional
 
 #### Current Development Priorities (Low Priority)
-- [ ] **Remaining visualization modules** - interactive.py, reporting.py, plots.py
+- [ ] **Remaining visualization modules** - interactive.py, plots.py
 - [ ] **Processing layer completion** - containment.py, diversity.py enhancements
 - [ ] **Additional plugin testing** - Expand format handler test coverage
 - [ ] **Large-scale performance testing** - Production-size dataset validation

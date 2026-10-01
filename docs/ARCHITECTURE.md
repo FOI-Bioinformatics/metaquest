@@ -52,7 +52,11 @@ commands keep part of their logic in a helper module beside them: `extract_targe
 (`read_extraction.py`) assembles through `extraction_assembly.py` (`assemble_samples`, one sample at a
 time under its sample lock, with the per-sample outcome in `AssemblyOutcome`), and `download_sra`
 (`sra.py`) takes its registry inputs and download verdicts from `sra_verdicts.py` (`registry_inputs`,
-`present_verdicts`, `store_verdict`, which `store_link` and `store_adopt` record too). Every
+`present_verdicts`, `store_verdict`, which `store_link` and `store_adopt` record too). The two
+reporting commands of the Environment group are one module each: `runs.py` (`RunsCommand`, which reads
+the run log and compares runs through `processing/run_diff.py`) and `project_report.py`
+(`ProjectReportCommand`, which builds the report in `processing/project_report.py` and renders it
+through `processing/project_report_markdown.py` and `visualization/project_report.py`). Every
 command writes to stdout through exactly one channel, `BaseCommand.emit`/`emit_raw`/`emit_json`
 (`metaquest/cli/base.py`); library modules log or return their output instead of printing, and a
 `make check` gate fails on any other `print(` call in `metaquest/`.
@@ -100,6 +104,34 @@ selection, exclusion, download, metadata, analysis, extraction, assembly, plus t
 round-trip any key the block does not itself declare, so a field this version of MetaQuest does not
 know about survives a load-and-save cycle unchanged. `registry.py` reads and writes these typed
 blocks rather than raw dictionaries; the on-disk JSON layout is unchanged.
+
+#### Run log
+The registry keeps the latest outcome of each step; `metaquest/data/run_log.py` keeps one record per
+run of a command, so a later run can be compared with an earlier one. The registry itself holds no list
+of runs. The layout is under `<project>/.metaquest/runs/`, where the project is the folder holding the
+registry file:
+
+- `runs.jsonl`: one JSON object per line (`RunRecord`, schema 1), one line per run, in the order the
+  runs finished: run ID, command, start and finish times in UTC, seconds, exit code, the argument list
+  and parsed arguments with secret values replaced by `***`, MetaQuest version, host, process ID, a
+  summary and the name of the detail file. Lines are appended under `runs.jsonl.lock` with flush and
+  fsync; a line cut short by an interrupted append is skipped on reading, with one warning.
+- `<run_id>.json`: the detail of one run, written atomically, only when the run noted one. After each
+  append, the detail files of that command beyond the last `DETAILS_KEPT_PER_COMMAND` (10) are pruned:
+  `runs.jsonl` is first rewritten atomically with `"detail": null` on the pruned lines, then the files
+  are removed. A pruned run and a run that never noted a detail therefore look the same, and `runs`
+  reports both as "not kept".
+
+A command opts in by overriding `BaseCommand.records_run(args)` (False by default) and notes its figures
+during `execute` with `run_log.note_run(args, summary=..., detail=...)`, or `note_rows` for rows noted one
+item at a time. `cli/main.py` records the run in a `finally` after the command returns, also after an
+interrupt (exit 130), when `records_run` is true, the `run_log` setting is on and a registry file
+exists (`run_log.project_for`); a failure to record, including a `records_run` override that raises, is
+logged as one warning and never changes the exit code. A detail holds rows only: mappings of plain
+values keyed by accession or by `accession/genome`, under one section per command, which is the form
+`processing/run_diff.py` compares in `runs --diff` and follows in `runs --accession`. Readers use
+`read_runs` (oldest first; `project_report`'s run section takes the last 10 from it), `resolve_run` (an
+ID, a unique prefix, `latest` or `previous`, as `runs` selects a run) and `read_detail`.
 
 #### Optional dependencies
 `metaquest/core/optional.py` is the single point where an optional package is imported. Core
@@ -192,7 +224,7 @@ that finds its lock taken over stops with `LockLost` ("lock lost: ..." for a dow
 staging folder to the new holder. The per-accession lock file itself is never shared this way; only the
 staging path underneath it is.
 
-Three `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `poll_seconds`,
+Four `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `poll_seconds`,
 `heartbeat_seconds`) cover every lock kind:
 
 | Policy | Stale | Wait | Heartbeat |
@@ -200,6 +232,7 @@ Three `LockPolicy` configurations (`what`, `stale_seconds`, `wait_seconds`, `pol
 | Registry | 120 s | 30 s | 5 s |
 | Catalogue | 120 s | 60 s | 5 s |
 | Dataset | 600 s | see below | 10 s |
+| Run log | 60 s | 10 s | 10 s |
 
 The registry's wait is shorter than its stale window on purpose, and the consequence is visible: a
 registry lock orphaned by a holder killed on another host (or in another pid namespace, where it cannot
@@ -218,7 +251,8 @@ The registry policy covers `<registry>.lock`; the catalogue policy covers
 `<store>/catalog.sqlite.lock`; the dataset policy covers four lock files: a store dataset lock
 (`<store>/locks/<ACCESSION>.lock`), a plain project's per-accession download lock
 (`<fastq>/.locks/<ACCESSION>.lock`), an index build lock (`<index>.lock`), and a per-sample extraction
-lock (`<output>/.locks/<ACCESSION>.<GENOME_ID>.lock`).
+lock (`<output>/.locks/<ACCESSION>.<GENOME_ID>.lock`). The run-log policy (`RUN_LOG_LOCK_POLICY`,
+fixed values, not read from the settings) covers `<project>/.metaquest/runs/runs.jsonl.lock`.
 
 The dataset policy's wait varies by caller: a store dataset lock and an index build lock wait without a
 time limit (for as long as the holder's heartbeat shows it is alive); a plain project's per-accession
@@ -416,6 +450,14 @@ The plugin system enables extensibility:
   which the apply step removes with `clear_assembly`) to the fields of `ReconcileReport`
 - **store** (`metaquest/store/`): The shared data store package, described in "Shared data store"
   below; a project that never runs `store_init` never touches it
+- **run_log**: the per-project run log (`RunRecord`, `note_run`, `note_rows`, `record_run`, `read_runs`,
+  `read_detail`, `resolve_run`, `project_for`), described in "Run log" above
+- **sra/run_report** (`metaquest/data/sra/run_report.py`): the per-run summary of `download_sra`:
+  `failure_reason` (one of `network`, `not-found`, `disk-full`, `insufficient-space`, `locked`,
+  `interrupted`, `unknown`), `RunOutcomes` (the last outcome and the number of attempts that started a
+  download, per accession), the rows of the `--report-file` CSV and the `download_run.json` document,
+  and `run_log_entries`, the run-log summary and detail taken from that document. Not re-exported from
+  `metaquest/data/sra/__init__.py`
 
 #### Processing Components
 
@@ -430,11 +472,32 @@ The plugin system enables extensibility:
 - **doctor_report**: the checks of `metaquest doctor` (Python, tools, config file and settings, store,
   free space, registry, resources, optionally the network), each a `Check(name, status, detail, data)`;
   `cli/commands/doctor.py` renders them as text or JSON and exits with 3 when one failed
+- **project_funnel**: `funnel(registry, members)`, the number of datasets screened, selected,
+  downloaded, analysed, extracted and assembled, with the downloaded bytes and time and, for
+  extractions and assemblies, the accession and genome pairs that reached the stage with their time and
+  assembled bases; the counts are those of `stage_members`, so they match the stages of `status`. Used
+  by `status` (the funnel line and the `funnel` key of `--json`) and `project_report`
+- **run_diff**: pure functions over run-log records: `diff_summaries` (every summary key of two runs,
+  with the numeric difference), `detail_rows` and `diff_details` (rows added, removed and changed between
+  two details), `detail_kept` and `accession_history` (the runs whose kept detail holds a row for one
+  accession). Used by `runs`
+- **project_report**: `build_project_report(registry, max_rows, include_environment, runs_limit)`, the
+  report of `project_report` as one dict with ten sections (project, funnel, genomes, extractions,
+  downloads, failures, timing, environment, outputs, runs). It reuses `stage_members`, `funnel`,
+  `download_verdicts`, `genome_counts`, `timing_summary`, the rows of `results_table`, `failure_reason`
+  and the `doctor` checks without network access; it imports nothing from the CLI layer, opens no FASTQ
+  file and writes nothing
+- **project_report_markdown**: `render_markdown(report)`, and the block layout (text lines and tables)
+  that the HTML renderer shares, so both formats show the same content
 
 #### Visualization Components
 
 - **plots**: Functions for generating various types of plots
-- **reporting**: Tools for generating reports
+- **project_report** (`visualization/project_report.py`): `render_html(report)`, the HTML page of
+  `project_report`, one `<section>` per report section, with a funnel figure and a per-genome figure;
+  plotly and jinja2 are imported through `optional.require` (the `interactive` extra), and plotly.js is
+  embedded in the page. The earlier report generator `visualization/reporting.py` and its template,
+  which no command called, were removed in 0.9.0
 
 #### Plugin System Components
 

@@ -2,6 +2,96 @@
 
 All notable changes to MetaQuest are documented in this file. Dates are in YYYY-MM-DD format.
 
+## [0.9.0] - 2026-10-01
+
+### Added
+
+- A per-project run log. A command that keeps one appends a record of each run to
+  `<project>/.metaquest/runs/runs.jsonl`: the command, its arguments with the NCBI API key masked, start and
+  finish times in UTC, run time, exit code, MetaQuest version, host, process ID and a summary of counts and
+  totals. Larger per-accession results go to `<run_id>.json` beside it, and the last 10 of these files are kept
+  per command; an older run keeps its line without one. The record is written only where a project registry
+  exists, also after an interrupt, and a run log that cannot be written is a warning that never changes the
+  command's exit code (`data/run_log.py`).
+- The `run_log` setting (`METAQUEST_RUN_LOG`, `[runtime] run_log`, default true) turns the run log off.
+- `download_sra`, `sra_profile`, `sra_report`, `results_table`, `extract_target_reads`, `store_verify`,
+  `project_report`, `select_datasets`, `blacklist` and `status --init`/`--reconcile` add a record of each run to
+  the run log. Per-accession results are kept in the run's detail file, one row per accession (per accession and
+  genome for `extract_target_reads`), so `runs --diff` and `runs --accession` can compare them: download
+  failures with reason and attempts, profile and report figures, mapped reads with breadth and mean depth,
+  store verdicts and fixes, and selection ranks. Dry runs, `blacklist --list`, plain `status`, `doctor` and
+  `runs` record nothing, and for `results_table`, `select_datasets` and `project_report`, `--no-record` also
+  leaves the run out of the run log.
+- `runs` (Environment group) reads the run log. It lists recent runs (`--limit`, default 20, 0 for all;
+  `--command`), shows one run (`--show RUN`), compares two runs (`--diff RUN_A RUN_B`: every summary value with
+  the difference for numbers, then the detail rows added, removed and changed) and follows one accession across
+  runs (`--accession ACC`). A run is selected by its ID, a unique ID prefix, `latest` or `previous`; `--json`
+  prints one document. A run without a detail file, because its command noted none or because it was pruned,
+  is reported as not kept. `runs` records nothing and exits 1 without a run log or for a selector that matches
+  no run or more than one.
+- `project_report` (Environment group) writes one report of the project from its registry and run log:
+  `project_report.md` and `project_report.json` always, and `project_report.html` when the `interactive` extra
+  is installed (`--html auto|always|never`; `always` exits 3 without the extra and writes nothing). Sections:
+  project, funnel, genomes, extractions, downloads, failed downloads (with reason and attempts), timing
+  (totals, medians, quartiles, 90th percentile, extremes), environment (the `doctor` checks without network;
+  `--no-environment` leaves them out), outputs and the last 10 runs. Tables are cut to `--max-rows` (default
+  200, 0 for all) with the total shown. The export is recorded in the registry as `project_report` unless
+  `--no-record`. It reads no FASTQ file and exits 1 without a registry; `--json` prints the written paths.
+- `status` reports a cross-stage funnel: one text line with the number of datasets screened, selected,
+  downloaded (with the size of the downloaded data and the recorded download time), extracted and assembled,
+  and a `funnel` key in `status --json` that adds the excluded and failed counts, the analysed stage, and the
+  accession and genome pairs, time and assembled bases of the extraction and assembly stages. The extraction
+  and assembly figures cover only the pairs that reached the stage (mapped reads or contigs above zero), unlike
+  the totals of the timing line (`processing/project_funnel.py`).
+- `results_table` has eight more columns after `download_verdict`: `quality_source` (which analysis supplied
+  the quality columns: `profile`, `report`, `legacy`, or empty), the assembly's `assembly_largest`,
+  `assembly_n90`, `assembly_gc_percent` (GC content in percent, two decimals), `assembly_contigs_ge_1kb` and
+  `assembly_mean_depth_estimate` (empty unless the coverage mapping onto the contigs ran), and `assembly_dir`
+  and `coverage_tsv` (paths relative to the project). All eight are empty where there is no assembly or no
+  quality analysis was recorded.
+- `status --export-tsv`'s `registry_extractions.tsv` has `coverage_tsv`, `n90`, `largest` and `assembly_dir`
+  after its existing columns.
+- `store_verify --json` prints one document: `root`, `checks` (which of `md5`, `spots`, `rescan` and
+  `fix_state` ran), `counts` (datasets per verdict that occurred), `datasets` (one row per accession, with its
+  state before the check and, under `--fix-state`, a `fix` entry with the action taken, `updated`,
+  `unchanged`, `skipped-in-use` or `skipped-changed`) and `fixed` (the datasets `--fix-state` rewrote, with
+  their state before and after). With no store configured it prints `{"error": ...}` and exits 1. In text
+  mode, `--fix-state` prints one `<accession>: fixed (<before> -> <after>)` line per rewritten dataset.
+- `download_sra --report-file` has two columns after the unchanged `accession,status,message,seconds`:
+  `reason` (for a failed accession: `network`, `not-found`, `disk-full`, `insufficient-space`, `locked`,
+  `interrupted` or `unknown`) and `attempts` (attempts in this run that started a download; a retry counts
+  again, while an accession refused for space, cancelled by a disk-full abort, stopped by an interrupt before
+  it started, given up after a lock wait, refused as a partial store copy, already present or linked from the
+  store counts 0).
+- `download_sra` writes `<fastq-folder>/download_run.json` after a run that reaches the download stage, with or
+  without `--report-file` (a dry run writes none): start and finish times, totals, failures by reason, each
+  failed accession with its reason, attempts and message, whether the run was aborted (`disk-full` or
+  `interrupted`), the exit code, host, settings and paths (`data/sra/run_report.py`).
+
+### Changed
+
+- `sra_report --groups-file` checks for scipy (the `analysis` extra) before any work, also under `--no-report`.
+  A run without scipy used to profile every accession and then fail when the statistical tests ran or, under
+  `--no-report`, succeed with every statistical test skipped; it now fails at once with exit code 3 and writes
+  nothing.
+- `sra_report`'s `report` analysis in the registry also carries `total_reads` and `total_bases`.
+- The `download_sra` report CSV and `download_run.json` are also written for an interrupted run (`aborted:
+  "interrupted"`, exit 130), listing the accessions that reported a result, and for a run whose final registry
+  write failed. `failed_accessions.txt` is unchanged.
+
+### Fixed
+
+- `results_table` and `status --export-tsv` fill the quality columns (`total_reads`, `gc_percent`,
+  `quality_grade`) from the `report` analysis of `sra_report` when `sra_profile` was never run for an accession;
+  they used to stay empty. When both analyses exist, the newer one supplies the values and the other fills any
+  it lacks.
+
+### Removed
+
+- The unused report generator (`metaquest/visualization/reporting.py` and
+  `metaquest/visualization/templates/report_template.html`) and its three test files. No command called it;
+  `project_report` replaces it.
+
 ## [0.8.0] - 2026-10-01
 
 ### Added

@@ -363,6 +363,19 @@ registry, a run log that cannot be written is reported as a warning without chan
 exit code, and `METAQUEST_RUN_LOG=false` (or `run_log = false` under `[runtime]` in the config file)
 turns the run log off.
 
+The commands that keep a run log are `download_sra`, `sra_profile`, `sra_report`, `results_table`,
+`extract_target_reads`, `store_verify`, `project_report`, `select_datasets`, `blacklist`, and `status`
+with `--init` or `--reconcile`. A dry run, `blacklist --list`, a plain `status` (also with `--json`,
+`--next` or `--export-tsv`), `doctor` and `runs` record nothing. For `results_table`, `select_datasets`
+and `project_report`, `--no-record` also leaves the run out of the run log, in addition to leaving the
+registry unchanged. The summary of a run holds counts and totals. Per-accession results go to the
+run's detail file, one row per accession (per accession and genome for `extract_target_reads`):
+`download_sra` keeps its failed accessions with reason and attempts, `sra_profile` and `sra_report`
+their per-accession figures, `extract_target_reads` the mapped reads, breadth and mean depth,
+`store_verify` each dataset's verdict and fix, and `select_datasets` each accession's rank. MetaQuest
+does not add `.metaquest/` to a project's `.gitignore`; add it there if the run log should not be
+committed with the registry.
+
 ```bash
 metaquest status --init                      # create the registry from an existing project
 metaquest status                             # accession by stage matrix, per genome
@@ -376,18 +389,41 @@ metaquest results_table --output results.tsv
 
 `results_table` writes one row per screened accession and genome, joining containment, selection,
 exclusion, download, run size, the dataset profile of `sra_profile` (total reads, GC in percent,
-quality grade), mapped reads, reference coverage and assembly statistics. A registry written before
-0.5.0 still fills the profile columns from its `sra_stats` and `quality` analyses. It records the
+quality grade), mapped reads, reference coverage and assembly statistics. The profile columns come
+from the newer of the `profile` analysis of `sra_profile` and the `report` analysis of `sra_report`,
+with a value the newer one lacks filled from the other, so a project that only ran `sra_report` also
+has them. A registry written before 0.5.0 that holds neither still fills them from its `sra_stats`
+and `quality` analyses. It records the
 export in the project registry when one exists, and does not create a registry when there is none.
-The last three columns, `download_seconds`, `extraction_seconds` and `assembly_seconds`, are the
+The columns `download_seconds`, `extraction_seconds` and `assembly_seconds` are the
 recorded run times, empty where a step was not timed (data recorded before 0.7.0, or a dataset linked
 from the store). The extraction time of a sample is measured from the end of the previous sample, so
 for the first sample it includes reading the containment table and building the minimap2 index; the
 assembly time is the megahit run alone, without the contig summary and the coverage mapping.
 `status --json` summarises the same times under `timing` (counts, totals and medians), the text report
 adds one timing line when anything was timed, and `status --export-tsv` adds the same columns.
-The last column, `download_verdict`, is the accession's recorded download completeness verdict
+The column `download_verdict` is the accession's recorded download completeness verdict
 (`complete`, `truncated` or `unverified`), empty where none was recorded.
+
+Eight more columns follow `download_verdict`: `quality_source` names the analysis that supplied the
+profile columns (`profile`, `report`, `legacy` for the pre-0.5.0 analyses, or empty when none was
+recorded); `assembly_largest`, `assembly_n90`, `assembly_gc_percent` (the assembly's GC content in
+percent, two decimals) and `assembly_contigs_ge_1kb` are contig statistics beyond `contigs`, `total_bp`
+and `n50`; `assembly_mean_depth_estimate` is filled only when the coverage mapping onto the contigs
+ran; `assembly_dir` and `coverage_tsv` are the assembly folder and the coverage table, as paths
+relative to the project. All eight are empty where the registry has nothing to report.
+`registry_extractions.tsv` of `status --export-tsv` also has `coverage_tsv`, `n90`, `largest` and
+`assembly_dir` after its timing columns.
+
+The `status` text report has a funnel line across the pipeline's stages, for example
+`funnel: 120 screened, 40 selected, 38 downloaded (1.2 TB, 41 h), 30 extracted, 12 assembled`: the
+number of datasets in each stage, with the size of the downloaded data and the recorded download
+time. The `funnel` key of `status --json` gives each stage in full: the excluded count for `selected`;
+bytes, seconds and the failed count for `downloaded`; `analysed`; and for `extracted` and `assembled`
+the number of accession and genome pairs, their seconds and, for assemblies, the total assembled
+bases. The extraction and assembly figures cover only the pairs that reached the stage (mapped reads
+above zero, contigs above zero), so they can be lower than the totals of the timing line, which also
+count attempts that did not. A stage with no recorded time has `seconds` null.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
 and threshold; pass `--force` to redo them. An assembly is also redone when the reads or settings it was
@@ -438,8 +474,9 @@ A run is selected by its ID (`20261001T120501Z-sra_profile-3fa2`), by a prefix t
 run, or as `latest` or `previous`; with `--command`, these refer to that command's runs only.
 `--diff` lists every summary value of the two runs with the difference for numbers, then compares their
 details row by row (one row per accession, or per accession and genome) and lists the rows found in only
-one run and the fields that changed. Only the last 10 detail files of each command are kept, so an
-older run is reported with its detail as not kept and is compared on its summary alone. `--accession`
+one run and the fields that changed. A run's detail is reported as not kept when there is none: a run
+keeps one only when its command noted one, and only the last 10 per command are kept. Such a run is
+compared on its summary alone. `--accession`
 lists the runs whose kept detail holds values for that accession, plus runs without a kept detail
 whose command line names it; the number of other runs that could not be searched is given at the end.
 `runs` exits 1 when the project has no run log, and also when a selector matches no run or more than
@@ -471,9 +508,10 @@ default, 0 for all) and say how many rows there were; `results_table` writes eve
 `project_report.md` and `project_report.json` are always written. `project_report.html` needs the
 `interactive` extra: with `--html auto` (the default) a missing extra is reported in one line and
 only the other two files are written, `--html always` exits 3 without writing anything, and
-`--html never` skips the page. The export is recorded in the registry as `project_report` unless
-`--no-record` is given. Without a project registry the command exits 1 and writes nothing; create one
-with `metaquest status --init`. `--json` prints the written paths as one JSON document.
+`--html never` skips the page. The export is recorded in the registry as `project_report`, and the
+run in the run log, unless `--no-record` is given. Without a project registry the command exits 1 and
+writes nothing; create one with `metaquest status --init`. `--json` prints the written paths as one
+JSON document.
 
 ### Shared data store
 
@@ -523,7 +561,13 @@ entry when a check finds a mismatch, but only promotes a dataset to `complete` a
 through its files (via the `--spots` check, or, if `--spots` was not requested, a read-through
 `--fix-state` performs itself); matching size and md5 alone is not enough, since a file can still be a
 truncated or corrupt gzip stream underneath. `--rescan` rebuilds a dataset's recorded file list from
-what is actually on disk before checking, for files added or removed by hand; `store_reindex` rebuilds
+what is actually on disk before checking, for files added or removed by hand. `store_verify --json`
+prints one document instead of the text table: `root`, `checks` (which of `md5`, `spots`, `rescan` and
+`fix_state` ran), `counts` (the number of datasets per verdict, only verdicts that occurred),
+`datasets` (one row per accession checked, with its state before the check and, under `--fix-state`, a
+`fix` entry naming the action taken) and `fixed` (the accessions `--fix-state` rewrote, with their
+state before and after). In text mode, `--fix-state` prints one `<accession>: fixed (<before> ->
+<after>)` line per rewritten dataset. `store_reindex` rebuilds
 the SQLite catalogue from the sidecar files if it is ever lost, replaying an append-only journal under
 the store's `journal/` folder to restore which projects used which datasets. A store folder without a
 sidecar does not stop `store_reindex`: it writes one from the file names and sizes alone, with state
@@ -752,8 +796,9 @@ threshold. `--top-n N` keeps only the N accessions with the highest containment 
 is applied; excluded accessions are skipped by default (`--skip-excluded`, on unless `--no-skip-excluded`
 is given), and `--skip-downloaded` additionally drops accessions the registry already records as
 downloaded, useful when re-running selection on an expanded search. `--no-record`
-still writes the output file and logs the counts, but does not record the selection in the registry, so
-`status` is left unchanged; use it for an exploratory run that should not redefine the target list.
+still writes the output file and logs the counts, but does not record the selection in the registry or
+the run in the run log, so `status` is left unchanged; use it for an exploratory run that should not
+redefine the target list.
 Because `status --next` points `download_sra` at the recorded selection's file, `--no-record` refuses to
 overwrite a file that a recorded selection names (including the default `accessions.txt`); give it an
 `--output` that names a scratch file instead.
@@ -794,10 +839,17 @@ long that accession's download took in this run; it is empty for a dataset linke
 for accessions that were not downloaded. Two columns follow it: `reason`, for a failed accession only
 (`network`, `not-found`, `disk-full`, `insufficient-space`, `locked`, `interrupted` or `unknown`), and
 `attempts`, the number of attempts in this run that started a download (a retry counts again; an
-accession refused for lack of space, cancelled by a disk-full abort, already present or linked from the
-store counts 0). Every run that is not a dry run also writes `fastq/download_run.json`, with the totals,
-the failures by reason, each failed accession, the settings, the exit code and whether the run was
-aborted. Both files are written after an interrupt as well. To see sizes and sequencing
+accession refused for lack of space, cancelled by a disk-full abort, stopped by an interrupt before it
+started, given up after waiting for another run's lock, refused because the store holds a partial copy
+under `--no-resume-partial`, already present or linked from the store counts 0). A run that reaches the
+download stage also writes `fastq/download_run.json`, with or without `--report-file`: start and finish
+times, the totals (accessions, downloaded, failed, already present, blacklisted, skipped, attempts),
+the failures by reason, each failed accession with its reason, attempts and message, whether the run
+was aborted (`disk-full` or `interrupted`), the exit code, the host, the settings and the paths used.
+Both files are written after an interrupt (exit 130) and after a run whose final registry write failed
+as well; after an interrupt they list only the accessions that reported a result. A dry run writes
+neither file, and a failure to write them is logged as a warning without changing the exit code.
+`failed_accessions.txt` is written as before. To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
 `docs/SRA_ENHANCED_FEATURES.md`. `sra_info` filters per experiment package, not per run: it lists every
 run of each experiment package that a requested run, experiment, sample, study, BioProject or BioSample
@@ -1086,7 +1138,11 @@ for both the quality section and the comparison. An accession found in `--qualit
 profiled again; with no `--accessions-file` or `--groups-file`, every profile in that folder is
 reported on. An accession without readable FASTQ files is left out with a warning. The report opens
 in a browser unless `--no-open` is given; `--no-report` writes only `sra_report.json` and prints the
-results, and needs neither plotly nor jinja2. A `report` analysis is recorded per accession.
+results, and needs neither plotly nor jinja2. With `--groups-file`, scipy (the `analysis` extra) is
+checked before any dataset is profiled, also under `--no-report`: without it the command exits 3 and
+writes nothing. A `report` analysis is recorded per accession, with the total reads and bases, the GC
+content and the quality grade, so the profile columns of `results_table` are filled also for a
+project that never ran `sra_profile`.
 
 ### Renamed SRA commands (0.5.0)
 
