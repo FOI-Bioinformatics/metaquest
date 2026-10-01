@@ -39,6 +39,9 @@ PROGRESS_LABEL = "download_sra"
 # The message recorded for an accession a disk-full abort kept from starting, in either pass.
 DISK_FULL_NOT_ATTEMPTED = "disk-full: not attempted"
 
+# The message a worker returns when the run's stop token kept it from starting or finishing.
+INTERRUPTED_MESSAGE = "interrupted"
+
 # Per-accession timing of the last download attempt: (start as ISO 8601 UTC, seconds taken).
 Timings = Dict[str, Tuple[str, float]]
 
@@ -344,8 +347,9 @@ def _execute_parallel_downloads(
 
     ``stop`` is the run's stop token (a new one when None), passed to every worker. On
     ``KeyboardInterrupt`` it is set, downloads not yet started are cancelled, this run's
-    running prefetch or fasterq-dump children are terminated, downloads that had already
-    finished but were not yet collected are collected (so ``on_result`` sees them), and the
+    running prefetch or fasterq-dump children are terminated, and the executor waits for the
+    downloads already running. Every download that then has a result not yet collected is
+    collected (so ``on_result`` sees it), except one that returned ``"interrupted"``, and the
     interrupt is re-raised. Other runs in the process are not affected. The process-wide ``STOP`` and
     ``SecureSubprocess``'s stopping flag are left as they are: a run neither sets nor clears
     them, so an emergency stop set before the run still applies to it.
@@ -369,6 +373,7 @@ def _execute_parallel_downloads(
     every = settings.active().progress_every  # read before the first download starts
     futures: Dict[Future, str] = {}
     collected: Set[Future] = set()
+    interrupt: Optional[KeyboardInterrupt] = None
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         try:
             futures = {
@@ -405,17 +410,22 @@ def _execute_parallel_downloads(
                     abort_reason = "disk-full"
                     logger.error("Disk full while downloading %s; downloads not yet started are cancelled", acc)
                     not_attempted = _cancel_pending(futures, futures_results, on_result, progress)
-        except KeyboardInterrupt:
-            # Downloads that had finished but were not yet yielded by as_completed still reach
-            # on_result (and so the registry batch and the run summary) before the re-raise.
-            finished = [f for f in futures if f not in collected and f.done() and not f.cancelled()]
+        except KeyboardInterrupt as exc:
+            # Not re-raised here: leaving the block waits for the running workers, and one that
+            # had already published its dataset (and was still releasing its lock or cleaning
+            # up) finishes during that wait. It is collected below, before the re-raise.
+            interrupt = exc
             stop.set()
             logger.warning("Interrupted; cancelling pending downloads and stopping running tools")
             executor.shutdown(wait=False, cancel_futures=True)
             SecureSubprocess.terminate_children(stop=stop)
-            if progress is not None:
-                _collect_finished(finished, futures, not_attempted, futures_results, on_result, progress)
-            raise
+
+    if interrupt is not None:
+        # Every worker has returned by now, so each uncollected, uncancelled future is done.
+        if progress is not None:
+            finished = [f for f in futures if f not in collected and f.done() and not f.cancelled()]
+            _collect_finished(finished, futures, not_attempted, futures_results, on_result, progress)
+        raise interrupt
 
     if finish_here and progress is not None:
         progress.finish()
@@ -461,11 +471,14 @@ def _collect_finished(
     on_result: Optional[Callable[[str, bool, str], None]],
     progress: ProgressReporter,
 ) -> None:
-    """Collect downloads that finished before an interrupt but were not yet collected.
+    """Collect downloads that finished after an interrupt was caught but were not yet collected.
 
-    Called from the interrupt handler, so nothing here may raise: a future whose worker raised
-    something other than a download error (a programming error, or an interrupt delivered to
-    the worker) is left out rather than re-raised over the ``KeyboardInterrupt``.
+    Called before the interrupt is re-raised, so nothing here may raise: a future whose worker
+    raised something other than a download error (a programming error, or an interrupt delivered
+    to the worker) is left out rather than re-raised over the ``KeyboardInterrupt``. A worker that
+    returned ``(False, "interrupted")`` was cut short by the stop token and is left out too, so an
+    interrupted re-download is not recorded as a new failure; a success or any other failure is
+    collected.
     """
     for future in finished:
         acc = futures[future]
@@ -474,7 +487,14 @@ def _collect_finished(
         error = future.exception()
         if error is not None and not isinstance(error, _DOWNLOAD_ERRORS):
             continue
+        if error is None and _was_interrupted(future.result()):
+            continue
         _collect_result(future, acc, futures_results, on_result, progress)
+
+
+def _was_interrupted(result: Any) -> bool:
+    """Whether a worker's result is the ``(False, "interrupted")`` a stopped run produces."""
+    return isinstance(result, tuple) and len(result) == 2 and not result[0] and result[1] == INTERRUPTED_MESSAGE
 
 
 def _cancel_pending(

@@ -3604,6 +3604,52 @@ class TestDownloadInterrupt:
                     )
         assert sorted(seen) == [("SRR2", False), ("SRR3", True)]
 
+    @staticmethod
+    def _interrupt_while_running(futures):
+        # The interrupt arrives while every worker is still running (published but cleaning up).
+        time.sleep(0.05)
+        raise KeyboardInterrupt
+        yield  # pragma: no cover - makes this a generator
+
+    def _run_interrupted(self, tmp_path, accessions, worker):
+        seen = []
+        with patch.object(SecureSubprocess, "terminate_children", return_value=0):
+            with patch.object(retry_mod, "as_completed", side_effect=self._interrupt_while_running):
+                with pytest.raises(KeyboardInterrupt):
+                    retry_mod._execute_parallel_downloads(
+                        accessions,
+                        tmp_path,
+                        1,
+                        len(accessions),
+                        False,
+                        None,
+                        {},
+                        [],
+                        on_result=lambda acc, ok, msg: seen.append((acc, ok, msg)),
+                        downloader=worker,
+                    )
+        return sorted(seen)
+
+    def test_keyboard_interrupt_collects_workers_that_finish_after_the_signal(self, tmp_path):
+        def worker(acc, *a, **kw):
+            time.sleep(0.3)
+            return True, "ok"
+
+        seen = self._run_interrupted(tmp_path, ["SRR1", "SRR2"], worker)
+        assert seen == [("SRR1", True, "ok"), ("SRR2", True, "ok")]
+
+    def test_keyboard_interrupt_leaves_out_a_worker_that_returned_interrupted(self, tmp_path):
+        def worker(acc, *a, **kw):
+            time.sleep(0.3)
+            if acc == "SRR1":
+                return False, "interrupted"
+            if acc == "SRR2":
+                return False, "fasterq-dump failed: network error"
+            return True, "ok"
+
+        seen = self._run_interrupted(tmp_path, ["SRR1", "SRR2", "SRR3"], worker)
+        assert seen == [("SRR2", False, "fasterq-dump failed: network error"), ("SRR3", True, "ok")]
+
     def test_download_accession_runs_no_tool_once_stopped(self, tmp_path):
 
         accession_mod.STOP.set()
