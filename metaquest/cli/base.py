@@ -204,6 +204,15 @@ class BaseCommand(ABC):
         """True for a command that parses but is left out of the main help (e.g. a renamed one)."""
         return False
 
+    def records_run(self, args: argparse.Namespace) -> bool:
+        """Whether ``main`` adds this run to the project's run log (``metaquest.data.run_log``).
+
+        False by default; a command that opts in may still return False for one invocation (a
+        dry run, say). The record is written after the command returns and never changes its
+        exit code.
+        """
+        return False
+
     @abstractmethod
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         """Configure the argument parser for this command."""

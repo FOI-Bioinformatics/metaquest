@@ -9,12 +9,15 @@ import logging
 import os
 import socket
 import sys
+import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from metaquest import __version__
 from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, add_global_options, command_registry
 from metaquest.core import settings
-from metaquest.core.exceptions import ConfigurationError, MetaQuestError, exit_code_for
+from metaquest.core.exceptions import ConfigurationError, DataAccessError, MetaQuestError, exit_code_for
+from metaquest.data import run_log
 from metaquest.utils.logging import log_traceback_hint, setup_logging
 
 # Import all command modules to register them
@@ -196,36 +199,8 @@ def _apply_quiet_and_verbose(parser: argparse.ArgumentParser, args: argparse.Nam
         args.log_level = "DEBUG"
 
 
-# Flags whose value must not reach a log file shared with other users.
-def _is_secret_flag(item: str) -> bool:
-    """Whether ``item`` is a secret setting's flag (``--api-key``) or an abbreviation of it (``--api-k``)."""
-    secret_flags = [spec.flag for spec in settings.SETTINGS.values() if spec.secret and spec.flag]
-    return len(item) > 2 and item.startswith("--") and any(flag.startswith(item) for flag in secret_flags)
-
-
-def _masked_argv(argv: List[str], parsed: Optional[argparse.Namespace] = None) -> List[str]:
-    """``argv`` with the value of every secret setting's flag replaced by ``***``.
-
-    A value is hidden after the flag or any abbreviation argparse accepts for it, and wherever
-    it appears as a whole argument when the parsed namespace holds it under the setting's dest.
-    """
-    secrets = set()
-    for spec in settings.SETTINGS.values():
-        value = getattr(parsed, spec.cli_dest, None) if spec.secret and spec.cli_dest else None
-        if value:
-            secrets.add(str(value))
-    masked: List[str] = []
-    hide_next = False
-    for item in argv:
-        flag, equals, value = item.partition("=")
-        if hide_next or item in secrets:
-            masked.append("***")
-        elif equals and (_is_secret_flag(flag) or (flag.startswith("--") and value in secrets)):
-            masked.append(f"{flag}=***")
-        else:
-            masked.append(item)
-        hide_next = not hide_next and not equals and _is_secret_flag(item)
-    return masked
+# Flags whose value must not reach a log file shared with other users (shared with the run log).
+_masked_argv = settings.masked_argv
 
 
 def _log_run_header(argv: List[str], parsed: Optional[argparse.Namespace] = None) -> None:
@@ -261,6 +236,38 @@ def _log_failure(message: str, error: BaseException) -> None:
     """Log a failure that left the command: one line on the console, the traceback in the log file."""
     logging.error(message, exc_info=error)
     log_traceback_hint()
+
+
+def _run_command(parsed_args: argparse.Namespace) -> int:
+    """Run the parsed command and map an exception that leaves it to its exit code."""
+    try:
+        return parsed_args.func(parsed_args)
+    except MetaQuestError as e:
+        _log_failure(f"Error: {e}", e)
+        return exit_code_for(e)
+    except Exception as e:
+        _log_failure(f"{type(e).__name__}: {e}", e)
+        return exit_code_for(e)
+    except KeyboardInterrupt as e:
+        # Only a command with graceful_shutdown False gets here; BaseCommand.run handles the rest.
+        logging.error("Interrupted")
+        return exit_code_for(e)
+
+
+def _record_run_if_wanted(
+    parsed_args: argparse.Namespace, argv: List[str], started: datetime, clock: float, exit_code: int
+) -> None:
+    """Add this run to the project's run log when its command keeps one; never changes the exit code."""
+    command = getattr(getattr(parsed_args, "func", None), "__self__", None)
+    try:
+        if not isinstance(command, BaseCommand) or not command.records_run(parsed_args):
+            return
+        project = run_log.project_for(getattr(parsed_args, "registry", None))
+        if project is not None:
+            seconds = time.monotonic() - clock
+            run_log.record_run(project, command.name, argv, parsed_args, started, seconds, exit_code)
+    except (OSError, DataAccessError, ValueError, TypeError) as e:
+        logging.warning("This run was not recorded in the run log: %s", e)
 
 
 def main(args: Optional[List[str]] = None) -> int:
@@ -300,19 +307,13 @@ def main(args: Optional[List[str]] = None) -> int:
     _log_run_header(argv, parsed_args)
     logging.debug("Runtime settings (value and source):\n  %s", "\n  ".join(runtime.describe()))
 
+    started, clock = datetime.now(timezone.utc), time.monotonic()
+    exit_code = 1
     try:
-        # Execute the chosen command
-        return parsed_args.func(parsed_args)
-    except MetaQuestError as e:
-        _log_failure(f"Error: {e}", e)
-        return exit_code_for(e)
-    except Exception as e:
-        _log_failure(f"{type(e).__name__}: {e}", e)
-        return exit_code_for(e)
-    except KeyboardInterrupt as e:
-        # Only a command with graceful_shutdown False gets here; BaseCommand.run handles the rest.
-        logging.error("Interrupted")
-        return exit_code_for(e)
+        exit_code = _run_command(parsed_args)
+    finally:
+        _record_run_if_wanted(parsed_args, argv, started, clock, exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":

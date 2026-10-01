@@ -29,6 +29,8 @@ def isolate_runtime_settings(monkeypatch):
     # The download free-space guard reads the host's real free space; a test that wants it sets
     # --min-free-gb (or deletes this variable) itself, so no result depends on the machine's disk.
     monkeypatch.setenv(settings.SETTINGS["min_free_gb"].env, "0")
+    # No test writes a run log under its project unless it sets METAQUEST_RUN_LOG itself.
+    monkeypatch.setenv(settings.SETTINGS["run_log"].env, "false")
     settings.reset_for_tests()
     yield
     settings.reset_for_tests()

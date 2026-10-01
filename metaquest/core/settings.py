@@ -328,6 +328,7 @@ _SPECS = (
         "Memory given to megahit: auto, a fraction, or a size",
         cli_dest="assembly_memory",
     ),
+    _spec("run_log", _boolean, True, "Record each run of a command that keeps a run log under .metaquest/runs/"),
 )
 
 SETTINGS: Dict[str, SettingSpec] = {spec.name: spec for spec in _SPECS}
@@ -444,6 +445,7 @@ class RuntimeSettings:
     min_free_gb: float
     prefetch_max_size: str
     assembly_memory: str
+    run_log: bool
     sources: Mapping[str, str] = field(default_factory=dict)
     # Messages about the config file (unknown keys) for the caller to log; activate() runs
     # before logging is set up, so logging them there would lose them.
@@ -562,6 +564,38 @@ def setting_or(name: str, fallback: Any) -> Any:
 def settings_or(**fallbacks: Any) -> Tuple[Any, ...]:
     """``setting_or`` for several names at once, in the order given."""
     return tuple(setting_or(name, fallback) for name, fallback in fallbacks.items())
+
+
+def _is_secret_flag(item: str) -> bool:
+    """Whether ``item`` is a secret setting's flag (``--api-key``) or an abbreviation of it (``--api-k``)."""
+    secret_flags = [spec.flag for spec in SETTINGS.values() if spec.secret and spec.flag]
+    return len(item) > 2 and item.startswith("--") and any(flag.startswith(item) for flag in secret_flags)
+
+
+def masked_argv(argv: List[str], parsed: Optional[argparse.Namespace] = None) -> List[str]:
+    """``argv`` with the value of every secret setting's flag replaced by ``***``.
+
+    A value is hidden after the flag or any abbreviation argparse accepts for it, and wherever
+    it appears as a whole argument when the parsed namespace holds it under the setting's dest.
+    Used for the run header in the log and for the argv a run log records.
+    """
+    secrets = set()
+    for spec in SETTINGS.values():
+        value = getattr(parsed, spec.cli_dest, None) if spec.secret and spec.cli_dest else None
+        if value:
+            secrets.add(str(value))
+    masked: List[str] = []
+    hide_next = False
+    for item in argv:
+        flag, equals, value = item.partition("=")
+        if hide_next or item in secrets:
+            masked.append("***")
+        elif equals and (_is_secret_flag(flag) or (flag.startswith("--") and value in secrets)):
+            masked.append(f"{flag}=***")
+        else:
+            masked.append(item)
+        hide_next = not hide_next and not equals and _is_secret_flag(item)
+    return masked
 
 
 def require_email(args: Optional[argparse.Namespace]) -> str:

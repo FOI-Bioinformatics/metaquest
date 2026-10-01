@@ -58,6 +58,7 @@ and, for most, with a flag. An empty environment variable counts as not set.
 | `min_free_gb` | number, 0 or more | 10 | `METAQUEST_MIN_FREE_GB` | `--min-free-gb` |
 | `prefetch_max_size` | whole number with optional K, M, G or T suffix | 100G | `METAQUEST_PREFETCH_MAX_SIZE` | none |
 | `assembly_memory` | `auto`, a fraction, or a size | auto | `METAQUEST_ASSEMBLY_MEMORY` | `--assembly-memory` |
+| `run_log` | true or false | true | `METAQUEST_RUN_LOG` | none |
 
 The flags exist on these commands:
 
@@ -107,6 +108,10 @@ What each setting does:
   megahit's own default when no limit is found. A size such as `32G` or `32000M` (binary units) or a whole
   number of bytes (at least 1M) is passed in bytes. A fraction such as `0.5` is passed as it is; megahit
   applies it to the whole node's memory, so under a scheduler give a size or `auto` instead.
+- `run_log`: whether a command that keeps a run log adds a record of each run to
+  `<project>/.metaquest/runs/` (see "Project state" in the README). Nothing is written in a folder
+  without a project registry, and a run log that cannot be written is reported as a warning without
+  changing the command's exit code. false turns the run log off.
 
 ## Order of precedence
 
