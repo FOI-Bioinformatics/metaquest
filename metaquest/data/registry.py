@@ -592,10 +592,10 @@ def record_extraction(
 
     ``coverage`` is ``ExtractionResult.coverage``: its ``breadth`` and ``mean_depth`` are
     recorded as given and its ``coverage_tsv`` project-relative; all three are None when
-    ``coverage`` is None (nothing mapped, or the coverage step failed).
+    ``coverage`` is None (nothing mapped, or the coverage step failed). A recorded assembly is
+    dropped: it was built from the reads this call replaces.
     """
     root = project_root(registry)
-    previous = rb.extraction_block(registry, accession, genome_id)
     genome_fasta = params.get("genome_fasta")
     coverage = coverage or {}
     coverage_tsv = coverage.get("coverage_tsv")
@@ -614,7 +614,7 @@ def record_extraction(
         breadth=coverage.get("breadth"),
         mean_depth=coverage.get("mean_depth"),
         coverage_tsv=_project_relative(coverage_tsv, root) if coverage_tsv is not None else None,
-        assembly=previous.assembly if previous is not None else None,
+        assembly=None,
     )
     rb.set_extraction_block(registry, accession, genome_id, block)
     registry.genomes.setdefault(genome_id, {})

@@ -342,6 +342,9 @@ class AssemblyBlock(RegistryBlock):
     total_bp: int = 0
     n50: int = 0
     largest: int = 0
+    # What the assembly was built from, left out while None. Like the timing fields it is set only
+    # after the assembly is recorded (``metaquest.data.registry_assembly``), never when it is built.
+    inputs: Optional[Dict[str, Any]] = field(default=None, init=False, metadata={_OMIT: True})
     # When megahit started (ISO 8601 UTC) and how many seconds it ran.
     started: Optional[str] = field(default=None, init=False, metadata=_TIMING)
     seconds: Optional[float] = field(default=None, init=False, metadata=_TIMING)

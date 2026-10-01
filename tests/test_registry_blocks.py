@@ -133,6 +133,10 @@ def test_fresh_blocks_omit_optional_keys_left_at_their_default():
     assert selection.to_dict() == {"selected": True, "date": "d", "criteria": {}, "output": "o"}
     store = StoreBlock(root="/r", linked=["A"])
     assert store.to_dict() == {"root": "/r", "mode": "symlink", "linked": ["A"]}
+    assembly = AssemblyBlock(date="d", dir="x", tool="megahit", version="v1")
+    assert "inputs" not in assembly.to_dict()
+    assembly.inputs = {"reads": []}
+    assert assembly.to_dict()["inputs"] == {"reads": []}
 
 
 def test_set_mate_reads_starts_a_download_block_when_there_is_none():

@@ -1418,9 +1418,9 @@ class TestExtractTargetReadsCommand:
         assert after is None
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_forced_extraction_without_assemble_keeps_the_assembly_record(self, mock_run):
+    def test_forced_extraction_without_assemble_drops_the_assembly_record(self, mock_run):
         """A --force redo that does not also pass --assemble leaves the assembly folder on
-        disk untouched, so its registry record must survive too."""
+        disk untouched, but its registry record is dropped: it was built from the replaced reads."""
         state = {}
         mock_run.side_effect = _fake_tools(state)
         cmd = ExtractTargetReadsCommand()
@@ -1454,7 +1454,8 @@ class TestExtractTargetReadsCommand:
             )
             assert cmd.execute(forced_no_assemble) == 0
             after = json.loads(registry_file.read_text())["datasets"]["SRR1"]["extractions"]["GCF_1"]["assembly"]
-        assert after == before
+            assert (root / "targeted" / "SRR1" / "GCF_1_assembly" / "final.contigs.fa").is_file()
+        assert after is None
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_successful_forced_assembly_ends_with_a_fresh_record(self, mock_run):

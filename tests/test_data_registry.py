@@ -628,9 +628,9 @@ class TestRecords:
         assert rec.mapped_reads == 239464 and rec.assembly.n50 == 15400 and rec.assembly.version == "v1.2.9"
         assert r.datasets["SRR1"]["metadata"]["run_size"] == "1234"
         assert r.datasets["SRR1"]["analyses"]["sra_stats"]["summary"]["total_reads"] == 10
-        # a new extraction record keeps the assembly block
+        # a new extraction record drops the assembly block: it was built from the replaced reads
         reg.record_extraction(r, "SRR1", "GCF_1", [], 0, True, {"genome_fasta": "g", "preset": "sr", "threshold": 0.1})
-        assert rb.extraction_block(r, "SRR1", "GCF_1").assembly.contigs == 188
+        assert rb.extraction_block(r, "SRR1", "GCF_1").assembly is None
 
     def test_record_metadata_keeps_spots_bases_layout_platform_as_int(self, tmp_path):
         r = reg.load_registry(tmp_path / "metaquest_registry.json")
