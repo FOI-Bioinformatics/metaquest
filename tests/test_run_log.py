@@ -121,6 +121,34 @@ def test_malformed_last_line_is_skipped_with_one_warning(project, run_log_on, ca
     assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
 
 
+def test_a_byte_that_is_not_utf8_is_skipped_like_a_cut_line(project, run_log_on, caplog):
+    _record(project)
+    log = run_log.runs_dir(project) / run_log.RUNS_FILE
+    with open(log, "ab") as handle:
+        handle.write(b"\xff\xfe not a record\n")
+    with caplog.at_level(logging.WARNING, logger="metaquest.data.run_log"):
+        assert len(run_log.read_runs(project)) == 1
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+    # Appending still works, and the earlier records are untouched.
+    second = _record(project)
+    assert [r.run_id for r in run_log.read_runs(project)][-1] == second.run_id
+    assert len(run_log.read_runs(project)) == 2
+
+
+def test_pruning_keeps_keys_a_later_schema_added_to_a_line(project, run_log_on):
+    first = _record(project, "sra_profile", detail={"n": 0})
+    log = run_log.runs_dir(project) / run_log.RUNS_FILE
+    data = json.loads(log.read_text())
+    data["future"] = {"added": "later"}
+    log.write_text(json.dumps(data, sort_keys=True) + "\n")
+    for i in range(run_log.DETAILS_KEPT_PER_COMMAND):
+        _record(project, "sra_profile", detail={"n": i + 1})
+    line = json.loads(log.read_text().splitlines()[0])
+    assert line["run_id"] == first.run_id
+    assert line["detail"] is None
+    assert line["future"] == {"added": "later"}
+
+
 def test_details_pruned_per_command(project, run_log_on):
     kept = run_log.DETAILS_KEPT_PER_COMMAND
     profiles = [_record(project, "sra_profile", detail={"n": i}) for i in range(kept + 2)]
@@ -226,6 +254,28 @@ def test_cli_records_an_opting_command(project, run_log_on, opting_blacklist, mo
     assert records[0].summary == {"stub": True}
     assert records[0].seconds >= 0
     assert "func" not in records[0].args and records[0].args["list"] is True
+
+
+@pytest.mark.parametrize("raised, code", [(KeyboardInterrupt(), 130), (RuntimeError("unexpected"), 1)])
+def test_cli_records_an_interrupted_or_crashed_command_with_its_exit_code(
+    project, run_log_on, opting_blacklist, monkeypatch, raised, code
+):
+    monkeypatch.chdir(project)
+    opting_blacklist[0] = raised
+    assert main(["blacklist", "--list"]) == code
+    assert [r.exit_code for r in run_log.read_runs(project)] == [code]
+
+
+@pytest.mark.parametrize("exit_value, recorded", [(5, 5), (0, 0), (None, 0), ("bad input", 1)])
+def test_cli_records_a_system_exit_with_its_code(
+    project, run_log_on, opting_blacklist, monkeypatch, exit_value, recorded
+):
+    monkeypatch.chdir(project)
+    opting_blacklist[0] = SystemExit(exit_value)
+    with pytest.raises(SystemExit) as raised:
+        main(["blacklist", "--list"])
+    assert raised.value.code == exit_value
+    assert [r.exit_code for r in run_log.read_runs(project)] == [recorded]
 
 
 def test_cli_finds_registry_above_working_directory(project, run_log_on, opting_blacklist, monkeypatch):

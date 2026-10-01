@@ -8,7 +8,9 @@ Layout, under ``<project>/.metaquest/runs/`` (the project is the folder holding 
   reading, with one warning.
 - ``<run_id>.json``: the detail of one run (larger tables a command passes through ``note_run``),
   written atomically. Only the last ``DETAILS_KEPT_PER_COMMAND`` detail files of each command are
-  kept; a pruned run keeps its line in ``runs.jsonl`` with ``"detail": null``.
+  kept; a pruned run keeps its line in ``runs.jsonl`` with ``"detail": null`` (and any key a later
+  schema added to the line). A detail file written for an append that then failed names no line
+  and so is never pruned; it is left in the folder.
 
 ``main`` records a run after the command returns, when the command's ``records_run`` is true, the
 ``run_log`` setting is on and a registry file exists; a failure to record is logged as a warning and
@@ -215,8 +217,15 @@ def _parse_lines(text: str) -> Tuple[List[Tuple[str, Optional[RunRecord]]], int]
 
 
 def _read_text(path: Path) -> str:
+    """The log's text, "" when it does not exist yet.
+
+    A byte that is not UTF-8 is replaced (U+FFFD) rather than raised, so one damaged line never
+    stops a reader or the next append: outside a JSON string it makes the line fail parsing, and
+    the line is skipped like one cut short; inside a string the line is read with the replacement
+    character, which a later rewrite of the log by pruning keeps in place of the byte.
+    """
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return ""
 
@@ -242,8 +251,11 @@ def _prune_details(folder: Path, log: Path, command: str) -> None:
     lines = []
     for line, record in parsed:
         if record is not None and record.run_id in pruned_ids:
-            record.detail = None
-            line = json.dumps(record.to_dict(), sort_keys=True)
+            # The line's own JSON is edited, not re-serialised through RunRecord, so keys a later
+            # schema adds to a line are carried through.
+            data = json.loads(line)
+            data["detail"] = None
+            line = json.dumps(data, sort_keys=True)
         lines.append(line)
     # The log is rewritten before the files go, so no line ever names a removed file for long.
     write_text_atomic(log, "\n".join(lines) + "\n", fsync=True)

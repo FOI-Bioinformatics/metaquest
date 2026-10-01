@@ -317,6 +317,10 @@ def main(args: Optional[List[str]] = None) -> int:
     exit_code = 1
     try:
         exit_code = _run_command(parsed_args)
+    except SystemExit as e:
+        # Recorded with the code the process exits with: an int as given, None as 0, else 1.
+        exit_code = 0 if e.code is None else e.code if isinstance(e.code, int) else 1
+        raise
     finally:
         _record_run_if_wanted(parsed_args, argv, started, clock, exit_code)
     return exit_code

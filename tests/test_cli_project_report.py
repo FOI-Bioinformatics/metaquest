@@ -220,3 +220,15 @@ def test_no_fastq_folder_is_listed(project, monkeypatch):
     assert listed == [os.path.abspath(project)]
     assert _run() == 0
     assert not [path for path in listed if path == fastq or path.startswith(fastq + os.sep)]
+
+
+def test_a_byte_that_is_not_utf8_in_the_run_log_still_gives_a_report(project, caplog):
+    log = project / ".metaquest" / "runs" / "runs.jsonl"
+    assert log.is_file()
+    with open(log, "ab") as handle:
+        handle.write(b"\xff damaged line\n")
+    with caplog.at_level(logging.WARNING):
+        assert _run("--html", "never") == 0
+    report = json.loads((project / "project_report" / "project_report.json").read_text())
+    assert report["runs"]["runs"]
+    assert "unreadable line" in caplog.text

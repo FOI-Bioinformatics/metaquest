@@ -7,12 +7,13 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 ### Added
 
 - A per-project run log. A command that keeps one appends a record of each run to
-  `<project>/.metaquest/runs/runs.jsonl`: the command, its arguments with the NCBI API key masked, start and
-  finish times in UTC, run time, exit code, MetaQuest version, host, process ID and a summary of counts and
-  totals. Larger per-accession results go to `<run_id>.json` beside it, and the last 10 of these files are kept
-  per command; an older run keeps its line without one. The record is written only where a project registry
-  exists, also after an interrupt, and a run log that cannot be written is a warning that never changes the
-  command's exit code (`data/run_log.py`).
+  `<project>/.metaquest/runs/runs.jsonl`: the command, its arguments with the NCBI API key masked, start and finish
+  times in UTC, run time, exit code, MetaQuest version, host, process ID and a summary of counts and totals. Larger
+  per-accession results go to `<run_id>.json` beside it, and the last 10 of these files are kept per command; an
+  older run keeps its line without one. The record is written only where a project registry exists, also after an
+  interrupt (exit code 130) or a `SystemExit` (its own code), a line that cannot be read (cut short, or holding a
+  byte that is not UTF-8) is skipped with a warning, and a run log that cannot be written is a warning that never
+  changes the command's exit code (`data/run_log.py`).
 - The `run_log` setting (`METAQUEST_RUN_LOG`, `[runtime] run_log`, default true) turns the run log off.
 - `download_sra`, `sra_profile`, `sra_report`, `results_table`, `extract_target_reads`, `store_verify`,
   `project_report`, `select_datasets`, `blacklist` and `status --init`/`--reconcile` add a record of each run to the

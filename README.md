@@ -353,15 +353,16 @@ with file sizes and dates, which analyses ran, and for each target genome the nu
 and the assembly statistics. Commands update it as they finish; `status` reads it and always
 re-checks the disk, so a deleted folder shows up as missing rather than done.
 
-The registry keeps the latest outcome of each step. A command that keeps a run log also adds one
-record per run to `.metaquest/runs/runs.jsonl` beside the registry: the command, its arguments, start
-and finish times in UTC, run time, exit code, MetaQuest version, host, process ID and a short summary
-of what the run did. A run with larger results also writes them to `.metaquest/runs/<run_id>.json`;
-the last 10 of these files are kept per command, and an older run keeps its line without one. The
-NCBI API key is replaced by `***` in what is recorded. Nothing is written in a folder without a
-registry, a run log that cannot be written is reported as a warning without changing the command's
-exit code, and `METAQUEST_RUN_LOG=false` (or `run_log = false` under `[runtime]` in the config file)
-turns the run log off.
+The registry keeps the latest outcome of each step. A command that keeps a run log also adds one record
+per run to `.metaquest/runs/runs.jsonl` beside the registry: the command, its arguments, start and
+finish times in UTC, run time, exit code, MetaQuest version, host, process ID and a short summary of
+what the run did. A run with larger results also writes them to `.metaquest/runs/<run_id>.json`; the
+last 10 of these files are kept per command, and an older run keeps its line without one. The NCBI API
+key is replaced by `***` in what is recorded. A line that cannot be read (cut short by an interrupted
+append, or holding a byte that is not UTF-8) is skipped with a warning. Nothing is written in a folder
+without a registry, a run log that cannot be written is reported as a warning without changing the
+command's exit code, and `METAQUEST_RUN_LOG=false` (or `run_log = false` under `[runtime]` in the config
+file) turns the run log off.
 
 The commands that keep a run log are `download_sra`, `sra_profile`, `sra_report`, `results_table`,
 `extract_target_reads`, `store_verify`, `project_report`, `select_datasets`, `blacklist`, and `status`

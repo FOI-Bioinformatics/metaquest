@@ -406,12 +406,18 @@ def test_read_only_invocations_record_nothing(project, capsys):
     assert _no_runs(project)
 
 
-def test_a_records_run_override_that_raises_keeps_the_exit_code(project, caplog):
+@pytest.mark.parametrize("error", [AttributeError("no such argument"), KeyError("missing")])
+@pytest.mark.parametrize(
+    "argv, code",
+    [(["blacklist", "--add", "SRR9", "--reason", "host reads"], 0), (["blacklist", "--add", "SRR9"], 1)],
+    ids=["exits-0", "fails"],
+)
+def test_a_records_run_override_that_raises_keeps_the_exit_code(project, caplog, error, argv, code):
     def broken(self, args):
-        raise AttributeError("no such argument")
+        raise error
 
     with patch("metaquest.cli.commands.blacklist.BlacklistCommand.records_run", broken):
-        assert main(["blacklist", "--add", "SRR9", "--reason", "host reads"]) == 0
+        assert main(argv) == code
     assert _no_runs(project)
     assert "not recorded in the run log" in caplog.text
 
