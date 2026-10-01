@@ -20,9 +20,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   run log. Per-accession results are kept in the run's detail file, one row per accession (per accession and genome
   for `extract_target_reads`), so `runs --diff` and `runs --accession` can compare them: download failures with
   reason and attempts and downloaded accessions with time and attempts, profile and report figures, mapped reads
-  with breadth and mean depth, store verdicts and fixes, and selection ranks. Dry runs, `blacklist --list`, plain
-  `status`, `doctor` and `runs` record nothing, and for `results_table`, `select_datasets` and `project_report`,
-  `--no-record` also leaves the run out of the run log.
+  with breadth and mean depth (a sample skipped as already extracted with its recorded values and `skipped: true`),
+  store verdicts and fixes, and selection ranks. Dry runs, `blacklist --list`, plain `status`, `doctor` and `runs`
+  record nothing, and for `results_table`, `select_datasets` and `project_report`, `--no-record` also leaves the run
+  out of the run log.
 - `runs` (Environment group) reads the run log. It lists recent runs (`--limit`, default 20, 0 for all;
   `--command`), shows one run (`--show RUN`), compares two runs (`--diff RUN_A RUN_B`: every summary value with
   the difference for numbers, then the detail rows added, removed and changed) and follows one accession across

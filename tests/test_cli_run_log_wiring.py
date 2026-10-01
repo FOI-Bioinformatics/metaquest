@@ -264,6 +264,35 @@ def test_extract_target_reads_records_one_row_per_accession_and_genome(project):
     assert detail == {"extractions": {"SRR1/G1": {"mapped_reads": 7, "breadth": 0.5, "mean_depth": 2.25}}}
 
 
+def test_extract_target_reads_notes_a_skipped_sample_with_its_recorded_values(project, capsys):
+    assert _extract(project) == 0
+    seen = {}
+
+    def skipping(**kwargs):
+        seen.update(kwargs["already_done"])
+        result = ExtractionResult(files=[project / "targeted" / "G1" / "SRR1_1.fastq"], mapped_records=7, skipped=True)
+        kwargs["on_result"]("SRR1", result)
+        return {"SRR1": result}
+
+    argv = ["extract_target_reads", "--parsed-containment", "parsed_containment.txt", "--genome-id", "G1"]
+    argv += ["--genome-fasta", "g1.fasta", "--threshold", "0.1"]
+    with patch("metaquest.cli.commands.read_extraction.extract_target_reads", side_effect=skipping):
+        assert main(argv) == 0
+    assert "SRR1" in seen
+    latest = run_log.read_runs(project, "extract_target_reads")[-1]
+    assert latest.summary["skipped"] == 1
+    detail = run_log.read_detail(project, latest)
+    assert detail == {
+        "extractions": {"SRR1/G1": {"mapped_reads": 7, "breadth": 0.5, "mean_depth": 2.25, "skipped": True}}
+    }
+    # runs --diff no longer reads the skipped sample as removed.
+    capsys.readouterr()
+    assert main(["runs", "--command", "extract_target_reads", "--diff", "previous", "latest", "--json"]) == 0
+    diff = json.loads(capsys.readouterr().out)["detail"]
+    assert diff["removed"] == [] and diff["added"] == []
+    assert diff["changed"] == {"SRR1/G1": {"skipped": [None, True]}}
+
+
 def test_extract_target_reads_dry_run_records_nothing(project):
     assert _extract(project, "--dry-run") == 0
     assert _no_runs(project)

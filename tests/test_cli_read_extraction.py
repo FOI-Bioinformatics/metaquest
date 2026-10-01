@@ -1500,8 +1500,8 @@ class TestExtractTargetReadsCommand:
             seen = []
             original = cmd._record_result
 
-            def spy(args_, accession, outcome, store=None, timing=None):
-                original(args_, accession, outcome, store, timing)
+            def spy(args_, accession, outcome, *rest):
+                original(args_, accession, outcome, *rest)
                 seen.append(accession)
                 if len(seen) == 1:
                     args_._termination.stop.set()

@@ -384,17 +384,25 @@ class ExtractTargetReadsCommand(BaseCommand):
         outcome: ExtractionResult,
         store: Optional[StorePaths] = None,
         timing: Optional[Tuple[str, float]] = None,
+        recorded: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         """Checkpoint one extraction result, with its ``(started, seconds)`` timing when given.
 
-        Skipped samples are already recorded, and their recorded timing is left alone.
+        Skipped samples are already recorded, and their recorded timing is left alone; the run
+        log still gets a row for one, with the values recorded before this run (``recorded``, the
+        run's snapshot of the recorded extractions) and ``skipped: true``, so a later
+        ``runs --diff`` does not read the sample as removed.
         """
+        key = f"{accession}/{args.genome_id}"
         if outcome.skipped:
+            before = (recorded or {}).get(accession) or {}
+            row = {field: before.get(field) for field in ("mapped_reads", "breadth", "mean_depth")}
+            run_log.note_rows(args, {key: {**row, "skipped": True}}, "extractions")
             return
         coverage = outcome.coverage or {}
         row = {"mapped_reads": outcome.mapped_records, "breadth": coverage.get("breadth")}
         row["mean_depth"] = coverage.get("mean_depth")
-        run_log.note_rows(args, {f"{accession}/{args.genome_id}": row}, "extractions")
+        run_log.note_rows(args, {key: row}, "extractions")
         index_dir = Path(args.output_folder) / ".index"
         with registry_transaction(args.registry) as reg:
             record_extraction(
@@ -433,8 +441,11 @@ class ExtractTargetReadsCommand(BaseCommand):
         store: Optional[StorePaths],
         clock: Optional[Stopwatch] = None,
         progress: Optional[ProgressReporter] = None,
+        recorded: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         """Checkpoint one sample, count it on ``progress``, then stop the run if a signal arrived.
+
+        ``recorded`` is the run's snapshot of the recorded extractions (see ``_record_result``).
 
         ``clock`` times each sample from the moment the previous one was checkpointed (or the
         extraction started) until its result arrives here: the time ``extract_target_reads``
@@ -451,7 +462,7 @@ class ExtractTargetReadsCommand(BaseCommand):
         ``extract_target_reads``'s ``samples`` list is never started.
         """
         timing = clock.lap() if clock is not None else None
-        self._record_result(args, accession, outcome, store, timing)
+        self._record_result(args, accession, outcome, store, timing, recorded)
         if progress is not None:
             if outcome.skipped:
                 state = "skipped"
@@ -580,7 +591,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                     force=args.force,
                     already_done=already_done,
                     on_result=lambda accession, outcome: self._record_result_and_check_stop(
-                        args, accession, outcome, store, clock, progress
+                        args, accession, outcome, store, clock, progress, already_done
                     ),
                     min_mapq=args.min_mapq,
                     temp_folder=setting_for(args, "temp_folder"),
