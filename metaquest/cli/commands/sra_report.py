@@ -237,6 +237,8 @@ class SRAReportCommand(BaseCommand):
                 summary = {
                     "quality_grade": profile.quality_grade,
                     "gc_percent": profile.gc_percent,
+                    "total_reads": profile.total_reads,
+                    "total_bases": profile.total_bases,
                     "group": group_of.get(accession),
                     "anomalous": accession in anomalies.anomalous_datasets,
                 }
@@ -264,6 +266,10 @@ class SRAReportCommand(BaseCommand):
             # Fail on a missing extra before any profiling or output, not after the JSON is written.
             require("plotly.graph_objects", "interactive", "The sra_report HTML report")
             require("jinja2", "interactive", "The sra_report HTML report")
+        if args.groups_file:
+            # Needed for the comparison's statistical tests; checked here (whether or not
+            # --no-report is given) so a missing scipy fails at once rather than after profiling.
+            require("scipy.stats", "analysis", "Comparing dataset groups (--groups-file)")
         groups = load_groups(args.groups_file) if args.groups_file else None
         saved = self._saved_profiles(args.quality_profiles)
         accessions = self._resolve_accessions(args, groups, saved)

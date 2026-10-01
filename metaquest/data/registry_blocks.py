@@ -23,6 +23,7 @@ Values are passed through without coercion, so an integer stays an integer and a
 from __future__ import annotations
 
 from dataclasses import MISSING, Field, dataclass, field, fields
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -510,18 +511,32 @@ def _analysis_summary(registry: Registry, accession: str, name: str) -> Dict[str
     return AnalysisEntry.from_dict(raw).summary if isinstance(raw, dict) else {}
 
 
-def profile_summary(registry: Registry, accession: str) -> Dict[str, Any]:
-    """``total_reads``, ``gc_percent`` and ``quality_grade`` from ``accession``'s profile analysis.
+def _analysis_entry(registry: Registry, accession: str, name: str) -> Optional[AnalysisEntry]:
+    """``accession``'s analysis ``name`` as a typed entry (date and summary), or None if unrecorded."""
+    raw = (registry.datasets.get(accession, {}).get("analyses") or {}).get(name)
+    return AnalysisEntry.from_dict(raw) if isinstance(raw, dict) else None
 
-    ``sra_profile`` records the ``"profile"`` analysis (GC in percent). A registry written before
-    0.5.0 holds the ``"sra_stats"`` analysis (GC already in percent) and the ``"quality"`` one of
-    ``sra_profile_quality`` (GC as a 0-1 fraction, the grade under ``grade``); those are read when
-    there is no ``"profile"`` analysis, ``sra_stats`` first for totals and GC. Fields that no
-    analysis recorded are None.
+
+def _recency(date: str) -> float:
+    """A sortable recency score for ``date`` (``datetime.fromisoformat``); unparsable text is oldest."""
+    try:
+        return datetime.fromisoformat(date).timestamp()
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _quality_fields(entry: AnalysisEntry) -> Dict[str, Any]:
+    """``total_reads``, ``gc_percent`` and ``quality_grade`` out of one analysis entry's summary."""
+    return {key: entry.summary.get(key) for key in ("total_reads", "gc_percent", "quality_grade")}
+
+
+def _legacy_quality_summary(registry: Registry, accession: str) -> Tuple[Dict[str, Any], bool]:
+    """``total_reads``, ``gc_percent`` and ``quality_grade`` from a pre-0.5.0 registry, and whether either existed.
+
+    A registry written before 0.5.0 holds the ``"sra_stats"`` analysis (GC already in percent) and
+    the ``"quality"`` one of ``sra_profile_quality`` (GC as a 0-1 fraction, the grade under
+    ``"grade"``); ``sra_stats`` is read first for totals and GC.
     """
-    new = _analysis_summary(registry, accession, "profile")
-    if new:
-        return {key: new.get(key) for key in ("total_reads", "gc_percent", "quality_grade")}
     stats = _analysis_summary(registry, accession, "sra_stats")
     quality = _analysis_summary(registry, accession, "quality")
     quality_gc = quality.get("gc_content")
@@ -529,11 +544,55 @@ def profile_summary(registry: Registry, accession: str) -> Dict[str, Any]:
     if gc_percent is None and quality_gc is not None:
         gc_percent = quality_gc * 100
     total_reads = stats.get("total_reads")
-    return {
+    summary = {
         "total_reads": total_reads if total_reads is not None else quality.get("total_reads"),
         "gc_percent": gc_percent,
         "quality_grade": quality.get("grade"),
     }
+    return summary, bool(stats) or bool(quality)
+
+
+def quality_summary(registry: Registry, accession: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """``total_reads``, ``gc_percent`` and ``quality_grade`` for ``accession``, and where they came from.
+
+    ``sra_profile`` records the ``"profile"`` analysis; ``sra_report`` records ``"report"``, which
+    also carries these three fields. Whichever is newer by ``datetime.fromisoformat`` (an
+    unparsable date counts as the oldest; equal dates favour ``"profile"``) supplies the result,
+    with any field it leaves ``None`` filled in from the other one when both exist. When neither
+    exists, the pre-0.5.0 ``"sra_stats"``/``"quality"`` analyses are read instead (see
+    ``_legacy_quality_summary``). The second element of the pair names the source used:
+    ``"profile"``, ``"report"``, ``"legacy"``, or None when nothing was ever recorded (every
+    field is then None too).
+    """
+    profile_entry = _analysis_entry(registry, accession, "profile")
+    report_entry = _analysis_entry(registry, accession, "report")
+    if profile_entry is not None or report_entry is not None:
+        primary: AnalysisEntry
+        secondary: Optional[AnalysisEntry]
+        source: str
+        if profile_entry is not None and report_entry is not None:
+            if _recency(profile_entry.date) >= _recency(report_entry.date):
+                primary, secondary, source = profile_entry, report_entry, "profile"
+            else:
+                primary, secondary, source = report_entry, profile_entry, "report"
+        elif profile_entry is not None:
+            primary, secondary, source = profile_entry, None, "profile"
+        else:
+            assert report_entry is not None  # the outer `or` guarantees this
+            primary, secondary, source = report_entry, None, "report"
+        primary_fields = _quality_fields(primary)
+        secondary_fields = _quality_fields(secondary) if secondary is not None else {}
+        summary = {
+            key: value if value is not None else secondary_fields.get(key) for key, value in primary_fields.items()
+        }
+        return summary, source
+    legacy, found = _legacy_quality_summary(registry, accession)
+    return legacy, ("legacy" if found else None)
+
+
+def profile_summary(registry: Registry, accession: str) -> Dict[str, Any]:
+    """``total_reads``, ``gc_percent`` and ``quality_grade`` for ``accession``; see ``quality_summary``."""
+    return quality_summary(registry, accession)[0]
 
 
 def project_block(registry: Registry) -> ProjectBlock:

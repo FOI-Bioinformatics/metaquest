@@ -158,6 +158,82 @@ def test_mark_inferred_leaves_an_unrecorded_block_alone():
     assert registry.datasets == {}
 
 
+# ------------------------------------------------------------ quality_summary
+
+
+def _analyses(registry, accession, **named):
+    """Set ``accession``'s "analyses" map directly, one ``name=(date, summary)`` pair per entry."""
+    analyses = {name: {"date": date, "output": "", "summary": summary} for name, (date, summary) in named.items()}
+    registry.datasets.setdefault(accession, {})["analyses"] = analyses
+
+
+def test_quality_summary_only_report_recorded_fills_gc_and_grade():
+    registry = R.Registry()
+    _analyses(
+        registry,
+        "SRR1",
+        report=("2026-02-01T00:00:00+00:00", {"total_reads": 500, "gc_percent": 41.5, "quality_grade": "good"}),
+    )
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 500, "gc_percent": 41.5, "quality_grade": "good"}
+    assert source == "report"
+    assert B.profile_summary(registry, "SRR1") == summary
+
+
+def test_quality_summary_newer_report_wins_and_fills_none_from_profile():
+    registry = R.Registry()
+    _analyses(
+        registry,
+        "SRR1",
+        profile=("2026-01-01T00:00:00+00:00", {"total_reads": 100, "gc_percent": 30.0, "quality_grade": "fair"}),
+        report=("2026-02-01T00:00:00+00:00", {"total_reads": None, "gc_percent": 45.0, "quality_grade": "good"}),
+    )
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 100, "gc_percent": 45.0, "quality_grade": "good"}
+    assert source == "report"
+
+
+def test_quality_summary_equal_dates_favour_profile():
+    registry = R.Registry()
+    _analyses(
+        registry,
+        "SRR1",
+        profile=("2026-03-01T00:00:00+00:00", {"total_reads": 200, "gc_percent": 50.0, "quality_grade": "excellent"}),
+        report=("2026-03-01T00:00:00+00:00", {"total_reads": 999, "gc_percent": 10.0, "quality_grade": "poor"}),
+    )
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 200, "gc_percent": 50.0, "quality_grade": "excellent"}
+    assert source == "profile"
+
+
+def test_quality_summary_unparsable_date_counts_as_oldest():
+    registry = R.Registry()
+    _analyses(
+        registry,
+        "SRR1",
+        profile=("not-a-date", {"total_reads": 200, "gc_percent": 50.0, "quality_grade": "excellent"}),
+        report=("2026-03-01T00:00:00+00:00", {"total_reads": 999, "gc_percent": 10.0, "quality_grade": "poor"}),
+    )
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 999, "gc_percent": 10.0, "quality_grade": "poor"}
+    assert source == "report"
+
+
+def test_quality_summary_legacy_only_when_neither_profile_nor_report_exists():
+    registry = R.Registry()
+    R.record_analysis(registry, "SRR1", "sra_stats", "s.csv", {"total_reads": 900, "gc_content": 52.0})
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 900, "gc_percent": 52.0, "quality_grade": None}
+    assert source == "legacy"
+
+
+def test_quality_summary_none_when_nothing_was_ever_recorded():
+    registry = R.Registry()
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": None, "gc_percent": None, "quality_grade": None}
+    assert source is None
+
+
 def _mask(value):
     """Timestamps and compressed file sizes differ between runs; everything else must not."""
     if isinstance(value, dict):

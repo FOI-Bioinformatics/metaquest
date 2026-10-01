@@ -251,6 +251,33 @@ def test_a_missing_interactive_extra_fails_before_any_work_or_output(tmp_path, m
     assert not (tmp_path / "metaquest_registry.json").exists()
 
 
+@pytest.mark.parametrize("no_report", [False, True])
+def test_a_missing_analysis_extra_fails_before_any_work_with_groups_file(tmp_path, monkeypatch, caplog, no_report):
+    """--groups-file needs scipy (for the statistical tests); checked up front, not after profiling."""
+    import sys
+
+    _datasets(tmp_path, ("SRR1", "SRR2"))
+    monkeypatch.setitem(sys.modules, "scipy", None)
+    with patch.object(SRADatasetAnalyzer, "profile_dataset_quality") as profile_call:
+        with caplog.at_level(logging.ERROR):
+            args = _args(tmp_path, groups_file=_groups_file(tmp_path), no_report=no_report)
+            assert SRAReportCommand().execute(args) == 3
+    profile_call.assert_not_called()
+    assert "metaquest[analysis]" in caplog.text
+    assert not (tmp_path / "reports").exists()
+    assert not (tmp_path / "metaquest_registry.json").exists()
+
+
+def test_without_groups_file_a_missing_scipy_does_not_matter(tmp_path, monkeypatch):
+    """scipy is only needed for the group comparison; a plain report must not require it."""
+    import sys
+
+    _datasets(tmp_path, ("SRR1",))
+    monkeypatch.setitem(sys.modules, "scipy", None)
+    profiles = _saved_profiles(tmp_path, ("SRR1",))
+    assert SRAReportCommand().execute(_args(tmp_path, quality_profiles=profiles)) == 0
+
+
 def test_the_report_is_opened_unless_no_open(tmp_path):
     _datasets(tmp_path, ("SRR1",))
     accessions = tmp_path / "acc.txt"
@@ -267,7 +294,7 @@ def test_registry_summary_names_group_grade_and_gc_percent(tmp_path):
         "summary"
     ]
     assert summary["group"] == "B"
-    assert set(summary) == {"quality_grade", "gc_percent", "group", "anomalous"}
+    assert set(summary) == {"quality_grade", "gc_percent", "group", "anomalous", "total_reads", "total_bases"}
 
 
 # ---------------------------------------------------------------------------
