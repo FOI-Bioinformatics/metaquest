@@ -57,7 +57,9 @@ def _instrumented(
     returns or raises. Each call the worker makes
     is timed into ``timings[accession] = (started, seconds)``, written in the worker thread
     before the result reaches the main thread's ``on_result``, so a later attempt overwrites an
-    earlier one. ``guard`` or ``timings`` may be None to skip that part.
+    earlier one; a refused attempt removes the entry, so a refusal in the retry pass is not
+    recorded with the time of the first pass's attempt. ``guard`` or ``timings`` may be None to
+    skip that part.
     """
 
     def _run(accession: str, *args: Any, **kwargs: Any) -> Tuple[bool, str]:
@@ -71,6 +73,8 @@ def _instrumented(
                     accession,
                     refusal,
                 )
+                if timings is not None:
+                    timings.pop(accession, None)
                 return False, refusal
         started = datetime.now(timezone.utc)
         clock = time.monotonic()

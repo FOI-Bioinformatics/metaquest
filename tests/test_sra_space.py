@@ -470,3 +470,22 @@ class TestCommand:
         assert "CPUs available to this job" in text
         assert "METAQUEST_MAX_WORKERS_CAP" in text
         assert "--min-free-gb" in text
+
+
+def test_a_refused_retry_drops_the_first_attempt_time(tmp_path):
+    """The first pass times a failed attempt; the guard refuses the retry; no time is left for it."""
+    guard = Mock()
+    calls = {"reserve": 0}
+
+    def reserve(acc, **kwargs):
+        calls["reserve"] += 1
+        return None if calls["reserve"] == 1 else "interrupted"
+
+    guard.reserve.side_effect = reserve
+    worker = Mock(return_value=(False, "network: connection reset"))
+    timings = {}
+    retry_mod._download_with_retries(
+        ["SRR1"], tmp_path, 1, 1, False, None, 1, downloader=worker, guard=guard, timings=timings
+    )
+    assert worker.call_count == 1
+    assert "SRR1" not in timings

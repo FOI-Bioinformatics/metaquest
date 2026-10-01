@@ -403,7 +403,8 @@ class ExtractTargetReadsCommand(BaseCommand):
         ``clock`` times each sample from the moment the previous one was checkpointed (or the
         extraction started) until its result arrives here: the time ``extract_target_reads``
         spent on it, a module held at a frozen line ceiling, so it is measured from this side.
-        The first sample that needs mapping also includes building the minimap2 index.
+        The first sample also includes reading the containment table and selecting the samples,
+        and the first that needs mapping the building of the minimap2 index.
 
         Checked here -- the boundary between one sample finishing and the next starting --
         rather than inside ``extract_target_reads``'s loop, a module held at a frozen line
@@ -587,7 +588,8 @@ class ExtractTargetReadsCommand(BaseCommand):
             finally:
                 if uses_default_tmp_dir:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-            # megahit's own run time; None when it did not run (an assembly already on disk).
+            # megahit's own run time (and its scratch removal), not the contig summary or the
+            # coverage mapping below; None when it did not run (an assembly already on disk).
             started, seconds = watch.lap() if ran else (None, None)
             if not ran and not args.force:
                 # Loaded once per call, on the first sample megahit skipped: only this loop

@@ -1404,6 +1404,41 @@ class TestStoreLinkCommand:
         assert registry.datasets["SRR1"]["download"]["source"] == "store"
         assert registry.store["linked"] == ["SRR1"]
 
+    def test_link_and_unlink_clear_an_earlier_download_time(self, tmp_path, monkeypatch):
+        """A linked or removed dataset was not downloaded by this project: no download time is kept."""
+        from metaquest.data.registry import record_download, registry_transaction
+        from metaquest.data.registry_timing import set_download_timing
+
+        root = tmp_path / "store"
+        paths = init_store(root)
+        _write_fastq_gz(sra_dir(paths, "SRR1") / "SRR1.fastq.gz")
+        sidecar = _sidecar("SRR1")
+        write_sidecar(sidecar_path(paths, "SRR1"), sidecar)
+        with catalog_write(paths) as cat:
+            cat.upsert_dataset(sidecar)
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+        registry_path = project_dir / "metaquest_registry.json"
+        fastq_dir = project_dir / "fastq"
+
+        def timed_failure():
+            with registry_transaction(registry_path) as reg:
+                record_download(reg, "SRR1", "failed", fastq_dir, "network: reset")
+                set_download_timing(reg, "SRR1", "2026-10-01T10:00:00+00:00", 42.0)
+
+        timed_failure()
+        link_args = _link_args(["SRR1"], data_root=str(root), registry=str(registry_path), fastq_folder=str(fastq_dir))
+        assert StoreLinkCommand().execute(link_args) == 0
+        assert "seconds" not in load_registry(registry_path).datasets["SRR1"]["download"]
+
+        with registry_transaction(registry_path) as reg:
+            set_download_timing(reg, "SRR1", "2026-10-01T10:00:00+00:00", 42.0)
+        unlink_args = _unlink_args(["SRR1"], registry=str(registry_path), fastq_folder=str(fastq_dir))
+        assert StoreUnlinkCommand().execute(unlink_args) == 0
+        download = load_registry(registry_path).datasets["SRR1"]["download"]
+        assert download["state"] == "missing" and "seconds" not in download and "started" not in download
+
     def test_link_copies_sidecar_completeness_and_records_usage(self, tmp_path, monkeypatch):
         """A linked accession's registry record carries the store sidecar's completeness
         verdict, and the store catalogue gets a 'linked' usage row for this project."""

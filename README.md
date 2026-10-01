@@ -372,7 +372,8 @@ export in the project registry when one exists, and does not create a registry w
 The last three columns, `download_seconds`, `extraction_seconds` and `assembly_seconds`, are the
 recorded run times, empty where a step was not timed (data recorded before 0.7.0, or a dataset linked
 from the store). The extraction time of a sample is measured from the end of the previous sample, so
-for the first sample it includes building the minimap2 index; the assembly time is the megahit run.
+for the first sample it includes reading the containment table and building the minimap2 index; the
+assembly time is the megahit run alone, without the contig summary and the coverage mapping.
 `status --json` summarises the same times under `timing` (counts, totals and medians), the text report
 adds one timing line when anything was timed, and `status --export-tsv` adds the same columns.
 

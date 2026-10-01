@@ -352,6 +352,7 @@ class DownloadSraCommand(BaseCommand):
         if (rb.download_block(reg, acc) or rb.DownloadBlock()).state == "downloaded":
             return
         record_download(reg, acc, "skipped", fastq_dir, message)
+        set_download_timing(reg, acc, None, None)
 
     def _record_run_outcomes(
         self, args: argparse.Namespace, stats: dict, fastq_dir: Path, store: Optional[StorePaths] = None

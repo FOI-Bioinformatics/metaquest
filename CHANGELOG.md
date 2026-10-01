@@ -63,9 +63,11 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   --report-file` has a trailing `seconds` column, `results_table` ends with `download_seconds`,
   `extraction_seconds` and `assembly_seconds`, `status --json` has a `timing` block (counts, totals
   and medians), the text report one timing line, and `status --export-tsv` the same columns. An
-  extraction's time runs from the previous sample's checkpoint, so the first sample's includes building
-  the minimap2 index; an assembly's time is the megahit run. A failed download attempt's time is
-  recorded too and counted in the totals.
+  extraction's time runs from the previous sample's checkpoint, so the first sample's includes reading
+  the containment table and building the minimap2 index; an assembly's time is the megahit run alone,
+  without the contig summary and the coverage mapping. A failed download attempt's time is recorded
+  too and counted in the totals; a time left on a `missing` or `skipped` download block is not, and
+  `store_link`, `store_unlink` and a skip clear it.
 - `pypi`, a second job in the release workflow (`.github/workflows/release.yml`), publishes the
   distribution the `build` job already produces to PyPI via PyPI's trusted-publisher mechanism (no
   token in the repository). It only runs once the repository variable `PYPI_PUBLISH` is set to

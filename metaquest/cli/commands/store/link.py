@@ -11,6 +11,7 @@ from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_comple
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry, record_download, registry_transaction, update_linked
+from metaquest.data.registry_timing import set_download_timing
 from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
 from metaquest.store.resolve import resolve_store_root
@@ -132,6 +133,8 @@ class StoreLinkCommand(BaseCommand):
                         source="store",
                         store_name=accession,
                     )
+                    # Linked, not downloaded: an earlier download time of this project is not kept.
+                    set_download_timing(reg, accession, None, None)
                 for accession in linked:
                     update_linked(reg, accession, add=True)
                 usage_registry = reg
@@ -193,6 +196,7 @@ class StoreUnlinkCommand(BaseCommand):
             with registry_transaction(args.registry) as reg:
                 for accession in removed:
                     record_download(reg, accession, "missing", args.fastq_folder, attempt=False)
+                    set_download_timing(reg, accession, None, None)
                 for accession in removed:
                     update_linked(reg, accession, add=False)
 

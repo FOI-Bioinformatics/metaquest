@@ -102,6 +102,34 @@ def test_stopwatch_laps(monkeypatch):
     assert watch.lap()[1] == 7.5
 
 
+def test_timing_summary_counts_only_downloaded_or_failed_blocks(tmp_path):
+    r = _registry(tmp_path)
+    set_download_timing(r, "SRR1", "t", 5.0)
+    for acc, state in (("SRR2", "missing"), ("SRR3", "skipped")):
+        reg.record_download(r, acc, state, tmp_path / "fastq", "x")
+        set_download_timing(r, acc, "t", 42.0)
+    summary = timing_summary(r)
+    assert summary["downloads_timed"] == 1 and summary["download_seconds_total"] == 5.0
+
+
+def test_empty_totals_are_floats(tmp_path):
+    summary = timing_summary(_registry(tmp_path))
+    totals = [value for key, value in summary.items() if key.endswith("_seconds_total")]
+    assert totals == [0.0, 0.0, 0.0] and all(isinstance(value, float) for value in totals)
+    assert json.dumps(summary["download_seconds_total"]) == "0.0"
+
+
+def test_record_skip_clears_an_earlier_attempt_time(tmp_path):
+    from metaquest.cli.commands.sra import DownloadSraCommand
+
+    r = _registry(tmp_path)
+    reg.record_download(r, "SRR2", "failed", tmp_path / "fastq", "x")
+    set_download_timing(r, "SRR2", "t", 3.0)
+    DownloadSraCommand._record_skip(r, "SRR2", "blacklisted", tmp_path / "fastq")
+    block = r.datasets["SRR2"]["download"]
+    assert block["state"] == "skipped" and "seconds" not in block and "started" not in block
+
+
 def test_timing_summary(tmp_path):
     r = _registry(tmp_path)
     assert timing_summary(r) == {

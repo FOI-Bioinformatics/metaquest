@@ -18,6 +18,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry
 
+# Download states whose recorded time describes an attempt that ran; status counts only these.
+TIMED_DOWNLOAD_STATES = ("downloaded", "failed")
+
 
 def _apply(block: rb.RegistryBlock, started: Optional[str], seconds: Optional[float]) -> None:
     """Set ``started`` and ``seconds`` on ``block``, or remove both when both are None."""
@@ -102,7 +105,7 @@ def _summarise(prefix: str, plural: str, values: List[float]) -> Dict[str, Any]:
     """The count, total and median of ``values`` under the keys ``status`` reports."""
     return {
         f"{plural}_timed": len(values),
-        f"{prefix}_seconds_total": round(sum(values), 3),
+        f"{prefix}_seconds_total": round(float(sum(values)), 3),
         f"{prefix}_seconds_median": round(statistics.median(values), 3) if values else None,
     }
 
@@ -111,13 +114,17 @@ def timing_summary(registry: Registry) -> Dict[str, Any]:
     """How many downloads, extractions and assemblies have a recorded time, with the total and median.
 
     Keys are ``downloads_timed``, ``download_seconds_total`` and ``download_seconds_median``, and
-    the same for ``extractions`` and ``assemblies``. A median is None when nothing is timed.
+    the same for ``extractions`` and ``assemblies``. A median is None when nothing is timed. Only a
+    download block whose state is ``downloaded`` or ``failed`` counts: a ``seconds`` left on a
+    ``missing`` or ``skipped`` block by a registry written before the writers cleared it is not.
     """
     downloads: List[float] = []
     extractions: List[float] = []
     assemblies: List[float] = []
     for record in registry.datasets.values():
-        value = _seconds(record.get("download"))
+        download = record.get("download")
+        timed = isinstance(download, dict) and download.get("state") in TIMED_DOWNLOAD_STATES
+        value = _seconds(download) if timed else None
         if value is not None:
             downloads.append(value)
         for extraction in (record.get("extractions") or {}).values():
