@@ -197,30 +197,40 @@ def _apply_quiet_and_verbose(parser: argparse.ArgumentParser, args: argparse.Nam
 
 
 # Flags whose value must not reach a log file shared with other users.
-SECRET_FLAGS = ("--api-key",)
+def _is_secret_flag(item: str) -> bool:
+    """Whether ``item`` is a secret setting's flag (``--api-key``) or an abbreviation of it (``--api-k``)."""
+    secret_flags = [spec.flag for spec in settings.SETTINGS.values() if spec.secret and spec.flag]
+    return len(item) > 2 and item.startswith("--") and any(flag.startswith(item) for flag in secret_flags)
 
 
-def _masked_argv(argv: List[str]) -> List[str]:
-    """``argv`` with the value of every secret flag replaced by ``***``."""
+def _masked_argv(argv: List[str], parsed: Optional[argparse.Namespace] = None) -> List[str]:
+    """``argv`` with the value of every secret setting's flag replaced by ``***``.
+
+    A value is hidden after the flag or any abbreviation argparse accepts for it, and wherever
+    it appears as a whole argument when the parsed namespace holds it under the setting's dest.
+    """
+    secrets = set()
+    for spec in settings.SETTINGS.values():
+        value = getattr(parsed, spec.cli_dest, None) if spec.secret and spec.cli_dest else None
+        if value:
+            secrets.add(str(value))
     masked: List[str] = []
     hide_next = False
     for item in argv:
-        if hide_next:
+        flag, equals, value = item.partition("=")
+        if hide_next or item in secrets:
             masked.append("***")
-            hide_next = False
-        elif item in SECRET_FLAGS:
-            masked.append(item)
-            hide_next = True
-        elif item.split("=", 1)[0] in SECRET_FLAGS and "=" in item:
-            masked.append(item.split("=", 1)[0] + "=***")
+        elif equals and (_is_secret_flag(flag) or (flag.startswith("--") and value in secrets)):
+            masked.append(f"{flag}=***")
         else:
             masked.append(item)
+        hide_next = not hide_next and not equals and _is_secret_flag(item)
     return masked
 
 
-def _log_run_header(argv: List[str]) -> None:
+def _log_run_header(argv: List[str], parsed: Optional[argparse.Namespace] = None) -> None:
     """Log, at DEBUG, what identifies this run in a shared log: version, arguments, host, PID, SLURM IDs."""
-    logging.debug("MetaQuest v%s: %s", __version__, " ".join(["metaquest", *_masked_argv(argv)]))
+    logging.debug("MetaQuest v%s: %s", __version__, " ".join(["metaquest", *_masked_argv(argv, parsed)]))
     logging.debug("Host %s, process ID %d", socket.gethostname(), os.getpid())
     slurm = [f"{name}={os.environ[name]}" for name in ("SLURM_JOB_ID", "SLURM_ARRAY_TASK_ID") if os.environ.get(name)]
     if slurm:
@@ -287,7 +297,7 @@ def main(args: Optional[List[str]] = None) -> int:
         return failed
     for message in runtime.warnings:
         logging.getLogger("metaquest.core.settings").warning(message)
-    _log_run_header(argv)
+    _log_run_header(argv, parsed_args)
     logging.debug("Runtime settings (value and source):\n  %s", "\n  ".join(runtime.describe()))
 
     try:

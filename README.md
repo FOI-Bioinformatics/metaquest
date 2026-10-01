@@ -793,7 +793,7 @@ ID and, under SLURM, `SLURM_JOB_ID` and `SLURM_ARRAY_TASK_ID`. `METAQUEST_LOG_HO
 
 `download_sra`, `download_metadata` and `extract_target_reads` log a progress summary every
 `--progress-every` items (50 by default) and at least every 5 minutes while items are finishing, then
-one closing line with the totals and the time taken:
+one closing line with the totals and the time taken (for `download_sra`, after the retry pass):
 
 ```
 download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left

@@ -129,9 +129,15 @@ class ProgressReporter:
                 self._last_line_done = self.done
                 self._log(self._summary())
 
-    def finish(self) -> None:
-        """Log the closing line (once, and only when at least one item was counted)."""
+    def finish(self, ok: Optional[int] = None, failed: Optional[int] = None) -> None:
+        """Log the closing line (once, and only when at least one item was counted).
+
+        ``ok`` and ``failed``, when given, replace the counts first: the final tally after a
+        retry pass that turned some failures into successes.
+        """
         with self._lock:
+            if ok is not None and failed is not None:
+                self.ok, self.failed = ok, failed
             if self._finished or self.done == 0:
                 return
             self._finished = True

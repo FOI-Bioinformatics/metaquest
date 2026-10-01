@@ -7,7 +7,7 @@ whichever comes first) and one at the end; the line for each item moves to DEBUG
 
 import logging
 import threading
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -269,3 +269,51 @@ def test_download_metadata_request_lines_follow_the_progress_setting(tmp_path, c
         metadata_mod._download_single_metadata("SRR3", tmp_path, "a@b.c", None)
     requests = [r for r in caplog.records if r.getMessage().startswith("Downloading metadata for")]
     assert len(requests) == 2 and all(r.levelno == level for r in requests)
+
+
+# --- fix wave: settings read before work starts, closing line after the retry pass ------------
+
+
+def test_a_bad_progress_setting_stops_downloads_before_any_starts(tmp_path, monkeypatch):
+    from metaquest.core.exceptions import ConfigurationError
+    from metaquest.data.sra import retry as retry_mod
+
+    monkeypatch.setenv("METAQUEST_PROGRESS_EVERY", "abc")
+    worker = MagicMock(return_value=(True, "ok"))
+    with pytest.raises(ConfigurationError, match="METAQUEST_PROGRESS_EVERY"):
+        retry_mod._download_with_retries(["SRR1", "SRR2"], tmp_path, 1, 2, False, None, 1, downloader=worker)
+    worker.assert_not_called()
+
+
+def test_a_bad_progress_setting_stops_metadata_before_any_request(tmp_path, monkeypatch):
+    from metaquest.core.exceptions import ConfigurationError
+
+    monkeypatch.setenv("METAQUEST_PROGRESS_EVERY", "abc")
+    with patch("metaquest.data.metadata._download_batch_metadata") as batch:
+        with pytest.raises(ConfigurationError):
+            metadata_mod._download_accessions_metadata(["SRR1"], tmp_path, "a@b.c", 1)
+    batch.assert_not_called()
+
+
+def test_download_closing_line_follows_the_retry_pass(tmp_path, caplog):
+    from metaquest.data.sra import retry as retry_mod
+
+    attempts = {}
+
+    def flaky(accession, *args, **kwargs):
+        attempts[accession] = attempts.get(accession, 0) + 1
+        if accession == "SRR2" and attempts[accession] == 1:
+            return False, "network: connection reset"
+        return True, "Downloaded 2 files"
+
+    with caplog.at_level(logging.INFO):
+        successful, failed_count, *_ = retry_mod._download_with_retries(
+            ["SRR1", "SRR2"], tmp_path, 1, 2, False, None, 1, downloader=flaky
+        )
+    assert (successful, failed_count) == (2, 0)
+    messages = [r.getMessage() for r in caplog.records]
+    closing = [i for i, m in enumerate(messages) if m.startswith("download_sra: finished")]
+    assert len(closing) == 1
+    assert messages[closing[0]].startswith("download_sra: finished 2/2 (2 ok, 0 failed)")
+    retry_line = next(i for i, m in enumerate(messages) if m.startswith("Retry attempt"))
+    assert retry_line < closing[0]

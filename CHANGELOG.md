@@ -23,7 +23,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - Progress summaries for `download_sra`, `download_metadata` and `extract_target_reads`: one line every
   `--progress-every N` items (default 50; also `METAQUEST_PROGRESS_EVERY` or `progress_every` in
   `[runtime]`) and at least every 5 minutes, such as `download_sra: 150/2000 done (148 ok, 2 failed),
-  3.1/min, about 9 h 57 min left`, and a closing line with the totals and the time taken.
+  3.1/min, about 9 h 57 min left`, and a closing line with the totals and the time taken (for
+  `download_sra`, after the retry pass, so it counts the accessions a retry fetched).
 - Free-space check for `download_sra`: before each accession starts, the filesystems it writes to (FASTQ
   or store `tmp` folder, `fasterq-dump` temporary folder, `.sra` cache) must have room for it, counting
   the downloads already running. An accession with a registry run size needs 8 times that size for its
@@ -138,8 +139,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   or fetch a DTD, so XXE does not apply to them. It is not hardened against entity expansion the way
   `SAFE_PARSER` is; those sites parse small responses fetched directly from NCBI, not stored files, and
   that remaining risk is accepted there.
-- The `--api-key` value is replaced by `***` in the command line logged at DEBUG, and shown as `(set)` in
-  the settings list and in `doctor`.
+- The `--api-key` value is replaced by `***` in the command line logged at DEBUG, also when the flag is
+  abbreviated (`--api-k`), and shown as `(set)` in the settings list and in `doctor`.
 
 ### Fixed
 

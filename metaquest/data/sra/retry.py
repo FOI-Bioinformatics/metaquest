@@ -320,8 +320,13 @@ def _execute_parallel_downloads(
     compress: bool = True,
     downloader: Optional[Callable[..., Tuple[bool, str]]] = None,
     stop: Optional[threading.Event] = None,
+    progress: Optional[ProgressReporter] = None,
 ):
     """Download accessions concurrently and tally results. Returns (successful, failed).
+
+    ``progress`` counts each result; when None a reporter is made here (before the first
+    download starts, so a setting that does not parse stops the run first) and finished at the
+    end of this pass. A caller that passes one logs its closing line itself, after a retry pass.
 
     ``downloader`` replaces ``download_accession`` when the project reads through a shared
     store; it takes the same arguments so the tally, retries and callbacks are unchanged.
@@ -348,6 +353,8 @@ def _execute_parallel_downloads(
     abort_reason: Optional[str] = None
     not_attempted: Set[str] = set()
     worker = downloader or accession_mod.download_accession
+    finish_here = progress is None
+    every = settings.active().progress_every  # read before the first download starts
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         try:
             futures = {
@@ -368,7 +375,8 @@ def _execute_parallel_downloads(
                 ): acc
                 for acc in accessions
             }
-            progress = _progress_reporter(len(futures))
+            if progress is None:
+                progress = ProgressReporter(PROGRESS_LABEL, len(futures), every, logger=logger)
             for future in as_completed(futures):
                 acc = futures[future]
                 if acc in not_attempted:
@@ -389,7 +397,8 @@ def _execute_parallel_downloads(
             SecureSubprocess.terminate_children(stop=stop)
             raise
 
-    progress.finish()
+    if finish_here and progress is not None:
+        progress.finish()
     successful, failed = _process_download_results(futures_results, accessions, download_results, failed_accessions)
     return successful, failed, abort_reason
 
@@ -483,6 +492,8 @@ def _download_with_retries(
     failed_accessions: list = []
     download_results: dict = {}
     worker = _instrumented(downloader or accession_mod.download_accession, guard, timings)
+    # Read before any download starts; its closing line follows the retry pass.
+    progress = _progress_reporter(len(accessions_to_download))
     successful_count, failed_count, abort_reason = _execute_parallel_downloads(
         accessions_to_download,
         fastq_path,
@@ -501,6 +512,7 @@ def _download_with_retries(
         compress,
         worker,
         stop=stop,
+        progress=progress,
     )
 
     if max_retries > 0 and failed_accessions and abort_reason is None:
@@ -525,5 +537,5 @@ def _download_with_retries(
         failed_count -= retried_successful
         if retried_successful > 0:
             logger.info(f"Successfully downloaded {retried_successful} accessions on retry")
-
+    progress.finish(ok=successful_count, failed=failed_count)
     return successful_count, failed_count, failed_accessions, download_results, abort_reason

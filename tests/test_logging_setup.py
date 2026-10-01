@@ -235,3 +235,25 @@ def test_the_logged_arguments_hide_the_api_key(caplog):
     with caplog.at_level(logging.DEBUG):
         _log_run_header(["download_metadata", "--api-key", "SECRET1", "--email", "a@b.c"])
     assert "SECRET1" not in caplog.text and "--api-key ***" in caplog.text
+
+
+@pytest.mark.parametrize("flag", [["--api-k", "SECRETKEY1"], ["--api=SECRETKEY1"], ["--api-key", "SECRETKEY1"]])
+def test_an_abbreviated_api_key_flag_is_masked_too(tmp_path, caplog, flag):
+    from metaquest.cli.main import main
+
+    with patch("metaquest.cli.main.setup_logging"), caplog.at_level(logging.DEBUG):
+        main(["-v", "download_metadata", *flag, "--email", "a@b.c", "--matches-folder", str(tmp_path / "none")])
+    assert "MetaQuest v" in caplog.text
+    assert "SECRETKEY1" not in caplog.text
+
+
+def test_masking_without_a_namespace_covers_abbreviations():
+    from metaquest.cli.main import _masked_argv
+
+    assert _masked_argv(["--api-k", "K1", "--api=K2", "--email", "a@b.c"]) == [
+        "--api-k",
+        "***",
+        "--api=***",
+        "--email",
+        "a@b.c",
+    ]
