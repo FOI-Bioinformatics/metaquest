@@ -9,6 +9,7 @@ import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
+from metaquest.cli.commands.sra_verdicts import linked_verdict, present_verdicts, registry_inputs
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
@@ -20,7 +21,6 @@ from metaquest.data.registry import (
     Registry,
     load_registry,
     project_root,
-    query,
     record_download,
     update_linked,
 )
@@ -358,7 +358,12 @@ class DownloadSraCommand(BaseCommand):
         set_download_timing(reg, acc, None, None)
 
     def _record_run_outcomes(
-        self, args: argparse.Namespace, stats: dict, fastq_dir: Path, store: Optional[StorePaths] = None
+        self,
+        args: argparse.Namespace,
+        stats: dict,
+        fastq_dir: Path,
+        store: Optional[StorePaths] = None,
+        expected_spots: Optional[Dict[str, int]] = None,
     ) -> None:
         """Record the outcomes the download loop could not report, in one registry transaction.
 
@@ -368,9 +373,11 @@ class DownloadSraCommand(BaseCommand):
         Every already-downloaded accession the shared store backs is also recorded as
         ``"linked"`` usage in the store catalogue, in one batched write after the registry
         write (``record_usage_many``) rather than one lock per accession, using the registry
-        that write produced.
+        that write produced. An already-downloaded accession in a folder of its own without a
+        ``downloaded`` record (``present_verdicts``) is verified against ``expected_spots`` first.
         """
         usage_rows = []
+        spots = expected_spots or {}
         # Store links and sidecar verdicts are read here, before the batch writes, so the one
         # registry lock is never held across thousands of reads on a slow filesystem.
         present = []
@@ -379,10 +386,17 @@ class DownloadSraCommand(BaseCommand):
             present.append((acc, from_store, self._sidecar_completeness(store, acc) if from_store else None))
             if from_store:
                 usage_rows.append((acc, "", "linked", "already downloaded"))
+        local = [acc for acc, from_store, _ in present if not from_store]
+        verdicts = present_verdicts(fastq_dir, local, load_registry(args.registry), spots) if local and spots else {}
         with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
             for acc, from_store, complete in present:
                 mutation = functools.partial(
-                    self._record_present, acc=acc, fastq_dir=fastq_dir, from_store=from_store, complete=complete
+                    self._record_present,
+                    acc=acc,
+                    fastq_dir=fastq_dir,
+                    from_store=from_store,
+                    complete=verdicts.get(acc) if complete is None else complete,
+                    spots=spots.get(acc),
                 )
                 batch.apply(mutation, label=acc)
             for acc in stats.get("blacklisted_accessions", []):
@@ -396,16 +410,26 @@ class DownloadSraCommand(BaseCommand):
             record_usage_many(store, usage_registry, usage_rows)
 
     @staticmethod
-    def _record_present(reg: Registry, acc: str, fastq_dir: Path, from_store: bool, complete: Optional[dict]) -> None:
+    def _record_present(
+        reg: Registry,
+        acc: str,
+        fastq_dir: Path,
+        from_store: bool,
+        complete: Optional[dict],
+        spots: Optional[int] = None,
+    ) -> None:
         """Record an accession found already downloaded, unless its record already says so.
 
-        ``complete`` is the store sidecar's completeness verdict for a store-linked accession,
-        read by the caller before the registry lock is taken.
+        ``complete`` is the store sidecar's completeness verdict for a store-linked accession (merged
+        with the one on file by ``linked_verdict``, against ``spots``), or ``present_verdicts``'s for
+        one in a folder of its own; the caller reads either before the registry lock is taken.
         """
         if from_store:
             ensure_project_identity(reg)
         if (rb.download_block(reg, acc) or rb.DownloadBlock()).state == "downloaded":
             return
+        if from_store and complete is not None:
+            complete = linked_verdict(rb.download_verdict(reg, acc), complete, spots)
         record_download(
             reg,
             acc,
@@ -455,6 +479,7 @@ class DownloadSraCommand(BaseCommand):
         store: Optional[StorePaths],
         batch: RegistryBatch,
         timings: Optional[Timings] = None,
+        expected_spots: Optional[Dict[str, int]] = None,
     ) -> Callable[[str, bool, str], None]:
         """The callback the download loop uses to record each accession's outcome.
 
@@ -473,9 +498,12 @@ class DownloadSraCommand(BaseCommand):
 
         ``timings`` is the dict ``download_sra`` fills before each ``on_result`` call; the
         attempt's start and seconds are recorded with the outcome, and a dataset linked from
-        the store, which no download produced, has any earlier time removed.
+        the store, which no download produced, has any earlier time removed. A store dataset whose
+        message carries no verdict records ``linked_verdict`` of the sidecar's against the one on
+        file, with ``expected_spots`` (``registry_inputs``'s counts) as the spot count.
         """
         timings = timings if timings is not None else {}
+        spot_counts = expected_spots or {}
         usage_rows: List[Tuple[str, str, str, str]] = []
 
         def _record_usage(reg: Registry) -> None:
@@ -499,16 +527,16 @@ class DownloadSraCommand(BaseCommand):
             if from_store:
                 usage_rows.append((accession, "", "linked" if linked else "downloaded", message))
             complete = parse_verdict_message(message) if success else None
-            if complete is None and from_store:
-                # "linked from store" carries no verify-download message of its own; the store's
-                # sidecar already has the completeness verdict from when the dataset was
-                # originally downloaded. Read here, outside the registry lock a flush takes.
-                complete = self._sidecar_completeness(store, accession)
+            # A store link's message has no verdict; its sidecar's is read here, outside the flush's lock.
+            sidecar = self._sidecar_completeness(store, accession) if complete is None and from_store else None
             started, seconds = self._attempt_timing(accession, success, message, timings) or (None, None)
 
             def _mutation(reg: Registry) -> None:
                 if from_store:
                     ensure_project_identity(reg)
+                verdict = complete
+                if sidecar is not None:
+                    verdict = linked_verdict(rb.download_verdict(reg, accession), sidecar, spot_counts.get(accession))
                 record_download(
                     reg,
                     accession,
@@ -516,7 +544,7 @@ class DownloadSraCommand(BaseCommand):
                     fastq_dir,
                     message,
                     attempt=not linked,
-                    complete=complete,
+                    complete=verdict,
                     source="store" if from_store else None,
                     store_name=accession if from_store else None,
                 )
@@ -597,38 +625,6 @@ class DownloadSraCommand(BaseCommand):
             "lock_wait": setting_for(args, "lock_wait"),
         }
 
-    @staticmethod
-    def _registry_inputs(args: argparse.Namespace, project_registry: Registry) -> Tuple[set, dict, set, dict]:
-        """The excluded accessions, expected spot counts, truncated accessions and run sizes in the registry.
-
-        All four are empty for a dry run. Expected spot counts are only collected with
-        ``--verify-downloads`` (the default), and truncated accessions only with
-        ``--redownload-truncated``. Run sizes (NCBI's ``.sra`` size in bytes) feed the
-        free-space guard; an accession without one needs ``--min-free-gb`` instead.
-        """
-        excluded: set = set()
-        expected_spots: dict = {}
-        truncated: set = set()
-        run_sizes: dict = {}
-        if args.dry_run:
-            return excluded, expected_spots, truncated, run_sizes
-        excluded = set(query(project_registry, "excluded"))
-        verify = getattr(args, "verify_downloads", True)
-        for acc in project_registry.datasets:
-            metadata = rb.metadata_block(project_registry, acc) or rb.MetadataBlock()
-            if verify and metadata.run_total_spots is not None:
-                expected_spots[acc] = metadata.run_total_spots
-            if metadata.run_size is not None:
-                run_sizes[acc] = metadata.run_size
-        if getattr(args, "redownload_truncated", False):
-            truncated = {
-                acc
-                for acc in project_registry.datasets
-                if (verdict := rb.download_verdict(project_registry, acc)) is not None
-                and verdict.verdict == "truncated"
-            }
-        return excluded, expected_spots, truncated, run_sizes
-
     def _download_batched(
         self,
         args: argparse.Namespace,
@@ -637,6 +633,7 @@ class DownloadSraCommand(BaseCommand):
         project_registry: Registry,
         max_workers: int,
         timings: Optional[Timings] = None,
+        inputs: Optional[tuple] = None,
     ) -> Optional[dict]:
         """Run ``download_sra`` with its outcomes queued in a registry batch; return its statistics.
 
@@ -646,11 +643,11 @@ class DownloadSraCommand(BaseCommand):
         records nothing, so its batch never writes. A final flush that fails with
         ``DataAccessError`` is retried once; None means the retry failed too, after the outcomes
         still queued have been logged. ``timings`` receives each download attempt's start and
-        seconds.
+        seconds; ``inputs`` is ``registry_inputs``'s result, computed here when not given.
         """
         timings = timings if timings is not None else {}
         verify_downloads = getattr(args, "verify_downloads", True)
-        excluded, expected_spots, truncated, run_sizes = self._registry_inputs(args, project_registry)
+        excluded, expected_spots, truncated, run_sizes = inputs or registry_inputs(args, project_registry, store)
         on_result = None
         batch = registry_batch(args.registry)
         body_done = False
@@ -661,7 +658,7 @@ class DownloadSraCommand(BaseCommand):
         try:
             with _termination_raises_interrupt(run_term.stop if run_term is not None else None) as term, batch:
                 if not args.dry_run:
-                    on_result = self._result_recorder(args, fastq_dir, store, batch, timings)
+                    on_result = self._result_recorder(args, fastq_dir, store, batch, timings, expected_spots)
                 download_stats = download_sra(
                     fastq_folder=args.fastq_folder,
                     accessions_file=args.accessions_file,
@@ -739,13 +736,16 @@ class DownloadSraCommand(BaseCommand):
             project_registry = load_registry(args.registry)
             store = self._resolve_store(args, project_registry)
             timings: Timings = {}
-            download_stats = self._download_batched(args, fastq_dir, store, project_registry, max_workers, timings)
+            inputs = registry_inputs(args, project_registry, store)
+            download_stats = self._download_batched(
+                args, fastq_dir, store, project_registry, max_workers, timings, inputs
+            )
             if download_stats is None:
                 return 1
             if args.dry_run:
                 self._log_dry_run_summary(args, download_stats)
             else:
-                self._record_run_outcomes(args, download_stats, fastq_dir, store)
+                self._record_run_outcomes(args, download_stats, fastq_dir, store, inputs[1])
                 self._warn_if_transient_bytes_large(args, fastq_dir, store)
 
                 if args.report_file:
