@@ -14,6 +14,7 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data.sra import accession as accession_mod
 from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
+from metaquest.data.sra import spots as spots_mod
 from metaquest.utils.lockfile import LockLost, verify_held
 
 logger = logging.getLogger(__name__)
@@ -34,37 +35,149 @@ STORE_READY_STATES = ("complete", "unverified")
 STORE_LINKED_PREFIX = "linked from store"
 
 
-def _metadata_xml(folders, accession: str) -> Optional[Path]:
-    """The first ``<accession>_metadata.xml`` found in ``folders``, or None."""
+def _xml_folders(folders, store) -> List[Union[str, Path]]:
+    """The folders that may hold ``<ACC>_metadata.xml``: ``folders`` (one, several or None), then the store's."""
     if folders is None:
         candidates: List[Union[str, Path]] = []
     elif isinstance(folders, (str, Path)):
         candidates = [folders]
     else:
         candidates = list(folders)
-    for folder in candidates:
+    if store is not None:
+        candidates.append(store.metadata)
+    return candidates
+
+
+def _metadata_xml(folders, accession: str) -> Optional[Path]:
+    """The first ``<accession>_metadata.xml`` found in ``folders``, or None."""
+    for folder in _xml_folders(folders, None):
         xml = Path(folder) / f"{accession}_metadata.xml"
         if xml.is_file():
             return xml
     return None
 
 
-def _store_state(store, accession: str) -> str:
+def _given_spots(value) -> Optional[int]:
+    """``value`` as a positive int, or None when it is missing, zero or not a whole number."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _resolve_expected_spots(accession: str, store, store_metadata, given) -> Optional[int]:
+    """The spot count a store download of ``accession`` is judged against.
+
+    ``given`` is the caller's count (the project registry's ``run_total_spots``); without one,
+    ``metaquest.data.sra.spots.expected_spots`` looks in the store sidecar and then in the
+    metadata XML folders, the same lookup order every other caller uses.
+    """
+    spots = _given_spots(given)
+    if spots is not None:
+        return spots
+    return spots_mod.expected_spots(None, accession, store=store, xml_folders=_xml_folders(store_metadata, store))
+
+
+def _read_store_sidecar(store, accession: str):
+    """The sidecar of the store's copy of ``accession``, or None when there is none to read."""
+    from metaquest.store.layout import sidecar_path
+    from metaquest.store.sidecar import read_sidecar
+
+    path = sidecar_path(store, accession)
+    return read_sidecar(path) if path.is_file() else None
+
+
+def _short_unverified(sidecar, expected_spots: Optional[int]) -> bool:
+    """True when a ready but unverified sidecar records fewer reads than ``expected_spots`` allows.
+
+    Uses the sidecar's ``reads_per_mate`` only, so no FASTQ file is read. A copy downloaded
+    before its spot count was known is recorded as ``unverified``; once a count is known, the
+    same verdict computation as a fresh download (``verdict_for_count``) decides whether it is short.
+    """
+    if sidecar is None or sidecar.state not in STORE_READY_STATES:
+        return False
+    if (sidecar.completeness or {}).get("verdict") not in (None, "unverified"):
+        return False
+    return spots_mod.verdict_for_count(sidecar.reads_per_mate, expected_spots)["verdict"] == "truncated"
+
+
+def _store_state(store, accession: str, expected_spots: Optional[int] = None) -> str:
     """What the store holds for ``accession``: ``ready``, ``incomplete`` or ``absent``.
 
     ``incomplete`` covers a sidecar recording a partial, failed or in-progress download, and
     also files sitting there with no sidecar at all, which is what an interrupted run leaves
-    behind and cannot be trusted without re-fetching.
+    behind and cannot be trusted without re-fetching. With ``expected_spots``, a ready copy
+    whose sidecar is ``unverified`` but records fewer reads than that count allows is
+    ``incomplete`` too.
     """
     from metaquest.store.layout import sidecar_path, sra_dir
-    from metaquest.store.sidecar import read_sidecar
 
-    sidecar_file = sidecar_path(store, accession)
-    if sidecar_file.is_file():
-        sidecar = read_sidecar(sidecar_file)
+    if sidecar_path(store, accession).is_file():
+        sidecar = _read_store_sidecar(store, accession)
         state = sidecar.state if sidecar else None
-        return "ready" if state in STORE_READY_STATES else "incomplete"
+        if state not in STORE_READY_STATES or _short_unverified(sidecar, expected_spots):
+            return "incomplete"
+        return "ready"
     return "incomplete" if fastq_mod.fastq_files(sra_dir(store, accession)) else "absent"
+
+
+def _reverify_sidecar(store, accession: str, expected_spots: int) -> None:
+    """Record a short ``unverified`` store copy as ``partial`` against ``expected_spots``.
+
+    The caller holds the dataset lock. The verdict comes from the sidecar's ``reads_per_mate``
+    (no FASTQ file is read); ``ncbi.spots`` is filled in when the sidecar had none. The sidecar
+    is rewritten atomically by ``write_sidecar`` and the catalogue row updated (never raises).
+    """
+    from metaquest.store.layout import sidecar_path
+    from metaquest.store.sidecar import write_sidecar
+
+    sidecar = _read_store_sidecar(store, accession)
+    if sidecar is None:
+        return
+    verdict = spots_mod.verdict_for_count(sidecar.reads_per_mate, expected_spots)
+    if not sidecar.ncbi.get("spots"):
+        sidecar.ncbi = {**sidecar.ncbi, "spots": expected_spots}
+    sidecar.completeness = {"method": verdict["method"], "ratio": verdict["ratio"], "verdict": verdict["verdict"]}
+    sidecar.state = "partial" if verdict["verdict"] == "truncated" else "complete"
+    write_sidecar(sidecar_path(store, accession), sidecar)
+    _catalogue_published(store, sidecar)
+    logger.warning(
+        "%s: the store copy holds %s of %s spots; recorded as %s",
+        accession,
+        sidecar.reads_per_mate,
+        expected_spots,
+        sidecar.state,
+    )
+
+
+def _spot_text(count: Optional[int]) -> str:
+    """A spot or read count for a message, ``unknown`` when it is not recorded."""
+    return "unknown" if count is None else str(count)
+
+
+def _incomplete_message(accession: str, sidecar) -> str:
+    """The result message for a store copy that is kept for resuming but not linked."""
+    reads = sidecar.reads_per_mate if sidecar is not None else None
+    spots = _given_spots(sidecar.ncbi.get("spots")) if sidecar is not None else None
+    return (
+        f"incomplete: {accession} store copy holds {_spot_text(reads)} of {_spot_text(spots)} spots; "
+        "kept for --resume-partial; rerun with --accept-partial to use it"
+    )
+
+
+def _drop_store_link(project_fastq: Path, accession: str, store) -> None:
+    """Remove the project's symlink to ``accession`` when it points into the store.
+
+    Called when the store's copy is not complete enough to link, so an earlier link never
+    presents partial data as present. A real folder (the project's own reads) is never removed.
+    """
+    from metaquest.store.link import is_store_link, unlink_dataset
+
+    if is_store_link(Path(project_fastq) / accession, store) and unlink_dataset(project_fastq, accession):
+        logger.info("Removed the project link to the incomplete store copy of %s", accession)
 
 
 def _link_result(accession: str, project_fastq: Path, store, link_mode: str, note: str) -> Tuple[bool, str]:
@@ -82,20 +195,63 @@ def _store_precheck(
     link_mode: str,
     accept_partial: bool,
     resume_partial: bool,
+    expected_spots: Optional[int] = None,
+    locked: bool = False,
 ) -> Optional[Tuple[bool, str]]:
     """Decide what the store alone can settle for ``accession``, without any network call.
 
     Returns a result when the dataset is already usable (linked), or when it is incomplete
-    and the caller asked not to resume it; returns None when it must be downloaded.
+    and the caller asked not to resume it; returns None when it must be downloaded. A ready
+    copy that is ``unverified`` but short against ``expected_spots`` is incomplete: with
+    ``locked`` (the caller holds the dataset lock) its sidecar is rewritten as ``partial``
+    first; without the lock this returns None so the decision is taken again under it.
     """
-    state = _store_state(store, accession)
+    if expected_spots is not None and _short_unverified(_read_store_sidecar(store, accession), expected_spots):
+        if not locked:
+            return None
+        _reverify_sidecar(store, accession, expected_spots)
+    state = _store_state(store, accession, expected_spots)
     if state == "ready":
         return _link_result(accession, project_fastq, store, link_mode, "")
     if state == "incomplete" and not resume_partial:
         if accept_partial:
             return _link_result(accession, project_fastq, store, link_mode, " (partial)")
+        _drop_store_link(project_fastq, accession, store)
         return False, f"partial in store; rerun with --resume-partial to finish {accession}"
     return None
+
+
+def _publish_decision(previous, new) -> str:
+    """Whether a freshly built store copy (``new`` sidecar) replaces the published one (``previous``).
+
+    Returns ``"publish"`` or ``"keep_previous"``: a refetch that comes back worse never replaces
+    a better copy. A ``failed`` result never replaces a copy that is not itself ``failed``; a
+    ``complete`` result always publishes; otherwise a copy with fewer reads per mate (judged
+    against the same spot count) than the published one is kept out. Without a previous
+    sidecar, or over a ``failed`` one, the new copy is published.
+    """
+    if previous is None:
+        return "publish"
+    if new.state == "failed":
+        return "publish" if previous.state == "failed" else "keep_previous"
+    if previous.state == "failed" or new.state == "complete":
+        return "publish"
+    if previous.reads_per_mate is not None and new.reads_per_mate is not None:
+        if new.reads_per_mate < previous.reads_per_mate:
+            return "keep_previous"
+    return "publish"
+
+
+def _keep_previous(
+    accession: str, project_fastq: Path, store, link_mode: str, accept_partial: bool, previous
+) -> Tuple[bool, str]:
+    """Hand over the published store copy that a worse refetch did not replace."""
+    if previous.state in STORE_READY_STATES:
+        return _link_result(accession, project_fastq, store, link_mode, " (kept the earlier copy)")
+    if accept_partial:
+        return _link_result(accession, project_fastq, store, link_mode, " (partial)")
+    _drop_store_link(project_fastq, accession, store)
+    return False, _incomplete_message(accession, previous)
 
 
 def _catalogue_published(store, sidecar) -> bool:
@@ -135,6 +291,7 @@ def _store_fetch(
     store,
     link_mode: str,
     store_metadata,
+    accept_partial: bool = False,
     **download_kwargs,
 ) -> Tuple[bool, str]:
     """Download ``accession`` into the store, describe it, and link the project to it.
@@ -145,6 +302,13 @@ def _store_fetch(
     into ``sra/<ACC>`` with one rename, so that folder never holds an unverified or
     sidecar-less dataset for another project to find, and an existing copy is replaced only
     once its replacement is complete.
+
+    The sidecar's ``ncbi.spots`` comes from the metadata XML, or from ``expected_spots`` (the
+    registry's count, in ``download_kwargs``) when the XML records none. A refetch that comes
+    back worse than the published copy is discarded (``_publish_decision``). A copy that is not
+    ready (``partial`` or ``failed``) is published so ``--resume-partial`` can finish it, but it
+    is linked only with ``accept_partial``; otherwise any project link to it is removed and the
+    result is ``(False, "incomplete: ...")``.
     """
     from metaquest.store.layout import lock_path, sra_dir
     from metaquest.store.link import link_dataset
@@ -189,15 +353,37 @@ def _store_fetch(
     compression = "gzip" if any(path.name.endswith(".gz") for path in files) else "none"
     xml = _metadata_xml(store_metadata, accession) or _metadata_xml(store.metadata, accession)
     ncbi = ncbi_from_metadata_xml(xml) if xml is not None else {}
+    registry_spots = _given_spots(download_kwargs.get("expected_spots"))
+    if not ncbi.get("spots") and registry_spots is not None:
+        ncbi = {**ncbi, "spots": registry_spots}
 
     sidecar = build_sidecar(accession, staged, ncbi, accession_mod.fasterq_dump_version(), compression)
     write_sidecar(staged / f"{accession}.json", sidecar)
     # A holder stalled past the stale window may have lost the lock to another project, which
     # then owns the staged folder too: publish nothing, and leave that folder to its new owner.
     verify_held(lock_path(store, accession))
+
+    previous = _read_store_sidecar(store, accession) if replacing else None
+    if previous is not None and _publish_decision(previous, sidecar) == "keep_previous":
+        logger.warning(
+            "%s: the new download (%s, %s reads per mate) is not more complete than the store copy "
+            "(%s, %s reads per mate); keeping the store copy",
+            accession,
+            sidecar.state,
+            _spot_text(sidecar.reads_per_mate),
+            previous.state,
+            _spot_text(previous.reads_per_mate),
+        )
+        cleanup_mod._safe_rmtree(staged)
+        return _keep_previous(accession, project_fastq, store, link_mode, accept_partial, previous)
+
     cleanup_mod.publish_folder(staged, target, store.tmp)
 
     catalogued = _catalogue_published(store, sidecar)
+
+    if sidecar.state not in STORE_READY_STATES and not accept_partial:
+        _drop_store_link(project_fastq, accession, store)
+        return False, _incomplete_message(accession, sidecar)
 
     link_dataset(project_fastq, accession, store, mode=link_mode)
     suffix = "; stored" if catalogued else "; catalogue pending; stored"
@@ -240,19 +426,41 @@ def _store_download(
         directory.mkdir(parents=True, exist_ok=True)
 
     try:
+        # One spot count decides completeness everywhere below: the precheck, the download's
+        # own verdict message, and the sidecar of a fresh copy.
+        expected = _resolve_expected_spots(accession, store, store_metadata, download_kwargs.get("expected_spots"))
+        download_kwargs["expected_spots"] = expected
+        precheck = functools.partial(
+            _store_precheck,
+            accession,
+            project_path,
+            store,
+            link_mode,
+            accept_partial,
+            resume_partial,
+            expected_spots=expected,
+        )
         if not force:
-            settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
+            settled = precheck()
             if settled is not None:
                 return settled
 
         should_stop = functools.partial(accession_mod.stop_requested, stop)
         with dataset_lock(store, accession, wait_seconds=lock_wait, should_stop=should_stop):
             if not force:
-                settled = _store_precheck(accession, project_path, store, link_mode, accept_partial, resume_partial)
+                settled = precheck(locked=True)
                 if settled is not None:
                     return settled
             return _store_fetch(
-                accession, project_path, store, link_mode, store_metadata, force=force, stop=stop, **download_kwargs
+                accession,
+                project_path,
+                store,
+                link_mode,
+                store_metadata,
+                accept_partial=accept_partial,
+                force=force,
+                stop=stop,
+                **download_kwargs,
             )
     except LockWaitStopped:
         logger.info(f"Stopped waiting for the store lock on {accession}: the run was interrupted")
