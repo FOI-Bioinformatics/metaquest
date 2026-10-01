@@ -10,8 +10,10 @@ progress release their reservations waits for them; one that would not fit even 
 on its own (``insufficient-space: ...``) and the rest of the run goes on.
 
 The estimate for an accession with a known run size (NCBI's ``.sra`` size, from the project
-registry) is ``FASTQ_EXPANSION`` times that size for the output folder and again for the
-temporary folder, plus the ``.sra`` size for the cache when ``prefetch`` is used. Needs of
+registry) is ``FASTQ_EXPANSION`` plus ``GZIP_EXPANSION`` times that size for the output folder
+(compression writes each ``.gz`` before it removes the uncompressed file, so both are there
+together), ``FASTQ_EXPANSION`` times for the temporary folder (an assumption: equal to the
+output, not measured), plus the ``.sra`` size for the cache when ``prefetch`` is used. Needs of
 locations that share a filesystem are added. An accession without a known size needs
 ``floor_bytes`` (``--min-free-gb``) on each filesystem instead. A filesystem whose free space
 cannot be read is assumed to have room, as ``store_adopt`` does: refusing on an unreadable
@@ -39,6 +41,9 @@ logger = logging.getLogger(__name__)
 # test store (Illumina paired-end, 2x150 bp): 6.98, 7.28, 7.33, 7.34, 7.63, 7.69 and 7.73;
 # rounded up to the next whole number.
 FASTQ_EXPANSION = 8
+# gzip-compressed FASTQ bytes per byte of .sra archive, on the same seven runs: 1.49 to 1.66;
+# rounded up. Counted on the output folder, where the compressed files are written.
+GZIP_EXPANSION = 2
 
 GB = 1024**3
 
@@ -172,7 +177,7 @@ class SpaceGuard:
         if size is None:
             return {device: self.floor_bytes for device in self._paths}
         per_role = {
-            OUTPUT: FASTQ_EXPANSION * size,
+            OUTPUT: (FASTQ_EXPANSION + GZIP_EXPANSION) * size,
             TEMP: FASTQ_EXPANSION * size,
             CACHE: size if self.use_prefetch else 0,
         }

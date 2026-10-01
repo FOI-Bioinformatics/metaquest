@@ -28,18 +28,21 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - Free-space check for `download_sra`: before each accession starts, the filesystems it writes to (FASTQ
   or store `tmp` folder, `fasterq-dump` temporary folder, `.sra` cache) must have room for it, counting
   the downloads already running. An accession with a registry run size needs 8 times that size for its
-  FASTQ files and again for the temporary files, plus the size for the cache; the factor comes from
-  seven runs of the crispatus test store, whose uncompressed FASTQ was 6.98 to 7.73 times the `.sra`
-  size (gzip-compressed: 1.49 to 1.66 times). An accession of unknown size needs `--min-free-gb` (default
+  temporary files (assumed equal to the uncompressed output, not measured), 10 times for the FASTQ folder
+  (uncompressed and gzip files together), plus the size for the cache; the factors come from seven runs
+  of the crispatus test store, whose uncompressed FASTQ was 6.98 to 7.73 times the `.sra` size and
+  gzip-compressed FASTQ 1.49 to 1.66 times. An accession of unknown size needs `--min-free-gb` (default
   10; `METAQUEST_MIN_FREE_GB`, `[runtime] min_free_gb`); 0 turns the check off. An accession that does
   not fit while others run waits for them to release their space; one that would not fit even alone
-  fails with `insufficient-space: not enough free space on <mount>: ...`, and the others continue.
+  fails with `insufficient-space: not enough free space on <mount>: ...`, and the others continue; the
+  retry pass does not try it again. Only a tool's own out-of-space error stops the pass (see Fixed).
   Before the first download a warning names a filesystem that the downloads of known size may not fit
   on together; it does not stop the run.
 - `--assembly-memory` on `extract_target_reads` (also `METAQUEST_ASSEMBLY_MEMORY`, `[runtime]
   assembly_memory`): `auto`, the default, passes megahit `--memory` as 90% of the memory limit detected
-  for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and omits it when none is
-  found; a size such as `32G` is passed in bytes; a fraction is passed as it is and applies to the node's whole memory.
+  for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and omits it when
+  none is found; a size such as `32G` is passed in bytes; a fraction is passed as it is and applies to
+  the node's whole memory. A whole number of bytes below 1M is refused as a size missing its unit.
 - The default number of parallel downloads is the CPUs available to the job (the affinity mask, which a
   SLURM cpuset limits, else `SLURM_CPUS_PER_TASK`, else the CPU count) divided by `--num-threads`, at
   most 4; `METAQUEST_MAX_WORKERS_CAP` (or `[runtime] max_workers_cap`) changes the cap, which the

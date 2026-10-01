@@ -172,7 +172,7 @@ class TestParseMemory:
         assert result == expected
         assert type(result) is type(expected)
 
-    @pytest.mark.parametrize("value", ["", "lots", "-1G", "2.5", "1.5x"])
+    @pytest.mark.parametrize("value", ["", "lots", "-1G", "2.5", "1.5x", "2", "64000"])
     def test_rejects(self, value):
         with pytest.raises(ValueError):
             resources.parse_memory(value, None)

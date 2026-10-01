@@ -296,7 +296,13 @@ _SPECS = (
     _spec("log_level", _log_level, DEFAULT_LOG_LEVEL, "Console logging level", cli_dest="log_level"),
     _spec("progress_every", _non_negative_int, 50, "Items between progress summaries", cli_dest="progress_every"),
     _spec("log_host", _boolean, False, "Put the host name on every log line"),
-    _spec("min_free_gb", _non_negative_number, 10.0, "Free space to keep, in GB; 0 disables", cli_dest="min_free_gb"),
+    _spec(
+        "min_free_gb",
+        _non_negative_number,
+        10.0,
+        "Free space, in GB, a download of unknown size needs on each filesystem; 0 disables",
+        cli_dest="min_free_gb",
+    ),
     _spec(
         "assembly_memory",
         _memory,

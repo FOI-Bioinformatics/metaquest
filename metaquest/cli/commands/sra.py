@@ -263,9 +263,11 @@ class DownloadSraCommand(BaseCommand):
             default=None,
             help=(
                 "Free space, in GB, a download of unknown size needs on each filesystem it writes to; "
-                "one with a registry run size needs about 8 times that size for its FASTQ files and "
-                "again for fasterq-dump's temporary files. A download that does not fit is not started, "
-                "and no further downloads start after it. 0 turns the check off "
+                "one with a registry run size needs about 8 times that size for fasterq-dump's temporary "
+                "files and 10 times for the FASTQ folder (uncompressed and gzip files). A download that "
+                "does not fit while others run waits for them; one that would not fit even alone fails "
+                "with insufficient-space and the others continue. Only a tool's own out-of-space error "
+                "stops the run. 0 turns the check off "
                 "(default: METAQUEST_MIN_FREE_GB, config [runtime] min_free_gb, or 10)"
             ),
         )

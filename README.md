@@ -667,8 +667,9 @@ available to this job (the CPU affinity mask, which reflects a SLURM allocation,
 Before each accession starts, `download_sra` checks that the filesystems it writes to have room for it:
 the FASTQ folder (or the store's `tmp` folder), the `fasterq-dump` temporary folder and, with prefetch,
 the `.sra` cache. An accession whose run size is in the registry (from `download_metadata`) needs about
-8 times that size for its uncompressed FASTQ files and again for the temporary files, plus the size
-itself for the cache; locations on one filesystem add up, and downloads already running are counted.
+8 times that size for the temporary files, 10 times for the FASTQ folder (the uncompressed files and
+the gzip files written from them), plus the size itself for the cache; locations on one filesystem add
+up, and downloads already running are counted.
 An accession of unknown size needs `--min-free-gb` (default 10; also `METAQUEST_MIN_FREE_GB` or
 `min_free_gb` in `[runtime]`) on each filesystem. A download that does not fit while others are running
 waits until they finish and release their space. One that would not fit even with nothing else running

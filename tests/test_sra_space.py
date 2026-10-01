@@ -17,6 +17,8 @@ from metaquest.data.sra import space as space_mod
 
 GB = space_mod.GB
 E = space_mod.FASTQ_EXPANSION
+# The output folder also holds the gzip-compressed files while they are written.
+OUT = space_mod.FASTQ_EXPANSION + space_mod.GZIP_EXPANSION
 Usage = namedtuple("Usage", "total used free")
 
 
@@ -59,17 +61,17 @@ class TestNeeds:
     def test_known_size_on_three_filesystems(self, tmp_path, fake_disks):
         fake_disks.devices.update({"out": 1, "tmp": 2, "cache": 3})
         guard = space_mod.SpaceGuard(_locations(tmp_path), GB, {"SRR1": 100}, use_prefetch=True)
-        assert guard.needs("SRR1") == {1: E * 100, 2: E * 100, 3: 100}
+        assert guard.needs("SRR1") == {1: OUT * 100, 2: E * 100, 3: 100}
 
     def test_needs_of_one_filesystem_are_added(self, tmp_path, fake_disks):
         fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 1})
         guard = space_mod.SpaceGuard(_locations(tmp_path), GB, {"SRR1": "100"}, use_prefetch=True)
-        assert guard.needs("SRR1") == {1: 2 * E * 100 + 100}
+        assert guard.needs("SRR1") == {1: OUT * 100 + E * 100 + 100}
 
     def test_no_cache_without_prefetch(self, tmp_path, fake_disks):
         fake_disks.devices.update({"out": 1, "tmp": 2, "cache": 3})
         guard = space_mod.SpaceGuard(_locations(tmp_path), GB, {"SRR1": 100}, use_prefetch=False)
-        assert guard.needs("SRR1") == {1: E * 100, 2: E * 100}
+        assert guard.needs("SRR1") == {1: OUT * 100, 2: E * 100}
 
     def test_unknown_size_needs_the_floor_on_each_filesystem(self, tmp_path, fake_disks):
         fake_disks.devices.update({"out": 1, "tmp": 1, "cache": 2})
@@ -388,7 +390,7 @@ class TestGuardInARun:
         assert sorted(state["order"]) == ["A", "B", "C"]
 
     def test_an_accession_larger_than_the_disk_fails_alone(self, tmp_path, fake_disks, monkeypatch):
-        sizes = {"A": GB, "HUGE": 20 * GB, "C": GB}  # HUGE needs 160 GB
+        sizes = {"A": GB, "HUGE": 20 * GB, "C": GB}  # HUGE needs 200 GB on the output folder
         guard = self._guard(tmp_path, fake_disks, monkeypatch, sizes)
         worker, state = self._counting_worker()
         successful, failed_count, failed, results, abort = retry_mod._download_with_retries(
@@ -397,7 +399,7 @@ class TestGuardInARun:
         assert abort is None
         assert (successful, failed_count, failed) == (2, 1, ["HUGE"])
         assert "insufficient-space: not enough free space" in results["HUGE"]
-        assert "about 160.0 GB needed" in results["HUGE"]
+        assert "about 200.0 GB needed" in results["HUGE"]
         assert sorted(state["order"]) == ["A", "C"]
 
 

@@ -316,7 +316,8 @@ The plugin system enables extensibility:
   out of `registry.py`, which is at its size ceiling
 - **sra/space** (`metaquest/data/sra/space.py`): the free-space guard of `download_sra`. `SpaceGuard`
   groups the output, temporary and `.sra` cache folders by filesystem and reserves, per accession,
-  8 times its registry run size for output and again for temporary files (`FASTQ_EXPANSION`), or
+  10 times its registry run size for output (`FASTQ_EXPANSION` plus `GZIP_EXPANSION`) and 8 times
+  for temporary files, or
   `min_free_gb` when the size is unknown. A reservation that does not fit waits for running downloads
   to release theirs; one that could not fit even then fails that accession alone
   (`insufficient-space: ...`). Only a tool's own out-of-space error aborts a download pass

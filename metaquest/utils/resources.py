@@ -133,12 +133,12 @@ def parse_memory(value: str, limit: Optional[int]) -> Optional[Union[int, float]
     - ``auto``: ``0.9 * limit`` in bytes when a limit was detected, else None (flag left out).
     - A fraction between 0 and 1 (``0.5``, ``.25``, ``1``): returned as a float; megahit applies
       it to the node's total memory, not to a cgroup limit.
-    - A size (``32G``, ``32000M``, ``512K``, ``1T``, binary units) or a whole number of bytes:
-      returned as an int.
+    - A size (``32G``, ``32000M``, ``512K``, ``1T``, binary units) or a whole number of bytes of
+      at least 1M: returned as an int.
 
     Raises:
-        ValueError: For anything else, including 0 and a number above 1 with a decimal part
-            but no unit.
+        ValueError: For anything else, including 0, a number above 1 with a decimal part but no
+            unit, and a whole number of bytes below 1M (most likely a size missing its unit).
     """
     text = str(value).strip()
     if text.lower() == "auto":
@@ -156,4 +156,6 @@ def parse_memory(value: str, limit: Optional[int]) -> Optional[Union[int, float]
     size = int(number * _SIZE_UNITS[unit])
     if size <= 0:
         raise ValueError(f"not a memory value: {value!r} (must be above zero)")
+    if not unit and size < _SIZE_UNITS["M"]:
+        raise ValueError(f"not a memory value: {value!r} bytes is too small; give a unit, such as {text}G")
     return size
