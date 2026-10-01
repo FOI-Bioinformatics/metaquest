@@ -24,6 +24,8 @@ from tests.helpers_processes import FAKE_READS, cli_env, install_fake_tools, run
 from tests.test_store_sidecar import NCBI_XML
 
 ACC = "SRR1"
+UNVERIFIED = {"verdict": "unverified", "ratio": None, "expected_spots": None, "reads_r1": None}
+TRUNCATED = {"verdict": "truncated", "ratio": 0.5, "expected_spots": 10, "reads_r1": 5}
 
 
 @pytest.fixture(autouse=True)
@@ -240,7 +242,7 @@ def test_registry_inputs_dry_run_is_empty(tmp_path):
 # ------------------------------------------------------------------ present_verdicts
 
 
-def test_present_verdicts_skips_recorded_linked_and_uncounted_accessions(tmp_path):
+def test_present_verdicts_skips_recorded_and_linked_accessions(tmp_path):
     fastq = tmp_path / "fastq"
     for acc in ("SRR1", "SRR2", "SRR3", "SRR4"):
         _write_fastq(fastq / acc, reads=2, accession=acc)
@@ -252,7 +254,8 @@ def test_present_verdicts_skips_recorded_linked_and_uncounted_accessions(tmp_pat
 
     verdicts = sra_verdicts.present_verdicts(fastq, ["SRR1", "SRR2", "SRR3", "SRR4", "SRR5"], registry, expected)
 
-    assert set(verdicts) == {"SRR1", "SRR3"}
+    assert set(verdicts) == {"SRR1", "SRR3", "SRR4"}
+    assert verdicts["SRR4"] == UNVERIFIED
     assert verdicts["SRR1"]["verdict"] == "complete"
     assert verdicts["SRR3"]["verdict"] == "truncated"
     assert verdicts["SRR3"]["reads_r1"] == 2
@@ -266,7 +269,7 @@ def test_present_verdicts_logs_an_unreadable_file_and_moves_on(tmp_path, caplog)
 
     verdicts = sra_verdicts.present_verdicts(fastq, [ACC], None, {ACC: 4})
 
-    assert verdicts == {ACC: None}
+    assert verdicts == {ACC: dict(UNVERIFIED, expected_spots=4)}
     assert "Could not verify" in caplog.text
 
 
@@ -301,3 +304,111 @@ def test_linked_verdict_without_a_sidecar_keeps_the_previous_verdict():
 
     assert sra_verdicts.linked_verdict(previous, None, 10) == previous
     assert sra_verdicts.linked_verdict(None, None, 10) is None
+
+
+# ------------------------------------------------------------------ fix round 1
+
+
+def test_present_accession_without_a_spot_count_is_recorded_unverified(tmp_path):
+    """No count anywhere: the verdict is ``unverified``, recorded without reading the files."""
+    _write_fastq(tmp_path / "fastq" / ACC, reads=2)
+    args = _parse(tmp_path)
+
+    with patch.object(sra_verdicts, "verify_download", side_effect=AssertionError("no file read")):
+        DownloadSraCommand()._record_run_outcomes(args, {"already_downloaded_accessions": [ACC]}, tmp_path / "fastq")
+
+    block = rb.download_block(load_registry(args.registry), ACC)
+    assert block.state == "downloaded"
+    assert block.complete is not None
+    assert block.complete.to_dict() == UNVERIFIED
+
+
+def test_present_accession_without_a_spot_count_keeps_a_recorded_truncated_verdict(tmp_path):
+    _write_fastq(tmp_path / "fastq" / ACC, reads=2)
+    _write_registry(tmp_path, {ACC: {"download": {"attempts": 1, "state": "failed", "complete": TRUNCATED}}})
+    args = _parse(tmp_path)
+
+    DownloadSraCommand()._record_run_outcomes(args, {"already_downloaded_accessions": [ACC]}, tmp_path / "fastq")
+
+    block = rb.download_block(load_registry(args.registry), ACC)
+    assert block.state == "downloaded"
+    assert block.complete.verdict == "truncated"
+    assert block.complete.reads_r1 == 5
+
+
+def test_present_store_link_keeps_a_recorded_truncated_verdict(tmp_path):
+    """The already-present store path never turns ``truncated`` into ``unverified`` either."""
+    store = init_store(tmp_path / "store")
+    _write_registry(tmp_path, {ACC: {"download": {"attempts": 1, "state": "failed", "complete": TRUNCATED}}})
+    args = _parse(tmp_path)
+
+    with (
+        patch("metaquest.cli.commands.sra.is_store_link", return_value=True),
+        patch.object(DownloadSraCommand, "_sidecar_completeness", staticmethod(lambda _s, _a: dict(UNVERIFIED))),
+        patch("metaquest.cli.commands.sra.record_usage_many"),
+    ):
+        DownloadSraCommand()._record_run_outcomes(
+            args, {"already_downloaded_accessions": [ACC]}, tmp_path / "fastq", store=store
+        )
+
+    block = rb.download_block(load_registry(args.registry), ACC)
+    assert block.source == "store"
+    assert block.complete.verdict == "truncated"
+    assert block.complete.reads_r1 == 5
+
+
+def _redownload(tmp_path, monkeypatch, message):
+    """Run download_sra over a recorded truncated ``ACC`` with a fake download reporting ``message``."""
+    install_fake_tools(tmp_path / "bin", tmp_path / "barrier")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    _write_fastq(tmp_path / "fastq" / ACC, reads=10)
+    _write_registry(tmp_path, {ACC: {"download": {"attempts": 1, "state": "downloaded", "complete": TRUNCATED}}})
+
+    def fake_download_sra(**kwargs):
+        kwargs["on_result"](ACC, True, message)
+        return {"total": 1, "successful": 1, "failed": 0, "failed_accessions": [], "results": {}}
+
+    with patch("metaquest.cli.commands.sra.download_sra", side_effect=fake_download_sra):
+        assert DownloadSraCommand().execute(_parse(tmp_path, "--redownload-truncated")) == 0
+    return rb.download_block(load_registry(tmp_path / "metaquest_registry.json"), ACC)
+
+
+def test_unverified_redownload_keeps_a_recorded_truncated_verdict(tmp_path, monkeypatch):
+    block = _redownload(tmp_path, monkeypatch, "Downloaded 2 files, unverified")
+
+    assert block.attempts == 2
+    assert block.complete.verdict == "truncated"
+    assert block.complete.reads_r1 == 5
+
+
+def test_complete_redownload_replaces_a_recorded_truncated_verdict(tmp_path, monkeypatch):
+    block = _redownload(tmp_path, monkeypatch, "Downloaded 2 files, complete (10 of 10 spots)")
+
+    assert block.complete.verdict == "complete"
+    assert block.complete.reads_r1 == 10
+    assert block.complete.expected_spots == 10
+
+
+def test_registry_inputs_falls_back_to_the_recorded_verdict_count_last(tmp_path):
+    _write_registry(
+        tmp_path,
+        {
+            ACC: {"download": {"attempts": 1, "state": "downloaded", "complete": TRUNCATED}},
+            "SRR2": {"download": {"attempts": 1, "state": "downloaded", "complete": TRUNCATED}},
+        },
+    )
+    _write_xml(tmp_path / "metadata", total_spots=12, accession="SRR2")
+    (tmp_path / "accessions.txt").write_text(f"{ACC}\nSRR2\n")
+    registry = load_registry(tmp_path / "metaquest_registry.json")
+
+    _, spots, _, _ = sra_verdicts.registry_inputs(_parse(tmp_path), registry, None)
+
+    assert spots == {ACC: 10, "SRR2": 12}
+
+
+def test_recorded_verdict_without_a_new_verdict_leaves_the_record_alone():
+    registry = Registry()
+    registry.datasets[ACC] = {"download": {"attempts": 1, "state": "failed", "complete": TRUNCATED}}
+
+    assert sra_verdicts.recorded_verdict(registry, ACC, None, 10, linked=False) is None
+    assert sra_verdicts.recorded_verdict(registry, ACC, None, 10, linked=True) is None

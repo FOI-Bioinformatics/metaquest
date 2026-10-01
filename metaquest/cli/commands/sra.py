@@ -9,7 +9,7 @@ import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands.sra_verdicts import linked_verdict, present_verdicts, registry_inputs
+from metaquest.cli.commands.sra_verdicts import present_verdicts, recorded_verdict, registry_inputs
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
@@ -387,7 +387,7 @@ class DownloadSraCommand(BaseCommand):
             if from_store:
                 usage_rows.append((acc, "", "linked", "already downloaded"))
         local = [acc for acc, from_store, _ in present if not from_store]
-        verdicts = present_verdicts(fastq_dir, local, load_registry(args.registry), spots) if local and spots else {}
+        verdicts = present_verdicts(fastq_dir, local, load_registry(args.registry), spots) if local else {}
         with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
             for acc, from_store, complete in present:
                 mutation = functools.partial(
@@ -420,16 +420,15 @@ class DownloadSraCommand(BaseCommand):
     ) -> None:
         """Record an accession found already downloaded, unless its record already says so.
 
-        ``complete`` is the store sidecar's completeness verdict for a store-linked accession (merged
-        with the one on file by ``linked_verdict``, against ``spots``), or ``present_verdicts``'s for
-        one in a folder of its own; the caller reads either before the registry lock is taken.
+        ``complete`` is the store sidecar's completeness verdict for a store-linked accession, or
+        ``present_verdicts``'s for one in a folder of its own, merged with the one on file by
+        ``recorded_verdict`` against ``spots``; the caller reads either before the lock is taken.
         """
         if from_store:
             ensure_project_identity(reg)
         if (rb.download_block(reg, acc) or rb.DownloadBlock()).state == "downloaded":
             return
-        if from_store and complete is not None:
-            complete = linked_verdict(rb.download_verdict(reg, acc), complete, spots)
+        complete = recorded_verdict(reg, acc, complete, spots, linked=from_store)
         record_download(
             reg,
             acc,
@@ -498,9 +497,9 @@ class DownloadSraCommand(BaseCommand):
 
         ``timings`` is the dict ``download_sra`` fills before each ``on_result`` call; the
         attempt's start and seconds are recorded with the outcome, and a dataset linked from
-        the store, which no download produced, has any earlier time removed. A store dataset whose
-        message carries no verdict records ``linked_verdict`` of the sidecar's against the one on
-        file, with ``expected_spots`` (``registry_inputs``'s counts) as the spot count.
+        the store, which no download produced, has any earlier time removed. The verdict recorded
+        is ``recorded_verdict`` of the message's (or, for a store dataset whose message carries
+        none, the sidecar's) and the one on file, with ``expected_spots`` as the spot count.
         """
         timings = timings if timings is not None else {}
         spot_counts = expected_spots or {}
@@ -534,9 +533,9 @@ class DownloadSraCommand(BaseCommand):
             def _mutation(reg: Registry) -> None:
                 if from_store:
                     ensure_project_identity(reg)
-                verdict = complete
-                if sidecar is not None:
-                    verdict = linked_verdict(rb.download_verdict(reg, accession), sidecar, spot_counts.get(accession))
+                verdict = recorded_verdict(
+                    reg, accession, sidecar or complete, spot_counts.get(accession), bool(sidecar)
+                )
                 record_download(
                     reg,
                     accession,
@@ -633,7 +632,7 @@ class DownloadSraCommand(BaseCommand):
         project_registry: Registry,
         max_workers: int,
         timings: Optional[Timings] = None,
-        inputs: Optional[tuple] = None,
+        inputs: Optional[Tuple[set, dict, set, dict]] = None,
     ) -> Optional[dict]:
         """Run ``download_sra`` with its outcomes queued in a registry batch; return its statistics.
 
