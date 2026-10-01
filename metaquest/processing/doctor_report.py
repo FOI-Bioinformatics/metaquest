@@ -37,6 +37,7 @@ from metaquest.core import settings
 from metaquest.core.exceptions import ConfigurationError, DataAccessError
 from metaquest.data.branchwater_search import DEFAULT_SERVER as BRANCHWATER_SERVER
 from metaquest.data.registry import load_registry, registry_path
+from metaquest.data.sra.cleanup import PROJECT_STAGING_FOLDER
 from metaquest.store.layout import store_paths
 from metaquest.store.resolve import resolve_store_root
 from metaquest.utils import resources
@@ -281,7 +282,7 @@ def space_locations(project: Path, store_root: Optional[str]) -> List[tuple]:
     scratch: the store's ``tmp`` folder, or the project's staging folder ``fastq/.metaquest-tmp``.
     """
     store_tmp = store_paths(Path(store_root)).tmp if store_root else None
-    temp = _setting("temp_folder") or store_tmp or project / "fastq" / ".metaquest-tmp"
+    temp = _setting("temp_folder") or store_tmp or project / "fastq" / PROJECT_STAGING_FOLDER
     cache = store_tmp or project / "fastq" / ".sra-cache"
     return [("project", project), ("temp", Path(temp)), ("sra-cache", cache)]
 

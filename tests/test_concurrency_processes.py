@@ -321,6 +321,13 @@ def test_registry_keeps_blacklist_and_selection_written_during_a_download(harnes
         assert datasets[accession]["download"]["state"] == "downloaded", accession
 
 
+def _scratch(h, project, accession):
+    """fasterq-dump's scratch folder for ``accession``: under the store's tmp, or the project's staging folder."""
+    if h.store is not None:
+        return h.store / "tmp" / f"{accession}_fqtmp"
+    return project / "fastq" / ".metaquest-tmp" / f"{accession}_fqtmp"
+
+
 @pytest.mark.parametrize("with_store", [False, True], ids=["project", "store"])
 def test_two_sigterms_during_a_download_stop_the_run_cleanly(tmp_path, with_store):
     """Scenario 4: the first SIGTERM stops the run, the second is only logged; exit 130."""
@@ -335,6 +342,7 @@ def test_two_sigterms_during_a_download_stop_the_run_cleanly(tmp_path, with_stor
             what="SRR1 to be published",
             detail=lambda: stderr_of(download),
         )
+        assert _scratch(h, project, "SRR2").is_dir(), "the held tool's scratch folder should exist while it runs"
 
         # The held fake tool delays its exit on SIGTERM while linger-SRR2 exists, so the run is
         # still stopping when the second signal arrives, at least 0.2 s after the first.
@@ -369,6 +377,8 @@ def test_two_sigterms_during_a_download_stop_the_run_cleanly(tmp_path, with_stor
             lock_folders.append(h.store / "locks")
             assert not (h.store / "sra" / "SRR2").exists()
         assert _lock_files(*lock_folders) == [], log
+        assert not _scratch(h, project, "SRR1").exists(), log
+        assert not _scratch(h, project, "SRR2").exists(), log
     finally:
         h.cleanup()
 
@@ -381,9 +391,11 @@ def test_a_tool_that_ignores_sigterm_is_killed_after_the_grace_period(harness):
     download = harness.download(project)
     harness.wait_started("SRR1", proc=download)
     tool_pid = pid_of_started(started_files(harness.barrier, "SRR1")[0])
+    assert _scratch(harness, project, "SRR1").is_dir(), "the held tool's scratch folder should exist while it runs"
 
     os.kill(download.pid, signal.SIGTERM)
     log = harness.finish(download, expected=130, timeout=20.0)
+    assert not _scratch(harness, project, "SRR1").exists(), log
 
     wait_for(lambda: not alive(tool_pid), timeout=5.0, what="the fake tool to be killed", detail=lambda: log)
     assert any(harness.barrier.glob("SRR1.*.ignored")), log

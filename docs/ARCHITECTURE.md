@@ -309,8 +309,11 @@ megahit never writes into the final folder. It writes into a hidden staging fold
 the aside copy; if the second rename fails, the aside copy is renamed back. A failed run removes its
 staging folder, so the previous assembly stays in place. `sweep_staging`, called by `extract_target_reads`
 under the sample's extraction lock before it decides on a sample, removes staging and aside folders a
-killed run left behind, restoring the newest aside copy first when the final folder is missing (a run
-stopped between the two renames). Staging and aside names are hidden, so `scan_assemblies` and
+killed run left behind. When the final folder is missing and both an aside copy and a staging folder are
+there (a run stopped between the two renames), it first renames a staging folder holding both
+`final.contigs.fa` and the marker into place, or else the newest aside copy. An aside copy with no
+staging folder beside it is left over from a finished publish, so a final folder missing then was
+removed afterwards and is not brought back. Staging and aside names are hidden, so `scan_assemblies` and
 `visible_files` never list them.
 
 #### Atomic writes and temp names

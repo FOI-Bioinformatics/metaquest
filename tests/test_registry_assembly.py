@@ -140,10 +140,12 @@ def test_predates_compares_unparsable_dates_as_text(tmp_path):
         ({"min_contig_len": 500}, "meta-large", 500, True),
         ({"preset": "meta-large"}, "meta-large", 2000, True),
         ({"preset": None, "min_contig_len": None}, "meta-large", 2000, True),
-        # "default" means megahit's default preset, the same as no preset.
-        ({"preset": "default", "min_contig_len": 500}, "meta-large", 500, True),
-        ({"preset": "meta-large", "min_contig_len": 500}, "default", 500, True),
+        # A recorded "default" is a preset like any other: it matches only "default" or a missing value.
+        ({"preset": "default", "min_contig_len": 500}, "meta-large", 500, False),
+        ({"preset": "default", "min_contig_len": 500}, "meta-sensitive", 500, False),
+        ({"preset": "meta-large", "min_contig_len": 500}, "default", 500, False),
         ({"preset": "default", "min_contig_len": 500}, "default", 500, True),
+        ({"preset": "default", "min_contig_len": 500}, None, 500, True),
     ],
 )
 def test_legacy_assembly_current_params(tmp_path, recorded, preset, min_contig_len, expected):

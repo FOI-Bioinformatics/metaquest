@@ -203,8 +203,10 @@ def publish_assembly(staging: Union[str, Path], out_dir: Union[str, Path]) -> No
     """Move the finished ``staging`` folder to ``out_dir``, replacing any folder there.
 
     An existing ``out_dir`` is first renamed to a hidden name beside it; if the rename of
-    ``staging`` then fails, that copy is renamed back and the error is raised. Once the new folder
-    is in place the old copy is removed.
+    ``staging`` then fails, that copy is renamed back and the error is raised. If renaming it back
+    fails too, that is logged and the first error is raised; the copy stays beside ``out_dir``
+    with ``staging``, where ``sweep_staging`` restores it. Once the new folder is in place the old
+    copy is removed.
     """
     source, target = Path(staging), Path(out_dir)
     aside: Optional[Path] = None
@@ -215,7 +217,10 @@ def publish_assembly(staging: Union[str, Path], out_dir: Union[str, Path]) -> No
         os.rename(source, target)
     except OSError:
         if aside is not None:
-            os.rename(aside, target)
+            try:
+                os.rename(aside, target)
+            except OSError as restore_error:
+                logger.error("Could not put %s back as %s: %s", aside.name, target, restore_error)
         raise
     if aside is not None:
         _remove(aside)
@@ -229,21 +234,49 @@ def _remove(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _newest(paths: List[Path]) -> Path:
+    """The entry of ``paths`` modified last; an entry that cannot be stat'ed counts as oldest."""
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return max(paths, key=_mtime)
+
+
+def _interrupted_publish_result(asides: List[Path], stagings: List[Path]) -> Path:
+    """The folder to put back after a publish stopped between its two renames.
+
+    A staging folder holding both ``final.contigs.fa`` and the marker is the finished new assembly
+    (the marker is written last); without one, the old copy moved aside.
+    """
+    finished = [p for p in stagings if (p / CONTIGS_NAME).is_file() and (p / MARKER_NAME).is_file()]
+    return _newest(finished) if finished else _newest(asides)
+
+
 def sweep_staging(out_dir: Union[str, Path]) -> List[Path]:
     """Remove the hidden ``.<name>.*.tmp`` entries beside ``out_dir`` and return them.
 
     These are staging folders, or old copies moved aside, that an interrupted run left behind. If
     ``out_dir`` itself is missing because a run stopped between moving the old folder aside and
-    renaming the new one in, the most recent old copy is renamed back first. The caller holds the
-    sample lock, so no other run is writing to these names.
+    renaming the new one in (an old copy and a staging folder are both there), the publish is
+    finished first: a staging folder that holds both ``final.contigs.fa`` and the marker is the
+    new assembly, written completely, and is renamed into place; otherwise the most recent old
+    copy is renamed back. An old copy with no staging folder beside it is what a removal that
+    failed after a finished publish leaves; ``out_dir`` missing then means it was removed after
+    that publish (by hand, for example), so the old copy is removed rather than brought back. The
+    caller holds the sample lock, so no other run is writing to these names.
     """
     target = Path(out_dir)
     if not target.parent.is_dir():
         return []
     leftovers = sorted(Path(p) for p in glob.glob(str(target.parent / f".{glob.escape(target.name)}.*.tmp")))
     asides = [p for p in leftovers if p.name.startswith(f".{target.name}.{_ASIDE_TAG}.")]
-    if asides and not (target.exists() or target.is_symlink()):
-        restored = max(asides, key=lambda p: p.stat().st_mtime)
+    stagings = [p for p in leftovers if p not in asides]
+    if asides and stagings and not (target.exists() or target.is_symlink()):
+        restored = _interrupted_publish_result(asides, stagings)
         os.rename(restored, target)
         leftovers.remove(restored)
         logger.warning("Restored %s from %s, left by an interrupted run", target, restored.name)

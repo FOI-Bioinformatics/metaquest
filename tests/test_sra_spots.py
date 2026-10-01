@@ -1,6 +1,6 @@
 """Tests for metaquest.data.sra.spots: one lookup for an accession's expected spot count, the
-verdict a read count gives against it, and the merge rule that never turns ``truncated`` into
-``unverified``."""
+verdict a read count gives against it, and the merge rule that never turns a recorded ``complete``
+or ``truncated`` verdict into ``unverified``."""
 
 import json
 

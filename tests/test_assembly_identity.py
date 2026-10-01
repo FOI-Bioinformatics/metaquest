@@ -220,6 +220,56 @@ class TestPublishAndSweep:
     def test_sweep_without_parent_folder(self, tmp_path):
         assert sweep_staging(tmp_path / "missing" / "asm") == []
 
+    def test_sweep_does_not_bring_back_a_folder_removed_after_a_finished_publish(self, tmp_path):
+        """An old copy with no staging folder beside it is a leftover of a finished publish."""
+        out = tmp_path / "GCF_1_assembly"
+        aside = ident._aside_path(out)
+        _old_assembly(aside)
+
+        removed = sweep_staging(out)
+
+        assert not out.exists()
+        assert removed == [aside]
+        assert _staging_left(out) == []
+
+    def test_sweep_publishes_a_finished_staging_folder_over_the_old_copy(self, tmp_path):
+        """A kill between the two renames, after the new assembly and its marker were written."""
+        out = tmp_path / "GCF_1_assembly"
+        aside = ident._aside_path(out)
+        _old_assembly(aside)
+        staging = tmp_path / ".GCF_1_assembly.host.1.ab.tmp"
+        _old_assembly(staging, ">new len=4\nACGT\n")
+        write_marker(staging, _inputs(tmp_path), "v1", {})
+
+        sweep_staging(out)
+
+        assert ">new" in (out / "final.contigs.fa").read_text()
+        assert (out / MARKER_NAME).is_file()
+        assert _staging_left(out) == []
+
+    def test_publish_keeps_the_first_error_when_the_restore_fails_too(self, tmp_path, caplog):
+        out = tmp_path / "asm"
+        _old_assembly(out)
+        staging = tmp_path / ".asm.new.tmp"
+        _old_assembly(staging, ">new len=4\nACGT\n")
+        real_rename = os.rename
+
+        def failing(src, dst):
+            if Path(src) == staging:
+                raise OSError("first rename failed")
+            if Path(dst) == out:
+                raise OSError("restore failed")
+            return real_rename(src, dst)
+
+        with patch.object(ident.os, "rename", side_effect=failing), caplog.at_level(logging.ERROR):
+            with pytest.raises(OSError, match="first rename failed"):
+                publish_assembly(staging, out)
+        assert "restore failed" in caplog.text
+        # The old copy and the staging folder are both left beside out; the next sweep puts the old copy back.
+        assert not out.exists()
+        sweep_staging(out)
+        assert ">old" in (out / "final.contigs.fa").read_text()
+
 
 class TestAssembleWithIdentity:
     def test_matching_marker_is_skipped(self, tmp_path):
@@ -248,6 +298,24 @@ class TestAssembleWithIdentity:
         assert marker["megahit_version"] == "MEGAHIT v1.2.9" and marker["params"] == {"threads": 4}
         assert "min_contig_len" in caplog.text
         assert _staging_left(out) == []
+
+    def test_megahit_output_folder_does_not_exist_when_it_starts(self, tmp_path):
+        """Real megahit refuses an existing -o folder; the staging folder is only a name until it runs."""
+        state = {}
+        fake = _fake_tools(state)
+        existed = []
+
+        def _checking(executable, args, **kwargs):
+            command = [str(part) for part in args]
+            if executable == "megahit" and "-o" in command:
+                existed.append(Path(command[command.index("-o") + 1]).exists())
+            return fake(executable, args, **kwargs)
+
+        out = tmp_path / "SRR1" / "GCF_1_assembly"
+        with patch(RUN, side_effect=_checking):
+            _, ran = assemble_extracted_reads(_reads(tmp_path), out, expected=_inputs(tmp_path))
+        assert ran is True
+        assert existed == [False]
 
     def test_megahit_writes_into_hidden_staging(self, tmp_path):
         state = {}

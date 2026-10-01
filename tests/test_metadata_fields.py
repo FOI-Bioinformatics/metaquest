@@ -107,6 +107,21 @@ class TestMetadataFieldsFromXml:
         assert fields == {}
         assert "bad_metadata.xml" in caplog.text
 
+    def test_extraction_error_returns_empty_with_warning(self, tmp_path, caplog, monkeypatch):
+        """An XML that parses but fails extraction (``ValueError``) is skipped like the other two cases."""
+        path = tmp_path / "odd_metadata.xml"
+        path.write_text(_VALID_XML)
+
+        def _failing_parse(_path):
+            raise ValueError("no RUN element")
+
+        monkeypatch.setattr("metaquest.data.metadata_fields.parse_metadata_xml", _failing_parse)
+        with caplog.at_level(logging.WARNING):
+            fields = metadata_fields_from_xml(path)
+        assert fields == {}
+        assert "odd_metadata.xml" in caplog.text
+        assert "no RUN element" in caplog.text
+
 
 class TestFillMetadataFromXml:
     """fill_metadata_from_xml: fills registry metadata blocks missing a spot count from the XML folder."""

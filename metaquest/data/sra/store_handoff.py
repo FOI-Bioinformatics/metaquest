@@ -188,18 +188,32 @@ def _incomplete_message(accession: str, sidecar) -> str:
     )
 
 
+def _read_count(value: Any) -> Optional[int]:
+    """``value`` as a read count: a whole number of zero or more, else None (unknown)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
 def _refetch_record(previous, new) -> Optional[Dict[str, Any]]:
     """The ``refetch`` record of the store copy after ``new`` (a refetch) was built over ``previous``.
 
     ``unchanged`` counts consecutive refetches whose ``reads_per_mate`` did not grow beyond the
-    larger of the previous copy's and its record's count; a gain resets it to 0. A ``complete``
-    result, or a first download (no ``previous``), has no record (None). ``reads_per_mate`` is
-    the largest count seen so far, ``expected_spots`` the count the refetch was judged against.
+    larger of the previous copy's and its record's count; a gain resets it to 0. A count of 0 is
+    a known count, so refetches that keep returning no reads are counted as unchanged and stop.
+    A ``complete`` result, or a first download (no ``previous``), has no record (None).
+    ``reads_per_mate`` is the largest count seen so far, ``expected_spots`` the count the
+    refetch was judged against.
     """
     if previous is None or new.state == "complete":
         return None
     prior = previous.refetch or {}
-    known = [n for n in (previous.reads_per_mate, spots_mod.positive_int(prior.get("reads_per_mate"))) if n]
+    counts = (_read_count(previous.reads_per_mate), _read_count(prior.get("reads_per_mate")))
+    known = [n for n in counts if n is not None]
     best = max(known) if known else None
     gained = new.reads_per_mate is not None and (best is None or new.reads_per_mate > best)
     unchanged = 0 if gained else int(prior.get("unchanged") or 0) + 1

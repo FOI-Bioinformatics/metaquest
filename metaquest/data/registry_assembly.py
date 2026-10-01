@@ -8,7 +8,7 @@ extraction replaces the reads the assembly was built from.
 For an assembly recorded without ``inputs`` (one made by an earlier version), two checks give a
 conservative view of whether it is stale: ``assembly_predates_extraction`` compares the two
 recorded dates, and ``legacy_assembly_current`` also compares the recorded megahit preset and
-minimum contig length with the requested ones.
+minimum contig length with the requested ones (a value missing on either side matches anything).
 """
 
 from datetime import datetime
@@ -69,11 +69,6 @@ def assembly_predates_extraction(registry: Registry, accession: str, genome_id: 
     return _earlier(assembly.date, extraction.date)
 
 
-def _normalise_preset(preset: Any) -> Any:
-    """``"default"`` (megahit's own default preset) is treated the same as no preset."""
-    return None if preset == "default" else preset
-
-
 def _matches(recorded: Any, requested: Any) -> bool:
     """True when the values are equal, or when either is missing (a missing value matches anything)."""
     return recorded is None or requested is None or recorded == requested
@@ -86,13 +81,12 @@ def legacy_assembly_current(
 
     That is: an assembly is recorded, it is not dated earlier than the extraction (see
     ``assembly_predates_extraction``), and its recorded ``params.preset`` and
-    ``params.min_contig_len`` equal ``preset`` and ``min_contig_len``. A value missing on either
-    side matches anything, and a preset of ``"default"`` counts as no preset.
+    ``params.min_contig_len`` equal ``preset`` and ``min_contig_len``. Only a value missing on
+    either side (None) matches anything: a recorded preset, ``"default"`` included, that differs
+    from the requested one is not current, so the assembly is built again with the requested one.
     """
     _, assembly = _blocks(registry, accession, genome_id)
     if assembly is None or assembly_predates_extraction(registry, accession, genome_id):
         return False
     params = assembly.params if isinstance(assembly.params, dict) else {}
-    return _matches(_normalise_preset(params.get("preset")), _normalise_preset(preset)) and _matches(
-        params.get("min_contig_len"), min_contig_len
-    )
+    return _matches(params.get("preset"), preset) and _matches(params.get("min_contig_len"), min_contig_len)

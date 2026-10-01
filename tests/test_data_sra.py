@@ -2919,6 +2919,10 @@ class TestDownloadSraStore:
             (("partial", 1, 3), ("partial", 2), 0),
             (("partial", 1, 3), ("failed", None), 4),
             (("partial", 1, 3), ("complete", 100), None),
+            # A count of 0 is known: a refetch that again returns no reads is no gain.
+            (("partial", 0, 1), ("partial", 0), 2),
+            (("partial", 0, None), ("partial", 0), 1),
+            (("partial", 0, 1), ("partial", 1), 0),
         ],
     )
     def test_refetch_record(self, previous, new, expected):
@@ -4162,6 +4166,20 @@ class TestProjectScratchFolder:
         assert success is False, message
         assert state["temp"] == str((fastq / ".metaquest-tmp" / "SRR1_fqtmp").absolute())
         assert not (fastq / ".metaquest-tmp" / "SRR1_fqtmp").exists()
+
+    def test_scratch_is_left_to_the_new_holder_after_a_lost_lock(self, tmp_path):
+        """A process that took the lock over uses the same scratch name, so it is not removed."""
+        from metaquest.utils.lockfile import LockLost
+
+        fastq = tmp_path / "fastq"
+        scratch = fastq / ".metaquest-tmp" / "SRR1_fqtmp"
+        state = {}
+        with patch.object(accession_mod, "verify_held", side_effect=LockLost("taken over by another host")):
+            success, message = self._run(fastq, state)
+        assert success is False
+        assert message.startswith("lock lost:")
+        assert state["temp"] == str(scratch.absolute())
+        assert scratch.is_dir()
 
     def test_a_given_temp_folder_is_used_and_left_in_place(self, tmp_path):
         fastq = tmp_path / "fastq"

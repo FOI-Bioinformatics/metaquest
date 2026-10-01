@@ -619,6 +619,10 @@ def _project_download(
                 return _stage_and_publish(
                     accession, fastq, lock, num_threads, force, scratch or temp_folder, download_kwargs, stop=stop
                 )
+            except LockLost:
+                # The process that took the lock over uses the same scratch name: leave it alone.
+                scratch = None
+                raise
             finally:
                 if scratch is not None:
                     cleanup_mod._safe_rmtree(scratch)
