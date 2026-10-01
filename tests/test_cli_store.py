@@ -29,7 +29,7 @@ from metaquest.cli.commands.store import (
 from metaquest.core.constants import STORE_ENV
 from metaquest.data.registry import load_registry, save_registry
 from metaquest.store.catalog import Catalog, catalog_write
-from metaquest.store.layout import init_store, read_marker, sidecar_path, sra_dir, store_paths
+from metaquest.store.layout import init_store, lock_path, read_marker, sidecar_path, sra_dir, store_paths
 from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
 from metaquest.utils.security import SecureSubprocess
@@ -2151,3 +2151,60 @@ def test_every_store_command_failure_starts_with_the_command_name():
     for module in sorted(folder.glob("*.py")):
         contexts += re.findall(r"self\.fail\(e, ([^)]*)\)", module.read_text())
     assert contexts and set(contexts) == {"self.name"}
+
+
+class TestStoreReindexMissingSidecar:
+    """A store folder with no sidecar at all is described from disk rather than blocking the reindex."""
+
+    def _sidecar_less_store(self, tmp_path):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        acc_dir = sra_dir(paths, "SRR1")
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        with gzip.open(acc_dir / "SRR1.fastq.gz", "wt") as handle:
+            handle.write("@r\nACGT\n+\nIIII\n")
+        return root, paths
+
+    def test_a_missing_sidecar_is_rebuilt_and_catalogued(self, tmp_path, caplog):
+        root, paths = self._sidecar_less_store(tmp_path)
+
+        with caplog.at_level(logging.WARNING):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 0
+        sidecar = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert sidecar is not None and sidecar.state == "failed"
+        assert any("SRR1" in record.message and record.levelno == logging.WARNING for record in caplog.records)
+        with Catalog(paths) as catalog:
+            row = catalog.get_dataset("SRR1")
+        assert row is not None and row["state"] == "failed"
+
+    def test_a_missing_sidecar_whose_lock_is_held_is_skipped_with_a_warning(self, tmp_path, caplog):
+        root, paths = self._sidecar_less_store(tmp_path)
+        # A fresh lock file naming a run on another host: alive as far as this host can tell.
+        holder = {"pid": 4242, "host": "otherhost", "started": "2026-01-01T00:00:00+00:00", "token": "feedbeef"}
+        paths.locks.mkdir(parents=True, exist_ok=True)
+        lock_path(paths, "SRR1").write_text(json.dumps(holder))
+
+        with caplog.at_level(logging.WARNING):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 0
+        assert not sidecar_path(paths, "SRR1").exists()
+        assert any(
+            "SRR1" in record.message and record.levelno == logging.WARNING and "lock" in record.message
+            for record in caplog.records
+        )
+
+    def test_an_unreadable_sidecar_still_refuses_and_rebuilds_nothing(self, tmp_path, caplog):
+        root, paths = self._sidecar_less_store(tmp_path)
+        bad_dir = sra_dir(paths, "SRR2")
+        bad_dir.mkdir(parents=True)
+        sidecar_path(paths, "SRR2").write_text("{ not json")
+
+        with caplog.at_level(logging.ERROR):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 1
+        assert any("SRR2" in record.message for record in caplog.records)
+        assert not sidecar_path(paths, "SRR1").exists()

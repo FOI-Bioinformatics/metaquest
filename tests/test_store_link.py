@@ -311,3 +311,80 @@ def test_link_dataset_copy_mode_interrupted_leaves_no_visible_folder(tmp_path, p
     assert not (project_fastq / "SRR1").exists()
     assert list(project_fastq.iterdir()) == []
     assert not accession_has_fastq(project_fastq / "SRR1")
+
+
+# ------------------------------------------------------------------ copy-mode relink
+
+
+def test_link_dataset_copy_mode_replaces_an_earlier_store_copy(tmp_path, paths):
+    """A second copy-mode link of the same accession refreshes the project's earlier copy."""
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    link_dataset(project_fastq, "SRR1", paths, mode="copy")
+    (paths.sra / "SRR1" / "SRR1_1.fastq").write_text("@r\nGGGG\n+\nIIII\n")
+
+    copied = link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert copied.is_dir() and not copied.is_symlink()
+    assert (copied / "SRR1_1.fastq").read_text() == "@r\nGGGG\n+\nIIII\n"
+    # Neither the staging copy nor the earlier copy is left behind.
+    assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]
+
+
+def test_link_dataset_copy_mode_still_refuses_a_folder_without_a_sidecar(tmp_path, paths):
+    """A real folder with no ``<ACC>.json`` holds the project's own reads and is never replaced."""
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    real_dir = project_fastq / "SRR1"
+    real_dir.mkdir(parents=True)
+    (real_dir / "SRR1_1.fastq").write_text("@own\nTTTT\n+\nIIII\n")
+
+    with pytest.raises(DataAccessError):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert (real_dir / "SRR1_1.fastq").read_text() == "@own\nTTTT\n+\nIIII\n"
+    assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]
+
+
+def test_copy_relink_interrupted_during_the_copy_keeps_the_earlier_copy(tmp_path, paths, monkeypatch):
+    """The earlier copy is moved aside only after the new copy is complete."""
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    link_dataset(project_fastq, "SRR1", paths, mode="copy")
+    real_copytree = shutil.copytree
+
+    def _interrupted_copytree(src, dst, *args, **kwargs):
+        real_copytree(src, dst, *args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("metaquest.store.link.shutil.copytree", _interrupted_copytree)
+    with pytest.raises(KeyboardInterrupt):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert (project_fastq / "SRR1" / "SRR1_1.fastq").read_text() == "@r\nACGT\n+\nIIII\n"
+    assert (project_fastq / "SRR1" / "SRR1.json").is_file()
+    assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]
+
+
+def test_copy_relink_whose_swap_fails_puts_the_earlier_copy_back(tmp_path, paths, monkeypatch):
+    """A failed swap leaves the project with its earlier copy, not with nothing."""
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    link_dataset(project_fastq, "SRR1", paths, mode="copy")
+    real_replace = os.replace
+    calls = []
+
+    def _failing_swap(src, dst):
+        calls.append((src, dst))
+        # The second rename is the staged copy moving into place.
+        if len(calls) == 2:
+            raise OSError("simulated rename failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("metaquest.store.link.os.replace", _failing_swap)
+    with pytest.raises(DataAccessError, match="simulated rename failure"):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert len(calls) == 3  # aside, the failed swap, and the earlier copy renamed back
+    assert (project_fastq / "SRR1" / "SRR1_1.fastq").read_text() == "@r\nACGT\n+\nIIII\n"
+    assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]

@@ -11,6 +11,7 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.store.adopt import ADOPT_COPY_IGNORE, _folder_bytes, adopt
 from metaquest.store.catalog import Catalog, catalog_write
 from metaquest.store.layout import init_store, lock_path, sidecar_path, sra_dir
+from metaquest.store.locks import dataset_lock
 from metaquest.store.sidecar import build_sidecar, read_sidecar, write_sidecar
 
 
@@ -771,3 +772,104 @@ class TestAdoptLockLost:
         assert (project_fastq / "SRR1").is_dir() and not (project_fastq / "SRR1").is_symlink()
         assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
         assert json.loads(lock_path(paths, "SRR1").read_text())["token"] == "feedbeef"
+
+
+class TestAdoptSidecarBeforePublish:
+    """The sidecar is written into the staged folder, so the published folder always carries one."""
+
+    def test_the_staged_folder_carries_its_sidecar_when_it_is_published(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+        seen = {}
+        real_move = shutil.move
+
+        def _spy_move(src, dst, *args, **kwargs):
+            seen["sidecar_present"] = (Path(src) / "SRR1.json").is_file()
+            return real_move(src, dst, *args, **kwargs)
+
+        with patch("metaquest.store.adopt.shutil.move", side_effect=_spy_move):
+            report = adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert report.adopted == ["SRR1"]
+        assert seen == {"sidecar_present": True}
+        sidecar = read_sidecar(sidecar_path(paths, "SRR1"))
+        assert sidecar is not None and sidecar.tool == "adopted"
+        assert [entry["name"] for entry in sidecar.files] == ["SRR1.fastq.gz"]
+
+    def test_a_kill_right_after_publishing_leaves_a_sidecar_and_the_project_copy(self, tmp_path):
+        paths = init_store(tmp_path / "store")
+        project_fastq = tmp_path / "project" / "fastq"
+        _write_fastq(project_fastq / "SRR1" / "SRR1.fastq")
+
+        with patch("metaquest.store.adopt.catalog_write", side_effect=KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                adopt(project_fastq, paths, move=True, dry_run=False)
+
+        assert sidecar_path(paths, "SRR1").is_file()
+        assert read_sidecar(sidecar_path(paths, "SRR1")).state == "complete"
+        # The project's own folder is still there, untouched and unlinked.
+        assert (project_fastq / "SRR1" / "SRR1.fastq").is_file()
+        assert not (project_fastq / "SRR1").is_symlink()
+
+
+class TestRebuildMissingSidecar:
+    """``rebuild_missing_sidecar`` describes a sidecar-less store folder without vouching for it."""
+
+    def test_rebuilds_from_the_files_on_disk_without_cataloguing(self, tmp_path):
+        from metaquest.store.adopt import rebuild_missing_sidecar
+
+        paths = init_store(tmp_path / "store")
+        store_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(store_dir / "SRR1_1.fastq.gz")
+        _write_fastq_gz(store_dir / "SRR1_2.fastq.gz")
+
+        with dataset_lock(paths, "SRR1"):
+            sidecar = rebuild_missing_sidecar("SRR1", store_dir, paths)
+
+        assert sidecar_path(paths, "SRR1").is_file()
+        assert read_sidecar(sidecar_path(paths, "SRR1")) == sidecar
+        assert sidecar.accession == "SRR1"
+        # Never claimed complete: nothing here read the files through.
+        assert sidecar.state == "failed"
+        assert "store_verify" in (sidecar.error or "")
+        assert sidecar.completeness.get("verdict") == "unverified"
+        assert sidecar.layout == "PAIRED"
+        assert sidecar.compression == "gzip"
+        assert sorted((f["name"], f["bytes"]) for f in sidecar.files) == [
+            ("SRR1_1.fastq.gz", (store_dir / "SRR1_1.fastq.gz").stat().st_size),
+            ("SRR1_2.fastq.gz", (store_dir / "SRR1_2.fastq.gz").stat().st_size),
+        ]
+        assert all(f["md5"] is None and f["reads"] is None for f in sidecar.files)
+        with Catalog(paths, create=True) as cat:
+            cat.migrate()
+            assert cat.get_dataset("SRR1") is None
+
+    def test_a_sidecar_written_meanwhile_is_kept(self, tmp_path):
+        from metaquest.store.adopt import rebuild_missing_sidecar
+
+        paths = init_store(tmp_path / "store")
+        store_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(store_dir / "SRR1.fastq.gz")
+        existing = build_sidecar("SRR1", store_dir, {}, "3.0", "gzip")
+        write_sidecar(sidecar_path(paths, "SRR1"), existing)
+
+        with dataset_lock(paths, "SRR1"):
+            sidecar = rebuild_missing_sidecar("SRR1", store_dir, paths)
+
+        assert sidecar == existing
+        assert read_sidecar(sidecar_path(paths, "SRR1")) == existing
+
+    def test_an_unreadable_sidecar_is_never_overwritten(self, tmp_path):
+        from metaquest.store.adopt import rebuild_missing_sidecar
+
+        paths = init_store(tmp_path / "store")
+        store_dir = sra_dir(paths, "SRR1")
+        _write_fastq_gz(store_dir / "SRR1.fastq.gz")
+        sidecar_path(paths, "SRR1").write_text("{ not json")
+
+        with dataset_lock(paths, "SRR1"):
+            with pytest.raises(DataAccessError):
+                rebuild_missing_sidecar("SRR1", store_dir, paths)
+
+        assert sidecar_path(paths, "SRR1").read_text() == "{ not json"

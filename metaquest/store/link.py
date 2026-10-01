@@ -12,7 +12,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import List, Union
+from typing import List, Optional, Union
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import unique_temp_path
@@ -80,15 +80,68 @@ def _symlink_target(store_dataset: Path, link_parent: Path, mode: str) -> str:
     return str(store_dataset)
 
 
-def _clear_existing(link: Path) -> None:
-    """Make room for a new link at ``link``, refusing to destroy real project data."""
+def _is_store_copy(link: Path) -> bool:
+    """True when ``link`` is a real folder an earlier copy-mode link made: it holds ``<ACC>.json``.
+
+    A copy of a store dataset carries the store's sidecar with it; a folder the project
+    downloaded itself (before the store existed) has none, and holds reads no other copy has.
+    """
+    return link.is_dir() and not link.is_symlink() and (link / f"{link.name}.json").is_file()
+
+
+def _refuse_project_data(link: Path, replace_store_copy: bool) -> None:
+    """Raise when ``link`` is a real entry that a new link or copy must not replace."""
+    if link.is_symlink() or not link.exists():
+        return
+    if replace_store_copy and _is_store_copy(link):
+        return
+    raise DataAccessError(
+        f"{link} already exists and is not a store link; remove it first if the reads should come from the store"
+    )
+
+
+def _clear_existing(link: Path, replace_store_copy: bool = False) -> Optional[Path]:
+    """Make room for a new link at ``link``, refusing to destroy real project data.
+
+    An existing symlink is removed. With ``replace_store_copy``, a real folder that an earlier
+    copy-mode link made (it holds ``<ACC>.json``) is renamed aside to a hidden name next to it,
+    not removed, and that path is returned so the caller can drop it once the new copy is in
+    place (or rename it back if the swap fails). Any other real entry is refused. Returns None
+    when nothing was moved aside.
+    """
+    _refuse_project_data(link, replace_store_copy)
     if link.is_symlink():
         link.unlink()
-        return
-    if link.exists():
-        raise DataAccessError(
-            f"{link} already exists and is not a store link; remove it first if the reads " "should come from the store"
-        )
+        return None
+    if not link.exists():
+        return None
+    aside = unique_temp_path(link)
+    os.replace(link, aside)
+    return aside
+
+
+def _copy_into_place(store_dataset: Path, link: Path) -> None:
+    """Copy ``store_dataset`` to ``link``, replacing an earlier copy only once the new one is complete.
+
+    The copy is made under a hidden staging name first, so an interrupted copy never leaves a
+    partial dataset folder that looks like a download, and an earlier copy at ``link`` is moved
+    aside only after the staging copy finished. If the final rename fails, the earlier copy is
+    renamed back, so the project is never left with no copy at all.
+    """
+    staging = unique_temp_path(link)
+    try:
+        shutil.copytree(store_dataset, staging)
+        aside = _clear_existing(link, replace_store_copy=True)
+        try:
+            os.replace(staging, link)
+        except OSError as e:
+            if aside is not None:
+                os.replace(aside, link)
+            raise DataAccessError(f"Cannot copy {store_dataset.name} into {link.parent}: {e}") from e
+        if aside is not None:
+            shutil.rmtree(aside, ignore_errors=True)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def link_dataset(
@@ -102,11 +155,13 @@ def link_dataset(
     Returns the project-side path. ``mode`` is one of ``auto`` (relative when the store and
     the project share a parent directory, absolute otherwise), ``relative``, ``absolute`` or
     ``copy``, which copies the dataset folder instead of linking it (for a project that must
-    keep working when the store is unmounted). An existing symlink at the target is replaced;
-    a real directory is never replaced, since it may hold reads this project downloaded
-    itself. On success, records ``accession`` as just used
-    (``metaquest.store.locks.touch_dataset_use``), so ``store_gc`` keeps it for a grace
-    period even before this project's usage row reaches the catalogue.
+    keep working when the store is unmounted). An existing symlink at the target is replaced.
+    A real directory is replaced only in ``copy`` mode and only when it holds ``<ACC>.json``
+    (an earlier copy of the store's dataset), after the new copy is complete; any other real
+    directory is refused, since it may hold reads this project downloaded itself. On success,
+    records ``accession`` as just used (``metaquest.store.locks.touch_dataset_use``), so
+    ``store_gc`` keeps it for a grace period even before this project's usage row reaches the
+    catalogue.
     """
     if mode not in LINK_MODES:
         raise DataAccessError(f"Unknown link mode '{mode}'; expected one of {', '.join(LINK_MODES)}")
@@ -123,20 +178,15 @@ def link_dataset(
     resolved_project = project_path.resolve()
     resolved_dataset = store_dataset.resolve()
 
-    _clear_existing(link)
-
     if mode == "copy":
-        # Copied under a dot-prefixed name and renamed into place, so an interrupted copy never
-        # leaves a partial dataset folder that looks like a download.
-        staging = unique_temp_path(link)
-        try:
-            shutil.copytree(store_dataset, staging)
-            os.replace(staging, link)
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
+        # Refused before any copying when the entry holds the project's own reads.
+        _refuse_project_data(link, replace_store_copy=True)
+        _copy_into_place(store_dataset, link)
         touch_dataset_use(paths, accession)
         logger.log(active_item_level(), "Copied %s from the store into %s", accession, link)
         return link
+
+    _clear_existing(link)
 
     if mode == "auto":
         mode = "relative" if _shares_a_parent(paths.root.resolve(), resolved_project) else "absolute"

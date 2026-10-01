@@ -12,8 +12,10 @@ from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
 from metaquest.data.registry import load_registry
 from metaquest.store import journal
+from metaquest.store.adopt import rebuild_missing_sidecar
 from metaquest.store.catalog import REBUILT_WITHOUT_PROJECTS, catalog_write
-from metaquest.store.layout import StorePaths, sidecar_path, store_paths
+from metaquest.store.layout import StorePaths, sidecar_path, sra_dir, store_paths
+from metaquest.store.locks import LockHeld, dataset_lock, lock_holder
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import Sidecar, read_sidecar
 
@@ -30,8 +32,8 @@ class StoreReindexCommand(BaseCommand):
     def help(self) -> str:
         """Return the command's help text."""
         return (
-            "Rebuild the store catalogue from every dataset's sidecar file "
-            "(refuses to run when any sidecar cannot be read)"
+            "Rebuild the store catalogue from every dataset's sidecar file (a missing sidecar is "
+            "rebuilt, unverified, from the files; refuses to run when any sidecar cannot be read)"
         )
 
     @property
@@ -49,22 +51,57 @@ class StoreReindexCommand(BaseCommand):
         )
 
     @staticmethod
-    def _read_all_sidecars(paths: StorePaths) -> Tuple[List[Sidecar], List[str]]:
-        """Every dataset's sidecar, plus the accessions whose sidecar could not be read.
+    def _read_all_sidecars(paths: StorePaths) -> Tuple[List[Sidecar], List[str], List[str]]:
+        """Every dataset's sidecar, the accessions whose sidecar could not be read, and those with none.
 
         A reindex rebuilds ``datasets`` from exactly what it reads, so a sidecar missed here
         would look like a dataset that no longer exists. The caller stops rather than acting
-        on a partial reading.
+        on a partial reading when a sidecar is there but unreadable; a folder with no sidecar
+        file at all is rebuilt from its files instead (``_rebuild_missing``).
         """
         sidecars: List[Sidecar] = []
         unreadable: List[str] = []
+        missing: List[str] = []
         for acc_dir in visible_files(paths.sra, dirs=True):
-            sidecar = read_sidecar(sidecar_path(paths, acc_dir.name))
+            sc_path = sidecar_path(paths, acc_dir.name)
+            if not sc_path.is_file():
+                missing.append(acc_dir.name)
+                continue
+            sidecar = read_sidecar(sc_path)
             if sidecar is None:
                 unreadable.append(acc_dir.name)
                 continue
             sidecars.append(sidecar)
-        return sidecars, unreadable
+        return sidecars, unreadable, missing
+
+    def _rebuild_missing(self, paths: StorePaths, missing: List[str]) -> List[Sidecar]:
+        """Rebuild the sidecar of each sidecar-less store folder in ``missing``, under its lock.
+
+        The lock is taken without waiting: a held lock means another run is publishing that
+        dataset right now, so it is skipped with a warning (its catalogue row, if any, is kept)
+        rather than described from a half-written folder.
+        """
+        rebuilt: List[Sidecar] = []
+        for accession in missing:
+            try:
+                with dataset_lock(paths, accession, blocking=False):
+                    sidecar = rebuild_missing_sidecar(accession, sra_dir(paths, accession), paths)
+            except LockHeld:
+                self.logger.warning(
+                    "%s: no sidecar and its lock is held (%s); skipped, rerun store_reindex once that run ends",
+                    accession,
+                    lock_holder(paths, accession),
+                )
+                continue
+            self.logger.warning(
+                "%s: had no sidecar; rebuilt one from the files on disk with state '%s' "
+                "(run 'store_verify --rescan --fix-state %s' to check the files)",
+                accession,
+                sidecar.state,
+                accession,
+            )
+            rebuilt.append(sidecar)
+        return rebuilt
 
     def execute(self, args: argparse.Namespace) -> int:
         """Run the command; return the exit code."""
@@ -80,7 +117,7 @@ class StoreReindexCommand(BaseCommand):
 
         try:
             paths = store_paths(root)
-            sidecars, unreadable = self._read_all_sidecars(paths)
+            sidecars, unreadable, missing = self._read_all_sidecars(paths)
             if unreadable:
                 self.logger.error(
                     "Not reindexing: %d sidecar(s) could not be read, and rebuilding from a "
@@ -89,6 +126,7 @@ class StoreReindexCommand(BaseCommand):
                     ", ".join(unreadable),
                 )
                 return 1
+            sidecars.extend(self._rebuild_missing(paths, missing))
             with catalog_write(paths) as catalog:
                 # Replay first: a fresh or rebuilt catalogue has no projects yet, so usage rows
                 # restored here can insert "unknown" placeholder datasets for accessions the

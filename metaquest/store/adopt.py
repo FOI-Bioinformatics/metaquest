@@ -26,9 +26,13 @@ download: two adopts of different accessions never touch each other's staging
 folder, and two adopts of the same accession serialise on this lock rather
 than trampling one another's ``<ACC>_adopt`` copy.
 
+The sidecar is written into the staging folder before it is moved into
+``<store>/sra/<ACC>``, so a published folder always carries its sidecar.
+
 Adoption only ever claims the project's own ``fastq/<ACC>`` folders. A dataset
 whose files made it into ``<store>/sra/<ACC>`` but whose sidecar was never
-written is finished in place on the next call, without re-touching the files,
+written (an adoption by an earlier version, interrupted between those two
+steps) is finished in place on the next call, without re-touching the files,
 but only when this project also has that accession: a sidecar-less folder for
 any other accession is another project's interrupted or still running work,
 and is reported rather than blessed with a sidecar and linked here.
@@ -42,6 +46,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
+from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.sra import (
     STORE_READY_STATES,
@@ -55,6 +60,7 @@ from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, lock_path, sidecar_path, sra_dir
 from metaquest.store.link import link_dataset
 from metaquest.store.locks import dataset_lock, lock_holder, lock_is_held
+from metaquest.store.sidecar import _detect_layout  # one layout rule for built and rebuilt sidecars
 from metaquest.store.sidecar import (
     Sidecar,
     build_sidecar,
@@ -220,6 +226,34 @@ def _newest_file_time(acc_dir: Path) -> Optional[str]:
     return datetime.fromtimestamp(max(times), tz=timezone.utc).isoformat()
 
 
+def _adopted_sidecar(accession: str, folder: Path, metadata_folders: Sequence[Union[str, Path]]) -> Sidecar:
+    """The sidecar describing an adopted dataset's files in ``folder``.
+
+    Records ``tool="adopted"`` and the files' own age rather than this moment: nothing here
+    downloaded them, and no tool version is known.
+    """
+    return build_sidecar(
+        accession,
+        folder,
+        _ncbi_from_folders(accession, metadata_folders),
+        "",
+        _detect_compression(folder),
+        tool="adopted",
+        downloaded=_newest_file_time(folder),
+    )
+
+
+def _write_staged_sidecar(accession: str, staged: Path, metadata_folders: Sequence[Union[str, Path]]) -> Sidecar:
+    """Write ``<ACC>.json`` into the staging folder ``staged``, before it is published.
+
+    The sidecar then travels with the files in the one rename that publishes the dataset, so
+    a run killed at any point leaves either no store folder or one that carries its sidecar.
+    """
+    sidecar = _adopted_sidecar(accession, staged, metadata_folders)
+    write_sidecar(staged / f"{accession}.json", sidecar)
+    return sidecar
+
+
 def _finish_sidecar(
     accession: str,
     store_dir: Path,
@@ -229,25 +263,56 @@ def _finish_sidecar(
 ) -> Sidecar:
     """Write the sidecar and catalogue entry for a dataset whose files already sit in the store.
 
-    Shared by a fresh adoption (files just staged and compressed into ``store_dir``) and by
-    finishing an interrupted one (files already there from an earlier, incomplete run). The
-    sidecar records ``tool="adopted"`` and the files' own age rather than this moment: nothing
-    here downloaded them, and no tool version is known.
+    Finishes an adoption that an earlier version interrupted after publishing the files but
+    before writing their sidecar (a fresh adoption writes the sidecar into the staging folder
+    instead, see ``_write_staged_sidecar``).
     """
-    ncbi = _ncbi_from_folders(accession, metadata_folders)
-    compression = _detect_compression(store_dir)
-    sidecar = build_sidecar(
-        accession,
-        store_dir,
-        ncbi,
-        "",
-        compression,
-        tool="adopted",
-        downloaded=_newest_file_time(store_dir),
-    )
+    sidecar = _adopted_sidecar(accession, store_dir, metadata_folders)
     write_sidecar(sc_path, sidecar)
     with catalog_write(paths) as catalog:
         catalog.upsert_dataset(sidecar)
+    return sidecar
+
+
+# Error a rebuilt sidecar carries, so every reader treats the dataset as not yet usable and
+# says how to check it; ``{acc}`` is the accession.
+_REBUILT_ERROR = (
+    "sidecar rebuilt by store_reindex from the files on disk; the files were not verified "
+    "(run 'store_verify --rescan --fix-state {acc}')"
+)
+
+
+def rebuild_missing_sidecar(accession: str, store_dir: Path, paths: StorePaths) -> Sidecar:
+    """Write a sidecar for a store folder that has none, from its files' names and sizes.
+
+    For ``store_reindex``, which then catalogues it; nothing is catalogued here. The caller
+    holds ``accession``'s lock. No file is read, so nothing is vouched for: the sidecar's state
+    is ``failed`` with an error saying so, its completeness ``unverified``, and every file's
+    md5 and read count are None, until ``store_verify --rescan --fix-state`` reads the files
+    through. A sidecar that appeared since the caller looked (another run finished the
+    dataset) is returned as it is, unchanged.
+    """
+    sc_path = sidecar_path(paths, accession)
+    if sc_path.is_file():
+        existing = read_sidecar(sc_path)
+        if existing is None:
+            # Never overwrite a sidecar that is there but unreadable; that needs a person.
+            raise DataAccessError(f"{sc_path}: sidecar exists but cannot be read; not rebuilding it")
+        return existing
+    files = fastq_files(store_dir)
+    sidecar = Sidecar(
+        accession=accession,
+        state="failed",
+        layout=_detect_layout(files),
+        downloaded=_newest_file_time(store_dir),
+        tool="unknown",
+        compression=_detect_compression(store_dir),
+        files=[{"name": path.name, "bytes": path.stat().st_size, "md5": None, "reads": None} for path in files],
+        completeness={"method": "unverified", "ratio": None, "verdict": "unverified"},
+        error=_REBUILT_ERROR.format(acc=accession),
+    )
+    verify_held(lock_path(paths, accession))
+    write_sidecar(sc_path, sidecar)
     return sidecar
 
 
@@ -334,13 +399,17 @@ def _stage_into_store(
             if not str(file_path).endswith(".gz"):
                 compress_fastq(file_path, _ADOPT_COMPRESS_THREADS)
 
+    # The sidecar goes into the staged folder first, so the folder is published with it.
+    sidecar = _write_staged_sidecar(accession, staged, metadata_folders)
+
     store_dir.parent.mkdir(parents=True, exist_ok=True)
     # A holder stalled past the stale window may have lost the lock (and the staging path) to
     # another run: publish nothing then, and leave the staged copy to the new holder.
     verify_held(lock_path(paths, accession))
     shutil.move(str(staged), str(store_dir))
 
-    _finish_sidecar(accession, store_dir, sidecar_path(paths, accession), paths, metadata_folders)
+    with catalog_write(paths) as catalog:
+        catalog.upsert_dataset(sidecar)
 
 
 def _scan_project_dir(project_dir: Path, report: AdoptReport) -> Dict[str, Path]:
