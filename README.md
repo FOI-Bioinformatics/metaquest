@@ -32,7 +32,7 @@ matplotlib plotting steps. Other features need an extra:
 | Extra | Packages | Needed for |
 |---|---|---|
 | `analysis` | scikit-learn, scipy | `diversity_analysis`, PCA, t-SNE and clustered heatmaps in `interactive_plot`, group statistics in `sra_report --groups-file` |
-| `interactive` | plotly, jinja2 | `interactive_plot`, `explore_containment`, the `sra_report` HTML report (not needed with `--no-report`) |
+| `interactive` | plotly, jinja2 | `interactive_plot`, `explore_containment`, the `sra_report` HTML report (not needed with `--no-report`), the `project_report` HTML page (its Markdown and JSON files are written without it) |
 | `maps` | cartopy | geographic sample maps |
 | `sourmash` | sourmash | sketching a genome in `branchwater_search`, and the `sourmash scripts metaquest_*` plugin |
 | `all` | all of the above | everything |
@@ -444,6 +444,36 @@ lists the runs whose kept detail holds values for that accession, plus runs with
 whose command line names it; the number of other runs that could not be searched is given at the end.
 `runs` exits 1 when the project has no run log, and also when a selector matches no run or more than
 one.
+
+### Project report
+
+`project_report` summarises the whole project in one report, read from the registry and the run log.
+It finds the project the same way as `status` (the nearest `metaquest_registry.json`, or `--registry`)
+and reads no FASTQ file.
+
+```bash
+metaquest project_report                         # project_report/project_report.md, .json and .html
+metaquest project_report --output-dir reports --max-rows 50
+metaquest project_report --html never --no-environment
+```
+
+The report has ten sections: the project (registry path, last update, registry and MetaQuest
+versions), the funnel of `status` (datasets screened, selected, downloaded, analysed, extracted and
+assembled), per genome the datasets extracted, assembled and with no mapped reads with the median
+breadth and depth, the extraction rows of `results_table` sorted by genome and then by mapped reads,
+the download states and completeness verdicts with the truncated and unverified accessions, the failed
+downloads with their reason, attempts and date, timing (the totals and medians of `status` plus the
+minimum, quartiles, 90th percentile and maximum of each step), the environment checks of `doctor`
+without network access (left out with `--no-environment`), the recorded exports and analysis outputs,
+and the last 10 runs of the run log. Tables and accession lists are cut to `--max-rows` rows (200 by
+default, 0 for all) and say how many rows there were; `results_table` writes every extraction row.
+
+`project_report.md` and `project_report.json` are always written. `project_report.html` needs the
+`interactive` extra: with `--html auto` (the default) a missing extra is reported in one line and
+only the other two files are written, `--html always` exits 3 without writing anything, and
+`--html never` skips the page. The export is recorded in the registry as `project_report` unless
+`--no-record` is given. Without a project registry the command exits 1 and writes nothing; create one
+with `metaquest status --init`. `--json` prints the written paths as one JSON document.
 
 ### Shared data store
 
