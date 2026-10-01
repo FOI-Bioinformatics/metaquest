@@ -5,6 +5,7 @@ This package downloads SRA accessions and checks the FASTQ files they produce. I
 concern:
 
 - ``fastq``: finding, counting, compressing and verifying FASTQ files already on disk
+- ``spots``: an accession's expected spot count and the completeness verdict a read count gives
 - ``sampling``: drawing a uniform sample of records from a dataset's FASTQ files
 - ``cleanup``: recognising, sizing, preparing and removing temporary download folders
 - ``accession``: downloading one accession with prefetch and fasterq-dump
@@ -34,6 +35,7 @@ from metaquest.data.sra.fastq import (
     primary_fastq,
     verify_download,
 )
+from metaquest.data.sra.spots import expected_spots, merged_verdict, spots_from_xml, verdict_for_count
 from metaquest.data.sra.sampling import sample_records
 from metaquest.data.sra.cleanup import is_transient_folder, transient_bytes
 from metaquest.data.sra.accession import (
@@ -62,16 +64,20 @@ __all__ = [
     "default_max_workers",
     "download_accession",
     "download_sra",
+    "expected_spots",
     "fasterq_dump_version",
     "fastq_digest",
     "fastq_files",
     "fastq_stem",
     "iter_fastq_records",
     "is_transient_folder",
+    "merged_verdict",
     "orphan_fastq",
     "parse_verdict_message",
     "primary_fastq",
     "sample_records",
+    "spots_from_xml",
     "transient_bytes",
+    "verdict_for_count",
     "verify_download",
 ]

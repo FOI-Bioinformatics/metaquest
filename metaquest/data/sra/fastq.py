@@ -350,19 +350,15 @@ def verify_download(
         reads_r1 += reads_orphan if reads_orphan is not None else count_fastq_reads(orphan)
     bytes_total = sum(p.stat().st_size for p in files)
 
-    ratio: Optional[float]
-    if expected_spots:
-        ratio = round(reads_r1 / expected_spots, 4)
-        verdict = "complete" if ratio >= COMPLETE_RATIO_THRESHOLD else "truncated"
-    else:
-        ratio = None
-        verdict = "unverified"
+    # Imported here: the spots module imports COMPLETE_RATIO_THRESHOLD from this one.
+    from metaquest.data.sra.spots import verdict_for_count
 
+    verdict = verdict_for_count(reads_r1, expected_spots)
     return {
         "reads_r1": reads_r1,
         "expected_spots": expected_spots,
-        "ratio": ratio,
-        "verdict": verdict,
+        "ratio": verdict["ratio"],
+        "verdict": verdict["verdict"],
         "bytes_total": bytes_total,
     }
 

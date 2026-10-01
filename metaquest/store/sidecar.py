@@ -67,10 +67,16 @@ class Sidecar:
     stats_computed: Optional[str] = None
     schema: int = SIDECAR_SCHEMA
     error: Optional[str] = None
+    # Optional record of a re-download of this dataset; left out of the JSON while None, so a
+    # sidecar written before the field existed is rewritten byte-identical (schema stays 1).
+    refetch: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Plain-dict form suitable for JSON serialization."""
-        return asdict(self)
+        """Plain-dict form suitable for JSON serialization; ``refetch`` is left out while None."""
+        data = asdict(self)
+        if data.get("refetch") is None:
+            data.pop("refetch", None)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Sidecar":

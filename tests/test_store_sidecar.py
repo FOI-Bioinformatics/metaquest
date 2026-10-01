@@ -336,3 +336,34 @@ def test_build_sidecar_corrupt_gzip_still_records_the_stored_md5(tmp_path):
     assert sidecar.state == "failed"
     assert sidecar.files[0]["md5"] == hashlib.md5(bad.read_bytes()).hexdigest()
     assert sidecar.files[0]["reads"] is None
+
+
+def test_sidecar_refetch_round_trips(tmp_path):
+    refetch = {"reason": "truncated", "attempts": 1, "date": "2026-10-01T00:00:00+00:00"}
+    sidecar = _make_sidecar(refetch=refetch)
+    path = tmp_path / "SRR1.json"
+    write_sidecar(path, sidecar)
+
+    assert json.loads(path.read_text())["refetch"] == refetch
+    loaded = read_sidecar(path)
+    assert loaded == sidecar
+    assert loaded.refetch == refetch
+
+
+def test_sidecar_without_refetch_writes_no_refetch_key():
+    sidecar = _make_sidecar()
+    assert sidecar.refetch is None
+    assert "refetch" not in sidecar.to_dict()
+
+
+def test_old_sidecar_json_round_trips_byte_identical(tmp_path):
+    """A sidecar written before ``refetch`` existed is rewritten byte for byte as it was read."""
+    path = tmp_path / "SRR1.json"
+    old = {key: value for key, value in _make_sidecar().to_dict().items() if key != "refetch"}
+    original = json.dumps(old, indent=2, sort_keys=True) + "\n"
+    path.write_text(original)
+
+    write_sidecar(path, read_sidecar(path))
+
+    assert path.read_text() == original
+    assert SIDECAR_SCHEMA == 1
