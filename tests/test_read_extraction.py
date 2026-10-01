@@ -731,7 +731,7 @@ class TestExtractionIdempotency:
             assert forced["SRR1"].skipped is False and len(state["calls"]) > calls_before
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_assembly_skips_existing_contigs_and_refuses_empty_dir(self, mock_run):
+    def test_assembly_skips_existing_contigs_and_redoes_empty_dir(self, mock_run, caplog):
         mock_run.side_effect = _fake_tools({})
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "asm"
@@ -740,10 +740,12 @@ class TestExtractionIdempotency:
             _, ran = assemble_extracted_reads([Path(tmp) / "r1.fq.gz", Path(tmp) / "r2.fq.gz"], out)
             assert not mock_run.called and ran is False
             (out / "final.contigs.fa").unlink()
-            with pytest.raises(ProcessingError, match="rerun with --force"):
-                assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out)
-            _, ran = assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out, force=True)
+            with caplog.at_level("WARNING"):
+                _, ran = assemble_extracted_reads([Path(tmp) / "r1.fq.gz"], out)
+            assert "holds no final.contigs.fa (interrupted run?); assembling again" in caplog.text
             assert mock_run.called and ran is True
+            assert (out / "final.contigs.fa").exists()
+            assert [p.name for p in Path(tmp).iterdir()] == ["asm"]  # no staging folder left behind
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_inferred_record_without_parameters_is_skipped(self, mock_run):
@@ -1006,17 +1008,17 @@ class TestExtractionIdempotency:
 
 class TestAssembleExtractedReads:
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_paired_uses_1_2(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        out, ran = assemble_extracted_reads([Path("a_1.fastq.gz"), Path("a_2.fastq.gz")], "asm")
-        assert out == Path("asm") and ran is True
+    def test_paired_uses_1_2(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        out, ran = assemble_extracted_reads([Path("a_1.fastq.gz"), Path("a_2.fastq.gz")], tmp_path / "asm")
+        assert out == tmp_path / "asm" and ran is True
         args = mock_run.call_args.args[1]
         assert "-1" in args and "-2" in args and "-r" not in args
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_single_uses_r(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        assemble_extracted_reads([Path("a.fastq.gz")], "asm", min_contig_len=500)
+    def test_single_uses_r(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        assemble_extracted_reads([Path("a.fastq.gz")], tmp_path / "asm", min_contig_len=500)
         args = mock_run.call_args.args[1]
         assert "-r" in args and "--min-contig-len" in args
 
@@ -1025,25 +1027,25 @@ class TestAssembleExtractedReads:
             assemble_extracted_reads([], "asm")
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_default_preset_added_to_the_megahit_args(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        assemble_extracted_reads([Path("a.fastq.gz")], "asm")
+    def test_default_preset_added_to_the_megahit_args(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        assemble_extracted_reads([Path("a.fastq.gz")], tmp_path / "asm")
         args = mock_run.call_args.args[1]
         assert args[args.index("--presets") + 1] == "meta-sensitive"
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_explicit_preset_added_to_the_megahit_args(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset="meta-large")
+    def test_explicit_preset_added_to_the_megahit_args(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        assemble_extracted_reads([Path("a.fastq.gz")], tmp_path / "asm", preset="meta-large")
         args = mock_run.call_args.args[1]
         assert args[args.index("--presets") + 1] == "meta-large"
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_default_and_none_preset_omit_the_flag(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset="default")
+    def test_default_and_none_preset_omit_the_flag(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        assemble_extracted_reads([Path("a.fastq.gz")], tmp_path / "asm", preset="default")
         assert "--presets" not in mock_run.call_args.args[1]
-        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset=None)
+        assemble_extracted_reads([Path("a.fastq.gz")], tmp_path / "asm", preset=None, force=True)
         assert "--presets" not in mock_run.call_args.args[1]
 
     def test_preset_with_explicit_k_values_raises(self):
@@ -1051,9 +1053,11 @@ class TestAssembleExtractedReads:
             assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset="meta-sensitive", k_flags={"k-min": 21})
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
-    def test_explicit_k_values_used_without_a_preset(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        assemble_extracted_reads([Path("a.fastq.gz")], "asm", preset=None, k_flags={"k-min": 21, "k-max": 141})
+    def test_explicit_k_values_used_without_a_preset(self, mock_run, tmp_path):
+        mock_run.side_effect = _fake_tools({})
+        assemble_extracted_reads(
+            [Path("a.fastq.gz")], tmp_path / "asm", preset=None, k_flags={"k-min": 21, "k-max": 141}
+        )
         args = mock_run.call_args.args[1]
         assert args[args.index("--k-min") + 1] == "21"
         assert args[args.index("--k-max") + 1] == "141"

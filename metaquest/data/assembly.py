@@ -12,9 +12,18 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from metaquest.core.exceptions import ProcessingError
+from metaquest.data.assembly_identity import (
+    CONTIGS_NAME,
+    MARKER_NAME,
+    AssemblyInputs,
+    assembly_state,
+    publish_assembly,
+    write_marker,
+)
+from metaquest.data.file_io import unique_temp_path
 from metaquest.utils import resources, tools
 from metaquest.utils.security import SecureSubprocess
 
@@ -101,16 +110,41 @@ def _megahit_args(
 
     if tmp_dir is not None:
         tmp_dir = Path(tmp_dir)
-        if tmp_dir.resolve().is_relative_to(out_dir.resolve()):
-            raise ProcessingError(
-                f"tmp_dir ({tmp_dir}) must not be output_dir or a folder inside it ({out_dir}); "
-                "megahit refuses to run when its -o directory already exists"
-            )
+        _refuse_tmp_dir_inside(tmp_dir, out_dir)
         tmp_dir.mkdir(parents=True, exist_ok=True)
         SecureSubprocess.add_allowed_root(tmp_dir)
         args += ["--tmp-dir", str(tmp_dir)]
 
     return args
+
+
+def _refuse_tmp_dir_inside(tmp_dir: Path, out_dir: Path) -> None:
+    """Raise ``ProcessingError`` when ``tmp_dir`` is ``out_dir`` or a folder inside it."""
+    if tmp_dir.resolve().is_relative_to(out_dir.resolve()):
+        raise ProcessingError(
+            f"tmp_dir ({tmp_dir}) must not be output_dir or a folder inside it ({out_dir}); "
+            "megahit refuses to run when its -o directory already exists"
+        )
+
+
+def _reuse_existing(
+    out_dir: Path, expected: Optional[AssemblyInputs], accept_unmarked: bool, version: str, params: Any
+) -> bool:
+    """True when the assembly in ``out_dir`` can be kept; logs why it is redone otherwise.
+
+    An unmarked folder that is accepted gets a marker for ``expected`` written in place.
+    """
+    state, reason = assembly_state(out_dir, expected, accept_unmarked)
+    if state == "current":
+        if expected is not None and not (out_dir / MARKER_NAME).exists():
+            write_marker(out_dir, expected, version, params)
+        logger.info("%s already assembled (%s); use --force to redo", out_dir, reason)
+        return True
+    if state == "incomplete":
+        logger.warning("%s holds no %s (interrupted run?); assembling again", out_dir, CONTIGS_NAME)
+    elif state == "stale":
+        logger.info("%s is out of date (%s); assembling again", out_dir, reason)
+    return False
 
 
 def assemble_extracted_reads(
@@ -124,14 +158,25 @@ def assemble_extracted_reads(
     k_flags: Optional[Dict[str, int]] = None,
     tmp_dir: Optional[Path] = None,
     memory: Optional[Union[int, float]] = None,
+    *,
+    expected: Optional[AssemblyInputs] = None,
+    accept_unmarked: bool = True,
+    version: str = "",
+    params: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Path, bool]:
     """Assemble a set of extracted FASTQ files with megahit.
 
     Single-end input (one file) uses megahit ``-r``; paired input (two files) uses ``-1``/``-2``. The
-    reads are expected to be a small, target-filtered set. If ``output_dir`` already holds contigs, the
-    assembly is considered done and megahit is not rerun unless ``force`` is set; if the folder exists
-    but holds no contigs (an interrupted run), an error is raised unless ``force`` is set, in which case
-    the folder is removed before megahit runs.
+    reads are expected to be a small, target-filtered set. Unless ``force`` is set, an existing
+    assembly is kept when ``assembly_state`` reports it current: with ``expected`` None any folder
+    holding contigs is kept, otherwise its marker must match ``expected`` (an unmarked folder is kept,
+    and given a marker, when ``accept_unmarked`` is True). A folder without contigs (an interrupted
+    run) is logged as a warning and assembled again.
+
+    megahit writes into a hidden staging folder beside ``output_dir``; the marker (when ``expected``
+    is given) is written into it, and the finished folder replaces ``output_dir`` by rename
+    (``publish_assembly``). If megahit fails, the previous ``output_dir`` is left as it was and the
+    staging folder is removed.
 
     Args:
         reads: One or two FASTQ files to assemble.
@@ -147,45 +192,53 @@ def assemble_extracted_reads(
         k_flags: Explicit ``--k-min``/``--k-max``/``--k-step`` values (keys without the leading
             dashes, e.g. ``{"k-min": 21}``), used instead of a preset; combining the two is rejected.
         tmp_dir: Where megahit writes its scratch files (``--tmp-dir``); defaults to megahit's own
-            choice under ``output_dir`` when not given. megahit needs FIFOs for its scratch files, so
+            choice under the staging folder when not given. megahit needs FIFOs for its scratch files, so
             a default landing on a filesystem without them (e.g. ExFAT) fails; a POSIX filesystem
             works around it.
         memory: megahit ``--memory``: bytes, or a fraction of the node's memory; None leaves the
             flag out (see ``assembly_memory``).
+        expected: The inputs the assembly should be built from (``assembly_identity.assembly_inputs``);
+            None keeps any folder that holds contigs and writes no marker.
+        accept_unmarked: Whether a folder with contigs but no marker counts as current.
+        version: The megahit version line, recorded in the marker (not compared).
+        params: Further settings recorded in the marker (not compared).
 
     Returns:
         The megahit output directory and whether megahit actually ran (False when the assembly was
         already there), so the caller can leave an existing record alone.
 
     Raises:
-        ProcessingError: If the number of reads is unsupported, the output directory exists without
-            contigs and ``force`` is not set, ``k_flags`` is given together with a preset, ``tmp_dir``
-            is ``output_dir`` or a folder inside it, or megahit itself fails.
+        ProcessingError: If the number of reads is unsupported, ``k_flags`` is given together with a
+            preset, ``tmp_dir`` is ``output_dir`` or a folder inside it, megahit itself fails, or
+            megahit finishes without writing ``final.contigs.fa``.
     """
     out_dir = Path(output_dir)
-    contigs_path = out_dir / "final.contigs.fa"
-    if out_dir.exists():
-        if contigs_path.exists() and not force:
-            logger.info("%s already assembled; use --force to redo", out_dir)
-            return out_dir, False
-        if not contigs_path.exists() and not force:
-            raise ProcessingError("Assembly folder exists but holds no contigs (interrupted run?); rerun with --force")
-        if force:
-            shutil.rmtree(out_dir, ignore_errors=True)
+    if not force and _reuse_existing(out_dir, expected, accept_unmarked, version, params):
+        return out_dir, False
+    if tmp_dir is not None:
+        _refuse_tmp_dir_inside(Path(tmp_dir), out_dir)
 
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
     SecureSubprocess.add_allowed_root(out_dir.parent)
-    args = _megahit_args(reads, out_dir, threads, min_contig_len, preset, k_flags, tmp_dir, memory)
+    staging = unique_temp_path(out_dir)
+    args = _megahit_args(reads, staging, threads, min_contig_len, preset, k_flags, tmp_dir, memory)
 
     try:
-        SecureSubprocess.run_secure("megahit", args)
-    except subprocess.CalledProcessError as exc:
-        tail = "\n".join((exc.stderr or "").strip().splitlines()[-5:])
-        raise ProcessingError(f"megahit failed (exit {exc.returncode}) for {out_dir}:\n{tail}") from exc
+        try:
+            SecureSubprocess.run_secure("megahit", args)
+        except subprocess.CalledProcessError as exc:
+            tail = "\n".join((exc.stderr or "").strip().splitlines()[-5:])
+            raise ProcessingError(f"megahit failed (exit {exc.returncode}) for {out_dir}:\n{tail}") from exc
+        if not (staging / CONTIGS_NAME).is_file():
+            raise ProcessingError(f"megahit finished without writing {CONTIGS_NAME} for {out_dir}")
+        if not keep_intermediate:
+            shutil.rmtree(staging / "intermediate_contigs", ignore_errors=True)
+        if expected is not None:
+            write_marker(staging, expected, version, params)
+        publish_assembly(staging, out_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     logger.info("Assembly written to %s", out_dir)
-
-    if not keep_intermediate:
-        shutil.rmtree(out_dir / "intermediate_contigs", ignore_errors=True)
-
     return out_dir, True
 
 

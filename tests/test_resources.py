@@ -11,6 +11,7 @@ from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.core.exceptions import ConfigurationError
 from metaquest.data import assembly as assembly_mod
 from metaquest.utils import resources
+from helpers_extraction import _fake_tools
 
 GIB = 1024**3
 
@@ -181,7 +182,7 @@ class TestParseMemory:
 class TestMegahitMemory:
     def _run(self, tmp_path, memory):
         reads = [tmp_path / "r_1.fq", tmp_path / "r_2.fq"]
-        with patch.object(assembly_mod.SecureSubprocess, "run_secure") as run:
+        with patch.object(assembly_mod.SecureSubprocess, "run_secure", side_effect=_fake_tools({})) as run:
             assembly_mod.assemble_extracted_reads(reads, tmp_path / "asm", preset=None, memory=memory)
         return run.call_args.args[1]
 
