@@ -96,7 +96,7 @@ class StoreLinkCommand(BaseCommand):
             state = sidecar.state
         elif expected is not None and _short_unverified(sidecar, expected):
             self._record_short(paths, accession, expected)
-            state = f"unverified, holding {sidecar.reads_per_mate} of {expected} spots"
+            state = f"partial (was unverified, holding {sidecar.reads_per_mate} of {expected} spots)"
         else:
             return False
 

@@ -205,8 +205,9 @@ def publish_assembly(staging: Union[str, Path], out_dir: Union[str, Path]) -> No
     An existing ``out_dir`` is first renamed to a hidden name beside it; if the rename of
     ``staging`` then fails, that copy is renamed back and the error is raised. If renaming it back
     fails too, that is logged and the first error is raised; the copy stays beside ``out_dir``
-    with ``staging``, where ``sweep_staging`` restores it. Once the new folder is in place the old
-    copy is removed.
+    under its hidden name until the caller's cleanup sweeps it, and the next run assembles again
+    (the registry record was cleared before the run). Once the new folder is in place the old copy
+    is removed.
     """
     source, target = Path(staging), Path(out_dir)
     aside: Optional[Path] = None
