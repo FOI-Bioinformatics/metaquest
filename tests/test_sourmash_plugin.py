@@ -310,6 +310,18 @@ class TestMetaquestTaxonomyPlugin:
         assert call_args[0][0] == ["E. coli", "B. subtilis"]
 
     @patch("metaquest.data.taxonomy.validate_taxonomic_assignments")
+    def test_main_takes_the_email_from_the_settings(self, mock_validate, parser, tmp_output, monkeypatch):
+        monkeypatch.setenv("METAQUEST_NCBI_EMAIL", "env@example.com")
+        species_file = tmp_output / "species.txt"
+        species_file.write_text("E. coli\n")
+        mock_validate.return_value = pd.DataFrame({"species": ["E. coli"], "is_valid": [True]})
+        cmd = MetaquestTaxonomyPlugin(parser)
+        args = parser.parse_args(["--species-file", str(species_file)])
+        with patch.object(type(cmd).__bases__[0], "main"):
+            cmd.main(args)
+        assert mock_validate.call_args.kwargs["email"] == "env@example.com"
+
+    @patch("metaquest.data.taxonomy.validate_taxonomic_assignments")
     @patch("pandas.read_csv")
     def test_main_with_csv_file(self, mock_read, mock_validate, parser):
         mock_read.return_value = pd.DataFrame(

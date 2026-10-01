@@ -183,7 +183,7 @@ class StoreUnlinkCommand(BaseCommand):
             try:
                 was_removed = unlink_dataset(args.fastq_folder, accession)
             except DataAccessError as e:
-                self.logger.error(str(e))
+                self.logger.error("%s: %s", self.name, e)
                 refused.append(accession)
                 continue
             if was_removed:

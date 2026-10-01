@@ -21,7 +21,7 @@ from lxml import etree
 from urllib.error import HTTPError, URLError
 
 from metaquest.core import settings
-from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.core.exceptions import DataAccessError, MetaQuestError, NetworkError
 from metaquest.core.validation import validate_folder
 from metaquest.data.file_io import ensure_directory, list_files, write_csv, write_text_atomic
 from metaquest.utils.progress import ProgressReporter, item_level
@@ -232,13 +232,14 @@ def _download_single_metadata(
         except HTTPError as e:
             if e.code in (400, 404):
                 return False, f"HTTP {e.code}: not found at NCBI"
-            last_error_message = f"HTTP {e.code} after {MAX_RETRIES} attempts"
+            transient = "network: " if e.code == 429 or e.code >= 500 else ""
+            last_error_message = f"{transient}HTTP {e.code} after {MAX_RETRIES} attempts"
             logger.warning(f"Error downloading {accession}, retrying ({attempt}/{MAX_RETRIES}): {e}")
             time.sleep(2**attempt)
 
         # A truncated NCBI reply raises http.client.IncompleteRead, an HTTPException, not an OSError.
         except (URLError, OSError, http.client.HTTPException) as e:
-            last_error_message = str(e)
+            last_error_message = f"network: {e}"
             logger.warning(f"Error downloading {accession}, retrying ({attempt}/{MAX_RETRIES}): {e}")
             time.sleep(2**attempt)
 
@@ -312,6 +313,8 @@ def download_metadata(
             accessions_to_download, metadata_path, email, to_download_count, api_key=api_key, batch_size=batch_size
         )
 
+    except NetworkError:
+        raise
     except (OSError, ValueError, MetaQuestError) as e:
         raise DataAccessError(f"Error downloading metadata: {e}") from e
 
@@ -381,7 +384,7 @@ def _download_batch_metadata(
                     return _download_accessions_individually(batch, metadata_path, email, api_key)
                 return {}, {batch[0]: f"HTTP {e.code}: not found at NCBI"}
             if e.code == 429 or 500 <= e.code < 600:
-                last_failures = {accession: f"HTTP {e.code} after {MAX_RETRIES} attempts" for accession in batch}
+                last_failures = {acc: f"network: HTTP {e.code} after {MAX_RETRIES} attempts" for acc in batch}
                 logger.warning(f"Error fetching batch, retrying ({attempt}/{MAX_RETRIES}): {e}")
                 time.sleep(2**attempt)
                 continue
@@ -389,7 +392,7 @@ def _download_batch_metadata(
 
         # A truncated NCBI reply raises http.client.IncompleteRead, an HTTPException, not an OSError.
         except (URLError, OSError, http.client.HTTPException) as e:
-            last_failures = {accession: str(e) for accession in batch}
+            last_failures = {accession: f"network: {e}" for accession in batch}
             logger.warning(f"Error fetching batch, retrying ({attempt}/{MAX_RETRIES}): {e}")
             time.sleep(2**attempt)
 
@@ -418,9 +421,7 @@ def _download_accessions_metadata(
     Returns:
         Dictionary mapping accessions to metadata file paths, for successes only.
     """
-    # Each batch (and any per-accession fallback within it) sets Entrez.email/api_key
-    # itself, under _ENTREZ_LOCK, only for the duration of its own efetch call; see
-    # _entrez_credentials. No blanket assignment is made here.
+    # Each efetch call sets Entrez.email/api_key itself under _ENTREZ_LOCK (_entrez_credentials).
     result_files: Dict[str, Path] = {}
     failures: Dict[str, str] = {}
     batches = [accessions_to_download[i : i + batch_size] for i in range(0, len(accessions_to_download), batch_size)]
@@ -438,7 +439,8 @@ def _download_accessions_metadata(
     logger.info(f"Fetched {len(batches)} batches: {len(result_files)} metadata files, {len(failures)} failures")
     for accession, reason in failures.items():
         logger.error(f"Failed to download {accession}: {reason}")
-
+    if failures and not result_files and all(reason.startswith("network: ") for reason in failures.values()):
+        raise NetworkError(f"NCBI could not be reached for any of {len(failures)} accession(s); try again later")
     return result_files
 
 

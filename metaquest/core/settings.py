@@ -72,9 +72,22 @@ def read_config() -> Dict[str, Any]:
         with path.open("rb") as handle:
             return tomllib.load(handle)
     except tomllib.TOMLDecodeError as e:
-        raise ConfigurationError(f"Config file {path} is not valid TOML: {e}") from e
+        raise ConfigurationError(f"Config file {path} is not valid TOML: {e}{_offending_line(path, str(e))}") from e
     except OSError as e:
         raise ConfigurationError(f"Config file {path} could not be read: {e}") from e
+
+
+def _offending_line(path: Path, message: str) -> str:
+    """The text of the line a TOML error names (``at line N``), as ``: line N is '...'``, or ''."""
+    match = re.search(r"at line (\d+)", message)
+    if match is None:
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    number = int(match.group(1))
+    return f"; line {number} is {lines[number - 1].strip()!r}" if 0 < number <= len(lines) else ""
 
 
 def _runtime_table(config: Mapping[str, Any]) -> Dict[str, Any]:
@@ -318,13 +331,15 @@ def _parse(spec: SettingSpec, raw: Any, source: str) -> Any:
             raise ValueError("expected a single value")
         return spec.parse(text)
     except ValueError as e:
-        raise ConfigurationError(f"Invalid value {raw!r} for {spec.name} from {source}: {e}") from e
+        shown = "(hidden)" if spec.secret else repr(raw)
+        raise ConfigurationError(f"Invalid value {shown} for {spec.name} from {source}: {e}") from e
 
 
 def _resolve(spec: SettingSpec, cli_value: Any, runtime: Mapping[str, Any]) -> Resolved:
     """Resolve one setting against a flag value and an already-read ``[runtime]`` table."""
     if cli_value is not None and spec.flag is not None:
-        return Resolved(spec.name, cli_value, spec.flag)
+        # Checked like an environment or config value, so --email nope or --min-free-gb -1 is refused.
+        return Resolved(spec.name, _parse(spec, cli_value, spec.flag), spec.flag)
     for variable in (spec.env, *spec.aliases):
         raw = os.environ.get(variable)
         if raw:
@@ -505,7 +520,7 @@ def setting_for(args: Optional[argparse.Namespace], name: str) -> Any:
     spec = SETTINGS[name]
     given = _cli_values(args).get(spec.cli_dest or "")
     if given is not None and spec.flag is not None:
-        return given
+        return _parse(spec, given, spec.flag)
     return getattr(active(), name)
 
 

@@ -165,3 +165,37 @@ def test_parse_metadata_signal_between_rows_stops_before_the_next_one(tmp_path):
     assert len(seen) == 1
     datasets = json.loads((tmp_path / "metaquest_registry.json").read_text())["datasets"]
     assert len(datasets) == 1
+
+
+def test_download_metadata_exits_4_when_ncbi_cannot_be_reached(tmp_path):
+    """Every request failing for a network reason (after its retries) is a retryable failure."""
+    from urllib.error import URLError
+
+    accessions = tmp_path / "accessions.txt"
+    accessions.write_text("SRR1\nSRR2\nSRR3\n")
+    args = argparse.Namespace(
+        email="a@b.c",
+        matches_folder=str(tmp_path / "matches"),
+        metadata_folder=str(tmp_path / "metadata"),
+        threshold=0.0,
+        dry_run=False,
+        accessions_file=str(accessions),
+        api_key=None,
+        batch_size=2,
+        registry=str(tmp_path / "metaquest_registry.json"),
+        data_root=None,
+    )
+    with (
+        patch("metaquest.data.metadata.Entrez.efetch", side_effect=URLError("connection refused")),
+        patch("metaquest.data.metadata._pace_requests"),
+        patch("metaquest.data.metadata.time.sleep"),
+    ):
+        assert DownloadMetadataCommand().execute(args) == 4
+
+
+def test_download_metadata_does_not_raise_when_a_failure_is_not_a_network_one(tmp_path):
+    """An accession NCBI answered without is not a network failure, so the run is not retryable."""
+    batches = [({}, {"SRR1": "network: connection refused"}), ({}, {"SRR2": "not in the NCBI response"})]
+    with patch("metaquest.data.metadata._download_batch_metadata", side_effect=batches):
+        result = metadata_module._download_accessions_metadata(["SRR1", "SRR2"], tmp_path, "a@b.c", 2, batch_size=1)
+    assert result == {}

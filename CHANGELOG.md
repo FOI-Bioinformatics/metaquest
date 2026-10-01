@@ -71,8 +71,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   setting that does not parse, a log file that cannot be opened), 4 for a retryable failure (a wait for
   the registry or catalogue lock that reached its limit; an NCBI request of `sra_info` that could not
   connect, timed out or got HTTP 429 or 5xx after its retries; a `download_sra` run whose every failure
-  was a network one), 130 for an interrupt, 1 for any other failure. `download_metadata` still logs each
-  accession NCBI did not return and exits with 0. See "Exit codes" in the README.
+  was a network one; a `download_metadata` run that could not reach NCBI for any accession), 130 for an
+  interrupt, 1 for any other failure. `download_metadata` still logs each accession NCBI did not return
+  and exits with 0 when it fetched any or a failure was not a network one; `sra_validate` keeps 4 for a
+  registry lock wait that gave up. See "Exit codes" in the README.
 - A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to
   the log file when there is one. The hint "Use --log-level DEBUG for full traceback" follows a failure
   only when there is no log file and the console is not at DEBUG.
@@ -110,6 +112,11 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - `--lock-wait`, `--temp-folder` and `--log-level` fall back to their environment variable and
   `[runtime]` key when not given; the lock limits of the registry, the store catalogue and the dataset
   locks can be set the same way (see `docs/configuration.md`). The built-in values are unchanged.
+- A flag that sets a runtime setting is checked like its environment variable: `--email nope` or a
+  negative `--min-free-gb` (which used to turn the free-space check off) stops the command with exit
+  code 3. The error for a malformed `config.toml` quotes the offending line; an invalid API key value is
+  shown as `(hidden)`. The sourmash plugin's `metaquest_taxonomy` takes the email address and API key
+  from the settings too, so `--email` is no longer required there.
 - The NCBI taxonomy client, the GTDB client and `SRAMetadataClient` (`sra_info`) share one retrying
   HTTP session (`metaquest.utils.http.retrying_session()`); `SRAMetadataClient` used to call
   `requests.get` without retries, and now retries a connection failure, HTTP 429 or 5xx with backoff

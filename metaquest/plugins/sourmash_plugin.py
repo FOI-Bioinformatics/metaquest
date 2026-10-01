@@ -244,12 +244,11 @@ class MetaquestTaxonomyPlugin(CommandLinePlugin):
         )
         parser.add_argument(
             "--email",
-            required=True,
-            help="Email address for NCBI API access",
+            help="Email address for NCBI API access (default: METAQUEST_NCBI_EMAIL or [runtime] ncbi_email)",
         )
         parser.add_argument(
             "--api-key",
-            help="NCBI API key for increased rate limits",
+            help="NCBI API key for increased rate limits (default: METAQUEST_NCBI_API_KEY or NCBI_API_KEY)",
         )
         parser.add_argument(
             "--output-file",
@@ -266,6 +265,7 @@ class MetaquestTaxonomyPlugin(CommandLinePlugin):
         super().main(args)
         import pandas as pd
 
+        from metaquest.core.settings import require_email, setting_for
         from metaquest.data.taxonomy import validate_taxonomic_assignments
 
         try:
@@ -287,8 +287,8 @@ class MetaquestTaxonomyPlugin(CommandLinePlugin):
 
             results_df = validate_taxonomic_assignments(
                 species_list,
-                email=args.email,
-                api_key=args.api_key,
+                email=require_email(args),
+                api_key=setting_for(args, "ncbi_api_key"),
                 output_file=args.output_file,
                 cache_file=args.cache_file,
             )

@@ -761,6 +761,24 @@ class TestSRAValidateCommand:
         assert result == 0
         mock_validate.assert_called_once()
 
+    def test_execute_registry_lock_timeout_exits_4(self, tmp_path):
+        """A registry lock wait that gave up is retryable: exit 4, not the broad catch's 1."""
+        from metaquest.core.exceptions import LockTimeoutError
+
+        command = SRAValidateCommand()
+        fastq_folder = tmp_path / "fastq"
+        (fastq_folder / "SRR123").mkdir(parents=True)
+        (fastq_folder / "SRR123" / "test.fastq").write_text("@r\nACGT\n+\n!!!!\n")
+        args = argparse.Namespace(
+            fastq_folder=str(fastq_folder),
+            accession=None,
+            check_pairs=False,
+            registry=str(tmp_path / "metaquest_registry.json"),
+            data_root=None,
+        )
+        with patch("metaquest.cli.commands.sra_enhanced.registry_batch", side_effect=LockTimeoutError("registry lock")):
+            assert command.execute(args) == 4
+
     def test_execute_records_analyses_in_registry(self, tmp_path):
         """Each validated accession is recorded with its pass/fail status and file count."""
         command = SRAValidateCommand()

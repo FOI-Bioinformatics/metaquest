@@ -141,4 +141,4 @@ class StoreInitCommand(BaseCommand):
             self.logger.info("Project id: %s (%s)", project_snapshot["id"], project_snapshot["name"])
             return 0
         except MetaQuestError as e:
-            return self.fail(e, "Error initializing store")
+            return self.fail(e, self.name)

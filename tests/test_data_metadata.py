@@ -177,7 +177,7 @@ class TestDownloadSingleMetadata:
                     success, result = _download_single_metadata("SRR123", metadata_path, "test@example.com")
 
         assert success is False
-        assert result == "HTTP 503 after 3 attempts"
+        assert result == "network: HTTP 503 after 3 attempts"
         assert mock_sleep.call_args_list == [call(2), call(4), call(8)]
 
     def test_download_single_metadata_partial_retry(self, tmp_path):
@@ -527,7 +527,7 @@ class TestDownloadBatchMetadata:
                     successes, failures = _download_batch_metadata(batch, metadata_path, "test@example.com", None)
 
         assert successes == {}
-        assert failures == {accession: "HTTP 503 after 3 attempts" for accession in batch}
+        assert failures == {accession: "network: HTTP 503 after 3 attempts" for accession in batch}
         assert mock_sleep.call_args_list == [call(2), call(4), call(8)]
 
     def test_success_path_sleeps_only_through_pace_requests(self, tmp_path):

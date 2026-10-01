@@ -447,8 +447,8 @@ A command reports an expected error with `return self.fail(error, "context")` (`
 
 Two commands decide their code from a set of per-item outcomes: `download_sra` returns 4 only when
 every accession that failed was classified `network` by `classify_download_error`, and 1 otherwise.
-`download_metadata` logs each accession NCBI did not return and exits 0; a rerun fetches only the
-missing ones.
+`download_metadata` logs each accession NCBI did not return and exits 0, unless every failure was a
+network one and nothing was fetched (`NetworkError`, 4); a rerun fetches only the missing ones.
 
 ### Logging policy
 

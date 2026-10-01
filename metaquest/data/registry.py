@@ -38,7 +38,7 @@ REGISTRY_FILENAME = "metaquest_registry.json"
 # file loads unchanged; the next save writes it back as version 2.
 SCHEMA_VERSION = 2
 STAGES = ("screened", "selected", "excluded", "downloaded", "analysed", "extracted", "assembled")
-# Registry lock defaults, read at call time; runtime settings override them. The wait fits SLURM's KillWait.
+# Lock defaults (repeated in core.settings), read at call time; settings override; the wait fits SLURM KillWait.
 LOCK_STALE_SECONDS = 120.0
 LOCK_WAIT_SECONDS = 30.0
 _MATE_SUFFIXES = ("_1", "_2", "_s", "_0")

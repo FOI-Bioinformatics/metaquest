@@ -2101,3 +2101,18 @@ def test_reindex_and_verify_ignore_hidden_entries(tmp_path, monkeypatch):
     assert StoreReindexCommand().execute(_reindex_args(data_root=str(paths.root))) == 0
     rc = StoreVerifyCommand().execute(_verify_args(data_root=str(paths.root)))
     assert rc == 0
+
+
+def test_every_store_command_failure_starts_with_the_command_name():
+    """Store command errors read ``store_<name>: ...``; a literal context would break that."""
+    import re
+
+    from pathlib import Path
+
+    import metaquest.cli.commands.store as store_pkg
+
+    folder = Path(store_pkg.__file__).parent
+    contexts = []
+    for module in sorted(folder.glob("*.py")):
+        contexts += re.findall(r"self\.fail\(e, ([^)]*)\)", module.read_text())
+    assert contexts and set(contexts) == {"self.name"}

@@ -557,7 +557,7 @@ class StoreGcCommand(BaseCommand):
                             continue
                         catalog.delete_dataset(accession)
             except DataAccessError as e:
-                self.logger.error(str(e))
+                self.logger.error("%s: %s", self.name, e)
                 for accession, aside in aside_by_accession.items():
                     try:
                         os.replace(aside, sra_dir(paths, accession))

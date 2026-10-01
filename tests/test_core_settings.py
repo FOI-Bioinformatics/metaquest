@@ -486,3 +486,58 @@ def test_lock_wait_flags_default_to_none_and_resolve_through_settings(monkeypatc
     assert options == {"lock_wait": 5.0}
     options = DownloadSraCommand()._store_options(argparse.Namespace(lock_wait=2.0), None, Registry())
     assert options == {"lock_wait": 2.0}
+
+
+# --- fix wave: flag values, secrets, TOML line, first active() call -------------
+
+
+@pytest.mark.parametrize(
+    "dest, value, flag",
+    [("email", "nope", "--email"), ("min_free_gb", -1.0, "--min-free-gb"), ("log_level", "LOUD", "--log-level")],
+)
+def test_a_flag_value_is_checked_like_an_environment_value(dest, value, flag):
+    with pytest.raises(ConfigurationError, match=f"from {flag}"):
+        settings.activate(argparse.Namespace(**{dest: value}))
+
+
+def test_a_flag_value_is_parsed_by_setting_for():
+    assert settings.setting_for(argparse.Namespace(log_level="debug"), "log_level") == "DEBUG"
+    with pytest.raises(ConfigurationError, match="--min-free-gb"):
+        settings.setting_for(argparse.Namespace(min_free_gb=-2.0), "min_free_gb")
+
+
+def test_a_bad_secret_value_is_not_echoed(tmp_path):
+    _write_config(tmp_path, '[runtime]\nncbi_api_key = ["SECRETKEY"]\n')
+    with pytest.raises(ConfigurationError) as excinfo:
+        settings.activate(None)
+    assert "SECRETKEY" not in str(excinfo.value)
+    assert "(hidden)" in str(excinfo.value)
+
+
+def test_malformed_toml_quotes_the_offending_line(tmp_path):
+    _write_config(tmp_path, "# settings\n[runtime\nprogress_every = 1\n")
+    with pytest.raises(ConfigurationError, match=r"line 2 is '\[runtime'"):
+        settings.resolve_setting("progress_every")
+
+
+def test_concurrent_first_calls_build_the_settings_once(monkeypatch):
+    import threading
+    import time
+
+    built = []
+    real_build = settings._build
+
+    def slow_build(args):
+        built.append(threading.get_ident())
+        time.sleep(0.05)
+        return real_build(args)
+
+    monkeypatch.setattr(settings, "_build", slow_build)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(settings.active())) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(built) == 1
+    assert all(result is results[0] for result in results)

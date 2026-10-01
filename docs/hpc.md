@@ -122,12 +122,13 @@ give it more time with a larger value than 300.
 | 1 | Failure: bad input, a dataset not found, a tool error | stop and read the log |
 | 2 | Usage error or renamed command | fix the script |
 | 3 | Configuration: a missing or too old tool, a malformed config file, no NCBI email | fix the environment |
-| 4 | Retryable: a network failure, or a wait for the registry or catalogue lock that gave up | resubmit later |
+| 4 | Retryable: a network failure, or a wait for a registry, catalogue or store lock that gave up | resubmit later |
 | 130 | Interrupted by a signal, including the walltime signal | resubmit to resume |
 
 `download_sra` exits with 4 only when every accession that failed did so for a network reason (a
 connection or timeout error, or a tool stopped by `--timeout`). If any accession failed for another
-reason (not found, disk full, not enough free space, locked by another run) it exits with 1.
+reason (not found, disk full, not enough free space, locked by another run, including one given up
+after `--lock-wait`) it exits with 1.
 
 Chain the steps with `--dependency=afterok`, which starts the next job only when every task of the
 previous one exited with 0:

@@ -731,15 +731,17 @@ whether to resubmit:
 | 1 | Failure: bad input, missing file, a dataset not found, a tool error | Fix the cause; a rerun alone will not help |
 | 2 | Usage error: an unknown flag or command, or a renamed command | Correct the command line |
 | 3 | Configuration: the environment lacks something the command needs | Fix the environment or configuration |
-| 4 | Retryable: a network failure, or a lock wait that reached its limit | Rerun later |
+| 4 | Retryable: a network failure, or a wait for a lock that reached its limit (see below) | Rerun later |
 | 130 | Interrupted by `SIGINT`, `SIGTERM` or `SIGHUP` | Rerun; finished work is kept |
 
 Code 3 covers a missing optional package; an external tool that is missing or older than the version in
 "External tools" above; a malformed `config.toml` or a setting that does not parse; a missing NCBI
 email address; and a `--log-file` that cannot be opened.
 Code 4 covers an NCBI request of `sra_info` that could not connect, timed out or got HTTP 429 or 5xx
-after its retries, and a wait for another run's lock on the project registry or the store catalogue
-that gave up.
+after its retries, a `download_metadata` run that could not reach NCBI for any accession, and a wait
+for another run's lock (the project registry, the store catalogue, a store dataset) that gave up. The
+per-accession `--lock-wait` of `download_sra` is the exception: an accession given up there counts as
+locked, which gives 1 (see below).
 
 Two commands decide from the outcome of each accession:
 
@@ -747,8 +749,9 @@ Two commands decide from the outcome of each accession:
   (including a tool stopped by `--timeout`). If any failed for another reason (not found, disk full,
   not enough free space, locked by another run, interrupted) it exits with 1. An accession given up
   after `--lock-wait` counts as locked, so it gives 1, not 4.
-- `download_metadata` logs each accession NCBI did not return, including when NCBI could not be
-  reached, and exits with 0. Run it again to fetch only the missing ones.
+- `download_metadata` logs each accession NCBI did not return and exits with 0. When NCBI could not be
+  reached for any accession (every request failed with a connection error, a timeout or HTTP 429 or
+  5xx after its retries) it exits with 4. Run it again to fetch only the missing ones.
 
 See [docs/hpc.md](docs/hpc.md) for a resubmission loop on code 4 under SLURM.
 

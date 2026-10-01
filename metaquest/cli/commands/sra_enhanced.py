@@ -456,6 +456,9 @@ class SRAValidateCommand(BaseCommand):
             success = self._print_validation_results(validation_results)
             return 0 if success else 1
 
+        except MetaQuestError as e:
+            # A registry lock wait that gave up (4) or a configuration problem (3) keeps its code.
+            return self.fail(e, "SRA validation failed")
         except Exception as e:
             logger.error(f"SRA validation failed: {e}")
             return 1
