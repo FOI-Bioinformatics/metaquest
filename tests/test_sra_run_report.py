@@ -82,12 +82,31 @@ class TestRunOutcomes:
             (True, "Retry 1: linked from store, 2 files"),
             (False, "locked: download of SRR1 is locked by pid 12: /x.lock"),
             (False, "partial in store; refetch limit reached"),
+            (
+                False,
+                "incomplete: 2 refetches of SRR1 gained no reads (1 of 100 spots); NCBI's count may not be "
+                "reachable; use --accept-partial, or --force to fetch again",
+            ),
         ],
     )
     def test_outcomes_that_started_no_download_count_zero(self, success, message):
         outcomes = RunOutcomes()
         outcomes.observe("SRR1", success, message)
         assert outcomes.attempts == {"SRR1": 0}
+
+    def test_the_store_refusal_of_an_exhausted_copy_counts_zero(self):
+        # The message as the store precheck writes it, before any lock or download is taken.
+        from types import SimpleNamespace
+
+        from metaquest.data.sra.store_handoff import _exhausted_message
+
+        sidecar = SimpleNamespace(refetch={"unchanged": 2}, reads_per_mate=1, ncbi={"spots": 100})
+        message = _exhausted_message("SRR1", sidecar, 100)
+        outcomes = RunOutcomes()
+        outcomes.observe("SRR1", False, message)
+        outcomes.observe("SRR2", False, f"Retry 1: {message}")
+        assert outcomes.attempts == {"SRR1": 0, "SRR2": 0}
+        assert failure_reason(message) == "unknown"
 
     @pytest.mark.parametrize(
         "success, message",
@@ -227,6 +246,30 @@ def _document(tmp_path):
 
 def _report(tmp_path):
     return list(csv.reader((tmp_path / "report.csv").open()))
+
+
+def _preflight_failure(args):
+    from metaquest.core.exceptions import ConfigurationError
+
+    fake = patch("metaquest.cli.commands.sra.download_sra", side_effect=AssertionError("no download expected"))
+    with patch("metaquest.cli.commands.sra.require_tools", side_effect=ConfigurationError("fasterq-dump not found")):
+        with fake:
+            return DownloadSraCommand().execute(args)
+
+
+def test_a_preflight_failure_creates_no_fastq_folder_and_writes_no_document(tmp_path):
+    assert _preflight_failure(_args(tmp_path)) == 3
+    assert not (tmp_path / "fastq").exists()
+    # The report CSV the user asked for is still written, with no rows.
+    assert _report(tmp_path) == [list(REPORT_HEADER)]
+
+
+def test_a_preflight_failure_in_an_existing_fastq_folder_still_writes_the_document(tmp_path):
+    (tmp_path / "fastq").mkdir()
+    assert _preflight_failure(_args(tmp_path)) == 3
+    document = _document(tmp_path)
+    assert document["exit_code"] == 3
+    assert document["totals"]["accessions"] == 0
 
 
 def test_a_retried_network_failure_is_reported_with_two_attempts(tmp_path):

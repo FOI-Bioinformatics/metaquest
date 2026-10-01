@@ -49,6 +49,9 @@ STORE_LINKED_PREFIX = "linked from store"
 STORE_INCOMPLETE_PREFIX = "incomplete:"
 STORE_PARTIAL_PREFIX = "partial in store;"
 SETTLED_PREFIXES = (STORE_INCOMPLETE_PREFIX, STORE_PARTIAL_PREFIX)
+# The end of the precheck's refusal of an incomplete copy whose refetches are used up: an
+# ``incomplete:`` message that started no download (the other ``incomplete:`` messages follow one).
+STORE_EXHAUSTED_SUFFIX = "use --accept-partial, or --force to fetch again"
 
 # Refetches of an incomplete store copy that may gain no reads before the copy is no longer
 # fetched again on its own: it is then linked with --accept-partial, or refused, until a run
@@ -239,7 +242,7 @@ def _exhausted_message(accession: str, sidecar, expected_spots: Optional[int]) -
     return (
         f"{STORE_INCOMPLETE_PREFIX} {sidecar.refetch.get('unchanged')} refetches of {accession} gained no reads "
         f"({_spot_text(sidecar.reads_per_mate)} of {_spot_text(spots)} spots); NCBI's count may not be "
-        "reachable; use --accept-partial, or --force to fetch again"
+        f"reachable; {STORE_EXHAUSTED_SUFFIX}"
     )
 
 

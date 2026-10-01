@@ -30,7 +30,13 @@ from metaquest.data.sra import accession as accession_mod
 from metaquest.data.sra.download import default_max_workers
 from metaquest.data.sra.retry import DISK_FULL_NOT_ATTEMPTED
 from metaquest.data.sra.space import INSUFFICIENT_SPACE_PREFIX
-from metaquest.data.sra.store_handoff import SETTLED_PREFIXES, STORE_LINKED_PREFIX, STORE_PARTIAL_PREFIX
+from metaquest.data.sra.store_handoff import (
+    SETTLED_PREFIXES,
+    STORE_EXHAUSTED_SUFFIX,
+    STORE_INCOMPLETE_PREFIX,
+    STORE_LINKED_PREFIX,
+    STORE_PARTIAL_PREFIX,
+)
 
 REASONS = ("network", "not-found", "disk-full", "insufficient-space", "locked", "interrupted", "unknown")
 REPORT_HEADER = ("accession", "status", "message", "seconds", "reason", "attempts")
@@ -78,13 +84,17 @@ def started_download(success: bool, message: str) -> bool:
     """Whether a result came from an attempt that started a download.
 
     Not one: a disk-full "not attempted" mark, an interruption, a free-space refusal, a wait for
-    a lock that gave up, the store's refusal of a partial copy, files found already in place,
-    and a link to a dataset the store already held. A lock lost during the download did start one.
+    a lock that gave up, the store's refusal of a partial copy or of an incomplete copy whose
+    refetches are used up, files found already in place, and a link to a dataset the store
+    already held. A lock lost during the download did start one, and so did every other
+    ``incomplete:`` outcome (it follows a fetch).
     """
     body = _body(message)
     if success:
         return body != accession_mod.ALREADY_EXISTS and not body.startswith(STORE_LINKED_PREFIX)
     if body == DISK_FULL_NOT_ATTEMPTED or body.startswith(STORE_PARTIAL_PREFIX):
+        return False
+    if body.startswith(STORE_INCOMPLETE_PREFIX) and body.endswith(STORE_EXHAUSTED_SUFFIX):
         return False
     reason = failure_reason(body)
     if reason == "locked":
@@ -96,7 +106,9 @@ class RunOutcomes:
     """The outcomes one download run reported: last result and attempt count per accession.
 
     ``timings`` is the dict handed to ``download_sra`` for each attempt's start and seconds;
-    ``stats`` is ``download_sra``'s statistics once it returned (None after an interrupt).
+    ``stats`` is ``download_sra``'s statistics once it returned (None after an interrupt);
+    ``reached_download`` is set when the run got as far as calling ``download_sra`` (a run that
+    stopped in its preflight checks leaves it False).
     The callback is only called on the run's main thread, so no lock is needed.
     """
 
@@ -106,6 +118,7 @@ class RunOutcomes:
         self.last: Dict[str, Tuple[bool, str]] = {}
         self.timings: Timings = {}
         self.stats: Optional[Dict[str, Any]] = None
+        self.reached_download = False
 
     def observe(self, accession: str, success: bool, message: str) -> None:
         """Record one result for ``accession``, counting it as an attempt when it started a download."""

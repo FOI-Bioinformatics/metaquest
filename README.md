@@ -840,22 +840,23 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 ```
 
 `--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`,
-`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). The column `seconds` is how
-long that accession's download took in this run; it is empty for a dataset linked from the store and
-for accessions that were not downloaded. Two columns follow it: `reason`, for a failed accession only
+`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). The column `seconds` is how long
+that accession's download took in this run; it is empty for a dataset linked from the store and for
+accessions that were not downloaded. Two columns follow it: `reason`, for a failed accession only
 (`network`, `not-found`, `disk-full`, `insufficient-space`, `locked`, `interrupted` or `unknown`), and
 `attempts`, the number of attempts in this run that started a download (a retry counts again; an
 accession refused for lack of space, cancelled by a disk-full abort, stopped by an interrupt before it
 started, given up after waiting for another run's lock, refused because the store holds a partial copy
-under `--no-resume-partial`, already present or linked from the store counts 0). A run that reaches the
-download stage also writes `fastq/download_run.json`, with or without `--report-file`: start and finish
-times, the totals (accessions, downloaded, failed, already present, blacklisted, skipped, attempts),
-the failures by reason, each failed accession with its reason, attempts and message, whether the run
-was aborted (`disk-full` or `interrupted`), the exit code, the host, the settings and the paths used.
-Both files are written after an interrupt (exit 130) and after a run whose final registry write failed
-as well; after an interrupt they list only the accessions that reported a result. A dry run writes
-neither file, and a failure to write them is logged as a warning without changing the exit code.
-`failed_accessions.txt` is written as before. To see sizes and sequencing
+under `--no-resume-partial` or an incomplete copy whose refetches are used up, already present or linked
+from the store counts 0). A run that reaches the download stage, or that stops in its preflight checks
+when the FASTQ folder already exists, also writes `fastq/download_run.json`, with or without
+`--report-file`: start and finish times, the totals (accessions, downloaded, failed, already present,
+blacklisted, skipped, attempts), the failures by reason, each failed accession with its reason, attempts
+and message, whether the run was aborted (`disk-full` or `interrupted`), the exit code, the host, the
+settings and the paths used. Both files are written after an interrupt (exit 130) and after a run whose
+final registry write failed as well; after an interrupt they list only the accessions that reported a
+result. A dry run writes neither file, and a failure to write them is logged as a warning without
+changing the exit code. `failed_accessions.txt` is written as before. To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
 `docs/SRA_ENHANCED_FEATURES.md`. `sra_info` filters per experiment package, not per run: it lists every
 run of each experiment package that a requested run, experiment, sample, study, BioProject or BioSample

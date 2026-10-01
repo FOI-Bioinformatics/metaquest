@@ -60,15 +60,16 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `unchanged`, `skipped-in-use` or `skipped-changed`) and `fixed` (the datasets `--fix-state` rewrote, with
   their state before and after). With no store configured it prints `{"error": ...}` and exits 1. In text
   mode, `--fix-state` prints one `<accession>: fixed (<before> -> <after>)` line per rewritten dataset.
-- `download_sra --report-file` has two columns after the unchanged `accession,status,message,seconds`:
-  `reason` (for a failed accession: `network`, `not-found`, `disk-full`, `insufficient-space`, `locked`,
-  `interrupted` or `unknown`) and `attempts` (attempts in this run that started a download; a retry counts
-  again, while an accession refused for space, cancelled by a disk-full abort, stopped by an interrupt before
-  it started, given up after a lock wait, refused as a partial store copy, already present or linked from the
-  store counts 0).
+- `download_sra --report-file` has two columns after the unchanged `accession,status,message,seconds`: `reason` (for
+  a failed accession: `network`, `not-found`, `disk-full`, `insufficient-space`, `locked`, `interrupted` or
+  `unknown`) and `attempts` (attempts in this run that started a download; a retry counts again, while an accession
+  refused for space, cancelled by a disk-full abort, stopped by an interrupt before it started, given up after a
+  lock wait, refused as a partial store copy or as an incomplete one whose refetches are used up, already present or
+  linked from the store counts 0).
 - `download_sra` writes `<fastq-folder>/download_run.json` after a run that reaches the download stage, with or
-  without `--report-file` (a dry run writes none): start and finish times, totals, failures by reason, each
-  failed accession with its reason, attempts and message, whether the run was aborted (`disk-full` or
+  without `--report-file` (a dry run writes none, and a run stopped by its preflight checks, such as a missing
+  `fasterq-dump`, writes none unless the folder already exists): start and finish times, totals, failures by reason,
+  each failed accession with its reason, attempts and message, whether the run was aborted (`disk-full` or
   `interrupted`), the exit code, host, settings and paths (`data/sra/run_report.py`).
 
 ### Changed

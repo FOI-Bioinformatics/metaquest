@@ -317,8 +317,10 @@ class DownloadSraCommand(BaseCommand):
         """Write the ``--report-file`` CSV and ``<fastq>/download_run.json`` for a run that is not a dry run.
 
         Called after every such run, an interrupted one or one whose final registry flush failed
-        included; statistics come from ``download_sra`` when it returned them, else from the
-        outcomes observed. A summary that cannot be written is logged and leaves ``code`` as it is.
+        included; the JSON document is left out for a run that stopped before the download stage
+        when the FASTQ folder does not exist. Statistics come from ``download_sra`` when it returned
+        them, else from the outcomes observed. A summary that cannot be written is logged and leaves
+        ``code`` as it is.
         """
         stats = outcomes.stats if outcomes.stats is not None else rr.stats_from_outcomes(outcomes)
         rows = rr.report_rows(stats, outcomes.timings, outcomes.attempts)
@@ -337,7 +339,9 @@ class DownloadSraCommand(BaseCommand):
                 paths=rr.run_paths(args, outcomes.stats),
             )
             run_log.note_run(args, *rr.run_log_entries(document, rows))
-            write_run_document(args.fastq_folder, document)
+            # A run stopped by its preflight checks does not create the FASTQ folder for this file.
+            if outcomes.reached_download or Path(args.fastq_folder).is_dir():
+                write_run_document(args.fastq_folder, document)
         except (OSError, MetaQuestError) as e:
             self.logger.warning("Could not write the download run summary: %s", e)
 
@@ -658,6 +662,8 @@ class DownloadSraCommand(BaseCommand):
                 if not args.dry_run:
                     on_result = self._result_recorder(args, fastq_dir, store, batch, timings, expected_spots)
                     on_result = outcomes.wrap(on_result) if outcomes is not None else on_result
+                if outcomes is not None:
+                    outcomes.reached_download = True
                 download_stats = download_sra(
                     fastq_folder=args.fastq_folder,
                     accessions_file=args.accessions_file,
