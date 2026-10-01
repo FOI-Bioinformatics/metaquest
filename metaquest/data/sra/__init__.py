@@ -45,7 +45,7 @@ from metaquest.data.sra.accession import (
     download_accession,
     fasterq_dump_version,
 )
-from metaquest.data.sra.store_handoff import STORE_LINKED_PREFIX, STORE_READY_STATES
+from metaquest.data.sra.store_handoff import SETTLED_PREFIXES, STORE_LINKED_PREFIX, STORE_READY_STATES
 from metaquest.data.sra.download import default_max_workers, download_sra
 
 __all__ = [
@@ -54,6 +54,7 @@ __all__ = [
     "FastqDigest",
     "MATE1_SUFFIXES",
     "MATE_SUFFIXES",
+    "SETTLED_PREFIXES",
     "STOP",
     "STORE_LINKED_PREFIX",
     "STORE_READY_STATES",

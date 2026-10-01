@@ -35,6 +35,15 @@ STORE_READY_STATES = ("complete", "unverified")
 # own run summary) matches against this constant rather than a copy of the literal.
 STORE_LINKED_PREFIX = "linked from store"
 
+# Starts of the failure messages for a store copy that is kept but not linked: a fetch or kept
+# refetch that left the copy incomplete, and the precheck's refusal of an incomplete copy under
+# --no-resume-partial. These are settled outcomes, not transient errors: the retry pass does not
+# retry them (a second fetch in the same run would gain nothing and use up a refetch), and
+# download_sra records the store sidecar's verdict for them.
+STORE_INCOMPLETE_PREFIX = "incomplete:"
+STORE_PARTIAL_PREFIX = "partial in store;"
+SETTLED_PREFIXES = (STORE_INCOMPLETE_PREFIX, STORE_PARTIAL_PREFIX)
+
 # Refetches of an incomplete store copy that may gain no reads before the copy is no longer
 # fetched again on its own: it is then linked with --accept-partial, or refused, until a run
 # passes --force. NCBI's spot count is sometimes not reachable by fasterq-dump at all.
@@ -168,7 +177,7 @@ def _incomplete_message(accession: str, sidecar) -> str:
     reads = sidecar.reads_per_mate if sidecar is not None else None
     spots = spots_mod.positive_int(sidecar.ncbi.get("spots")) if sidecar is not None else None
     return (
-        f"incomplete: {accession} store copy holds {_spot_text(reads)} of {_spot_text(spots)} spots; "
+        f"{STORE_INCOMPLETE_PREFIX} {accession} store copy holds {_spot_text(reads)} of {_spot_text(spots)} spots; "
         "kept for --resume-partial; rerun with --accept-partial to use it"
     )
 
@@ -208,7 +217,7 @@ def _exhausted_message(accession: str, sidecar, expected_spots: Optional[int]) -
     """The result message for an incomplete store copy that is no longer refetched without --force."""
     spots = expected_spots or spots_mod.positive_int(sidecar.ncbi.get("spots"))
     return (
-        f"incomplete: {sidecar.refetch.get('unchanged')} refetches of {accession} gained no reads "
+        f"{STORE_INCOMPLETE_PREFIX} {sidecar.refetch.get('unchanged')} refetches of {accession} gained no reads "
         f"({_spot_text(sidecar.reads_per_mate)} of {_spot_text(spots)} spots); NCBI's count may not be "
         "reachable; use --accept-partial, or --force to fetch again"
     )
@@ -263,7 +272,7 @@ def _store_precheck(
         if accept_partial:
             return _link_result(accession, project_fastq, store, link_mode, " (partial)")
         _drop_store_link(project_fastq, accession, store)
-        return False, f"partial in store; rerun with --resume-partial to finish {accession}"
+        return False, f"{STORE_PARTIAL_PREFIX} rerun with --resume-partial to finish {accession}"
     if state == "incomplete":
         return _exhausted_result(accession, project_fastq, store, link_mode, accept_partial, expected_spots)
     return None

@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.sra_verdicts import present_verdicts, recorded_verdict, registry_inputs
+from metaquest.cli.commands.sra_verdicts import store_sidecar_verdict
 from pathlib import Path
 
 from metaquest.core.constants import FAILED_ACCESSIONS_FILE
@@ -17,17 +18,12 @@ from metaquest.core.exceptions import DataAccessError, ExitCode, MetaQuestError
 from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import open_atomic
-from metaquest.data.registry import (
-    Registry,
-    load_registry,
-    project_root,
-    record_download,
-    update_linked,
-)
+from metaquest.data.registry import Registry, load_registry, project_root, record_download, update_linked
 from metaquest.data.registry_batch import RegistryBatch, registry_batch
 from metaquest.data.registry_timing import set_download_timing
 from metaquest.data.sra import (
     ALREADY_EXISTS,
+    SETTLED_PREFIXES,
     STORE_LINKED_PREFIX,
     classify_download_error,
     default_max_workers,
@@ -35,10 +31,9 @@ from metaquest.data.sra import (
     parse_verdict_message,
     transient_bytes,
 )
-from metaquest.store.layout import StorePaths, sidecar_path, store_paths
+from metaquest.store.layout import StorePaths, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
-from metaquest.store.sidecar import sidecar_completeness
 from metaquest.store.usage import ensure_project_identity, record_usage_many
 from metaquest.utils import resources
 from metaquest.utils.termination import graceful_termination
@@ -526,8 +521,10 @@ class DownloadSraCommand(BaseCommand):
             if from_store:
                 usage_rows.append((accession, "", "linked" if linked else "downloaded", message))
             complete = parse_verdict_message(message) if success else None
-            # A store link's message has no verdict; its sidecar's is read here, outside the flush's lock.
-            sidecar = self._sidecar_completeness(store, accession) if complete is None and from_store else None
+            # A store link or a store copy kept unlinked (SETTLED_PREFIXES) records its sidecar's verdict
+            # (sra_verdicts.store_verdict); the sidecar is read here, outside the flush's lock.
+            use_sidecar = complete is None and (from_store or (not success and message.startswith(SETTLED_PREFIXES)))
+            sidecar = self._sidecar_completeness(store, accession) if use_sidecar else None
             started, seconds = self._attempt_timing(accession, success, message, timings) or (None, None)
 
             def _mutation(reg: Registry) -> None:
@@ -562,9 +559,7 @@ class DownloadSraCommand(BaseCommand):
         None when there is no store, or no sidecar (not yet catalogued, or unreadable);
         ``read_sidecar`` already logs a warning for the latter case.
         """
-        if store is None:
-            return None
-        return sidecar_completeness(sidecar_path(store, accession))
+        return store_sidecar_verdict(store, accession)
 
     def _transient_folders(self, args: argparse.Namespace, fastq_dir: Path, store: Optional[StorePaths]) -> Set[Path]:
         """Folders where ``download_accession`` can leave ``.sra-cache`` archives or

@@ -16,6 +16,7 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.sra import accession as accession_mod
 from metaquest.data.sra.space import INSUFFICIENT_SPACE_PREFIX
+from metaquest.data.sra.store_handoff import SETTLED_PREFIXES
 from metaquest.utils.progress import ProgressReporter, item_level
 from metaquest.utils.security import SecureSubprocess
 
@@ -144,12 +145,18 @@ def _split_not_found(failed_accessions: List[str], download_results: Dict[str, A
     retry (the run genuinely does not exist, or the ID is invalid), and one the free-space guard
     refused does not fit even with no other download running; each is kept in the failed list
     rather than burning a retry round (and, for a refusal, a wait for running downloads) on it.
+    A store copy kept but not linked (a message starting with one of ``SETTLED_PREFIXES``) is a
+    settled outcome too: fetching it again in the same run gains nothing and uses up a refetch.
     """
     retry_batch: List[str] = []
     not_found: List[str] = []
     for accession in failed_accessions:
         message = download_results.get(accession, "")
-        if INSUFFICIENT_SPACE_PREFIX in message or accession_mod.classify_download_error(message) == "not-found":
+        if (
+            INSUFFICIENT_SPACE_PREFIX in message
+            or str(message).startswith(SETTLED_PREFIXES)
+            or accession_mod.classify_download_error(message) == "not-found"
+        ):
             not_found.append(accession)
         else:
             retry_batch.append(accession)

@@ -1,14 +1,21 @@
-"""The registry inputs and completeness verdicts ``download_sra`` records.
+"""The registry inputs and completeness verdicts ``download_sra``, ``store_link`` and ``store_adopt`` record.
 
 ``registry_inputs`` collects what the download loop needs from the project registry, with each
-accession's expected spot count falling back to the metadata XML (the project's metadata folder,
-then the store's) and then to the count of the verdict on file. ``present_verdicts`` verifies an
-accession that is on disk without a ``downloaded`` record, as a run killed after its files were in
-place leaves it; it reads FASTQ files, so it runs before the registry lock is taken.
-``recorded_verdict`` is the verdict to record, under the lock, for a download, a present accession
-or a dataset linked from the shared store (``linked_verdict``): recomputed when a read count and a
-spot count are both known, and never an ``unverified`` one in place of a recorded ``complete`` or
-``truncated`` one.
+accession's expected spot count looked up in the order ``metaquest.data.sra.spots.expected_spots``
+documents: the registry's metadata, the store sidecar (for a run with a store), the metadata XML
+(the project's metadata folder, then the store's) and last the count of the verdict on file.
+``present_verdicts`` verifies an accession that is on disk without a ``downloaded`` record, as a run
+killed after its files were in place leaves it; it reads FASTQ files, so it runs before the
+registry lock is taken. ``recorded_verdict`` is the verdict to record, under the lock, for a
+download, a present accession or a dataset linked from the shared store: recomputed when a read
+count and a spot count are both known, and never an ``unverified`` one in place of a recorded
+``complete`` or ``truncated`` one.
+
+For a store accession the one rule is ``store_verdict``: the sidecar's verdict (read before the lock
+is taken) judged against the project's spot count (``store_spot_count``, also read before the lock)
+and merged with the verdict on file. ``download_sra`` (a link, or a settled ``incomplete:`` result),
+``store_link`` and ``store_adopt`` all record it, so a relink never turns ``truncated`` into
+``unverified``.
 """
 
 import argparse
@@ -21,8 +28,10 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry, project_root, query
 from metaquest.data.sra.fastq import verify_download
-from metaquest.data.sra.spots import merged_verdict, positive_int, spots_from_xml, verdict_for_count
-from metaquest.store.layout import StorePaths
+from metaquest.data.sra.spots import expected_spots as lookup_spots
+from metaquest.data.sra.spots import merged_verdict, positive_int, verdict_for_count
+from metaquest.store.layout import StorePaths, sidecar_path
+from metaquest.store.sidecar import sidecar_completeness
 
 logger = logging.getLogger(__name__)
 
@@ -47,21 +56,25 @@ def _run_accessions(args: argparse.Namespace) -> List[str]:
 
 
 def _fallback_spots(
-    accessions: Iterable[str], registry: Registry, known: Mapping[str, int], folders: List[Path], excluded: set
+    accessions: Iterable[str],
+    registry: Registry,
+    known: Mapping[str, int],
+    folders: List[Path],
+    excluded: set,
+    store: Optional[StorePaths] = None,
 ) -> Dict[str, int]:
-    """Spot counts for the accessions ``known`` lacks: ``<ACC>_metadata.xml`` in ``folders``, then the verdict on file.
+    """Spot counts for the accessions ``known`` lacks, in ``expected_spots``'s order after its metadata step.
 
-    The order follows ``metaquest.data.sra.spots.expected_spots`` after its registry metadata step:
-    the XML holds NCBI's count, the recorded verdict only a copy an earlier run made.
+    That is the store sidecar's ``ncbi.spots`` (with a ``store``), ``<ACC>_metadata.xml`` in
+    ``folders``, then the verdict on file: the sidecar and the XML hold NCBI's count, the recorded
+    verdict only a copy an earlier run made. The store hand-off then judges a store download
+    against this count, and the result recorder records the verdict against the same one.
     """
     found: Dict[str, int] = {}
     for acc in accessions:
         if acc in known or acc in excluded or acc in found:
             continue
-        spots = spots_from_xml(acc, folders)
-        if spots is None:
-            previous = rb.download_verdict(registry, acc)
-            spots = positive_int(previous.expected_spots) if previous is not None else None
+        spots = lookup_spots(registry, acc, store=store, xml_folders=folders)
         if spots is not None:
             found[acc] = spots
     return found
@@ -74,10 +87,11 @@ def registry_inputs(
 
     All four are empty for a dry run. Expected spot counts are only collected with
     ``--verify-downloads`` (the default): the registry's ``run_total_spots`` first, then, for an
-    accession of this run without one, ``Run_Total_Spots`` in ``<ACC>_metadata.xml`` in the
-    project's ``metadata`` folder and then in the store's, and last the ``expected_spots`` of the
-    verdict on file (so a ``--redownload-truncated`` run judges the new files against the count the
-    old ones were judged by). Truncated accessions are only collected
+    accession of this run without one, ``ncbi.spots`` in the store sidecar (with a store),
+    ``Run_Total_Spots`` in ``<ACC>_metadata.xml`` in the project's ``metadata`` folder and then in
+    the store's, and last the ``expected_spots`` of the verdict on file (so a
+    ``--redownload-truncated`` run judges the new files against the count the old ones were judged
+    by). Truncated accessions are only collected
     with ``--redownload-truncated``. Run sizes (NCBI's ``.sra`` size in bytes) feed the free-space
     guard; an accession without one needs ``--min-free-gb`` instead.
     """
@@ -99,7 +113,7 @@ def registry_inputs(
     if verify:
         folders = [project_root(project_registry) / "metadata"] + ([store.metadata] if store is not None else [])
         run = _run_accessions(args)
-        expected_spots.update(_fallback_spots(run, project_registry, expected_spots, folders, excluded))
+        expected_spots.update(_fallback_spots(run, project_registry, expected_spots, folders, excluded, store))
     if getattr(args, "redownload_truncated", False):
         truncated = {
             acc
@@ -168,6 +182,59 @@ def present_verdicts(
     return verdicts
 
 
+def store_spot_count(
+    registry: Optional[Registry],
+    accession: str,
+    store: StorePaths,
+    known: Optional[int] = None,
+    metadata_folder: Optional[Union[str, Path]] = None,
+) -> Optional[int]:
+    """The spot count a store accession of this project is judged against; call before the lock.
+
+    ``known`` (a count the caller already resolved, e.g. ``registry_inputs``'s) when positive,
+    else ``expected_spots`` over ``registry`` (a snapshot), the store sidecar and the metadata XML
+    in ``metadata_folder`` (default: the project's ``metadata`` folder) and then the store's.
+    Reads the sidecar and XML files, so it never runs under the registry lock.
+    """
+    spots = positive_int(known)
+    if spots is not None:
+        return spots
+    folders: List[Union[str, Path]] = []
+    if metadata_folder is not None:
+        folders.append(metadata_folder)
+    elif registry is not None:
+        folders.append(project_root(registry) / "metadata")
+    folders.append(store.metadata)
+    return lookup_spots(registry, accession, store=store, xml_folders=folders)
+
+
+def store_sidecar_verdict(store: Optional[StorePaths], accession: str) -> Optional[dict]:
+    """The completeness verdict the store sidecar of ``accession`` records, or None; call before the lock.
+
+    None when there is no store or no readable sidecar (``read_sidecar`` logs the latter).
+    """
+    if store is None:
+        return None
+    return sidecar_completeness(sidecar_path(store, accession))
+
+
+def store_verdict(
+    registry: Registry, accession: str, sidecar: Optional[Mapping[str, Any]], expected: Optional[int]
+) -> Optional[Dict[str, Any]]:
+    """The verdict to record for a store accession given its sidecar and the project's spot count.
+
+    Call under the registry lock, with ``sidecar`` from ``store_sidecar_verdict`` and ``expected``
+    from ``store_spot_count``, both read before the lock was taken. The verdict is
+    ``linked_verdict`` of the one ``registry`` holds: recomputed from the sidecar's read count when
+    a spot count is known (a short ``unverified`` copy becomes ``truncated``), and otherwise never
+    an ``unverified`` verdict in place of a recorded ``complete`` or ``truncated`` one. None
+    (no sidecar) leaves the verdict on file as it is. Reads no file.
+    """
+    if sidecar is None:
+        return None
+    return linked_verdict(rb.download_verdict(registry, accession), sidecar, expected)
+
+
 def linked_verdict(
     previous: Optional[Union[Mapping[str, Any], rb.Verdict]],
     sidecar: Optional[Mapping[str, Any]],
@@ -201,7 +268,7 @@ def recorded_verdict(
 ) -> Optional[Dict[str, Any]]:
     """The verdict to record for ``accession``, merged with the one ``registry`` holds; call under the lock.
 
-    ``new`` is the store sidecar's verdict when ``linked`` (``linked_verdict``), otherwise the
+    ``new`` is the store sidecar's verdict when ``linked`` (``store_verdict``), otherwise the
     verdict of a download's result message or of ``present_verdicts``. With the read count it
     carries and ``expected`` both known the verdict is recomputed (a complete redownload replaces
     ``truncated``); otherwise a recorded ``complete`` or ``truncated`` verdict is kept over an
@@ -209,7 +276,7 @@ def recorded_verdict(
     """
     if new is None:
         return None
-    previous = rb.download_verdict(registry, accession)
     if linked:
-        return linked_verdict(previous, new, expected)
+        return store_verdict(registry, accession, new, expected)
+    previous = rb.download_verdict(registry, accession)
     return merged_verdict(previous, new, _read_count(new), positive_int(expected))

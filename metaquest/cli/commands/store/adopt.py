@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, List
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_completeness, _gitignore_guard
+from metaquest.cli.commands.sra_verdicts import store_sidecar_verdict, store_spot_count, store_verdict
+from metaquest.cli.commands.store._shared import _no_store_hint, _gitignore_guard
 from metaquest.core.exceptions import DataAccessError
 from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
@@ -178,11 +179,23 @@ class StoreAdoptCommand(BaseCommand):
 
     @staticmethod
     def _record_linked(args: argparse.Namespace, paths: StorePaths, newly_linked: List[str]) -> None:
-        """Point the registry's download records at the store and record the linked usage."""
+        """Point the registry's download records at the store and record the linked usage.
+
+        The verdict recorded is ``sra_verdicts.store_verdict``'s, as ``store_link`` and
+        ``download_sra`` record it: the new sidecar's verdict judged against the project's spot
+        count and merged with the verdict on file, so a recorded ``truncated`` verdict is never
+        replaced by ``unverified``. The sidecars and spot counts are read before the lock is taken.
+        """
+        snapshot = load_registry(args.registry)
+        metadata = Path(args.metadata_folder)
+        inputs = {
+            acc: (store_sidecar_verdict(paths, acc), store_spot_count(snapshot, acc, paths, metadata_folder=metadata))
+            for acc in newly_linked
+        }
         with registry_transaction(args.registry) as reg:
             ensure_project_identity(reg)
             for acc in newly_linked:
-                complete = _sidecar_completeness(paths, acc)
+                complete = store_verdict(reg, acc, *inputs[acc])
                 record_download(
                     reg,
                     acc,

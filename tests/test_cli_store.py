@@ -1467,7 +1467,9 @@ class TestStoreLinkCommand:
 
         registry = load_registry(registry_path)
         complete = registry.datasets["SRR1"]["download"]["complete"]
-        assert complete == {"verdict": "complete", "ratio": 1.0, "expected_spots": 5, "reads_r1": 5}
+        # Recomputed from the sidecar's read and spot counts (sra_verdicts.store_verdict), the same
+        # verdict download_sra records for a link.
+        assert complete == {"method": "spots", "verdict": "complete", "ratio": 1.0, "expected_spots": 5, "reads_r1": 5}
 
         with Catalog(paths) as cat:
             row = cat.conn.execute(

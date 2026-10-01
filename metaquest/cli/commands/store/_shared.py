@@ -1,18 +1,16 @@
 """
 Helpers shared by more than one store command: the timestamp, the no-store hint, the stale
-project row, the sidecar completeness lookup, the `.gitignore` guard and the registry's list of
-linked datasets.
+project row, the `.gitignore` guard and the registry's list of linked datasets. The verdict a
+store command records for a linked dataset is ``metaquest.cli.commands.sra_verdicts.store_verdict``.
 """
 
 import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from metaquest.cli.base import emit_error_json
-from metaquest.store.layout import StorePaths, sidecar_path
-from metaquest.store.sidecar import sidecar_completeness
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +42,6 @@ def _stale_project_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "hostname": row.get("hostname") or "an unrecorded host",
         "reason": row.get("reason") or "registry missing",
     }
-
-
-def _sidecar_completeness(paths: StorePaths, accession: str) -> Optional[Dict[str, Any]]:
-    """The completeness verdict recorded in the store's sidecar for ``accession``, or None."""
-    return sidecar_completeness(sidecar_path(paths, accession))
 
 
 def _gitignore_guard(cwd: Path, log: logging.Logger) -> None:

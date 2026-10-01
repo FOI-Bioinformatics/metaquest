@@ -1,22 +1,33 @@
 """
 `store_link` and `store_unlink`: add or remove one accession's project symlink.
+
+`store_link` records the verdict ``sra_verdicts.store_verdict`` gives, the same one ``download_sra``
+records for a link: the store sidecar's verdict judged against the project's spot count and merged
+with the verdict on file, so a relink never turns a recorded ``truncated`` verdict into
+``unverified``. A ready copy whose sidecar is ``unverified`` but short against that spot count is
+refused like a ``partial`` one; its sidecar is first rewritten as ``partial`` under the dataset lock,
+as the download hand-off does.
 """
 
 import argparse
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from metaquest.cli.base import BaseCommand
-from metaquest.cli.commands.store._shared import _no_store_hint, _sidecar_completeness
+from metaquest.cli.commands.sra_verdicts import store_sidecar_verdict, store_spot_count, store_verdict
+from metaquest.cli.commands.store._shared import _no_store_hint
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import load_registry, record_download, registry_transaction, update_linked
 from metaquest.data.registry_timing import set_download_timing
+from metaquest.data.sra.store_handoff import _reverify_sidecar, _short_unverified
 from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import LINK_MODES, link_dataset, unlink_dataset
+from metaquest.store.locks import dataset_lock
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import read_sidecar
 from metaquest.store.usage import ensure_project_identity, record_usage_many
+from metaquest.utils.lockfile import LockHeld
 
 
 class StoreLinkCommand(BaseCommand):
@@ -65,19 +76,27 @@ class StoreLinkCommand(BaseCommand):
             help="Link a dataset whose store copy is incomplete, failed or undescribed",
         )
 
-    def _refuse_incomplete(self, paths: StorePaths, accession: str, accept_partial: bool) -> bool:
+    def _refuse_incomplete(
+        self, paths: StorePaths, accession: str, accept_partial: bool, expected: Optional[int] = None
+    ) -> bool:
         """True when ``accession`` must not be linked as it stands.
 
         The store's sidecar is the record of whether a dataset is usable. A ``partial`` or
         ``failed`` one, or one with no sidecar at all (an interrupted run, or a folder put
         there by hand), reads as complete once it is linked into ``fastq/``, so linking it
-        silently would feed an unfinished dataset into every later analysis.
+        silently would feed an unfinished dataset into every later analysis. A ready copy
+        whose sidecar is ``unverified`` but holds fewer reads than ``expected`` (the project's
+        spot count) allows is incomplete too (``_short_unverified``); its sidecar is rewritten
+        as ``partial`` under the dataset lock first (``_record_short``).
         """
         sidecar = read_sidecar(sidecar_path(paths, accession))
         if sidecar is None:
             state = "no sidecar"
         elif sidecar.state in ("partial", "failed", "downloading"):
             state = sidecar.state
+        elif expected is not None and _short_unverified(sidecar, expected):
+            self._record_short(paths, accession, expected)
+            state = f"unverified, holding {sidecar.reads_per_mate} of {expected} spots"
         else:
             return False
 
@@ -90,6 +109,20 @@ class StoreLinkCommand(BaseCommand):
             state,
         )
         return True
+
+    def _record_short(self, paths: StorePaths, accession: str, expected: int) -> None:
+        """Rewrite a short ``unverified`` sidecar as ``partial``, under the dataset lock.
+
+        The decision is taken again under the lock, since another project may have replaced the
+        copy meanwhile. A lock another run holds is not waited for: that run is working on the
+        dataset, and the refusal stands either way.
+        """
+        try:
+            with dataset_lock(paths, accession, blocking=False):
+                if _short_unverified(read_sidecar(sidecar_path(paths, accession)), expected):
+                    _reverify_sidecar(paths, accession, expected)
+        except LockHeld:
+            self.logger.warning("%s: another run holds the dataset lock; its sidecar is left as it is", accession)
 
     def execute(self, args: argparse.Namespace) -> int:
         """Run the command; return the exit code."""
@@ -107,8 +140,10 @@ class StoreLinkCommand(BaseCommand):
         accept_partial = getattr(args, "accept_partial", False)
         linked: List[str] = []
         failed: List[str] = []
+        # Read before the registry lock is taken: the spot counts may come from metadata XML files.
+        spots = {acc: store_spot_count(registry, acc, paths) for acc in args.accessions}
         for accession in args.accessions:
-            if self._refuse_incomplete(paths, accession, accept_partial):
+            if self._refuse_incomplete(paths, accession, accept_partial, spots[accession]):
                 failed.append(accession)
                 continue
             try:
@@ -119,10 +154,11 @@ class StoreLinkCommand(BaseCommand):
                 failed.append(accession)
 
         if linked:
+            sidecars = {acc: store_sidecar_verdict(paths, acc) for acc in linked}
             with registry_transaction(args.registry) as reg:
                 ensure_project_identity(reg)
                 for accession in linked:
-                    complete = _sidecar_completeness(paths, accession)
+                    complete = store_verdict(reg, accession, sidecars[accession], spots[accession])
                     record_download(
                         reg,
                         accession,
