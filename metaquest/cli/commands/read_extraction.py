@@ -31,12 +31,14 @@ from metaquest.data.registry import (
     resolve_project_path,
     scan_downloads,
 )
+from metaquest.data.file_io import visible_files
 from metaquest.data.registry_timing import Stopwatch, set_extraction_timing
-from metaquest.data.sra import count_fastq_reads
+from metaquest.data.sra import STORE_READY_STATES, count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.store.layout import StorePaths
 from metaquest.store.link import dangling_links
 from metaquest.store.resolve import resolve_optional_store
+from metaquest.store.sidecar import Sidecar, read_sidecar
 from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
 from metaquest.utils.progress import DemoteInfo, ProgressReporter
@@ -51,6 +53,21 @@ SAMPLE_LINE_TEMPLATES = (
     "%s: extraction against %s is in progress elsewhere; skipped",
     "%s: redoing extraction, %s",
 )
+
+
+def _store_copy_reason(sidecar: Sidecar) -> str:
+    """Why a store copy whose sidecar state is not ready is skipped, for the skip line.
+
+    A ``partial`` copy gives its read count against the NCBI spot count when both are
+    recorded; a ``failed`` copy gives the verification error it recorded. Any other state,
+    or a missing figure, is named as the state alone.
+    """
+    reads, spots = sidecar.reads_per_mate, sidecar.ncbi.get("spots")
+    if sidecar.state == "partial" and reads is not None and spots is not None:
+        return f"store copy partial ({reads} of {spots} spots)"
+    if sidecar.state == "failed" and sidecar.error:
+        return f"store copy failed verification: {sidecar.error}"
+    return f"store copy {sidecar.state}"
 
 
 def _non_negative_int(value: str) -> int:
@@ -122,7 +139,10 @@ class ExtractTargetReadsCommand(BaseCommand):
         parser.add_argument(
             "--allow-truncated",
             action="store_true",
-            help="Extract even for a sample whose registry download verdict is 'truncated'",
+            help=(
+                "Extract even for a sample whose registry download verdict is 'truncated', "
+                "or whose store copy is recorded as partial or failed"
+            ),
         )
         parser.add_argument(
             "--debug-keep-sam",
@@ -297,8 +317,8 @@ class ExtractTargetReadsCommand(BaseCommand):
         """The selected samples that will really be mapped, so only their mates are counted.
 
         Counting reads both mate files of a sample, which is a streaming pass over every
-        byte; doing it for a sample that is about to be skipped as already extracted or as a
-        truncated download is pure cost.
+        byte; doing it for a sample that is about to be skipped as already extracted or as an
+        unusable download (``_unusable_downloads``) is pure cost.
         """
         genome_path = Path(args.genome_fasta)
 
@@ -325,15 +345,27 @@ class ExtractTargetReadsCommand(BaseCommand):
         return recorded | set(scan_downloads(Path(args.fastq_folder)))
 
     @staticmethod
-    def _truncated_downloads(registry: Registry) -> Dict[str, Dict[str, Any]]:
-        """Accession -> download completeness verdict, for every accession whose verdict is
-        ``"truncated"``."""
-        truncated = {}
+    def _unusable_downloads(registry: Registry, fastq_folder: Path) -> Dict[str, Dict[str, Any]]:
+        """Accession -> why its download is skipped unless ``--allow-truncated`` is given.
+
+        Holds every accession whose registry verdict is ``"truncated"`` (its verdict, as
+        before) and every store copy in ``fastq_folder`` whose sidecar records a state outside
+        ``STORE_READY_STATES``, with a ``reason``. The sidecar is consulted whatever the
+        registry verdict says: a record written as ``"unverified"`` may point at a store copy
+        found short or failed since. Only sidecars are read, never a FASTQ file, so a plain
+        project download recorded as ``"unverified"`` is not skipped.
+        """
+        unusable: Dict[str, Dict[str, Any]] = {}
         for accession in registry.datasets:
             verdict = rb.download_verdict(registry, accession)
             if verdict is not None and verdict.verdict == "truncated":
-                truncated[accession] = verdict.to_dict()
-        return truncated
+                unusable[accession] = verdict.to_dict()
+        for acc_dir in visible_files(fastq_folder, dirs=True):
+            sidecar_file = _resolved_sidecar_path(acc_dir) or acc_dir / f"{acc_dir.name}.json"
+            sidecar = read_sidecar(sidecar_file) if sidecar_file.is_file() else None
+            if sidecar is not None and sidecar.state not in STORE_READY_STATES:
+                unusable[acc_dir.name] = {**unusable.get(acc_dir.name, {}), "reason": _store_copy_reason(sidecar)}
+        return unusable
 
     def _record_result(
         self,
@@ -507,7 +539,7 @@ class ExtractTargetReadsCommand(BaseCommand):
                 if (rec := self._resolved_extraction_record(registry, acc, args.genome_id)) is not None
             }
 
-            truncated_downloads = self._truncated_downloads(registry)
+            truncated_downloads = self._unusable_downloads(registry, Path(args.fastq_folder))
             available = self._available_accessions(args, registry)
 
             mate_counts: Dict[str, Any] = {}

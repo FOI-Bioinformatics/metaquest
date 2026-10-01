@@ -597,15 +597,11 @@ def _resolve_done_state(
 
 
 def _skip_if_truncated(accession: str, verdict: Optional[Dict[str, Any]], allow_truncated: bool) -> bool:
-    """True (after logging) when this sample's truncated download should be skipped."""
+    """True (after logging) when this sample's truncated download or unusable store copy should be skipped."""
     if not verdict or allow_truncated:
         return False
-    logger.warning(
-        "skipped %s: download truncated (%d of %d spots); use --allow-truncated",
-        accession,
-        verdict.get("reads_r1", 0),
-        verdict.get("expected_spots", 0),
-    )
+    spots = f"download truncated ({verdict.get('reads_r1', 0)} of {verdict.get('expected_spots', 0)} spots)"
+    logger.warning("skipped %s: %s; use --allow-truncated", accession, verdict.get("reason", spots))
     return True
 
 
@@ -745,12 +741,12 @@ def extract_target_reads(
             strain of the target genome can map with a genuinely low MAPQ.
         temp_folder: Where the intermediate SAM alignment(s) are written; defaults to the
             sample's own output folder.
-        allow_truncated: If True, extract even a sample whose download verdict (via
-            ``truncated_downloads``) is "truncated"; otherwise that sample is skipped.
+        allow_truncated: If True, extract even a sample listed in ``truncated_downloads``;
+            otherwise that sample is skipped.
         mate_counts: Accession -> (mate 1 reads, mate 2 reads). A mismatch maps the two mate
             files independently as single-end, rather than relying on minimap2's own warning.
-        truncated_downloads: Accession -> download verdict, for every accession whose verdict
-            is "truncated"; skipped unless ``allow_truncated``.
+        truncated_downloads: Accession -> download verdict, or a ``reason`` for an unusable store
+            copy, for every accession to skip unless ``allow_truncated``.
         keep_sam: If True, keep the intermediate SAM alignment(s) for debugging.
         available: Accessions with FASTQ files on disk. A selected sample not in it is left
             out and counted rather than logged individually, so a dry run over many thousands

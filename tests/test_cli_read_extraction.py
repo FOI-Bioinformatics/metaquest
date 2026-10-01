@@ -17,7 +17,7 @@ from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.cli.commands.status import StatusCommand
 from metaquest.core.exceptions import ProcessingError, SecurityError
 from metaquest.data.read_extraction import ExtractionResult
-from metaquest.data.registry import load_registry, record_extraction, save_registry
+from metaquest.data.registry import load_registry, record_download, record_extraction, save_registry
 from helpers_extraction import _fake_tools, tools_present  # noqa: F401 (autouse fixture)
 from metaquest.utils import tools
 
@@ -922,7 +922,8 @@ class TestExtractTargetReadsCommand:
             project_acc_dir.symlink_to(store_acc_dir)
 
             record = compute_dataset_stats(sorted(store_acc_dir.iterdir()), use_seqkit=False)
-            write_sidecar(store_acc_dir / "SRR1.json", Sidecar(accession="SRR1", stats=record))
+            sidecar = Sidecar(accession="SRR1", state="complete", stats=record)
+            write_sidecar(store_acc_dir / "SRR1.json", sidecar)
 
             registry_file = root / "registry.json"
             with patch("metaquest.cli.commands.read_extraction.count_fastq_reads") as counted:
@@ -1694,3 +1695,108 @@ def test_sample_line_templates_exist_in_the_data_module():
     source = Path(data_mod.__file__).read_text()
     for template in SAMPLE_LINE_TEMPLATES:
         assert f'"{template}"' in source, template
+
+
+@pytest.fixture
+def isolated_store(tmp_path, monkeypatch):
+    """A tmp_path store, with the environment kept away from the developer's own store and config."""
+    from metaquest.store.layout import init_store
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("METAQUEST_DATA", raising=False)
+    return init_store(tmp_path / "store")
+
+
+def _store_linked_sample(root, store, sidecar_fields, verdict="unverified"):
+    """Move SRR1's reads into ``store``, link them back into fastq/ and write the store's sidecar.
+
+    The registry records the download with ``verdict``, as a project whose record was written
+    before the store copy was found short would.
+    """
+    from metaquest.store.layout import sidecar_path, sra_dir
+    from metaquest.store.sidecar import Sidecar, write_sidecar
+
+    project_dir = root / "fastq" / "SRR1"
+    store_dir = sra_dir(store, "SRR1")
+    store_dir.mkdir(parents=True)
+    for path in sorted(project_dir.iterdir()):
+        path.rename(store_dir / path.name)
+    project_dir.rmdir()
+    project_dir.symlink_to(store_dir)
+    write_sidecar(sidecar_path(store, "SRR1"), Sidecar(accession="SRR1", layout="PAIRED", **sidecar_fields))
+    registry_file = root / "registry.json"
+    registry = load_registry(registry_file)
+    complete = {"verdict": verdict, "reads_r1": 5}
+    record_download(
+        registry, "SRR1", "downloaded", root / "fastq", complete=complete, source="store", store_name="SRR1"
+    )
+    save_registry(registry)
+    return registry_file
+
+
+def _run_extraction(root, table, genome, registry_file, store, **overrides):
+    """Run the command over the one-sample tree, returning the exit code and whether a tool ran."""
+    args = _args(
+        root,
+        parsed_containment=str(table),
+        genome_fasta=str(genome),
+        fastq_folder=str(root / "fastq"),
+        output_folder=str(root / "targeted"),
+        threshold=0.5,
+        registry=str(registry_file),
+        data_root=str(store.root) if store is not None else None,
+        **overrides,
+    )
+    with patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools({})) as run:
+        rc = ExtractTargetReadsCommand().execute(args)
+    return rc, run.called
+
+
+_PARTIAL = {"state": "partial", "reads_per_mate": 5, "ncbi": {"spots": 20}}
+
+
+def test_partial_store_copy_with_an_unverified_registry_verdict_is_skipped(tmp_path, isolated_store, caplog):
+    """The registry says unverified, but the store's sidecar records a partial copy: skipped."""
+    root, table, genome = _gzip_tree(tmp_path)
+    registry_file = _store_linked_sample(root, isolated_store, _PARTIAL)
+    with caplog.at_level(logging.WARNING):
+        rc, ran = _run_extraction(root, table, genome, registry_file, isolated_store)
+    assert rc == 1
+    assert not ran
+    assert "skipped SRR1: store copy partial (5 of 20 spots); use --allow-truncated" in caplog.text
+
+
+def test_allow_truncated_extracts_a_partial_store_copy(tmp_path, isolated_store):
+    """--allow-truncated covers a partial store copy as it covers a truncated download."""
+    root, table, genome = _gzip_tree(tmp_path)
+    registry_file = _store_linked_sample(root, isolated_store, _PARTIAL)
+    rc, ran = _run_extraction(root, table, genome, registry_file, isolated_store, allow_truncated=True)
+    assert rc == 0
+    assert ran
+    assert (root / "targeted" / "SRR1" / "GCF_1_1.fastq.gz").exists()
+
+
+def test_failed_store_copy_is_skipped_with_its_verification_error(tmp_path, isolated_store, caplog):
+    """A sidecar left in the failed state names its error in the skip line."""
+    root, table, genome = _gzip_tree(tmp_path)
+    failed = {"state": "failed", "error": "SRR1_2.fastq.gz: truncated gzip stream"}
+    registry_file = _store_linked_sample(root, isolated_store, failed)
+    with caplog.at_level(logging.WARNING):
+        rc, ran = _run_extraction(root, table, genome, registry_file, isolated_store)
+    assert rc == 1
+    assert not ran
+    expected = "skipped SRR1: store copy failed verification: SRR1_2.fastq.gz: truncated gzip stream"
+    assert f"{expected}; use --allow-truncated" in caplog.text
+
+
+def test_unverified_download_in_a_plain_project_is_not_skipped(tmp_path, isolated_store):
+    """Without a store sidecar nothing proves the copy short without reading it, so it is extracted."""
+    root, table, genome = _gzip_tree(tmp_path)
+    registry_file = root / "registry.json"
+    registry = load_registry(registry_file)
+    record_download(registry, "SRR1", "downloaded", root / "fastq", complete={"verdict": "unverified", "reads_r1": 3})
+    save_registry(registry)
+    rc, ran = _run_extraction(root, table, genome, registry_file, None)
+    assert rc == 0
+    assert ran
