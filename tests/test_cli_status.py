@@ -1406,6 +1406,33 @@ def test_funnel_line_matches_the_specified_format():
     )
 
 
+def _funnel_with_download(bytes_total, seconds):
+    return {
+        "screened": {"accessions": 10},
+        "selected": {"accessions": 8, "excluded": 0},
+        "downloaded": {"accessions": 7, "bytes": bytes_total, "seconds": seconds, "failed": 0},
+        "analysed": {"accessions": 0},
+        "extracted": {"accessions": 0, "pairs": 0, "seconds": None},
+        "assembled": {"accessions": 0, "pairs": 0, "total_bp": 0, "seconds": None},
+    }
+
+
+def test_funnel_line_rounds_the_size_to_one_decimal_and_omits_an_unrecorded_time():
+    # The crispatus project's downloads predate 0.7.0, so none carries a time: the line used to
+    # read "(4.48731 GB, 0.0 h)".
+    from metaquest.cli.commands.status.render_text import funnel_line
+
+    line = funnel_line(_funnel_with_download(4_487_310_000, None))
+    assert "7 downloaded (4.5 GB), 0 extracted" in line
+
+
+def test_funnel_line_keeps_a_recorded_time_even_with_a_size_in_terabytes():
+    from metaquest.cli.commands.status.render_text import funnel_line
+
+    assert "7 downloaded (2.0 TB, 1.5 h)," in funnel_line(_funnel_with_download(2_040_000_000_000, 5400.0))
+    assert "7 downloaded (0 bytes, 0.0 h)," in funnel_line(_funnel_with_download(0, 0.0))
+
+
 def test_build_report_funnel_matches_project_funnel_directly(tmp_path):
     from metaquest.data.registry import ProjectPaths
     from metaquest.processing.project_funnel import funnel as project_funnel
@@ -1425,7 +1452,7 @@ def test_status_json_and_text_report_funnel(tmp_path, capsys):
     assert report["funnel"] == {
         "screened": {"accessions": 3},
         "selected": {"accessions": 0, "excluded": 0},
-        "downloaded": {"accessions": 2, "bytes": 30, "seconds": 40.0, "failed": 0},
+        "downloaded": {"accessions": 2, "bytes": 30, "seconds": 40.0, "failed": 0, "failed_seconds": None},
         "analysed": {"accessions": 0},
         "extracted": {"accessions": 1, "pairs": 1, "seconds": 2.5},
         "assembled": {"accessions": 1, "pairs": 1, "total_bp": 0, "seconds": 45.0},

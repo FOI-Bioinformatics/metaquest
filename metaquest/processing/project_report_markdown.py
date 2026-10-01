@@ -20,6 +20,7 @@ FUNNEL_DETAIL = (
     ("bytes", "bytes"),
     ("total_bp", "total bp"),
     ("seconds", "seconds"),
+    ("failed_seconds", "failed seconds"),
 )
 TIMING_FIELDS = ("count", "min", "p25", "median", "p75", "p90", "max")
 

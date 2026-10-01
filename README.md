@@ -418,9 +418,11 @@ relative to the project. All eight are empty where the registry has nothing to r
 
 The `status` text report has a funnel line across the pipeline's stages, for example
 `funnel: 120 screened, 40 selected, 38 downloaded (1.2 TB, 41 h), 30 extracted, 12 assembled`: the
-number of datasets in each stage, with the size of the downloaded data and the recorded download
-time. The `funnel` key of `status --json` gives each stage in full: the excluded count for `selected`;
-bytes, seconds and the failed count for `downloaded`; `analysed`; and for `extracted` and `assembled`
+number of datasets in each stage, with the size of the downloaded data (one decimal) and their recorded
+download time; the time is left out when no download was timed (downloads recorded before 0.7.0, or data
+linked or adopted from a store). The `funnel` key of `status --json` gives each stage in full: the excluded
+count for `selected`; for `downloaded`, the bytes and seconds of the downloaded datasets, the failed count
+and the seconds of the failed attempts (`failed_seconds`); `analysed`; and for `extracted` and `assembled`
 the number of accession and genome pairs, their seconds and, for assemblies, the total assembled
 bases. The extraction and assembly figures cover only the pairs that reached the stage (mapped reads
 above zero, contigs above zero), so they can be lower than the totals of the timing line, which also

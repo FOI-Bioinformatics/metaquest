@@ -78,6 +78,7 @@ def test_funnel_untimed_datasets_leave_seconds_none(tmp_path):
     r = _registry(tmp_path)
     f = funnel(r)
     assert f["downloaded"]["seconds"] is None
+    assert f["downloaded"]["failed_seconds"] is None
     assert f["extracted"]["seconds"] is None
     assert f["assembled"]["seconds"] is None
 
@@ -94,7 +95,10 @@ def test_funnel_sums_seconds_only_over_timed_records(tmp_path):
     record_assembly(r, "SRR1", "G1", tmp_path / "asm", {"contigs": 2, "total_bp": 500}, "v1", {})
     set_assembly_timing(r, "SRR1", "G1", "2026-10-01T10:00:00+00:00", 3.0)
     f = funnel(r)
-    assert f["downloaded"]["seconds"] == 15.0  # a failed attempt's own time still counts
+    # seconds covers the downloaded datasets only, like accessions and bytes; a failed
+    # attempt's time is kept apart under failed_seconds.
+    assert f["downloaded"]["seconds"] == 10.0
+    assert f["downloaded"]["failed_seconds"] == 5.0
     assert f["extracted"]["seconds"] == 2.0
     assert f["assembled"]["seconds"] == 3.0
     assert f["assembled"]["total_bp"] == 500
@@ -137,7 +141,7 @@ def test_funnel_on_an_empty_registry_is_all_zero_and_untimed(tmp_path):
     assert f == {
         "screened": {"accessions": 0},
         "selected": {"accessions": 0, "excluded": 0},
-        "downloaded": {"accessions": 0, "bytes": 0, "seconds": None, "failed": 0},
+        "downloaded": {"accessions": 0, "bytes": 0, "seconds": None, "failed": 0, "failed_seconds": None},
         "analysed": {"accessions": 0},
         "extracted": {"accessions": 0, "pairs": 0, "seconds": None},
         "assembled": {"accessions": 0, "pairs": 0, "total_bp": 0, "seconds": None},

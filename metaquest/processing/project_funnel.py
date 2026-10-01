@@ -38,11 +38,11 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
 
     - ``downloaded``: ``bytes`` sums ``bytes_total`` over the datasets in the "downloaded"
       stage (a download that is not in that state never has files on record, so its
-      ``bytes_total`` is always 0); ``seconds`` sums the recorded download time of every dataset
-      whose download state is "downloaded" or "failed" (the two states a download's ``seconds``
-      is ever recorded for, see ``metaquest.data.registry_timing.TIMED_DOWNLOAD_STATES``), so a
-      failed attempt's wall-clock time still counts even though it did not reach the stage;
-      ``failed`` counts datasets whose download state is "failed".
+      ``bytes_total`` is always 0); ``seconds`` sums the recorded download time of the same
+      datasets, so all three figures describe one set; ``failed`` counts datasets whose download
+      state is "failed" and ``failed_seconds`` sums their recorded time (the other state a
+      download's ``seconds`` is recorded for, see
+      ``metaquest.data.registry_timing.TIMED_DOWNLOAD_STATES``).
     - ``extracted``/``assembled``: ``pairs`` counts the (accession, genome) extractions and
       assemblies that meet the same mapped-reads/contigs threshold
       ``metaquest.data.registry._extraction_stage`` uses to decide stage membership (one
@@ -58,6 +58,7 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
 
     downloaded_bytes = 0
     downloaded_seconds: List[float] = []
+    failed_seconds: List[float] = []
     failed = 0
     extracted_pairs = 0
     extraction_seconds: List[float] = []
@@ -76,7 +77,7 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
             if state in TIMED_DOWNLOAD_STATES:
                 seconds = _seconds(download.get("seconds"))
                 if seconds is not None:
-                    downloaded_seconds.append(seconds)
+                    (downloaded_seconds if state == "downloaded" else failed_seconds).append(seconds)
         for extraction in (record.get("extractions") or {}).values():
             if not isinstance(extraction, dict):
                 continue
@@ -101,6 +102,7 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
             "bytes": downloaded_bytes,
             "seconds": _total_seconds(downloaded_seconds),
             "failed": failed,
+            "failed_seconds": _total_seconds(failed_seconds),
         },
         "analysed": {"accessions": len(members["analysed"])},
         "extracted": {

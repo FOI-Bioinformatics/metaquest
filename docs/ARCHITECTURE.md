@@ -473,7 +473,8 @@ The plugin system enables extensibility:
   free space, registry, resources, optionally the network), each a `Check(name, status, detail, data)`;
   `cli/commands/doctor.py` renders them as text or JSON and exits with 3 when one failed
 - **project_funnel**: `funnel(registry, members)`, the number of datasets screened, selected,
-  downloaded, analysed, extracted and assembled, with the downloaded bytes and time and, for
+  downloaded, analysed, extracted and assembled, with the downloaded bytes and time (the time of failed
+  downloads apart, as `failed_seconds`) and, for
   extractions and assemblies, the accession and genome pairs that reached the stage with their time and
   assembled bases; the counts are those of `stage_members`, so they match the stages of `status`. Used
   by `status` (the funnel line and the `funnel` key of `--json`) and `project_report`

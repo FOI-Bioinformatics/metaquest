@@ -29,16 +29,28 @@ def _format_hours(seconds: float) -> str:
     return f"{hours:.0f} h" if hours >= 10 else f"{hours:.1f} h"
 
 
+def _format_size(count: int) -> str:
+    """A byte count with one decimal in the largest decimal unit it reaches (e.g. 4.5 GB, 1.2 TB)."""
+    for factor, unit in ((10**12, "TB"), (10**9, "GB"), (10**6, "MB"), (10**3, "KB")):
+        if count >= factor:
+            return f"{count / factor:.1f} {unit}"
+    return f"{count} bytes"
+
+
 def funnel_line(funnel: Dict[str, Any]) -> str:
     """The one-line text form of a `status` report's `funnel` block.
 
-    Always one line, in stage order, with the download stage's total size and time in
-    parentheses. ``selected``'s excluded count, ``downloaded``'s failed count, and the
-    ``extracted``/``assembled`` pair counts, bytes and seconds are detail this line leaves to
-    the JSON report.
+    Always one line, in stage order, with the download stage's total size and, when any download
+    was timed, its total time in parentheses (downloads recorded before 0.7.0 carry no time, so
+    the time is left out rather than shown as 0). ``selected``'s excluded count,
+    ``downloaded``'s failed count and time, and the ``extracted``/``assembled`` pair counts,
+    bytes and seconds are detail this line leaves to the JSON report.
     """
     downloaded = funnel["downloaded"]
-    detail = f" ({_format_bytes(downloaded['bytes'])}, {_format_hours(downloaded['seconds'] or 0.0)})"
+    parts = [_format_size(downloaded["bytes"])]
+    if downloaded["seconds"] is not None:
+        parts.append(_format_hours(downloaded["seconds"]))
+    detail = f" ({', '.join(parts)})"
     return (
         f"funnel: {funnel['screened']['accessions']} screened, "
         f"{funnel['selected']['accessions']} selected, "

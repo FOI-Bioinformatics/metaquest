@@ -37,12 +37,13 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `--no-environment` leaves them out), outputs and the last 10 runs. Tables are cut to `--max-rows` (default
   200, 0 for all) with the total shown. The export is recorded in the registry as `project_report` unless
   `--no-record`. It reads no FASTQ file and exits 1 without a registry; `--json` prints the written paths.
-- `status` reports a cross-stage funnel: one text line with the number of datasets screened, selected,
-  downloaded (with the size of the downloaded data and the recorded download time), extracted and assembled,
-  and a `funnel` key in `status --json` that adds the excluded and failed counts, the analysed stage, and the
-  accession and genome pairs, time and assembled bases of the extraction and assembly stages. The extraction
-  and assembly figures cover only the pairs that reached the stage (mapped reads or contigs above zero), unlike
-  the totals of the timing line (`processing/project_funnel.py`).
+- `status` reports a cross-stage funnel: one text line with the number of datasets screened, selected, downloaded
+  (with the size of the downloaded data and, when any download was timed, their recorded download time), extracted
+  and assembled, and a `funnel` key in `status --json` that adds the excluded and failed counts, the recorded time
+  of failed downloads (`failed_seconds`, apart from the downloaded datasets' `seconds`), the analysed stage, and the
+  accession and genome pairs, time and assembled bases of the extraction and assembly stages. The extraction and
+  assembly figures cover only the pairs that reached the stage (mapped reads or contigs above zero), unlike the
+  totals of the timing line (`processing/project_funnel.py`).
 - `results_table` has eight more columns after `download_verdict`: `quality_source` (which analysis supplied
   the quality columns: `profile`, `report`, `legacy`, or empty), the assembly's `assembly_largest`,
   `assembly_n90`, `assembly_gc_percent` (GC content in percent, two decimals), `assembly_contigs_ge_1kb` and
