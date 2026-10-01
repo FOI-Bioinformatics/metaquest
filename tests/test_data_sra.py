@@ -3541,6 +3541,69 @@ class TestDownloadInterrupt:
         assert stop.is_set()
         assert not accession_mod.STOP.is_set()
 
+    def test_keyboard_interrupt_collects_downloads_that_had_already_finished(self, tmp_path):
+        # SRR1 is yielded and collected; SRR2 finished too but the interrupt arrives from
+        # as_completed before it is yielded. Both must reach on_result, each exactly once.
+        from concurrent.futures import wait
+
+        def interrupted_as_completed(futures):
+            wait(list(futures))
+            ordered = sorted(futures, key=lambda f: futures[f])
+            yield ordered[0]
+            raise KeyboardInterrupt
+
+        worker = Mock(return_value=(True, "ok"))
+        seen = []
+        with patch.object(SecureSubprocess, "terminate_children", return_value=0):
+            with patch.object(retry_mod, "as_completed", side_effect=interrupted_as_completed):
+                with pytest.raises(KeyboardInterrupt):
+                    retry_mod._execute_parallel_downloads(
+                        ["SRR1", "SRR2"],
+                        tmp_path,
+                        1,
+                        2,
+                        False,
+                        None,
+                        {},
+                        [],
+                        on_result=lambda acc, ok, msg: seen.append((acc, ok, msg)),
+                        downloader=worker,
+                    )
+        assert sorted(seen) == [("SRR1", True, "ok"), ("SRR2", True, "ok")]
+
+    def test_keyboard_interrupt_skips_a_finished_worker_that_raised_a_non_download_error(self, tmp_path):
+        from concurrent.futures import wait
+
+        def interrupted_as_completed(futures):
+            wait(list(futures))
+            raise KeyboardInterrupt
+            yield  # pragma: no cover - makes this a generator
+
+        def worker(acc, *a, **kw):
+            if acc == "SRR1":
+                raise RuntimeError("programming error")
+            if acc == "SRR2":
+                raise OSError("disk went away")
+            return True, "ok"
+
+        seen = []
+        with patch.object(SecureSubprocess, "terminate_children", return_value=0):
+            with patch.object(retry_mod, "as_completed", side_effect=interrupted_as_completed):
+                with pytest.raises(KeyboardInterrupt):
+                    retry_mod._execute_parallel_downloads(
+                        ["SRR1", "SRR2", "SRR3"],
+                        tmp_path,
+                        1,
+                        3,
+                        False,
+                        None,
+                        {},
+                        [],
+                        on_result=lambda acc, ok, msg: seen.append((acc, ok)),
+                        downloader=worker,
+                    )
+        assert sorted(seen) == [("SRR2", False), ("SRR3", True)]
+
     def test_download_accession_runs_no_tool_once_stopped(self, tmp_path):
 
         accession_mod.STOP.set()
