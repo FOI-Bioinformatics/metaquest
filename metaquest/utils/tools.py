@@ -174,8 +174,10 @@ def probe_tool(name: str, timeout: float = VERSION_PROBE_TIMEOUT) -> ToolStatus:
     """Find ``name`` on ``PATH`` and read its version from what it prints (stdout, then stderr).
 
     The tool runs through ``run_secure`` with the table's ``version_args`` and a fixed
-    ``timeout``, whatever the run's own tool timeout. A tool that is missing is not run. Raises
-    ``KeyError`` for a name not in ``TOOLS``.
+    ``timeout``, whatever the run's own tool timeout. A tool that is missing is not run. A tool
+    that exits non-zero has no version, whatever it printed (a loader error naming
+    ``libcrypto.so.1.0.0`` is not version 1.0.0): ``error`` says it is not runnable and quotes
+    its first error line. Raises ``KeyError`` for a name not in ``TOOLS``.
     """
     spec = TOOLS[name]
     path = shutil.which(name)
@@ -187,13 +189,17 @@ def probe_tool(name: str, timeout: float = VERSION_PROBE_TIMEOUT) -> ToolStatus:
         logger.debug("Could not run %s %s: %s", name, " ".join(spec.version_args), e)
         return ToolStatus(name, path, error=str(e))
     output = _output_text(result.stdout) + "\n" + _output_text(result.stderr)
+    returncode = result.returncode if isinstance(result.returncode, int) else 0
+    if returncode:
+        first = _output_text(result.stderr) + "\n" + _output_text(result.stdout)
+        lines = [line.strip() for line in first.splitlines() if line.strip()]
+        detail = f": {lines[0]}" if lines else ""
+        return ToolStatus(name, path, error=f"not runnable, exited with code {returncode}{detail}")
     for line in output.splitlines():
         version = parse_version(line)
         if version is not None:
             return ToolStatus(name, path, line.strip(), version)
-    returncode = result.returncode if isinstance(result.returncode, int) else 0
-    error = f"exited with code {returncode}" if returncode else "printed no version number"
-    return ToolStatus(name, path, error=error)
+    return ToolStatus(name, path, error="printed no version number")
 
 
 def require_tools(names: Iterable[str], check_versions: bool = True) -> None:

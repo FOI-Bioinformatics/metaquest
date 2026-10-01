@@ -93,6 +93,20 @@ class TestSRAMetadataClient:
         assert info.spots == 1000000
 
 
+class TestSRAMetadataClientClose:
+    def test_close_closes_the_session(self):
+        client = SRAMetadataClient("a@b.c")
+        with patch.object(client.session, "close") as close:
+            client.close()
+        close.assert_called_once()
+
+    def test_context_manager_closes_the_session(self):
+        with SRAMetadataClient("a@b.c") as client:
+            session_close = patch.object(client.session, "close").start()
+        session_close.assert_called_once()
+        patch.stopall()
+
+
 class TestTechnologyDetection:
     """Test sequencing technology detection."""
 

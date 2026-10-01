@@ -237,6 +237,9 @@ def check_store(data_root: Optional[str], project: Path, min_free_gb: float) -> 
     try:
         root = resolve_store_root(data_root, _registry_store_root(project), require_marker=True)
     except (DataAccessError, ConfigurationError) as e:
+        if isinstance(e, ConfigurationError) and str(e).startswith("Config file "):
+            # The config check reports this error already; one problem is one failed check.
+            return Check("store", WARN, "not checked: the config file does not parse", {"root": data_root})
         return Check("store", FAIL, str(e), {"root": data_root})
     if root is None:
         return Check("store", OK, "no shared data store configured (optional)", {"root": None})

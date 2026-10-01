@@ -51,7 +51,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   limit and SLURM variables, and the nearest project registry; `--network` adds NCBI and Branchwater
   (10 s each), `--for COMMAND` turns a missing tool that command needs into a failure, `--json` writes
   one JSON document. Exit code 0 without a failed check, 3 with one. It still runs, and reports the
-  error, when `config.toml` does not parse. See "Checking the environment" in the README.
+  error once (as the config check), when `config.toml` does not parse. A tool that exits non-zero on
+  its version flag is reported as not runnable with its first error line, not given a version read
+  from that error; `--for` takes the command names `metaquest --help` lists. `SRAMetadataClient` has
+  `close()` and works as a context manager. See "Checking the environment" in the README.
 - Timing: the registry records when each download, extraction and assembly started and how many
   seconds it took (`started`, `seconds`; absent in registries written earlier). `download_sra
   --report-file` has a trailing `seconds` column, `results_table` ends with `download_seconds`,

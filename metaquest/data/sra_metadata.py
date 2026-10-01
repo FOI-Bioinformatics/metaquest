@@ -75,6 +75,18 @@ class SRAMetadataClient:
         # transport-level connection attempts they cover) are exhausted.
         self.session = retrying_session()
 
+    def close(self) -> None:
+        """Close the client's HTTP session and its pooled connections."""
+        self.session.close()
+
+    def __enter__(self) -> "SRAMetadataClient":
+        """Return the client itself; the session is closed when the block exits."""
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Close the session."""
+        self.close()
+
     def _make_request(self, url: str, params: Dict[str, str]) -> str:
         """Make rate-limited request to NCBI API."""
         # Rate limiting

@@ -61,8 +61,9 @@ class DoctorCommand(BaseCommand):
         )
 
     def _unknown_command(self, name: str) -> bool:
-        """Whether ``name`` is not a registered command (hidden ones included)."""
-        return name not in command_registry.get_all_commands()
+        """Whether ``name`` is not a command listed in ``metaquest --help`` (a hidden former name is not one)."""
+        command = command_registry.get_all_commands().get(name)
+        return command is None or command.hidden
 
     def _write_text(self, checks: List[Check]) -> None:
         width = max(len(check.name) for check in checks)
@@ -75,7 +76,7 @@ class DoctorCommand(BaseCommand):
         """Run every check and report; 0 without a failed check, 3 with one, 2 for an unknown ``--for``."""
         for_command = getattr(args, "for_command", None)
         if for_command and self._unknown_command(for_command):
-            self.logger.error("--for %s: no such command (see 'metaquest --help')", for_command)
+            self.logger.error("--for %s: no such command (see 'metaquest --help' for the current names)", for_command)
             return int(ExitCode.USAGE)
         checks = run_checks(
             project=getattr(args, "project", "."),

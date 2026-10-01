@@ -107,6 +107,16 @@ def test_probe_of_a_tool_that_fails_without_a_version_records_the_error(tmp_path
     assert status.problem() is None
 
 
+def test_a_tool_that_exits_non_zero_has_no_version_even_if_its_error_names_one(tmp_path, monkeypatch):
+    """A broken conda samtools names libcrypto.so.1.0.0; that is not samtools 1.0.0."""
+    loader = "samtools: error while loading shared libraries: libcrypto.so.1.0.0: cannot open shared object file"
+    monkeypatch.setenv("PATH", str(fake_tool(tmp_path, "samtools", "", stderr=loader, rc=127)))
+    status = probe_tool("samtools")
+    assert status.found and status.version is None
+    assert status.error == f"not runnable, exited with code 127: {loader}"
+    assert status.problem() is None
+
+
 def test_probe_below_the_floor_is_a_problem_with_the_floor_and_hint(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(fake_tool(tmp_path, "minimap2", "2.16-r922")))
     status = probe_tool("minimap2")

@@ -136,6 +136,10 @@ def test_for_an_unknown_command_is_a_usage_error(tmp_path, monkeypatch, capsys):
     assert main(["doctor", "--for", "no_such_command"]) == 2
 
 
+def test_for_rejects_a_hidden_former_command_name():
+    assert main(["doctor", "--for", "sra_stats"]) == 2
+
+
 def test_low_disk_space_warns(tmp_path, monkeypatch, capsys):
     _tools_on_path(tmp_path, monkeypatch)
     with patch("metaquest.processing.doctor_report.shutil.disk_usage", return_value=Usage(100 * GB, 98 * GB, 2 * GB)):
@@ -167,8 +171,10 @@ def test_malformed_config_is_a_failed_check_and_exit_3_through_main(tmp_path, mo
     checks = _by_name(report)
     assert checks["config"]["status"] == FAIL
     assert "not valid TOML" in checks["config"]["detail"]
-    # The rest of the report still ran.
+    # The rest of the report still ran, and the one problem is one failed check, not also the store's.
     assert checks["tool minimap2"]["status"] == OK
+    assert checks["store"]["status"] == WARN and "config file does not parse" in checks["store"]["detail"]
+    assert [check["name"] for check in report["checks"] if check["status"] == FAIL] == ["config"]
 
 
 def test_malformed_config_still_stops_any_other_command(tmp_path, monkeypatch):

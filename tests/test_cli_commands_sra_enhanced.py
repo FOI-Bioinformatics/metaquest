@@ -97,6 +97,7 @@ class TestSRAInfoCommand:
             result = command.execute(args)
 
         assert result == 0
+        mock_client.close.assert_called_once()
         out = capsys.readouterr().out
         assert "Total accessions: 2" in out
         assert "Metadata fetched: 2" in out

@@ -138,7 +138,10 @@ class SRAInfoCommand(BaseCommand):
             self.emit(f"Analyzing {len(accessions)} SRA accessions...")
 
             client = SRAMetadataClient(email, setting_for(args, "ncbi_api_key"))
-            metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
+            try:
+                metadata, tech_counts, total_size_gb = create_download_preview(accessions, client)
+            finally:
+                client.close()
 
             if not metadata:
                 self.logger.error("Could not fetch metadata for any accessions")
