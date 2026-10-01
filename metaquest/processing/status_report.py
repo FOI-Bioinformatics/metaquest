@@ -18,7 +18,6 @@ from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import is_hidden_name, visible_files
 from metaquest.data.registry import (
     ProjectPaths,
-    ReconcileReport,
     Registry,
     STAGES,
     empty_assembly_dirs,
@@ -26,6 +25,7 @@ from metaquest.data.registry import (
     query,
     stage_members,
 )
+from metaquest.data.registry_reconcile import StoreReconcileReport
 from metaquest.data.registry_timing import timing_summary
 from metaquest.data.sra import STORE_READY_STATES, accession_has_fastq, is_transient_folder
 from metaquest.store.catalog import Catalog
@@ -220,13 +220,20 @@ def _genome_report(
     return report
 
 
-def _drift_report(drift: ReconcileReport) -> Dict[str, Any]:
+def _drift_report(drift: StoreReconcileReport) -> Dict[str, Any]:
     return {
         "recorded_missing": list(drift.recorded_missing),
         "untracked_fastq": list(drift.untracked_fastq),
         "untracked_extractions": [[acc, genome_id] for acc, genome_id in drift.untracked_extractions],
         "empty_assembly_dirs": [[acc, genome_id] for acc, genome_id in drift.empty_assembly_dirs],
         "dangling_links": list(drift.dangling_links),
+        # An accession here also appears in dangling_links; its download is left as recorded
+        # rather than marked missing, because the store it links into is not mounted at all.
+        "store_unavailable": list(drift.store_unavailable),
+        # Accessions whose metadata block was filled in from their XML file, and whose
+        # unverified/missing download verdict was recomputed, by this reconcile.
+        "metadata_filled": list(drift.metadata_filled),
+        "verdicts_rechecked": list(drift.verdicts_rechecked),
     }
 
 
@@ -286,7 +293,7 @@ def build_report(
     paths: ProjectPaths,
     registry_file: Path,
     existed: bool,
-    drift: Optional[ReconcileReport] = None,
+    drift: Optional[StoreReconcileReport] = None,
 ) -> Dict[str, Any]:
     """The status report for ``registry``: local inventory, registry file, store, stages, download
     verdicts, genomes, drift and timing, as the dict ``status --json`` prints.

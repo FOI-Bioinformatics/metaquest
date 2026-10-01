@@ -182,6 +182,31 @@ def _print_gaps(registry: Registry, emit: Callable[[str], None]) -> None:
             emit(f"  Downloaded but not extracted for {genome_id} : " + ", ".join(gap))
 
 
+_NAMED_IN_TEXT = 5
+
+
+def _print_reconcile_notes(drift: Dict[str, Any], emit: Callable[[str], None]) -> None:
+    """Warn about datasets an unmounted store left alone, and report re-checks and fills.
+
+    Each line appears only when its count is non-zero, so a reconcile that finds none of these
+    leaves the drift section's existing text exactly as before this was added.
+    """
+    unavailable = drift.get("store_unavailable") or []
+    if unavailable:
+        named = ", ".join(unavailable[:_NAMED_IN_TEXT])
+        more = len(unavailable) - _NAMED_IN_TEXT
+        emit(
+            f"WARNING: {len(unavailable)} dataset(s) link into a data store that is not mounted "
+            "and were not marked missing: " + named + (f" and {more} more" if more > 0 else "")
+        )
+    rechecked = drift.get("verdicts_rechecked") or []
+    if rechecked:
+        emit(f"  Verdicts re-checked                     : {len(rechecked)}")
+    filled = drift.get("metadata_filled") or []
+    if filled:
+        emit(f"  Metadata filled from XML                : {len(filled)}")
+
+
 def _print_drift(drift: Dict[str, Any], emit: Callable[[str], None]) -> None:
     if not drift:
         return
@@ -203,6 +228,7 @@ def _print_drift(drift: Dict[str, Any], emit: Callable[[str], None]) -> None:
         emit(f"  Empty assembly directories               : {pairs}")
     if drift.get("dangling_links"):
         emit("  Store links with a missing target       : " + ", ".join(drift["dangling_links"]))
+    _print_reconcile_notes(drift, emit)
 
 
 def _print_next(steps: List[Dict[str, Any]], emit: Callable[[str], None]) -> None:

@@ -26,6 +26,27 @@ from metaquest.data.registry import (
 )
 from metaquest.processing.status_report import inventory_report
 
+# A minimal single-run NCBI metadata XML, modeled on the fixture in
+# tests/test_registry_reconcile_reverify.py: {accession} and {spots} are filled in per test.
+_XML = """<?xml version="1.0"?>
+<EXPERIMENT_PACKAGE_SET>
+    <EXPERIMENT_PACKAGE>
+        <EXPERIMENT>
+            <IDENTIFIERS><PRIMARY_ID>EXP1</PRIMARY_ID></IDENTIFIERS>
+            <LIBRARY_DESCRIPTOR>
+                <LIBRARY_STRATEGY>WGS</LIBRARY_STRATEGY>
+                <LIBRARY_LAYOUT><PAIRED/></LIBRARY_LAYOUT>
+            </LIBRARY_DESCRIPTOR>
+            <PLATFORM><ILLUMINA><INSTRUMENT_MODEL>Illumina HiSeq 2500</INSTRUMENT_MODEL></ILLUMINA></PLATFORM>
+        </EXPERIMENT>
+        <RUN_SET>
+            <RUN accession="{accession}" total_spots="{spots}" total_bases="200" size="300">
+                <IDENTIFIERS><PRIMARY_ID>{accession}</PRIMARY_ID></IDENTIFIERS>
+            </RUN>
+        </RUN_SET>
+    </EXPERIMENT_PACKAGE>
+</EXPERIMENT_PACKAGE_SET>"""
+
 
 def _args(registry, **kwargs):
     base = dict(
@@ -1376,3 +1397,151 @@ def test_export_tsv_carries_the_timing_columns(tmp_path, capsys):
     assert datasets.loc["SRR1", "download_seconds"] == 10.0 and datasets.loc["SRR2", "download_seconds"] == 30.0
     row = extractions.set_index("accession").loc["SRR1"]
     assert (row["extraction_seconds"], row["assembly_seconds"]) == (2.5, 45.0)
+
+
+# -------------------------------------------- --init fills metadata; reconcile's new report fields
+
+
+def test_init_fills_metadata_from_xml_with_a_spot_count(tmp_path, capsys):
+    """--init bootstraps a metadata block with no spot count for every XML on disk; it must then
+    be filled from that same XML in the same write, not left for a later --reconcile."""
+    _project_tree(tmp_path)
+    (tmp_path / "metadata").mkdir()
+    (tmp_path / "metadata" / "SRR1_metadata.xml").write_text(_XML.format(accession="SRR1", spots=4))
+
+    rc = StatusCommand().execute(_status_args(tmp_path, init=True, accessions_file=str(tmp_path / "accessions.txt")))
+
+    assert rc == 0
+    data = json.loads((tmp_path / "metaquest_registry.json").read_text())
+    metadata = data["datasets"]["SRR1"]["metadata"]
+    assert metadata["run_total_spots"] == 4
+    assert metadata["platform"] == "ILLUMINA"
+    # Bootstrap marked the block inferred; filling it in keeps that mark.
+    assert metadata["inferred"] is True
+
+
+class TestStatusReportsStoreUnavailable:
+    """A fastq/<ACC> link into a store that is not mounted at all (its sra/ folder is also gone)."""
+
+    def _unmounted_link(self, tmp_path):
+        _project_tree(tmp_path)
+        gone = tmp_path / "unmounted"
+        (tmp_path / "fastq" / "SRR3").symlink_to(gone / "sra" / "SRR3")
+        return gone
+
+    def test_reconcile_json_reports_store_unavailable_and_changes_no_records(self, tmp_path, capsys):
+        gone = self._unmounted_link(tmp_path)
+        assert StatusCommand().execute(_status_args(tmp_path, init=True)) == 0
+        capsys.readouterr()
+        before = json.loads((tmp_path / "metaquest_registry.json").read_text())
+
+        rc = StatusCommand().execute(_status_args(tmp_path, data_root=str(gone), reconcile=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["drift"]["store_unavailable"] == ["SRR3"]
+        assert report["drift"]["recorded_missing"] == []
+
+        after = json.loads((tmp_path / "metaquest_registry.json").read_text())
+        assert after["datasets"] == before["datasets"]
+        assert after["store"] == before["store"]
+
+    def test_reconcile_text_warns_about_an_unmounted_store(self, tmp_path, capsys):
+        gone = self._unmounted_link(tmp_path)
+        StatusCommand().execute(_status_args(tmp_path, init=True))
+        capsys.readouterr()
+
+        rc = StatusCommand().execute(_status_args(tmp_path, data_root=str(gone), reconcile=True, json=False))
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "WARNING" in out
+        assert "SRR3" in out
+        assert "not mounted" in out
+
+
+def test_reconcile_json_drift_always_carries_the_three_new_keys(tmp_path, capsys):
+    """Even when nothing is found, the JSON document names store_unavailable, metadata_filled
+    and verdicts_rechecked, so a reader does not have to special-case their absence."""
+    _project_tree(tmp_path)
+    StatusCommand().execute(_status_args(tmp_path, init=True))
+    capsys.readouterr()
+
+    rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=True))
+    report = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert report["drift"]["store_unavailable"] == []
+    assert report["drift"]["metadata_filled"] == []
+    assert report["drift"]["verdicts_rechecked"] == []
+
+
+def test_text_report_unchanged_when_the_three_new_lists_are_empty(tmp_path, capsys):
+    """A reconcile that finds nothing new under the new reporting prints no WARNING line and no
+    re-checked/filled line; the existing Drift section text is untouched."""
+    _project_tree(tmp_path)
+    StatusCommand().execute(_status_args(tmp_path, init=True))
+    capsys.readouterr()
+
+    rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=False))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Drift against disk" in out
+    assert "WARNING" not in out
+    assert "Verdicts re-checked" not in out
+    assert "Metadata filled from XML" not in out
+
+
+def _setup_metadata_fill_and_verdict_recheck(tmp_path, capsys):
+    """SRR1 downloaded with an unverified verdict and a metadata block with no spot count, then a
+    real XML on disk with a spot count: one --reconcile should fill both. verdicts_rechecked only
+    counts a verdict that was literally "unverified", not a merely missing one (see
+    _fill_verdicts), so the download must be recorded with that verdict explicitly."""
+    from metaquest.data.registry import record_download, record_metadata
+
+    _project_tree(tmp_path)
+    StatusCommand().execute(_status_args(tmp_path, init=True))
+    capsys.readouterr()
+
+    registry = load_registry(tmp_path / "metaquest_registry.json")
+    record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {})
+    record_download(
+        registry,
+        "SRR1",
+        "downloaded",
+        tmp_path / "fastq",
+        attempt=False,
+        complete={
+            "method": "unverified",
+            "ratio": None,
+            "verdict": "unverified",
+            "expected_spots": None,
+            "reads_r1": None,
+        },
+    )
+    save_registry(registry)
+    (tmp_path / "metadata").mkdir()
+    (tmp_path / "metadata" / "SRR1_metadata.xml").write_text(_XML.format(accession="SRR1", spots=1))
+
+
+def test_reconcile_json_reports_metadata_filled_and_verdicts_rechecked(tmp_path, capsys):
+    _setup_metadata_fill_and_verdict_recheck(tmp_path, capsys)
+
+    rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=True))
+    report = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert report["drift"]["metadata_filled"] == ["SRR1"]
+    assert report["drift"]["verdicts_rechecked"] == ["SRR1"]
+
+
+def test_reconcile_text_reports_metadata_filled_and_verdicts_rechecked(tmp_path, capsys):
+    _setup_metadata_fill_and_verdict_recheck(tmp_path, capsys)
+
+    rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=False))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Metadata filled from XML" in out
+    assert "Verdicts re-checked" in out

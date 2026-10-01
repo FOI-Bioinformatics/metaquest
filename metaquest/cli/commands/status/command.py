@@ -21,25 +21,28 @@ from metaquest.cli.commands.status.render_text import print_report
 from metaquest.cli.commands.status.suggest import next_steps
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
 from metaquest.data.file_io import write_csv
+from metaquest.data.metadata_fields import fill_metadata_from_xml
 from metaquest.data.registry import (
     ProjectPaths,
     Registry,
     STAGES,
-    ReconcileReport,
     bootstrap_from_disk,
     load_registry,
     registry_path,
 )
 from metaquest.data.registry_batch import registry_update
-from metaquest.data.registry_reconcile import ReconcilePlan, apply_reconcile, scan_reconcile
+from metaquest.data.registry_reconcile import ReconcilePlan, StoreReconcileReport, apply_reconcile, scan_reconcile
 from metaquest.processing.status_report import build_report, to_dataframes
 
 
-def _adopt_bootstrap(registry: Registry, built: Registry) -> Registry:
+def _adopt_bootstrap(registry: Registry, built: Registry, metadata_folder: Path) -> Registry:
     """Fill the empty ``registry`` loaded under the lock with what ``status --init`` rebuilt from disk.
 
     Raises ``DataAccessError`` when the registry file exists by now: another process created it
-    after this one checked, and overwriting it would lose what that process recorded.
+    after this one checked, and overwriting it would lose what that process recorded. Once the
+    bootstrapped fields are copied in, fills in every metadata block bootstrap recorded without a
+    spot count from its ``<accession>_metadata.xml`` file, in this same registry write, so a kill
+    partway through cannot leave the registry persisted with metadata half-filled.
     """
     if registry.path is not None and registry.path.exists():
         raise DataAccessError(
@@ -48,10 +51,11 @@ def _adopt_bootstrap(registry: Registry, built: Registry) -> Registry:
         )
     for name in ("created", "genomes", "datasets", "project", "store"):
         setattr(registry, name, getattr(built, name))
+    fill_metadata_from_xml(registry, metadata_folder)
     return registry
 
 
-def _apply_plan(registry: Registry, plan: ReconcilePlan) -> Tuple[ReconcileReport, Registry]:
+def _apply_plan(registry: Registry, plan: ReconcilePlan) -> Tuple[StoreReconcileReport, Registry]:
     """Apply a reconcile plan to the registry loaded under the lock; return the report and that registry."""
     return apply_reconcile(registry, plan), registry
 
@@ -170,7 +174,9 @@ class StatusCommand(BaseCommand):
             else:
                 registry = bootstrap_from_disk(paths, args.accessions_file, args.parsed_containment, registry_file)
                 if args.init:
-                    registry = registry_update(registry_file, partial(_adopt_bootstrap, built=registry))
+                    registry = registry_update(
+                        registry_file, partial(_adopt_bootstrap, built=registry, metadata_folder=paths.metadata)
+                    )
                     self.logger.info("Registry written to %s", registry_file)
 
             drift = None
