@@ -275,19 +275,33 @@ def run_document(
     }
 
 
-def run_log_entries(document: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def run_log_entries(
+    document: Dict[str, Any], rows: Sequence[Sequence[str]] = ()
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """The run-log summary and detail of one ``run_document``.
 
-    The summary holds the totals, the failure count per reason and the abort cause; the detail one
-    row per failed accession (reason, attempts, message) under ``"failed"``, empty without a failure.
+    The summary holds the totals, the failure count per reason and the abort cause. The detail
+    holds rows only: one per failed accession (reason, attempts, message) under ``"failed"``, and
+    one per accession downloaded in this run (status, seconds, attempts) under ``"downloaded"``,
+    taken from ``rows`` (``report_rows``); a section without a row is left out.
     """
     summary = {
         **document["totals"],
         "failures_by_reason": document["failures_by_reason"],
         "aborted": document["aborted"],
     }
-    rows = {entry["accession"]: {k: v for k, v in entry.items() if k != "accession"} for entry in document["failed"]}
-    return summary, ({"failed": rows} if rows else {})
+    detail: Dict[str, Any] = {}
+    failed = {entry["accession"]: {k: v for k, v in entry.items() if k != "accession"} for entry in document["failed"]}
+    if failed:
+        detail["failed"] = failed
+    downloaded = {
+        acc: {"status": status, "seconds": float(seconds) if seconds else None, "attempts": int(attempts)}
+        for acc, status, _, seconds, _, attempts in rows
+        if status == "downloaded"
+    }
+    if downloaded:
+        detail["downloaded"] = downloaded
+    return summary, detail
 
 
 def write_run_document(fastq_dir: Union[str, Path], document: Dict[str, Any]) -> Path:

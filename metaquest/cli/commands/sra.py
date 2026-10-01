@@ -321,9 +321,10 @@ class DownloadSraCommand(BaseCommand):
         outcomes observed. A summary that cannot be written is logged and leaves ``code`` as it is.
         """
         stats = outcomes.stats if outcomes.stats is not None else rr.stats_from_outcomes(outcomes)
+        rows = rr.report_rows(stats, outcomes.timings, outcomes.attempts)
         try:
             if args.report_file:
-                rr.write_report_csv(args.report_file, rr.report_rows(stats, outcomes.timings, outcomes.attempts))
+                rr.write_report_csv(args.report_file, rows)
                 self.logger.info("Download report written to %s", args.report_file)
             document = rr.run_document(
                 stats=stats,
@@ -335,7 +336,7 @@ class DownloadSraCommand(BaseCommand):
                 settings=rr.run_settings(args),
                 paths=rr.run_paths(args, outcomes.stats),
             )
-            run_log.note_run(args, *rr.run_log_entries(document))
+            run_log.note_run(args, *rr.run_log_entries(document, rows))
             write_run_document(args.fastq_folder, document)
         except (OSError, MetaQuestError) as e:
             self.logger.warning("Could not write the download run summary: %s", e)

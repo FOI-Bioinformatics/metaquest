@@ -370,7 +370,8 @@ with `--init` or `--reconcile`. A dry run, `blacklist --list`, a plain `status` 
 and `project_report`, `--no-record` also leaves the run out of the run log, in addition to leaving the
 registry unchanged. The summary of a run holds counts and totals. Per-accession results go to the
 run's detail file, one row per accession (per accession and genome for `extract_target_reads`):
-`download_sra` keeps its failed accessions with reason and attempts, `sra_profile` and `sra_report`
+`download_sra` keeps its failed accessions with reason and attempts and the accessions it downloaded
+with time and attempts, `sra_profile` and `sra_report`
 their per-accession figures, `extract_target_reads` the mapped reads, breadth and mean depth,
 `store_verify` each dataset's verdict and fix, and `select_datasets` each accession's rank. MetaQuest
 does not add `.metaquest/` to a project's `.gitignore`; add it there if the run log should not be

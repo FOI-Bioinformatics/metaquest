@@ -3,11 +3,12 @@
 Every test runs on ``tmp_path`` with the external tools and downloads replaced by fakes, and reads
 back what ``main`` recorded through ``run_log.read_runs`` and ``run_log.read_detail``. A detail
 holds rows only: mappings of plain values keyed by accession or ``accession/genome``, under one
-section (the form ``runs --diff`` and ``runs --accession`` compare).
+section per kind of result (the form ``runs --diff`` and ``runs --accession`` compare).
 """
 
 import argparse
 import gzip
+import json
 from typing import Any, Dict
 from unittest.mock import patch
 
@@ -115,6 +116,42 @@ def test_download_sra_records_its_run_document_totals(project):
     _assert_rows(detail["failed"])
     assert detail["failed"]["SRR2"]["reason"] == "network"
     assert detail["failed"]["SRR2"]["attempts"] == 1
+
+
+def _fake_mixed_download(**kwargs):
+    kwargs["timings"]["SRR1"] = ("2026-10-01T12:00:00+00:00", 2.5)
+    kwargs["on_result"]("SRR1", True, "Downloaded SRR1")
+    kwargs["on_result"]("SRR2", False, NETWORK)
+    return {
+        "total": 2,
+        "successful": 1,
+        "failed": 1,
+        "failed_accessions": ["SRR2"],
+        "results": {"SRR1": "Downloaded SRR1", "SRR2": NETWORK},
+        "aborted": None,
+    }
+
+
+def test_download_sra_detail_has_a_row_per_downloaded_accession(project, capsys):
+    (project / "acc.txt").write_text("SRR1\nSRR2\n")
+    with (
+        patch("metaquest.cli.commands.sra.require_tools"),
+        patch("metaquest.cli.commands.sra.download_sra", side_effect=_fake_mixed_download),
+    ):
+        main(["download_sra", "--accessions-file", "acc.txt", "--max-retries", "0"])
+    record = _only_run(project, "download_sra")
+    detail = run_log.read_detail(project, record)
+    assert set(detail) == {"failed", "downloaded"}
+    _assert_rows(detail["downloaded"])
+    assert detail["downloaded"] == {"SRR1": {"status": "downloaded", "seconds": 2.5, "attempts": 1}}
+    assert set(detail["failed"]) == {"SRR2"}
+
+    # runs --accession now finds the run that fetched SRR1, with unprefixed field names.
+    capsys.readouterr()
+    assert main(["runs", "--accession", "SRR1", "--json"]) == 0
+    history = json.loads(capsys.readouterr().out)["runs"]
+    assert [entry["command"] for entry in history] == ["download_sra"]
+    assert history[0]["values"] == {"SRR1": {"status": "downloaded", "seconds": 2.5, "attempts": 1}}
 
 
 def test_a_dry_run_records_nothing(project):
