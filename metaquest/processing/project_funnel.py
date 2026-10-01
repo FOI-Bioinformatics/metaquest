@@ -26,6 +26,19 @@ def _total_seconds(values: List[float]) -> Optional[float]:
     return round(sum(values), 3) if values else None
 
 
+def _tally_download(download: Dict[str, Any], tally: Dict[str, Any]) -> None:
+    """Add one dataset's raw download block to ``tally`` (bytes, failed count and the two time lists)."""
+    state = download.get("state")
+    if state == "downloaded":
+        tally["bytes"] += int(download.get("bytes_total") or 0)
+    elif state == "failed":
+        tally["failed"] += 1
+    if state in TIMED_DOWNLOAD_STATES:
+        seconds = _seconds(download.get("seconds"))
+        if seconds is not None:
+            tally["seconds" if state == "downloaded" else "failed_seconds"].append(seconds)
+
+
 def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
     """How many of ``registry``'s datasets made it through each stage of the pipeline.
 
@@ -56,10 +69,7 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
     if members is None:
         members = stage_members(registry)
 
-    downloaded_bytes = 0
-    downloaded_seconds: List[float] = []
-    failed_seconds: List[float] = []
-    failed = 0
+    download_tally: Dict[str, Any] = {"bytes": 0, "failed": 0, "seconds": [], "failed_seconds": []}
     extracted_pairs = 0
     extraction_seconds: List[float] = []
     assembled_pairs = 0
@@ -69,15 +79,7 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
     for record in registry.datasets.values():
         download = record.get("download")
         if isinstance(download, dict):
-            state = download.get("state")
-            if state == "downloaded":
-                downloaded_bytes += int(download.get("bytes_total") or 0)
-            elif state == "failed":
-                failed += 1
-            if state in TIMED_DOWNLOAD_STATES:
-                seconds = _seconds(download.get("seconds"))
-                if seconds is not None:
-                    (downloaded_seconds if state == "downloaded" else failed_seconds).append(seconds)
+            _tally_download(download, download_tally)
         for extraction in (record.get("extractions") or {}).values():
             if not isinstance(extraction, dict):
                 continue
@@ -99,10 +101,10 @@ def funnel(registry: Registry, members: Optional[Dict[str, List[str]]] = None) -
         "selected": {"accessions": len(members["selected"]), "excluded": len(members["excluded"])},
         "downloaded": {
             "accessions": len(members["downloaded"]),
-            "bytes": downloaded_bytes,
-            "seconds": _total_seconds(downloaded_seconds),
-            "failed": failed,
-            "failed_seconds": _total_seconds(failed_seconds),
+            "bytes": download_tally["bytes"],
+            "seconds": _total_seconds(download_tally["seconds"]),
+            "failed": download_tally["failed"],
+            "failed_seconds": _total_seconds(download_tally["failed_seconds"]),
         },
         "analysed": {"accessions": len(members["analysed"])},
         "extracted": {
