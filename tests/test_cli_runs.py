@@ -113,6 +113,18 @@ def test_list_limit_zero_lists_every_run(project, two_profiles, capsys):
     assert len(_json(capsys)["runs"]) == 2
 
 
+def test_list_default_limit_is_twenty_newest_runs(project, capsys):
+    args = argparse.Namespace(registry=None)
+    records = [
+        run_log.record_run(project, "blacklist", ["blacklist", "--list"], args, STARTED + timedelta(minutes=i), 0.1, 0)
+        for i in range(25)
+    ]
+    assert main(["runs", "--registry", _registry(project), "--json"]) == 0
+    document = _json(capsys)
+    assert document["total"] == 25
+    assert [run["run_id"] for run in document["runs"]] == [record.run_id for record in reversed(records[5:])]
+
+
 def test_list_json_is_one_document(project, two_profiles, capsys):
     assert main(["runs", "--registry", _registry(project), "--json"]) == 0
     document = _json(capsys)
@@ -177,6 +189,16 @@ def test_show_run_with_detail(project, two_profiles, capsys):
     assert "sra_profile --threads 2" in out
     assert "Detail: kept" in out
     assert "SRR1" in out and "43.0" in out
+
+
+def test_show_kept_detail_without_rows_prints_it_as_json(project, capsys):
+    args = argparse.Namespace(registry=None)
+    run_log.note_run(args, summary={"removed": 0}, detail={"count": 3})
+    record = run_log.record_run(project, "blacklist", ["blacklist"], args, STARTED, 0.1, 0)
+    assert main(["runs", "--registry", _registry(project), "--show", record.run_id]) == 0
+    out = capsys.readouterr().out
+    assert "Detail: kept" in out
+    assert "  {" in out and '"count": 3' in out
 
 
 def test_show_pruned_detail_reported_as_not_kept(project, capsys, monkeypatch):

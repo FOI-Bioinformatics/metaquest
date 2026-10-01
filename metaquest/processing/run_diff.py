@@ -3,10 +3,11 @@ Comparisons between recorded runs of the project's run log (``metaquest.data.run
 
 The ``runs`` command uses these to diff two runs and to trace one accession through the log.
 A run's detail is whatever its command passed to ``note_run``; the rows compared here are the
-mappings of plain values found anywhere in it, keyed by their own key (an accession, or
+mappings of plain values held in its sections, at any depth, keyed by their own key (an accession, or
 ``accession/genome``). For example, ``sra_profile`` notes ``{"analyses": {"profile": {acc: {...}}}}``
-and each accession's mapping is one row. When a detail holds rows in more than one section, each
-field name is prefixed with its section (``profile.gc_percent``) so the sections stay apart.
+and each accession's mapping is one row. When one row key appears in more than one section, each of
+its field names is prefixed with the full path of its section (``analyses.profile.gc_percent``) so the
+sections stay apart. A flat mapping beside the sections (settings, counts) is not a row.
 """
 
 from pathlib import Path
@@ -65,12 +66,19 @@ def _is_row(value: Any) -> bool:
 
 
 def _row_sections(detail: Mapping[str, Any], path: Tuple[str, ...] = ()) -> List[Tuple[Tuple[str, ...], str, Dict]]:
-    """Every row in ``detail`` as (section path, row key, row)."""
+    """Every row in ``detail`` as (section path, row key, row).
+
+    A section is a mapping whose mapping values are all rows (plain values beside them are
+    ignored); its values are the rows. A mapping that also holds a non-row mapping is not a
+    section: its non-row mappings are searched in turn and its flat mappings (settings, counts)
+    are not rows and are ignored.
+    """
+    nested = [value for value in detail.values() if isinstance(value, Mapping)]
+    if nested and all(_is_row(value) for value in nested):
+        return [(path, str(key), dict(value)) for key, value in detail.items() if isinstance(value, Mapping)]
     found: List[Tuple[Tuple[str, ...], str, Dict]] = []
     for key, value in detail.items():
-        if _is_row(value):
-            found.append((path, str(key), dict(value)))
-        elif isinstance(value, Mapping):
+        if isinstance(value, Mapping) and not _is_row(value):
             found.extend(_row_sections(value, path + (str(key),)))
     return found
 
@@ -78,18 +86,23 @@ def _row_sections(detail: Mapping[str, Any], path: Tuple[str, ...] = ()) -> List
 def detail_rows(detail: Optional[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """The rows of one run's detail, keyed by row key (an accession, or ``accession/genome``).
 
-    A row is a mapping of plain values. When rows come from more than one section of the
-    detail, each field is prefixed with the name of the section holding it (``profile.gc_percent``).
+    A row is a mapping of plain values inside a section (see ``_row_sections``). When the same
+    row key appears in more than one section, each of its fields is prefixed with the full path of
+    the section holding it (``analyses.profile.gc_percent``); a key found in one section only
+    keeps its field names, so they do not change with the other sections a detail holds.
     Empty for None or a detail without rows.
     """
     if not detail:
         return {}
     found = _row_sections(detail)
-    sections = {path for path, _, _ in found}
+    sections_of: Dict[str, set] = {}
+    for path, key, _ in found:
+        sections_of.setdefault(key, set()).add(path)
     rows: Dict[str, Dict[str, Any]] = {}
     for path, key, row in found:
-        if len(sections) > 1 and path:
-            row = {f"{path[-1]}.{field}": value for field, value in row.items()}
+        if len(sections_of[key]) > 1 and path:
+            prefix = ".".join(path)
+            row = {f"{prefix}.{field}": value for field, value in row.items()}
         rows.setdefault(key, {}).update(row)
     return rows
 
@@ -135,13 +148,22 @@ def _matches(key: str, accession: str) -> bool:
     return key == accession or key.startswith(f"{accession}/")
 
 
+def _names_accession(argv: Sequence[str], accession: str) -> bool:
+    """Whether a command line names ``accession`` as an argument of its own or as ``--option=ACC``.
+
+    The contents of an accessions file named on the command line are not read: a pruned run that
+    took its accessions from ``--accessions-file`` cannot be matched.
+    """
+    return any(item == accession or item.partition("=")[2] == accession for item in argv)
+
+
 def accession_history(project: PathLike, records: Sequence[RunRecord], accession: str) -> List[Dict[str, Any]]:
     """The runs, oldest first, that recorded values for ``accession``.
 
     Each entry holds ``run_id``, ``command``, ``started``, ``exit_code``, ``detail_kept`` and
     ``values`` (``{row key: row}`` for the rows of that accession). A run whose detail is no
     longer kept is included, with ``values`` None, only when its command line names the
-    accession; other runs without a detail cannot be searched and are left out.
+    accession (``_names_accession``); other runs without a detail cannot be searched and are left out.
     """
     history = []
     for record in records:
@@ -152,7 +174,7 @@ def accession_history(project: PathLike, records: Sequence[RunRecord], accession
             values = {key: row for key, row in rows.items() if _matches(key, accession)} or None
             if values is None:
                 continue
-        elif accession not in record.argv:
+        elif not _names_accession(record.argv, accession):
             continue
         history.append(
             {

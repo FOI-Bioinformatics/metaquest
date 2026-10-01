@@ -81,9 +81,28 @@ def test_detail_rows_finds_rows_under_nested_sections():
     assert rows == {"SRR1": {"gc_percent": 41.2}, "SRR2": {"gc_percent": 50.0}}
 
 
-def test_detail_rows_prefixes_fields_when_there_are_several_sections():
+def test_detail_rows_prefixes_fields_of_a_key_found_in_several_sections():
     detail = {"analyses": {"profile": {"SRR1": {"gc_percent": 41.2}}, "report": {"SRR1": {"grade": "A"}}}}
-    assert detail_rows(detail) == {"SRR1": {"profile.gc_percent": 41.2, "report.grade": "A"}}
+    assert detail_rows(detail) == {"SRR1": {"analyses.profile.gc_percent": 41.2, "analyses.report.grade": "A"}}
+
+
+def test_detail_rows_ignores_a_flat_mapping_beside_the_rows():
+    # The Task 18 review's reproduction: a settings mapping beside the rows is not a row and
+    # does not rename the row's fields, so a diff against the same detail without it is empty.
+    with_settings = {"analyses": {"profile": {"SRR1": {"gc_percent": 41.2}}}, "settings": {"threads": 2}}
+    assert detail_rows(with_settings) == {"SRR1": {"gc_percent": 41.2}}
+    diff = diff_details(with_settings, _profile_detail({"SRR1": {"gc_percent": 41.2}}))
+    assert diff == {"added": [], "removed": [], "changed": {}, "unchanged": 1}
+
+
+def test_detail_rows_keeps_sections_with_the_same_last_name_apart():
+    detail = {"x": {"profile": {"SRR1": {"a": 1}}}, "y": {"profile": {"SRR1": {"a": 2}}}}
+    assert detail_rows(detail) == {"SRR1": {"x.profile.a": 1, "y.profile.a": 2}}
+
+
+def test_detail_rows_does_not_prefix_keys_found_in_one_section_only():
+    detail = {"failed": {"SRR1": {"reason": "network"}}, "downloaded": {"SRR2": {"seconds": 3.0}}}
+    assert detail_rows(detail) == {"SRR1": {"reason": "network"}, "SRR2": {"seconds": 3.0}}
 
 
 def test_detail_rows_of_flat_rows_and_of_none():
@@ -153,6 +172,16 @@ def test_accession_history_includes_pruned_run_named_in_argv(project, monkeypatc
     history = accession_history(project, run_log.read_runs(project), "SRR1")
     assert len(history) == 1
     assert history[0]["detail_kept"] is False
+    assert history[0]["values"] is None
+
+
+def test_accession_history_includes_pruned_run_naming_the_accession_as_option_value(project, monkeypatch):
+    monkeypatch.setattr(run_log, "DETAILS_KEPT_PER_COMMAND", 1)
+    _record(project, "sra_profile", 0, argv=["sra_profile", "--accession=SRR1"], detail=_profile_detail({"SRR1": {}}))
+    _record(project, "sra_profile", 1, argv=["sra_profile", "--accession=SRR11"], detail=_profile_detail({"S": {}}))
+    _record(project, "sra_profile", 2, argv=["sra_profile", "SRR9"], detail=_profile_detail({"SRR9": {"a": 1}}))
+    history = accession_history(project, run_log.read_runs(project), "SRR1")
+    assert [entry["started"] for entry in history] == [run_log.read_runs(project)[0].started]
     assert history[0]["values"] is None
 
 

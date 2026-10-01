@@ -470,17 +470,17 @@ metaquest runs --accession SRR11011981       # the values recorded for one acces
 metaquest runs --diff previous latest --json # one JSON document, for scripts
 ```
 
-A run is selected by its ID (`20261001T120501Z-sra_profile-3fa2`), by a prefix that matches only one
-run, or as `latest` or `previous`; with `--command`, these refer to that command's runs only.
-`--diff` lists every summary value of the two runs with the difference for numbers, then compares their
-details row by row (one row per accession, or per accession and genome) and lists the rows found in only
-one run and the fields that changed. A run's detail is reported as not kept when there is none: a run
-keeps one only when its command noted one, and only the last 10 per command are kept. Such a run is
-compared on its summary alone. `--accession`
-lists the runs whose kept detail holds values for that accession, plus runs without a kept detail
-whose command line names it; the number of other runs that could not be searched is given at the end.
-`runs` exits 1 when the project has no run log, and also when a selector matches no run or more than
-one.
+A run is selected by its ID (`20261001T120501Z-sra_profile-3fa2`), by a prefix that matches only one run, or
+as `latest` or `previous`; with `--command`, these refer to that command's runs only. `--diff` lists every
+summary value of the two runs with the difference for numbers, then compares their details row by row (one row
+per accession, or per accession and genome) and lists the rows found in only one run and the fields that
+changed. An accession found in more than one section of a detail has each field named after its section
+(`analyses.profile.gc_percent`). A run's detail is reported as not kept when there is none: a run keeps one
+only when its command noted one, and only the last 10 per command are kept. Such a run is compared on its
+summary alone. `--accession` lists the runs whose kept detail holds values for that accession, plus runs
+without a kept detail whose command line names it (as an argument or as `--option=ACC`; an accessions file
+named on the command line is not read); the number of other runs that could not be searched is given at the
+end. `runs` exits 1 when the project has no run log, and also when a selector matches no run or more than one.
 
 ### Project report
 
