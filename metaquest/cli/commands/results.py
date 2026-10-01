@@ -55,7 +55,7 @@ class ResultsTableCommand(BaseCommand):
             "--no-record",
             dest="no_record",
             action="store_true",
-            help="Write the table but do not record the export in the registry",
+            help="Write the table but do not record the export in the registry or the run in the run log",
         )
 
     def _load_parsed_table(self, path: str) -> Optional[pd.DataFrame]:

@@ -144,9 +144,9 @@ def _dataset_fields(registry: Registry, accession: str) -> Tuple[Dict[str, Any],
     """The columns of a results row that depend on the accession only, shared by all its genomes.
 
     Returned as ``(fields, quality_source)`` rather than one dict with ``quality_source`` folded
-    in: ``_row`` spreads ``fields`` early (to keep the existing columns' positions), but
-    ``quality_source`` belongs at the end of ``RESULTS_COLUMNS``, alongside the other columns
-    added after ``download_verdict``, so it is kept out of the spread and placed explicitly.
+    in, so that ``_row`` can place it after ``download_verdict`` and a raw row's key order stays
+    the same as ``RESULTS_COLUMNS``. This is for the readability of the raw rows only:
+    ``results_dataframe`` orders the output columns by ``RESULTS_COLUMNS`` in any case.
     """
     exclusion = rb.exclusion_block(registry, accession) or _NO_EXCLUSION
     excluded = bool(exclusion.excluded)
@@ -201,9 +201,8 @@ def _row(
         # Same rb.raw pattern as download_seconds; appended at the end, not grouped with the
         # other download fields, so existing column positions are kept.
         "download_verdict": _download_verdict(registry, accession),
-        # Appended after download_verdict (see RESULTS_COLUMNS); quality_source is per accession
-        # but, like download_verdict, is placed here rather than in `dataset` so the dict's key
-        # order matches RESULTS_COLUMNS instead of landing next to total_reads/gc_percent/quality_grade.
+        # Per accession, but placed here rather than in `dataset` so the raw row's key order
+        # matches RESULTS_COLUMNS (results_dataframe orders the output columns explicitly anyway).
         "quality_source": quality_source,
         "assembly_largest": assembly.get("largest"),
         "assembly_n90": assembly.get("n90"),

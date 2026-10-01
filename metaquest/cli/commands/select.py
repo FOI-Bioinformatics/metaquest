@@ -185,8 +185,9 @@ class SelectDatasetsCommand(BaseCommand):
             dest="no_record",
             action="store_true",
             help="Write the output file and log the counts, but do not record the selection in "
-            "the registry (for an exploratory run that should not redefine the target list); "
-            "refuses an --output that a recorded selection names, so give it a scratch file",
+            "the registry or the run in the run log (for an exploratory run that should not "
+            "redefine the target list); refuses an --output that a recorded selection names, so "
+            "give it a scratch file",
         )
 
     def execute(self, args: argparse.Namespace) -> int:

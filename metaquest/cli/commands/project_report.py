@@ -81,7 +81,7 @@ class ProjectReportCommand(BaseCommand):
             "--no-record",
             dest="no_record",
             action="store_true",
-            help="Write the report but do not record the export in the registry",
+            help="Write the report but do not record the export in the registry or the run in the run log",
         )
         parser.add_argument(
             "--registry",
