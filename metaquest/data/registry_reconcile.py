@@ -9,12 +9,28 @@ reading on a snapshot of the registry, without the lock, and returns a ``Reconci
 each condition again against that registry, and reads no reads. ``reconcile`` runs both
 steps on one registry and keeps the behaviour it had before the split.
 
+Before the verdicts, a metadata block recorded without a spot count is filled in from the
+project's ``<accession>_metadata.xml`` file, when there is one. A download whose verdict is
+missing or ``unverified`` is then checked again once a spot count is known: a plain project
+download by counting its mate-1 file and its file of unpaired spots, a link into the shared
+store by comparing the read count the store's sidecar records, without reading any FASTQ.
+A download whose spot count is still unknown keeps its ``unverified`` verdict. The first
+reconcile after upgrading therefore reads the mate-1 file (and any file of unpaired spots)
+of every ``unverified`` plain download that has a spot count, which on a large project takes
+about as long as reading those files once; later runs find those verdicts known and read
+nothing again.
+
+A link into a store that is not mounted (the link's target and its ``sra`` folder are both
+absent) is reported in ``StoreReconcileReport.store_unavailable`` and its download is not
+marked missing; a dangling link into a mounted store, whose dataset folder is gone, is.
+
 The module sits next to ``metaquest.data.registry``, which is held at its current size by
 the module size ceiling; that module re-exports ``reconcile``.
 """
 
 import copy
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -38,14 +54,36 @@ from metaquest.data.registry import (
     scan_downloads,
     scan_extractions,
     set_download_verdict,
+    update_linked,
 )
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, verify_download
+from metaquest.data.sra.spots import expected_spots, merged_verdict
 
 logger = logging.getLogger(__name__)
 
 _CONTIGS_NAME = "final.contigs.fa"
 # Returned by ReconcilePlan.value for a figure the scan did not compute.
 _NOT_SCANNED = object()
+_KNOWN_VERDICTS = ("complete", "truncated")
+# Accessions named in the warning about an unmounted store; the rest are counted.
+_NAMED_IN_WARNING = 5
+
+
+@dataclass
+class StoreReconcileReport(ReconcileReport):
+    """``ReconcileReport`` plus what reconcile found about the shared store, metadata and verdicts.
+
+    ``store_unavailable`` lists accessions whose project folder links into a store that is not
+    mounted (the link's target and the store's ``sra`` folder are both absent); their downloads
+    are left as recorded rather than marked missing. They also appear in ``dangling_links``.
+    ``metadata_filled`` lists accessions whose metadata block gained its fields, spot count
+    included, from the project's metadata XML file. ``verdicts_rechecked`` lists accessions whose
+    ``unverified`` verdict became ``complete`` or ``truncated``. Each list is sorted.
+    """
+
+    store_unavailable: List[str] = field(default_factory=list)
+    metadata_filled: List[str] = field(default_factory=list)
+    verdicts_rechecked: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -53,12 +91,14 @@ class ReconcilePlan:
     """What ``scan_reconcile`` found on disk, and the figures it computed there.
 
     The folder listings (``on_disk``, ``extractions``, ``assemblies``) and the report-only
-    findings (``empty_assembly_dirs``, ``dangling_links``) are taken once, by the scan.
-    ``computed`` holds every figure that required reading files: the read count and coverage
-    of an untracked extraction, the contig statistics of its assembly, and the completeness
-    verdict of a download that has none. Each is keyed by what it depends on (the accession,
-    genome id, recorded spot count or store root), so ``apply_reconcile`` uses a figure only
-    when the registry it is given still asks the same question, and skips it otherwise.
+    findings (``empty_assembly_dirs``, ``dangling_links``, and ``unavailable_links``, the dangling
+    links into a store that is not mounted) are taken once, by the scan. ``computed`` holds every
+    figure that required reading files: the read count and coverage of an untracked extraction,
+    the contig statistics of its assembly, the metadata a metadata XML file holds, and the read and
+    spot counts behind a download's completeness verdict. Each is keyed by what it depends on (the
+    accession, genome id, recorded spot count, download date or store root), so ``apply_reconcile``
+    uses a figure only when the registry it is given still asks the same question, and skips it
+    otherwise.
     """
 
     paths: ProjectPaths = field(default_factory=ProjectPaths)
@@ -68,6 +108,7 @@ class ReconcilePlan:
     assemblies: Dict[str, Dict[str, Path]] = field(default_factory=dict)
     empty_assembly_dirs: List[Tuple[str, str]] = field(default_factory=list)
     dangling_links: List[str] = field(default_factory=list)
+    unavailable_links: List[str] = field(default_factory=list)
     computed: Dict[Tuple[str, ...], Any] = field(default_factory=dict)
 
     def value(self, key: Tuple[str, ...], compute: Optional[Callable[[], Any]]) -> Any:
@@ -94,6 +135,7 @@ def scan_reconcile(snapshot: Registry, paths: ProjectPaths) -> ReconcilePlan:
     from metaquest.store.link import dangling_links
 
     genome_ids = sorted(_genome_ids_on_disk(paths, snapshot))
+    dangling = dangling_links(paths.fastq)
     plan = ReconcilePlan(
         paths=paths,
         on_disk=scan_downloads(paths.fastq),
@@ -101,20 +143,23 @@ def scan_reconcile(snapshot: Registry, paths: ProjectPaths) -> ReconcilePlan:
         extractions=scan_extractions(paths.targeted, genome_ids),
         assemblies=scan_assemblies(paths.targeted, genome_ids),
         empty_assembly_dirs=empty_assembly_dirs(paths.targeted, genome_ids),
-        dangling_links=dangling_links(paths.fastq),
+        dangling_links=dangling,
+        unavailable_links=_unmounted_store_links(paths.fastq, dangling),
     )
     _reconcile(copy.deepcopy(snapshot), plan, compute=True)
     return plan
 
 
-def apply_reconcile(registry: Registry, plan: ReconcilePlan) -> ReconcileReport:
-    """Apply ``plan`` to ``registry`` in place and return what differed; reads no FASTQ.
+def apply_reconcile(registry: Registry, plan: ReconcilePlan) -> StoreReconcileReport:
+    """Apply ``plan`` to ``registry`` in place and return what differed; reads no FASTQ, sidecar or XML.
 
     Meant to run inside a ``registry_transaction`` on the freshly loaded registry. Every
     condition is checked again against ``registry``: a download recorded since the scan is not
-    marked missing twice, an extraction recorded since the scan is not inferred over, and a
-    verdict is filled in only when the scan computed it for the same recorded spot count or
-    store root. Work the scan did not see is left for the next reconcile.
+    marked missing twice, an extraction recorded since the scan is not inferred over, metadata
+    is filled in only for a block that still lacks a spot count, and a verdict is filled in or
+    re-checked only when the registry still records none (or ``unverified``) and the scan
+    computed it for the same spot count, download date and store root. Work the scan did not see
+    is left for the next reconcile.
     """
     return _reconcile(registry, plan, compute=False)
 
@@ -136,27 +181,20 @@ def reconcile(registry: Registry, paths: ProjectPaths) -> ReconcileReport:
     return apply_reconcile(registry, scan_reconcile(registry, paths))
 
 
-def _reconcile(registry: Registry, plan: ReconcilePlan, compute: bool) -> ReconcileReport:
+def _unmounted_store_links(project_fastq: Path, dangling: List[str]) -> List[str]:
+    """The names in ``dangling`` whose link target's parent folder (the store's ``sra``) is absent too.
+
+    A dangling link whose parent folder exists points into a mounted store that no longer holds
+    the dataset; one whose parent folder is gone as well points into a store that is not mounted.
+    """
+    return [name for name in dangling if not Path(os.path.realpath(project_fastq / name)).parent.is_dir()]
+
+
+def _reconcile(registry: Registry, plan: ReconcilePlan, compute: bool) -> StoreReconcileReport:
     """The reconcile itself; with ``compute`` False it only uses figures ``plan`` already holds."""
-    report = ReconcileReport()
-    for acc in registry.datasets:
-        download = rb.download_block(registry, acc)
-        if download is not None and download.state == "downloaded" and acc not in plan.on_disk:
-            # A download another process finished after the scan is not in the scan's listing;
-            # one look at its folder (a few stat calls) keeps it from being marked missing.
-            if accession_has_fastq(plan.paths.fastq / acc):
-                continue
-            download.state, download.date = "missing", _registry._now()
-            rb.set_download_block(registry, acc, download)
-            report.recorded_missing.append(acc)
-    tracked = set(query(registry, "downloaded"))
-    # Checked on disk again, the mirror of the check above: an accession unlinked or removed after
-    # the scan (store_unlink records it missing) must not be written back as downloaded.
-    untracked = (acc for acc in plan.on_disk if acc not in tracked)
-    report.untracked_fastq = sorted(acc for acc in untracked if accession_has_fastq(plan.paths.fastq / acc))
-    for acc in report.untracked_fastq:
-        record_download(registry, acc, "downloaded", plan.paths.fastq, attempt=False)
-        rb.mark_inferred(registry, acc, "download", attempts=0)
+    report = StoreReconcileReport()
+    _mark_missing(registry, plan, report, warn=not compute)
+    _record_untracked(registry, plan, report)
     for acc, per_genome_files in plan.extractions.items():
         for genome_id, files in per_genome_files.items():
             if rb.extraction_block(registry, acc, genome_id) is None:
@@ -164,8 +202,68 @@ def _reconcile(registry: Registry, plan: ReconcilePlan, compute: bool) -> Reconc
                     report.untracked_extractions.append((acc, genome_id))
     report.empty_assembly_dirs = list(plan.empty_assembly_dirs)
     report.dangling_links = list(plan.dangling_links)
-    _fill_verdicts(registry, plan, compute)
+    report.store_unavailable = list(plan.unavailable_links)
+    report.metadata_filled = sorted(_fill_metadata(registry, plan, compute))
+    report.verdicts_rechecked = sorted(_fill_verdicts(registry, plan, compute))
     return report
+
+
+def _mark_missing(registry: Registry, plan: ReconcilePlan, report: StoreReconcileReport, warn: bool) -> None:
+    """Mark downloaded accessions whose reads are gone as missing, except links into an unmounted store.
+
+    ``warn`` logs one warning naming the downloads left alone because their store is not mounted;
+    the scan's rehearsal passes False so the warning is logged once per reconcile.
+    """
+    unavailable = set(plan.unavailable_links)
+    left_alone: List[str] = []
+    for acc in registry.datasets:
+        download = rb.download_block(registry, acc)
+        if download is None or download.state != "downloaded" or acc in plan.on_disk:
+            continue
+        if acc in unavailable:
+            left_alone.append(acc)
+            continue
+        # A download another process finished after the scan is not in the scan's listing;
+        # one look at its folder (a few stat calls) keeps it from being marked missing.
+        if accession_has_fastq(plan.paths.fastq / acc):
+            continue
+        download.state, download.date = "missing", _registry._now()
+        rb.set_download_block(registry, acc, download)
+        report.recorded_missing.append(acc)
+    if warn and left_alone:
+        named = ", ".join(sorted(left_alone)[:_NAMED_IN_WARNING])
+        more = len(left_alone) - _NAMED_IN_WARNING
+        logger.warning(
+            "%d downloaded dataset(s) link into a data store that is not mounted and were not marked missing: %s%s",
+            len(left_alone),
+            named,
+            f" and {more} more" if more > 0 else "",
+        )
+
+
+def _record_untracked(registry: Registry, plan: ReconcilePlan, report: StoreReconcileReport) -> None:
+    """Record FASTQ found on disk that the registry does not record as downloaded, marked inferred.
+
+    An accession whose previous download record says it came from the shared store (e.g. one an
+    earlier reconcile marked missing while the store was unmounted) is recorded as linked from the
+    store again, with its ``store_name``, and put back on the registry's list of linked datasets.
+    """
+    tracked = set(query(registry, "downloaded"))
+    # Checked on disk again, the mirror of the check in _mark_missing: an accession unlinked or
+    # removed after the scan (store_unlink records it missing) must not be written back as downloaded.
+    untracked = (acc for acc in plan.on_disk if acc not in tracked)
+    report.untracked_fastq = sorted(acc for acc in untracked if accession_has_fastq(plan.paths.fastq / acc))
+    for acc in report.untracked_fastq:
+        previous = rb.download_block(registry, acc)
+        if previous is not None and previous.source == "store":
+            store_name = previous.store_name or acc
+            record_download(
+                registry, acc, "downloaded", plan.paths.fastq, attempt=False, source="store", store_name=store_name
+            )
+            update_linked(registry, acc, add=True)
+        else:
+            record_download(registry, acc, "downloaded", plan.paths.fastq, attempt=False)
+        rb.mark_inferred(registry, acc, "download", attempts=0)
 
 
 def _count_extraction(files: List[Path], genome_id: str) -> Tuple[int, Optional[Dict[str, Any]]]:
@@ -202,56 +300,134 @@ def _infer_extraction(
 
 
 def _fill_missing_download_verdicts(registry: Registry, paths: ProjectPaths) -> None:
-    """Compute a completeness verdict for a downloaded accession that never got one.
+    """Compute a completeness verdict for a downloaded accession that has none, or ``unverified``.
 
     A project downloaded before completeness verification existed (or with
-    ``--no-verify-downloads``) has metadata recorded but no ``download.complete`` verdict.
-    When NCBI's recorded spot count is on file, this recomputes it the same way a fresh
-    download would have, against the accession's files on disk. A record whose reads came from
-    the shared store is filled in from that dataset's sidecar instead: the store already
-    verified it when it was downloaded, and counting the reads again through a link would
-    repeat work another project has done.
+    ``--no-verify-downloads``) has metadata recorded but no ``download.complete`` verdict, and a
+    download made while NCBI's spot count was unknown records ``unverified``. Once the spot count
+    is on file, this recomputes the verdict the same way a fresh download would have, against the
+    accession's files on disk. A record whose reads came from the shared store is filled in from
+    that dataset's sidecar instead: the store counted the reads when it downloaded them, and
+    counting them again through a link would repeat work another project has done.
     """
     _fill_verdicts(registry, ReconcilePlan(paths=paths), compute=True)
 
 
-def _fill_verdicts(registry: Registry, plan: ReconcilePlan, compute: bool) -> None:
-    """``_fill_missing_download_verdicts`` on a plan; with ``compute`` False, only scanned verdicts are used."""
+def _fill_metadata(registry: Registry, plan: ReconcilePlan, compute: bool) -> List[str]:
+    """Fill metadata blocks recorded without a spot count from the project's XML files; return the accessions.
+
+    With ``compute`` (the scan) this is ``fill_metadata_from_xml`` on the project's metadata
+    folder, and each block it fills is kept in the plan. Without it (the apply) no XML is read:
+    a block the scan filled is copied in, only while the registry's block still lacks a spot
+    count, keeping that block's ``inferred`` mark.
+    """
+    if compute:
+        # Imported here: metadata_fields pulls in the XML parsing stack, which reconcile otherwise
+        # does not need at import time.
+        from metaquest.data.metadata_fields import fill_metadata_from_xml
+
+        filled = fill_metadata_from_xml(registry, plan.paths.metadata)
+        for acc in filled:
+            plan.computed[("metadata", acc)] = copy.deepcopy(registry.datasets[acc]["metadata"])
+        return filled
+    filled = []
+    for acc in registry.datasets:
+        block = rb.metadata_block(registry, acc)
+        if block is None or block.run_total_spots is not None:
+            continue
+        stored = plan.value(("metadata", acc), None)
+        if stored is _NOT_SCANNED:
+            continue
+        new_block = rb.MetadataBlock.from_dict(copy.deepcopy(stored))
+        if block.inferred:
+            new_block.inferred = True
+        rb.set_metadata_block(registry, acc, new_block)
+        filled.append(acc)
+    return filled
+
+
+def _fill_verdicts(registry: Registry, plan: ReconcilePlan, compute: bool) -> List[str]:
+    """``_fill_missing_download_verdicts`` on a plan; returns the accessions whose ``unverified`` verdict became known.
+
+    With ``compute`` False, only figures the scan computed are used. A previous ``unverified``
+    verdict is replaced only by a known one (``complete`` or ``truncated``); a download whose
+    store is not mounted is skipped.
+    """
+    rechecked: List[str] = []
+    unavailable = set(plan.unavailable_links)
     for acc in registry.datasets:
         download = rb.download_block(registry, acc) or rb.DownloadBlock()
         # A verdict recorded as an empty dict counts as none, as it did before the typed blocks.
-        if download.state != "downloaded" or (download.complete is not None and download.complete.to_dict()):
+        previous = download.complete.to_dict() if download.complete is not None else {}
+        unverified = bool(previous) and previous.get("verdict") == "unverified"
+        if download.state != "downloaded" or (previous and not unverified) or acc in unavailable:
             continue
         if download.source == "store":
-            root = rb.store_block(registry).root or ""
-            store_verdict = plan.value(
-                ("store", acc, root), (lambda: _store_verdict(registry, acc)) if compute else None
-            )
-            if store_verdict is not _NOT_SCANNED and store_verdict is not None:
-                set_download_verdict(registry, acc, store_verdict)
+            new = _store_recheck(registry, plan, acc, download, compute)
+        else:
+            new = _plain_recheck(registry, plan, acc, download, compute)
+        if new is None or new == previous:
             continue
-        spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots
-        if not spots:
+        known = new.get("verdict") in _KNOWN_VERDICTS
+        if unverified and not known:
             continue
-        acc_dir = plan.paths.fastq / acc
-        if not acc_dir.is_dir():
-            continue
-        # Keyed on the download's date too, so files downloaded again between the scan and the
-        # apply are never stamped with the verdict computed on the files they replaced.
-        verify = plan.value(
-            ("spots", acc, str(spots), str(download.date)),
-            (lambda: verify_download(acc, acc_dir, spots)) if compute else None,
-        )
-        if verify is _NOT_SCANNED:
-            continue
-        set_download_verdict(registry, acc, {"method": "spots", "ratio": verify["ratio"], "verdict": verify["verdict"]})
+        set_download_verdict(registry, acc, new)
+        if unverified:
+            rechecked.append(acc)
+    return rechecked
 
 
-def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any]]:
-    """The completeness verdict the store's sidecar records for ``accession``, or None.
+def _plain_recheck(
+    registry: Registry, plan: ReconcilePlan, acc: str, download: rb.DownloadBlock, compute: bool
+) -> Optional[Dict[str, Any]]:
+    """The verdict of a plain project download from its reads on disk, or None when it cannot be had.
+
+    Counts the mate-1 (or single-end) file and the file of unpaired spots once per download; the
+    count is keyed on the spot count and the download's date, so files downloaded again between
+    the scan and the apply are never stamped with the verdict computed on the files they replaced.
+    """
+    spots = expected_spots(registry, acc)
+    if spots is None:
+        return None
+    acc_dir = plan.paths.fastq / acc
+    if not acc_dir.is_dir():
+        return None
+    reads = plan.value(
+        ("spots", acc, str(spots), str(download.date)),
+        (lambda: verify_download(acc, acc_dir, spots)["reads_r1"]) if compute else None,
+    )
+    if reads is _NOT_SCANNED:
+        return None
+    return merged_verdict(download.complete, None, reads, spots)
+
+
+def _store_recheck(
+    registry: Registry, plan: ReconcilePlan, acc: str, download: rb.DownloadBlock, compute: bool
+) -> Optional[Dict[str, Any]]:
+    """The verdict of a download linked from the store, from its sidecar's counts; reads no FASTQ.
+
+    The sidecar's ``reads_per_mate`` is compared with the expected spot count (the registry's
+    metadata first, then the sidecar's ``ncbi.spots``). Without both counts the sidecar's own
+    verdict is taken, as before re-checking existed. Keyed on the store root, the registry's spot
+    count and the download's date.
+    """
+    root = rb.store_block(registry).root or ""
+    recorded_spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots
+    figures = plan.value(
+        ("store", acc, root, str(recorded_spots), str(download.date)),
+        (lambda: _store_figures(registry, acc)) if compute else None,
+    )
+    if figures is _NOT_SCANNED or figures is None:
+        return None
+    sidecar_verdict, reads, spots = figures
+    return merged_verdict(download.complete, sidecar_verdict, reads, spots)
+
+
+def _store_figures(registry: Registry, accession: str) -> Optional[Tuple[Dict[str, Any], Optional[int], Optional[int]]]:
+    """The store sidecar's verdict for ``accession``, its read count per mate and the expected spot count.
 
     Reads the store root the registry itself recorded; a project whose store has moved or is
-    not mounted simply gets no verdict this time round, exactly as before.
+    not mounted simply gets no verdict this time round (None), exactly as before.
     """
     root = rb.store_block(registry).root
     if not root:
@@ -261,7 +437,11 @@ def _store_verdict(registry: Registry, accession: str) -> Optional[Dict[str, Any
     from metaquest.store.sidecar import sidecar_completeness
 
     try:
-        return sidecar_completeness(sidecar_path(store_paths(Path(root)), accession))
+        store = store_paths(Path(root))
+        verdict = sidecar_completeness(sidecar_path(store, accession))
+        if verdict is None:
+            return None
+        return verdict, verdict.get("reads_r1"), expected_spots(registry, accession, store=store)
     except (OSError, DataAccessError) as e:
         logger.warning("Could not read the store sidecar for %s: %s", accession, e)
         return None

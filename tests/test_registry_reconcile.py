@@ -2,7 +2,10 @@
 
 ``reconcile`` was split into ``scan_reconcile`` (reads the disk, no lock) and ``apply_reconcile``
 (fast, under the lock). ``_reference_reconcile`` below is the single-step function as it stood
-before the split, kept verbatim so the two-step form can be checked against it.
+before the split, kept so the two-step form can be checked against it. Two changes made since
+then are mirrored in it: the report is a ``StoreReconcileReport`` (store, metadata and re-check
+fields, all empty for this fixture), and a filled-in verdict is the full dict
+``verdict_for_count`` returns rather than a hand-built subset.
 """
 
 import copy
@@ -17,8 +20,9 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry as reg
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry_batch import registry_update
-from metaquest.data.registry_reconcile import apply_reconcile, reconcile, scan_reconcile
+from metaquest.data.registry_reconcile import StoreReconcileReport, apply_reconcile, reconcile, scan_reconcile
 from metaquest.data.sra import verify_download
+from metaquest.data.sra.spots import verdict_for_count
 
 # ------------------------------------------------------------- reference (pre-split)
 
@@ -26,7 +30,7 @@ from metaquest.data.sra import verify_download
 def _reference_reconcile(registry: reg.Registry, paths: reg.ProjectPaths) -> reg.ReconcileReport:
     from metaquest.store.link import dangling_links
 
-    report = reg.ReconcileReport()
+    report = StoreReconcileReport()
     on_disk = reg.scan_downloads(paths.fastq)
     for acc in registry.datasets:
         download = rb.download_block(registry, acc)
@@ -63,6 +67,8 @@ def _reference_fill(registry: reg.Registry, paths: reg.ProjectPaths) -> None:
         if download.source == "store":
             complete = _reference_store_verdict(registry, acc)
             if complete is not None:
+                if complete["reads_r1"] is not None and complete["expected_spots"]:
+                    complete = verdict_for_count(complete["reads_r1"], complete["expected_spots"])
                 reg.set_download_verdict(registry, acc, complete)
             continue
         spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots
@@ -72,8 +78,7 @@ def _reference_fill(registry: reg.Registry, paths: reg.ProjectPaths) -> None:
         if not acc_dir.is_dir():
             continue
         verify = verify_download(acc, acc_dir, spots)
-        complete = {"method": "spots", "ratio": verify["ratio"], "verdict": verify["verdict"]}
-        reg.set_download_verdict(registry, acc, complete)
+        reg.set_download_verdict(registry, acc, verdict_for_count(verify["reads_r1"], spots))
 
 
 def _reference_store_verdict(registry: reg.Registry, accession: str) -> Optional[Dict[str, Any]]:
