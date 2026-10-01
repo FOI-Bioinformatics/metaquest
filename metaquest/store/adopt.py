@@ -58,12 +58,12 @@ from metaquest.data.sra import (
 )
 from metaquest.store.catalog import catalog_write
 from metaquest.store.layout import StorePaths, lock_path, sidecar_path, sra_dir
-from metaquest.store.link import link_dataset
+from metaquest.store.link import link_dataset, room_shortfall
 from metaquest.store.locks import dataset_lock, lock_holder, lock_is_held
-from metaquest.store.sidecar import _detect_layout  # one layout rule for built and rebuilt sidecars
 from metaquest.store.sidecar import (
     Sidecar,
     build_sidecar,
+    detect_layout,
     md5_file,
     ncbi_from_metadata_xml,
     read_sidecar,
@@ -303,7 +303,7 @@ def rebuild_missing_sidecar(accession: str, store_dir: Path, paths: StorePaths) 
     sidecar = Sidecar(
         accession=accession,
         state="failed",
-        layout=_detect_layout(files),
+        layout=detect_layout(files),
         downloaded=_newest_file_time(store_dir),
         tool="unknown",
         compression=_detect_compression(store_dir),
@@ -350,12 +350,8 @@ def _has_room_for(accession: str, entry: Path, paths: StorePaths) -> bool:
     ``disk_usage`` would be worse than trying.
     """
     needed = _folder_bytes(entry) * 2
-    try:
-        free = shutil.disk_usage(paths.root).free
-    except OSError as e:
-        logger.warning("Could not check free space on %s: %s", paths.root, e)
-        return True
-    if free >= needed:
+    free = room_shortfall(paths.root, needed)
+    if free is None:
         return True
     logger.warning(
         "%s: not adopting it, the store's filesystem has %d bytes free and staging needs about %d",

@@ -388,3 +388,66 @@ def test_copy_relink_whose_swap_fails_puts_the_earlier_copy_back(tmp_path, paths
     assert len(calls) == 3  # aside, the failed swap, and the earlier copy renamed back
     assert (project_fastq / "SRR1" / "SRR1_1.fastq").read_text() == "@r\nACGT\n+\nIIII\n"
     assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]
+
+
+def test_copy_relink_interrupted_between_aside_and_swap_puts_the_earlier_copy_back(tmp_path, paths, monkeypatch):
+    """An interrupt after the earlier copy was moved aside, before the swap, leaves it visible again."""
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    link_dataset(project_fastq, "SRR1", paths, mode="copy")
+    real_replace = os.replace
+    calls = []
+
+    def _interrupted_swap(src, dst):
+        calls.append((src, dst))
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("metaquest.store.link.os.replace", _interrupted_swap)
+    with pytest.raises(KeyboardInterrupt):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert len(calls) == 3  # aside, the interrupted swap, and the earlier copy renamed back
+    assert (project_fastq / "SRR1" / "SRR1_1.fastq").read_text() == "@r\nACGT\n+\nIIII\n"
+    assert (project_fastq / "SRR1" / "SRR1.json").is_file()
+    assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]
+
+
+def test_copy_relink_without_room_names_the_accession_and_keeps_the_earlier_copy(tmp_path, paths, monkeypatch):
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+    link_dataset(project_fastq, "SRR1", paths, mode="copy")
+    full = shutil._ntuple_diskusage(1000, 1000, 1)
+    monkeypatch.setattr("metaquest.store.link.shutil.disk_usage", lambda _path: full)
+
+    with pytest.raises(DataAccessError, match=r"Cannot copy SRR1 into .*1 bytes free, the copy needs about \d+"):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert (project_fastq / "SRR1" / "SRR1_1.fastq").read_text() == "@r\nACGT\n+\nIIII\n"
+    assert [entry.name for entry in project_fastq.iterdir()] == ["SRR1"]
+
+
+def test_copy_link_whose_copy_fails_raises_a_data_access_error_naming_the_accession(tmp_path, paths, monkeypatch):
+    _store_dataset(paths)
+    project_fastq = tmp_path / "project" / "fastq"
+
+    def _failing_copytree(src, dst, *args, **kwargs):
+        raise shutil.Error([(str(src), str(dst), "No space left on device")])
+
+    monkeypatch.setattr("metaquest.store.link.shutil.copytree", _failing_copytree)
+    with pytest.raises(DataAccessError, match="Cannot copy SRR1 into"):
+        link_dataset(project_fastq, "SRR1", paths, mode="copy")
+
+    assert list(project_fastq.iterdir()) == []
+
+
+def test_room_shortfall_assumes_room_when_the_filesystem_cannot_be_measured(tmp_path, monkeypatch, caplog):
+    from metaquest.store.link import room_shortfall
+
+    def _unreadable(_path):
+        raise OSError("not mounted")
+
+    monkeypatch.setattr("metaquest.store.link.shutil.disk_usage", _unreadable)
+    assert room_shortfall(tmp_path, 10**12) is None
+    assert "Could not check free space" in caplog.text

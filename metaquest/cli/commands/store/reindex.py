@@ -3,10 +3,13 @@
 """
 
 import argparse
+import logging
+import re
 from typing import List, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.store._shared import _now, _no_store_hint
+from metaquest.core.constants import SRA_ACCESSION_PATTERN
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import visible_files
@@ -18,6 +21,8 @@ from metaquest.store.layout import StorePaths, sidecar_path, sra_dir, store_path
 from metaquest.store.locks import LockHeld, dataset_lock, lock_holder
 from metaquest.store.resolve import resolve_store_root
 from metaquest.store.sidecar import Sidecar, read_sidecar
+
+logger = logging.getLogger(__name__)
 
 
 class StoreReindexCommand(BaseCommand):
@@ -57,7 +62,10 @@ class StoreReindexCommand(BaseCommand):
         A reindex rebuilds ``datasets`` from exactly what it reads, so a sidecar missed here
         would look like a dataset that no longer exists. The caller stops rather than acting
         on a partial reading when a sidecar is there but unreadable; a folder with no sidecar
-        file at all is rebuilt from its files instead (``_rebuild_missing``).
+        file at all is rebuilt from its files instead (``_rebuild_missing``), but only when its
+        name is an SRA accession (``SRA_ACCESSION_PATTERN``): any other folder in ``sra/`` (notes
+        put there by hand, for example) is not a dataset, so it is logged as skipped and gets
+        neither a sidecar nor a catalogue row.
         """
         sidecars: List[Sidecar] = []
         unreadable: List[str] = []
@@ -65,7 +73,10 @@ class StoreReindexCommand(BaseCommand):
         for acc_dir in visible_files(paths.sra, dirs=True):
             sc_path = sidecar_path(paths, acc_dir.name)
             if not sc_path.is_file():
-                missing.append(acc_dir.name)
+                if re.fullmatch(SRA_ACCESSION_PATTERN, acc_dir.name):
+                    missing.append(acc_dir.name)
+                else:
+                    logger.warning("%s in %s is not named like an SRA accession; skipped", acc_dir.name, paths.sra)
                 continue
             sidecar = read_sidecar(sc_path)
             if sidecar is None:

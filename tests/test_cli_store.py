@@ -2210,3 +2210,40 @@ class TestStoreReindexMissingSidecar:
         assert rc == 1
         assert any("SRR2" in record.message for record in caplog.records)
         assert not sidecar_path(paths, "SRR1").exists()
+
+    def test_a_folder_not_named_like_an_accession_is_skipped(self, tmp_path, caplog):
+        root, paths = self._sidecar_less_store(tmp_path)
+        stray = paths.sra / "notes"
+        stray.mkdir()
+        (stray / "readme.txt").write_text("kept by hand\n")
+
+        with caplog.at_level(logging.WARNING):
+            rc = StoreReindexCommand().execute(_reindex_args(data_root=str(root)))
+
+        assert rc == 0
+        assert not (stray / "notes.json").exists()
+        assert sidecar_path(paths, "SRR1").is_file()
+        assert any("notes" in record.message and "skipped" in record.message for record in caplog.records)
+        with Catalog(paths) as catalog:
+            assert catalog.get_dataset("notes") is None
+            assert catalog.get_dataset("SRR1") is not None
+
+    def test_a_rebuilt_sidecar_is_refused_by_store_link_until_verified(self, tmp_path, monkeypatch):
+        """The repair path the rebuilt sidecar names: reindex, a refused link, verify --rescan --fix-state."""
+        root, paths = self._sidecar_less_store(tmp_path)
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        assert StoreReindexCommand().execute(_reindex_args(data_root=str(root))) == 0
+        assert read_sidecar(sidecar_path(paths, "SRR1")).state == "failed"
+
+        assert StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root))) == 1
+        assert not (project_dir / "fastq" / "SRR1").exists()
+
+        rc = StoreVerifyCommand().execute(_verify_args(["SRR1"], data_root=str(root), rescan=True, fix_state=True))
+        assert rc == 0
+        assert read_sidecar(sidecar_path(paths, "SRR1")).state == "complete"
+
+        assert StoreLinkCommand().execute(_link_args(["SRR1"], data_root=str(root))) == 0
+        assert (project_dir / "fastq" / "SRR1").is_symlink()

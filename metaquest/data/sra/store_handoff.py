@@ -2,6 +2,12 @@
 
 The ``metaquest.store`` imports stay inside the functions because ``metaquest.store`` itself
 imports this package.
+
+The precheck's refusal of an incomplete copy (``_store_precheck`` without ``--resume-partial`` or
+with exhausted refetches) removes the project's store link without holding the dataset lock, on a
+sidecar read that may already be stale. This is tolerated: it only matters when two runs of the
+same project handle the same accession at once and the other one has just linked a better copy,
+and the next run links that copy again.
 """
 
 import functools

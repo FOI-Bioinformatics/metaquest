@@ -99,7 +99,7 @@ def md5_file(path: Union[str, Path]) -> str:
     return digest.hexdigest()
 
 
-def _detect_layout(files: List[Path]) -> str:
+def detect_layout(files: List[Path]) -> str:
     """``PAIRED`` when a mate-1 (``_1``/``_R1``) and a mate-2 (``_2``/``_R2``) file both exist,
     else ``SINGLE``."""
     stems = [fastq_stem(p) for p in files]
@@ -134,7 +134,7 @@ def build_sidecar(
     """
     acc_path = Path(acc_dir)
     files = fastq_files(acc_path)
-    layout = _detect_layout(files)
+    layout = detect_layout(files)
 
     reads_by_path: Dict[Path, Optional[int]] = {}
     file_records = []

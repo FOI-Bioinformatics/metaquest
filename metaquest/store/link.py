@@ -120,28 +120,82 @@ def _clear_existing(link: Path, replace_store_copy: bool = False) -> Optional[Pa
     return aside
 
 
+def room_shortfall(location: Path, needed: int) -> Optional[int]:
+    """The free bytes on ``location``'s filesystem when they are fewer than ``needed``, else None.
+
+    The one free-space rule for staging a copy of a dataset: ``store_adopt`` asks for twice the
+    folder's size on the store's filesystem, a copy-mode link for the folder's size on the
+    project's. A filesystem that cannot be measured is assumed to have room (logged): refusing on
+    an unreadable ``disk_usage`` would be worse than trying.
+    """
+    try:
+        free = shutil.disk_usage(location).free
+    except OSError as e:
+        logger.warning("Could not check free space on %s: %s", location, e)
+        return None
+    return free if free < needed else None
+
+
+def _tree_bytes(folder: Path) -> int:
+    """Total bytes of the files under ``folder``; a file that cannot be stat'ed counts as 0."""
+    total = 0
+    for path in folder.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def _copy_into_place(store_dataset: Path, link: Path) -> None:
     """Copy ``store_dataset`` to ``link``, replacing an earlier copy only once the new one is complete.
 
     The copy is made under a hidden staging name first, so an interrupted copy never leaves a
     partial dataset folder that looks like a download, and an earlier copy at ``link`` is moved
-    aside only after the staging copy finished. If the final rename fails, the earlier copy is
-    renamed back, so the project is never left with no copy at all.
+    aside only after the staging copy finished. If the final rename does not happen, for any
+    reason including an interrupt, the earlier copy is renamed back, so the project is never left
+    with no visible copy at all. The project's filesystem must have room for the staging copy
+    (``room_shortfall``); a shortfall, or a copy that fails, raises ``DataAccessError`` naming the
+    accession.
     """
+    accession = store_dataset.name
+    needed = _tree_bytes(store_dataset)
+    free = room_shortfall(link.parent, needed)
+    if free is not None:
+        raise DataAccessError(
+            f"Cannot copy {accession} into {link.parent}: {free} bytes free, the copy needs about {needed}"
+        )
     staging = unique_temp_path(link)
     try:
-        shutil.copytree(store_dataset, staging)
-        aside = _clear_existing(link, replace_store_copy=True)
         try:
-            os.replace(staging, link)
-        except OSError as e:
-            if aside is not None:
-                os.replace(aside, link)
-            raise DataAccessError(f"Cannot copy {store_dataset.name} into {link.parent}: {e}") from e
-        if aside is not None:
-            shutil.rmtree(aside, ignore_errors=True)
+            shutil.copytree(store_dataset, staging)
+        except (OSError, shutil.Error) as e:
+            raise DataAccessError(f"Cannot copy {accession} into {link.parent}: {e}") from e
+        _swap_into_place(staging, link, accession)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def _swap_into_place(staging: Path, link: Path, accession: str) -> None:
+    """Move the finished ``staging`` copy to ``link``, an earlier copy there aside and then away.
+
+    The earlier copy is renamed back whenever the swap did not happen, also on an interrupt
+    (``KeyboardInterrupt`` or any other exception), as long as nothing took its place meanwhile.
+    """
+    aside = _clear_existing(link, replace_store_copy=True)
+    swapped = False
+    try:
+        os.replace(staging, link)
+        swapped = True
+    except OSError as e:
+        raise DataAccessError(f"Cannot copy {accession} into {link.parent}: {e}") from e
+    finally:
+        if aside is not None:
+            if swapped:
+                shutil.rmtree(aside, ignore_errors=True)
+            elif not os.path.lexists(link):
+                os.replace(aside, link)
 
 
 def link_dataset(
