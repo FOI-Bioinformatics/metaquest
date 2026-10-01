@@ -23,7 +23,8 @@ from metaquest.data.metadata import (
     parse_metadata,
     parse_metadata_xml,
 )
-from metaquest.data.registry import Registry, nan_to_none, record_metadata, registry_path
+from metaquest.data.metadata_fields import FIELD_COLUMNS, metadata_fields
+from metaquest.data.registry import Registry, record_metadata, registry_path
 from metaquest.data.registry_batch import registry_batch, registry_update
 from metaquest.processing.counts import count_metadata
 from metaquest.store.resolve import resolve_optional_store
@@ -32,44 +33,13 @@ from metaquest.visualization.plots import plot_metadata_counts
 logger = logging.getLogger(__name__)
 
 
-# Registry field name and the metadata table column it is read from, as used by _metadata_fields.
-_FIELD_COLUMNS = (
-    ("run_size", "Run_Size"),
-    ("run_md5", "Run_MD5"),
-    ("run_total_spots", "Run_Total_Spots"),
-    ("run_total_bases", "Run_Total_Bases"),
-    ("assay_type", "Experiment_Library_Strategy"),
-    ("organism", "Sample_Scientific_Name"),
-    ("collection_date", "collection_date"),
-    ("library_layout", "Experiment_Library_Layout"),
-    ("platform", "Platform"),
-    ("library_strategy", "Experiment_Library_Strategy"),
-)
+# The field-to-column mapping and the row-to-fields function now live in data.metadata_fields,
+# shared with fill_metadata_from_xml; kept as aliases here for the rest of this module and tests.
+_FIELD_COLUMNS = FIELD_COLUMNS
+_metadata_fields = metadata_fields
 
 # The table columns ParseMetadataCommand reads per row: the accession and the _FIELD_COLUMNS sources.
 _ROW_COLUMNS = tuple(dict.fromkeys(("Run_ID",) + tuple(column for _, column in _FIELD_COLUMNS)))
-
-
-def _metadata_fields(row: Mapping[str, Any]) -> Dict[str, Any]:
-    """Extract metadata fields from a parsed metadata dict or pandas row.
-
-    Maps the parsed XML field names (used by parse_metadata_xml) to the registry
-    field names (used by record_metadata). This mapping is shared by both
-    DownloadMetadataCommand and ParseMetadataCommand to ensure consistency.
-
-    Args:
-        row: Mapping with keys like "Run_Total_Spots", "Run_MD5", etc.
-            Can be a dict from parse_metadata_xml or a pandas Series.
-
-    Returns:
-        Dict with registry field names like "run_total_spots", "run_md5", etc.
-    """
-    fields: Dict[str, Any] = {}
-    for field, column in _FIELD_COLUMNS:
-        value = row.get(column)
-        if value is not None:
-            fields[field] = nan_to_none(value)
-    return fields
 
 
 class DownloadMetadataCommand(BaseCommand):
