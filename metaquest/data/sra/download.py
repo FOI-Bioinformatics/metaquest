@@ -181,17 +181,22 @@ def _space_guard(
     min_free_gb: Optional[float],
     force: bool,
     accessions: List[str],
+    expected_spots: Optional[Mapping[str, int]] = None,
 ) -> Optional[space_mod.SpaceGuard]:
     """The free-space guard for this run, or None when ``min_free_gb`` (or its setting) is 0.
 
     An accession the shared store already holds is linked, not downloaded, so it needs no
-    space (unless ``force`` downloads it again). Logs the preflight warnings.
+    space (unless ``force`` downloads it again); nor does an incomplete copy whose refetches
+    stopped gaining reads, which is linked or refused without a download. A copy that is
+    ``unverified`` but short against its ``expected_spots`` count is refetched, so it is
+    counted. Logs the preflight warnings.
     """
     floor_gb = settings.active().min_free_gb if min_free_gb is None else min_free_gb
     if not floor_gb or floor_gb <= 0:
         return None
+    counts = expected_spots or {}
     exempt = (
-        {acc for acc in accessions if store_handoff_mod._store_state(store, acc) == "ready"}
+        {acc for acc in accessions if store_handoff_mod._store_settles(store, acc, counts.get(acc))}
         if store is not None and not force
         else set()
     )
@@ -385,6 +390,7 @@ def download_sra(
             min_free_gb,
             force,
             accessions_to_download,
+            expected_spots=expected_spots,
         )
 
         # Download accessions in parallel, with an optional retry pass

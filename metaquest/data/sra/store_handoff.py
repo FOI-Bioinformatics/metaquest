@@ -7,8 +7,9 @@ imports this package.
 import functools
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data.sra import accession as accession_mod
@@ -34,6 +35,11 @@ STORE_READY_STATES = ("complete", "unverified")
 # own run summary) matches against this constant rather than a copy of the literal.
 STORE_LINKED_PREFIX = "linked from store"
 
+# Refetches of an incomplete store copy that may gain no reads before the copy is no longer
+# fetched again on its own: it is then linked with --accept-partial, or refused, until a run
+# passes --force. NCBI's spot count is sometimes not reachable by fasterq-dump at all.
+STORE_PARTIAL_REFETCH_LIMIT = 2
+
 
 def _xml_folders(folders, store) -> List[Union[str, Path]]:
     """The folders that may hold ``<ACC>_metadata.xml``: ``folders`` (one, several or None), then the store's."""
@@ -57,17 +63,6 @@ def _metadata_xml(folders, accession: str) -> Optional[Path]:
     return None
 
 
-def _given_spots(value) -> Optional[int]:
-    """``value`` as a positive int, or None when it is missing, zero or not a whole number."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
-
-
 def _resolve_expected_spots(accession: str, store, store_metadata, given) -> Optional[int]:
     """The spot count a store download of ``accession`` is judged against.
 
@@ -75,7 +70,7 @@ def _resolve_expected_spots(accession: str, store, store_metadata, given) -> Opt
     ``metaquest.data.sra.spots.expected_spots`` looks in the store sidecar and then in the
     metadata XML folders, the same lookup order every other caller uses.
     """
-    spots = _given_spots(given)
+    spots = spots_mod.positive_int(given)
     if spots is not None:
         return spots
     return spots_mod.expected_spots(None, accession, store=store, xml_folders=_xml_folders(store_metadata, store))
@@ -124,6 +119,16 @@ def _store_state(store, accession: str, expected_spots: Optional[int] = None) ->
     return "incomplete" if fastq_mod.fastq_files(sra_dir(store, accession)) else "absent"
 
 
+def _store_settles(store, accession: str, expected_spots: Optional[int] = None) -> bool:
+    """True when a run without ``--force`` links or refuses ``accession`` without downloading it.
+
+    That is a ready copy, or an incomplete one whose refetches stopped gaining reads
+    (``_refetch_exhausted``). The free-space guard exempts these accessions.
+    """
+    state = _store_state(store, accession, expected_spots)
+    return state == "ready" or (state == "incomplete" and _refetch_exhausted(_read_store_sidecar(store, accession)))
+
+
 def _reverify_sidecar(store, accession: str, expected_spots: int) -> None:
     """Record a short ``unverified`` store copy as ``partial`` against ``expected_spots``.
 
@@ -161,10 +166,51 @@ def _spot_text(count: Optional[int]) -> str:
 def _incomplete_message(accession: str, sidecar) -> str:
     """The result message for a store copy that is kept for resuming but not linked."""
     reads = sidecar.reads_per_mate if sidecar is not None else None
-    spots = _given_spots(sidecar.ncbi.get("spots")) if sidecar is not None else None
+    spots = spots_mod.positive_int(sidecar.ncbi.get("spots")) if sidecar is not None else None
     return (
         f"incomplete: {accession} store copy holds {_spot_text(reads)} of {_spot_text(spots)} spots; "
         "kept for --resume-partial; rerun with --accept-partial to use it"
+    )
+
+
+def _refetch_record(previous, new) -> Optional[Dict[str, Any]]:
+    """The ``refetch`` record of the store copy after ``new`` (a refetch) was built over ``previous``.
+
+    ``unchanged`` counts consecutive refetches whose ``reads_per_mate`` did not grow beyond the
+    larger of the previous copy's and its record's count; a gain resets it to 0. A ``complete``
+    result, or a first download (no ``previous``), has no record (None). ``reads_per_mate`` is
+    the largest count seen so far, ``expected_spots`` the count the refetch was judged against.
+    """
+    if previous is None or new.state == "complete":
+        return None
+    prior = previous.refetch or {}
+    known = [n for n in (previous.reads_per_mate, spots_mod.positive_int(prior.get("reads_per_mate"))) if n]
+    best = max(known) if known else None
+    gained = new.reads_per_mate is not None and (best is None or new.reads_per_mate > best)
+    unchanged = 0 if gained else int(prior.get("unchanged") or 0) + 1
+    expected = spots_mod.positive_int(new.ncbi.get("spots")) or spots_mod.positive_int(previous.ncbi.get("spots"))
+    return {
+        "unchanged": unchanged,
+        "reads_per_mate": new.reads_per_mate if gained else best,
+        "expected_spots": expected,
+        "last": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _refetch_exhausted(sidecar) -> bool:
+    """True when ``STORE_PARTIAL_REFETCH_LIMIT`` refetches in a row gained no reads for this copy."""
+    if sidecar is None or not sidecar.refetch:
+        return False
+    return int(sidecar.refetch.get("unchanged") or 0) >= STORE_PARTIAL_REFETCH_LIMIT
+
+
+def _exhausted_message(accession: str, sidecar, expected_spots: Optional[int]) -> str:
+    """The result message for an incomplete store copy that is no longer refetched without --force."""
+    spots = expected_spots or spots_mod.positive_int(sidecar.ncbi.get("spots"))
+    return (
+        f"incomplete: {sidecar.refetch.get('unchanged')} refetches of {accession} gained no reads "
+        f"({_spot_text(sidecar.reads_per_mate)} of {_spot_text(spots)} spots); NCBI's count may not be "
+        "reachable; use --accept-partial, or --force to fetch again"
     )
 
 
@@ -218,7 +264,27 @@ def _store_precheck(
             return _link_result(accession, project_fastq, store, link_mode, " (partial)")
         _drop_store_link(project_fastq, accession, store)
         return False, f"partial in store; rerun with --resume-partial to finish {accession}"
+    if state == "incomplete":
+        return _exhausted_result(accession, project_fastq, store, link_mode, accept_partial, expected_spots)
     return None
+
+
+def _exhausted_result(
+    accession: str, project_fastq: Path, store, link_mode: str, accept_partial: bool, expected_spots: Optional[int]
+) -> Optional[Tuple[bool, str]]:
+    """The result for an incomplete copy whose refetches stopped gaining reads, or None to fetch it again.
+
+    Once ``STORE_PARTIAL_REFETCH_LIMIT`` refetches in a row gained nothing, the copy is linked
+    as partial with ``accept_partial`` and otherwise refused (any store link removed); only
+    ``--force``, which skips this precheck, fetches it again.
+    """
+    sidecar = _read_store_sidecar(store, accession)
+    if not _refetch_exhausted(sidecar):
+        return None
+    if accept_partial:
+        return _link_result(accession, project_fastq, store, link_mode, " (partial)")
+    _drop_store_link(project_fastq, accession, store)
+    return False, _exhausted_message(accession, sidecar, expected_spots)
 
 
 def _publish_decision(previous, new) -> str:
@@ -242,11 +308,41 @@ def _publish_decision(previous, new) -> str:
     return "publish"
 
 
-def _keep_previous(
-    accession: str, project_fastq: Path, store, link_mode: str, accept_partial: bool, previous
-) -> Tuple[bool, str]:
-    """Hand over the published store copy that a worse refetch did not replace."""
+def _record_kept_refetch(store, accession: str, previous, new, expected_spots: Optional[int]):
+    """Update the published sidecar after a refetch (``new``) that did not replace it; returns it re-read.
+
+    The caller holds the dataset lock. A copy that is ``unverified`` but short against
+    ``expected_spots`` is first recorded as ``partial`` (``_reverify_sidecar``); an incomplete
+    copy then gets its ``refetch`` counter advanced, written atomically by ``write_sidecar``.
+    """
+    from metaquest.store.layout import sidecar_path
+    from metaquest.store.sidecar import write_sidecar
+
+    if expected_spots is not None and _short_unverified(previous, expected_spots):
+        _reverify_sidecar(store, accession, expected_spots)
+        previous = _read_store_sidecar(store, accession) or previous
     if previous.state in STORE_READY_STATES:
+        return previous
+    previous.refetch = _refetch_record(previous, new)
+    write_sidecar(sidecar_path(store, accession), previous)
+    return previous
+
+
+def _keep_previous(
+    accession: str,
+    project_fastq: Path,
+    store,
+    link_mode: str,
+    accept_partial: bool,
+    previous,
+    expected_spots: Optional[int] = None,
+) -> Tuple[bool, str]:
+    """Hand over the published store copy that a worse refetch did not replace.
+
+    A copy that is ``unverified`` but short against ``expected_spots`` is not ready, so it is
+    linked only with ``accept_partial``, like any other incomplete copy.
+    """
+    if previous.state in STORE_READY_STATES and not _short_unverified(previous, expected_spots):
         return _link_result(accession, project_fastq, store, link_mode, " (kept the earlier copy)")
     if accept_partial:
         return _link_result(accession, project_fastq, store, link_mode, " (partial)")
@@ -304,8 +400,11 @@ def _store_fetch(
     once its replacement is complete.
 
     The sidecar's ``ncbi.spots`` comes from the metadata XML, or from ``expected_spots`` (the
-    registry's count, in ``download_kwargs``) when the XML records none. A refetch that comes
-    back worse than the published copy is discarded (``_publish_decision``). A copy that is not
+    resolved spot count of ``_resolve_expected_spots``, in ``download_kwargs``: the registry's,
+    the previous sidecar's or the XML's) when the XML records none. A refetch that comes back
+    worse than the published copy is discarded (``_publish_decision``), and the published
+    sidecar's ``refetch`` counter is advanced instead; a published refetch carries the counter
+    in its own sidecar (``_refetch_record``). A copy that is not
     ready (``partial`` or ``failed``) is published so ``--resume-partial`` can finish it, but it
     is linked only with ``accept_partial``; otherwise any project link to it is removed and the
     result is ``(False, "incomplete: ...")``.
@@ -353,17 +452,18 @@ def _store_fetch(
     compression = "gzip" if any(path.name.endswith(".gz") for path in files) else "none"
     xml = _metadata_xml(store_metadata, accession) or _metadata_xml(store.metadata, accession)
     ncbi = ncbi_from_metadata_xml(xml) if xml is not None else {}
-    registry_spots = _given_spots(download_kwargs.get("expected_spots"))
-    if not ncbi.get("spots") and registry_spots is not None:
-        ncbi = {**ncbi, "spots": registry_spots}
+    expected = spots_mod.positive_int(download_kwargs.get("expected_spots"))
+    if not ncbi.get("spots") and expected is not None:
+        ncbi = {**ncbi, "spots": expected}
 
+    previous = _read_store_sidecar(store, accession) if replacing else None
     sidecar = build_sidecar(accession, staged, ncbi, accession_mod.fasterq_dump_version(), compression)
+    sidecar.refetch = _refetch_record(previous, sidecar)
     write_sidecar(staged / f"{accession}.json", sidecar)
     # A holder stalled past the stale window may have lost the lock to another project, which
     # then owns the staged folder too: publish nothing, and leave that folder to its new owner.
     verify_held(lock_path(store, accession))
 
-    previous = _read_store_sidecar(store, accession) if replacing else None
     if previous is not None and _publish_decision(previous, sidecar) == "keep_previous":
         logger.warning(
             "%s: the new download (%s, %s reads per mate) is not more complete than the store copy "
@@ -375,7 +475,8 @@ def _store_fetch(
             _spot_text(previous.reads_per_mate),
         )
         cleanup_mod._safe_rmtree(staged)
-        return _keep_previous(accession, project_fastq, store, link_mode, accept_partial, previous)
+        previous = _record_kept_refetch(store, accession, previous, sidecar, expected)
+        return _keep_previous(accession, project_fastq, store, link_mode, accept_partial, previous, expected)
 
     cleanup_mod.publish_folder(staged, target, store.tmp)
 

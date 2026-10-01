@@ -2770,6 +2770,276 @@ class TestDownloadSraStore:
 
         assert store_handoff_mod._publish_decision(_sidecar(previous), _sidecar(new)) == expected
 
+    # Task 6: the refetch limit on a partial store copy.
+
+    EXHAUSTED_SRR1 = (
+        "incomplete: 2 refetches of SRR1 gained no reads (1 of 100 spots); NCBI's count may not be reachable; "
+        "use --accept-partial, or --force to fetch again"
+    )
+
+    @staticmethod
+    def _partial_dataset(paths, reads, refetch=None, state="partial"):
+        from metaquest.store.sidecar import Sidecar, write_sidecar
+
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True, exist_ok=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n" * reads)
+        write_sidecar(
+            acc_dir / "SRR1.json",
+            Sidecar(
+                accession="SRR1",
+                state=state,
+                reads_per_mate=reads,
+                ncbi={"spots": 100},
+                completeness={"method": "spots", "ratio": reads / 100, "verdict": "truncated"},
+                refetch=refetch,
+            ),
+        )
+        return acc_dir
+
+    def _run_partial(self, tmp_path, paths, calls, reads, **kwargs):
+        with patch(
+            "metaquest.data.sra.accession.download_accession", side_effect=self._fake_reads_download(calls, reads, 100)
+        ):
+            return download_sra(
+                tmp_path / "project" / "fastq",
+                self._accessions(tmp_path, "SRR1"),
+                store=paths,
+                expected_spots={"SRR1": 100},
+                max_retries=0,
+                **kwargs,
+            )
+
+    def test_third_identical_partial_refetch_does_not_download(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        calls = []
+        # The first download and two refetches that each gain nothing.
+        for _ in range(3):
+            stats = self._run_partial(tmp_path, paths, calls, 1)
+            assert stats["results"]["SRR1"] == self.INCOMPLETE_SRR1
+        assert len(calls) == 3
+        record = read_sidecar(paths.sra / "SRR1" / "SRR1.json").refetch
+        assert record["unchanged"] == 2
+        assert record["reads_per_mate"] == 1
+        assert record["expected_spots"] == 100
+        assert record["last"]
+
+        stats = self._run_partial(tmp_path, paths, calls, 1)
+
+        assert len(calls) == 3
+        assert stats["failed"] == 1
+        assert stats["results"]["SRR1"] == self.EXHAUSTED_SRR1
+        assert classify_download_error(self.EXHAUSTED_SRR1) == "unknown"
+        assert not (tmp_path / "project" / "fastq" / "SRR1").exists()
+
+    def test_an_exhausted_copy_is_linked_as_partial_with_accept_partial(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._partial_dataset(paths, 1, refetch={"unchanged": 2, "reads_per_mate": 1, "expected_spots": 100})
+        calls = []
+
+        stats = self._run_partial(tmp_path, paths, calls, 1, accept_partial=True)
+
+        assert calls == []
+        assert stats["successful"] == 1
+        assert stats["results"]["SRR1"] == "linked from store (partial), 1 files"
+        assert (tmp_path / "project" / "fastq" / "SRR1").is_symlink()
+
+    def test_force_refetches_an_exhausted_copy(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        self._partial_dataset(paths, 1, refetch={"unchanged": 2, "reads_per_mate": 1, "expected_spots": 100})
+        calls = []
+
+        stats = self._run_partial(tmp_path, paths, calls, 1, force=True)
+
+        assert len(calls) == 1
+        assert stats["results"]["SRR1"] == self.INCOMPLETE_SRR1
+        assert read_sidecar(paths.sra / "SRR1" / "SRR1.json").refetch["unchanged"] == 3
+
+    def test_a_refetch_that_gains_reads_resets_the_count(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        self._partial_dataset(paths, 1, refetch={"unchanged": 1, "reads_per_mate": 1, "expected_spots": 100})
+        calls = []
+
+        stats = self._run_partial(tmp_path, paths, calls, 2)
+
+        assert len(calls) == 1
+        assert stats["failed"] == 1
+        sidecar = read_sidecar(paths.sra / "SRR1" / "SRR1.json")
+        assert sidecar.reads_per_mate == 2
+        assert sidecar.refetch["unchanged"] == 0
+        assert sidecar.refetch["reads_per_mate"] == 2
+        assert not store_handoff_mod._refetch_exhausted(sidecar)
+
+    def test_a_complete_refetch_clears_the_record(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        acc_dir = self._partial_dataset(paths, 1, refetch={"unchanged": 2, "reads_per_mate": 1, "expected_spots": 100})
+        calls = []
+
+        stats = self._run_partial(tmp_path, paths, calls, 100, force=True)
+
+        assert len(calls) == 1
+        assert stats["successful"] == 1
+        sidecar = read_sidecar(acc_dir / "SRR1.json")
+        assert sidecar.state == "complete"
+        assert sidecar.refetch is None
+        assert "refetch" not in json.loads((acc_dir / "SRR1.json").read_text())
+
+    def test_a_worse_refetch_counts_against_the_kept_copy(self, tmp_path):
+        from metaquest.store.sidecar import read_sidecar
+
+        paths = self._store(tmp_path)
+        acc_dir = self._partial_dataset(paths, 5)
+        calls = []
+
+        stats = self._run_partial(tmp_path, paths, calls, 1)
+
+        assert len(calls) == 1
+        assert stats["results"]["SRR1"].startswith("incomplete: SRR1 store copy holds 5 of 100 spots")
+        sidecar = read_sidecar(acc_dir / "SRR1.json")
+        assert sidecar.reads_per_mate == 5
+        assert sidecar.refetch["unchanged"] == 1
+        assert sidecar.refetch["reads_per_mate"] == 5
+        assert (acc_dir / "SRR1_1.fastq").read_text().count("@r") == 5
+
+    @pytest.mark.parametrize(
+        "previous, new, expected",
+        [
+            (None, ("partial", 1), None),
+            (("partial", 1, None), ("partial", 1), 1),
+            (("partial", 1, 1), ("partial", 1), 2),
+            (("partial", 5, 1), ("partial", 1), 2),
+            (("partial", 1, 3), ("partial", 2), 0),
+            (("partial", 1, 3), ("failed", None), 4),
+            (("partial", 1, 3), ("complete", 100), None),
+        ],
+    )
+    def test_refetch_record(self, previous, new, expected):
+        from metaquest.store.sidecar import Sidecar
+
+        prior = None
+        if previous is not None:
+            state, reads, unchanged = previous
+            record = None if unchanged is None else {"unchanged": unchanged, "reads_per_mate": reads}
+            prior = Sidecar(accession="SRR1", state=state, reads_per_mate=reads, ncbi={"spots": 100}, refetch=record)
+        fresh = Sidecar(accession="SRR1", state=new[0], reads_per_mate=new[1], ncbi={"spots": 100})
+
+        record = store_handoff_mod._refetch_record(prior, fresh)
+
+        if expected is None:
+            assert record is None
+        else:
+            assert record["unchanged"] == expected
+            assert record["expected_spots"] == 100
+            assert record["last"]
+
+    def test_refetch_exhausted(self):
+        from metaquest.store.sidecar import Sidecar
+
+        limit = store_handoff_mod.STORE_PARTIAL_REFETCH_LIMIT
+        assert limit == 2
+        assert not store_handoff_mod._refetch_exhausted(None)
+        assert not store_handoff_mod._refetch_exhausted(Sidecar(state="partial"))
+        assert not store_handoff_mod._refetch_exhausted(Sidecar(state="partial", refetch={"unchanged": limit - 1}))
+        assert store_handoff_mod._refetch_exhausted(Sidecar(state="partial", refetch={"unchanged": limit}))
+
+    # Task 5 review follow-ups.
+
+    def test_forced_worse_refetch_never_links_a_short_unverified_copy(self, tmp_path):
+        from metaquest.store.sidecar import Sidecar, read_sidecar, write_sidecar
+
+        paths = self._store(tmp_path)
+        acc_dir = paths.sra / "SRR1"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n" * 5)
+        write_sidecar(
+            acc_dir / "SRR1.json",
+            Sidecar(
+                accession="SRR1",
+                state="unverified",
+                reads_per_mate=5,
+                ncbi={},
+                completeness={"method": "unverified", "ratio": None, "verdict": "unverified"},
+            ),
+        )
+        calls = []
+
+        stats = self._run_partial(tmp_path, paths, calls, 1, force=True)
+
+        assert len(calls) == 1
+        assert stats["failed"] == 1
+        assert stats["results"]["SRR1"].startswith("incomplete: SRR1 store copy holds 5 of 100 spots")
+        sidecar = read_sidecar(acc_dir / "SRR1.json")
+        assert sidecar.state == "partial"
+        assert sidecar.reads_per_mate == 5
+        assert not (tmp_path / "project" / "fastq" / "SRR1").exists()
+
+    def test_precheck_refusal_removes_a_store_link(self, tmp_path):
+        from metaquest.store.link import link_dataset
+
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+        link_dataset(fastq_folder, "SRR1", paths)
+
+        with patch(
+            "metaquest.data.sra.accession.download_accession", side_effect=AssertionError("no download expected")
+        ):
+            stats = download_sra(
+                fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, resume_partial=False, max_retries=0
+            )
+
+        assert "rerun with --resume-partial" in stats["results"]["SRR1"]
+        assert not (fastq_folder / "SRR1").is_symlink()
+        assert (paths.sra / "SRR1" / "SRR1_1.fastq").exists()
+
+    def test_precheck_refusal_leaves_a_link_outside_the_store(self, tmp_path):
+        paths = self._store(tmp_path)
+        self._store_dataset(paths, state="partial")
+        fastq_folder = tmp_path / "project" / "fastq"
+        fastq_folder.mkdir(parents=True)
+        elsewhere = tmp_path / "elsewhere" / "SRR1"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "SRR1_1.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        (fastq_folder / "SRR1").symlink_to(elsewhere)
+
+        with patch(
+            "metaquest.data.sra.accession.download_accession", side_effect=AssertionError("no download expected")
+        ):
+            download_sra(
+                fastq_folder, self._accessions(tmp_path, "SRR1"), store=paths, resume_partial=False, max_retries=0
+            )
+
+        assert (fastq_folder / "SRR1").is_symlink()
+        assert (fastq_folder / "SRR1").resolve() == elsewhere.resolve()
+
+    def test_space_guard_counts_a_short_unverified_copy_due_for_refetch(self, tmp_path):
+        from metaquest.data.sra import download as download_mod
+
+        paths = self._store(tmp_path)
+        self._short_unverified_dataset(paths)
+        args = (tmp_path / "project" / "fastq", None, None, paths, True, {"SRR1": 1000}, 1.0, False, ["SRR1"])
+
+        assert download_mod._space_guard(*args).needs("SRR1") == {}
+        assert download_mod._space_guard(*args, expected_spots={"SRR1": 100}).needs("SRR1") != {}
+
+    def test_space_guard_exempts_an_exhausted_copy(self, tmp_path):
+        from metaquest.data.sra import download as download_mod
+
+        paths = self._store(tmp_path)
+        self._partial_dataset(paths, 1, refetch={"unchanged": 2, "reads_per_mate": 1, "expected_spots": 100})
+        args = (tmp_path / "project" / "fastq", None, None, paths, True, {"SRR1": 1000}, 1.0)
+
+        assert download_mod._space_guard(*args, False, ["SRR1"]).needs("SRR1") == {}
+        assert download_mod._space_guard(*args, True, ["SRR1"]).needs("SRR1") != {}
+
     def test_second_project_links_without_downloading_again(self, tmp_path):
         paths = self._store(tmp_path)
         first = tmp_path / "project_a" / "fastq"

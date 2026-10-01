@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _UNVERIFIED = "unverified"
 
 
-def _positive_int(value: Any) -> Optional[int]:
+def positive_int(value: Any) -> Optional[int]:
     """``value`` as an int when it is a positive whole number (or its string form), else None.
 
     A spot count of zero is treated as unknown, as ``verify_download`` has always done.
@@ -87,7 +87,7 @@ def spots_from_xml(accession: str, folders: Iterable[Union[str, Path]]) -> Optio
         except (OSError, ValueError, ET.ParseError) as e:
             logger.warning("Could not read the spot count of %s from %s: %s", accession, xml_path, e)
             continue
-        spots = _positive_int((parsed or {}).get("Run_Total_Spots"))
+        spots = positive_int((parsed or {}).get("Run_Total_Spots"))
         if spots is not None:
             return spots
     return None
@@ -111,7 +111,7 @@ def _sidecar_spots(accession: str, store: Union["StorePaths", str, Path]) -> Opt
         return None
     if sidecar is None or not isinstance(sidecar.ncbi, dict):
         return None
-    return _positive_int(sidecar.ncbi.get("spots"))
+    return positive_int(sidecar.ncbi.get("spots"))
 
 
 def expected_spots(
@@ -135,7 +135,7 @@ def expected_spots(
     if registry is not None:
         metadata = rb.metadata_block(registry, accession)
         if metadata is not None:
-            spots = _positive_int(metadata.run_total_spots)
+            spots = positive_int(metadata.run_total_spots)
             if spots is not None:
                 return spots
     if store is not None:
@@ -146,7 +146,7 @@ def expected_spots(
     if spots is not None or registry is None:
         return spots
     previous = rb.download_verdict(registry, accession)
-    return _positive_int(previous.expected_spots) if previous is not None else None
+    return positive_int(previous.expected_spots) if previous is not None else None
 
 
 def _as_dict(verdict: Any) -> Optional[Dict[str, Any]]:
@@ -176,8 +176,8 @@ def merged_verdict(
     a store copy whose sidecar records no read count. A missing ``new`` keeps ``previous``. Returns
     None when neither is known. The result is always a new dict; the arguments are not modified.
     """
-    if reads_r1 is not None and _positive_int(expected) is not None:
-        return verdict_for_count(reads_r1, _positive_int(expected))
+    if reads_r1 is not None and positive_int(expected) is not None:
+        return verdict_for_count(reads_r1, positive_int(expected))
     before = _as_dict(previous)
     after = _as_dict(new)
     if after is None:
