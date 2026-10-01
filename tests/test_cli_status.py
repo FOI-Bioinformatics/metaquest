@@ -1387,6 +1387,59 @@ def test_text_report_has_no_timing_line_without_timing(tmp_path, capsys):
     assert "timing" not in capsys.readouterr().out
 
 
+# -------------------------------------------- Task 24: cross-stage funnel
+
+
+def test_funnel_line_matches_the_specified_format():
+    from metaquest.cli.commands.status.render_text import funnel_line
+
+    funnel = {
+        "screened": {"accessions": 1200},
+        "selected": {"accessions": 300, "excluded": 50},
+        "downloaded": {"accessions": 280, "bytes": 1_200_000_000_000, "seconds": 147600.0, "failed": 5},
+        "analysed": {"accessions": 200},
+        "extracted": {"accessions": 250, "pairs": 260, "seconds": 1000.0},
+        "assembled": {"accessions": 90, "pairs": 95, "total_bp": 123456, "seconds": 2000.0},
+    }
+    assert funnel_line(funnel) == (
+        "funnel: 1200 screened, 300 selected, 280 downloaded (1.2 TB, 41 h), 250 extracted, 90 assembled"
+    )
+
+
+def test_build_report_funnel_matches_project_funnel_directly(tmp_path):
+    from metaquest.data.registry import ProjectPaths
+    from metaquest.processing.project_funnel import funnel as project_funnel
+    from metaquest.processing.status_report import build_report
+
+    r = _mixed_registry(tmp_path)
+    paths = ProjectPaths(fastq=tmp_path / "fastq", targeted=tmp_path / "targeted")
+    report = build_report(r, _status_args(tmp_path), paths, tmp_path / "metaquest_registry.json", True)
+    assert report["funnel"] == project_funnel(r)
+
+
+def test_status_json_and_text_report_funnel(tmp_path, capsys):
+    _timed_project(tmp_path)
+    capsys.readouterr()
+    StatusCommand().execute(_status_args(tmp_path))
+    report = json.loads(capsys.readouterr().out)
+    assert report["funnel"] == {
+        "screened": {"accessions": 3},
+        "selected": {"accessions": 0, "excluded": 0},
+        "downloaded": {"accessions": 2, "bytes": 30, "seconds": 40.0, "failed": 0},
+        "analysed": {"accessions": 0},
+        "extracted": {"accessions": 1, "pairs": 1, "seconds": 2.5},
+        "assembled": {"accessions": 1, "pairs": 1, "total_bp": 0, "seconds": 45.0},
+    }
+    StatusCommand().execute(_status_args(tmp_path, json=False))
+    lines = capsys.readouterr().out.splitlines()
+    assert "funnel: 3 screened, 0 selected, 2 downloaded (30 bytes, 0.0 h), 1 extracted, 1 assembled" in lines
+    # The funnel line is additive; the pre-existing timing line is unchanged by this task.
+    assert (
+        "  timing     : downloads 2 (40.0 s in total, median 20.0 s), extractions 1 (2.5 s in total, "
+        "median 2.5 s), assemblies 1 (45.0 s in total, median 45.0 s)"
+    ) in lines
+
+
 def test_export_tsv_carries_the_timing_columns(tmp_path, capsys):
     import pandas as pd
 

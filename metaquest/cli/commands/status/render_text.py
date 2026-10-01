@@ -23,6 +23,31 @@ def _format_bytes(count: int) -> str:
     return f"{count} bytes"
 
 
+def _format_hours(seconds: float) -> str:
+    """``seconds`` as hours: one decimal place below 10 h, none at or above it."""
+    hours = seconds / 3600
+    return f"{hours:.0f} h" if hours >= 10 else f"{hours:.1f} h"
+
+
+def funnel_line(funnel: Dict[str, Any]) -> str:
+    """The one-line text form of a `status` report's `funnel` block.
+
+    Always one line, in stage order, with the download stage's total size and time in
+    parentheses. ``selected``'s excluded count, ``downloaded``'s failed count, and the
+    ``extracted``/``assembled`` pair counts, bytes and seconds are detail this line leaves to
+    the JSON report.
+    """
+    downloaded = funnel["downloaded"]
+    detail = f" ({_format_bytes(downloaded['bytes'])}, {_format_hours(downloaded['seconds'] or 0.0)})"
+    return (
+        f"funnel: {funnel['screened']['accessions']} screened, "
+        f"{funnel['selected']['accessions']} selected, "
+        f"{downloaded['accessions']} downloaded{detail}, "
+        f"{funnel['extracted']['accessions']} extracted, "
+        f"{funnel['assembled']['accessions']} assembled"
+    )
+
+
 def _run_filter_detail(criteria: Dict[str, Any]) -> List[str]:
     """The run filters a selection recorded, for the selected stage row.
 
@@ -126,6 +151,13 @@ def _print_stages(stages: Dict[str, Any], registry: Registry, emit: Callable[[st
     truncated = download_verdicts(registry)["truncated"]
     if truncated:
         emit(f"  truncated downloads: {len(truncated)} (" + ", ".join(truncated) + ")")
+
+
+def _print_funnel(report: Dict[str, Any], emit: Callable[[str], None]) -> None:
+    """Write the report's one-line cross-stage funnel (``build_report`` always sets the key)."""
+    f = report.get("funnel")
+    if f:
+        emit(funnel_line(f))
 
 
 def _print_timing(timing: Optional[Dict[str, Any]], emit: Callable[[str], None]) -> None:
@@ -254,6 +286,7 @@ def print_report(
     if report.get("store"):
         _print_store(report["store"], emit)
     _print_stages(report["stages"], registry, emit)
+    _print_funnel(report, emit)
     _print_timing(report.get("timing"), emit)
     _print_genomes(report["genomes"], emit)
     _print_stage_filter(registry, args.stage, args.genome, emit)

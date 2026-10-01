@@ -28,6 +28,7 @@ from metaquest.data.registry import (
 from metaquest.data.registry_reconcile import StoreReconcileReport
 from metaquest.data.registry_timing import timing_summary
 from metaquest.data.sra import STORE_READY_STATES, accession_has_fastq, is_transient_folder
+from metaquest.processing.project_funnel import funnel
 from metaquest.store.catalog import Catalog
 from metaquest.store.layout import StorePaths, sidecar_path, store_paths
 from metaquest.store.link import is_store_link
@@ -297,8 +298,9 @@ def build_report(
     existed: bool,
     drift: Optional[StoreReconcileReport] = None,
 ) -> Dict[str, Any]:
-    """The status report for ``registry``: local inventory, registry file, store, stages, download
-    verdicts, genomes, drift and timing, as the dict ``status --json`` prints.
+    """The status report for ``registry``: local inventory, registry file, store, stages, the
+    cross-stage funnel, download verdicts, genomes, drift and timing, as the dict ``status
+    --json`` prints.
 
     ``args`` carries the status command's options (the folders, ``accessions_file``,
     ``parsed_containment``, ``data_root``, ``genome`` and ``init``); ``drift`` is the result of
@@ -322,6 +324,7 @@ def build_report(
     # One pass over the registry lists every stage; the counts are the lengths of those lists.
     members = stage_members(registry)
     report["stages"] = {s: {"count": len(members[s]), "accessions": members[s]} for s in STAGES}
+    report["funnel"] = funnel(registry, members)
     report["downloads"] = download_verdicts(registry)
     report["genomes"] = _genome_report(registry, paths, args.genome, genome_counts(registry))
     report["drift"] = _drift_report(drift) if drift else {}
