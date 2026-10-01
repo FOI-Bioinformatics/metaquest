@@ -57,7 +57,7 @@ a recipe ready to submit as-is, and it is not stored anywhere else in this repos
 
 ```yaml
 {% set name = "metaquest" %}
-{% set version = "0.7.0" %}
+{% set version = "0.8.0" %}
 
 package:
   name: "{{ name|lower }}"
@@ -66,7 +66,7 @@ package:
 source:
   url: "https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/metaquest-{{ version }}.tar.gz"
   sha256: <sha256 of the sdist at that PyPI release; `pip download --no-binary :all: --no-deps
-    metaquest==0.7.0` then `sha256sum`, or the value PyPI's "Download files" page shows>
+    metaquest==0.8.0` then `sha256sum`, or the value PyPI's "Download files" page shows>
 
 build:
   number: 0

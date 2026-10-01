@@ -380,7 +380,18 @@ The last column, `download_verdict`, is the accession's recorded download comple
 (`complete`, `truncated` or `unverified`), empty where none was recorded.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
-and threshold; pass `--force` to redo them.
+and threshold; pass `--force` to redo them. An assembly is also redone when the reads or settings it was
+built from have changed (see "Targeted Read Extraction Before Assembly" below).
+
+`status --init` fills every metadata block it creates from an `<ACCESSION>_metadata.xml` on disk that
+records a spot count (spot count, size, md5, assay type, organism, collection date, library layout and
+strategy, platform), in the same write that creates the registry. `status --reconcile` re-checks
+`unverified` download verdicts and fills metadata in the same way (see "Shared data store" below). Its
+report, and the `drift` object of `status --json`, add three lists: `store_unavailable` (project links into
+a data store that is not mounted, left alone rather than marked missing; these also appear under
+`dangling_links`), `metadata_filled` and `verdicts_rechecked` (accessions whose `unverified` verdict became
+`complete` or `truncated`). The text report prints a warning for the first and a count line for each of the
+other two, only when the list is not empty.
 
 Each `select_datasets` run replaces the previous selection: only the accessions of the latest run
 count as selected, and `status --stage selected` shows which those are. To keep the registry small
@@ -446,7 +457,13 @@ through its files (via the `--spots` check, or, if `--spots` was not requested, 
 truncated or corrupt gzip stream underneath. `--rescan` rebuilds a dataset's recorded file list from
 what is actually on disk before checking, for files added or removed by hand; `store_reindex` rebuilds
 the SQLite catalogue from the sidecar files if it is ever lost, replaying an append-only journal under
-the store's `journal/` folder to restore which projects used which datasets. If that replay restores no
+the store's `journal/` folder to restore which projects used which datasets. A store folder without a
+sidecar does not stop `store_reindex`: it writes one from the file names and sizes alone, with state
+`failed` and an error naming `store_verify --rescan --fix-state <ACCESSION>`, and catalogues it; a folder
+whose lock is held is skipped with a warning, and an unreadable sidecar still stops the reindex. Such a
+dataset is not linked without `--accept-partial` until `store_verify --rescan --fix-state` has read its
+files and promoted it (a plain `--md5` check reports mismatches, since the rebuilt sidecar records no md5),
+and when no project uses it, `store_gc` offers it for removal. If the journal replay restores no
 project at all while the rebuilt catalogue still holds datasets, `store_reindex` sets a
 `rebuilt_without_projects` catalogue flag (every dataset would otherwise look unused); `store_gc` then
 refuses to run until each project using the store has run `store_init` or `store_link` again and
@@ -457,7 +474,15 @@ with no store configured at all, `store_gc`, `store_status` and `store_usage` al
 `store_gc` never removes a dataset a project still links or another run is working on; `--older-than
 DAYS` restricts it to datasets downloaded at least that many days ago, `--keep-partial` never removes a
 `partial` dataset, and it also reports (and, with `--yes`, removes) leftover temp artifacts under the
-store's `tmp/` folder left by an interrupted download or adoption.
+store's `tmp/` folder left by an interrupted download or adoption, including the bare `tmp/<ACCESSION>`
+staging folder of a killed download once that accession's lock is no longer held.
+
+With `--link-mode copy`, linking an accession that already has a copy in the project refreshes it: the new
+copy is made under a hidden name first, the earlier copy is moved aside only then and put back if the swap
+fails, so a relink needs room for a second copy on the project's filesystem. A project folder that does not
+hold the store's `<ACCESSION>.json` is still refused. `store_adopt` writes each dataset's sidecar into its
+staging folder before publishing it, so an adoption killed at any point leaves no store folder without a
+sidecar.
 
 A per-accession lock (`locks/<ACCESSION>.lock`, with a heartbeat) stops two projects from downloading
 the same accession into the store at once; a lock with no heartbeat for 10 minutes is treated as
@@ -483,11 +508,43 @@ default). `store_verify --spots` and `status --reconcile` compute a verdict for 
 one, now also checking `<data-root>/metadata/` and the calling project's own `metadata/` folder for an
 XML `download_metadata` wrote after the fact (see "Downloading reads" above and `store_verify` below).
 
-A download into the store runs `prefetch` (fixed at `--max-size 100G`) before `fasterq-dump`; if the
-kept `.sra` archive or a temporary build folder grow past 1 GB combined, the download summary warns and
-names the folder, and `store_gc --dry-run` separately lists such leftovers as removal candidates. Without
-`--temp-folder`, `fasterq-dump`'s own scratch files default to `<data-root>/tmp/<ACCESSION>_fqtmp`
-(inside the store, not the system temp directory) when a store is configured.
+A store copy that is `partial` or `failed` is never linked into a project without `--accept-partial`.
+`download_sra` refetches it (unless `--no-resume-partial`), publishes the result to the store, removes any
+project link into the store for that accession (a real project folder is never touched) and reports the
+accession as `incomplete: <ACC> store copy holds R of S spots; kept for --resume-partial; rerun with
+--accept-partial to use it`, which counts as a failed accession (exit 1). A copy recorded `unverified`
+whose sidecar read count is short against a spot count known since is treated as `partial` in the same
+way. A refetch that comes back with fewer reads than the published copy does not replace it, unless the
+refetch is verified `complete`. After `STORE_PARTIAL_REFETCH_LIMIT` (2) refetches in a row that gained no
+reads, as happens when NCBI's count cannot be reached, the copy is no longer fetched on every run: it is
+linked with `--accept-partial`, or refused with a message naming `--force`, which is the only way to fetch
+it again. The refetch counter is kept in the store sidecar (`refetch`), so it is shared by every project
+that uses the store.
+
+The store hand-off and `status --reconcile` take the expected spot count from one lookup, in this order: the
+registry's metadata block (`Run_Total_Spots`, from `download_metadata`), the store sidecar's NCBI count, the
+`<ACCESSION>_metadata.xml` file of the metadata folder, and last the count recorded with the previous
+download verdict. Linking a dataset from the store, or reconciling, never replaces a recorded `complete` or
+`truncated` verdict with `unverified` when no count is known; when both a read count and a spot count are
+known, the verdict is computed again. A plain redownload that comes back `unverified` keeps a recorded
+`truncated` verdict; one that comes back `complete` replaces it.
+`status --reconcile` uses this to re-check every `unverified` verdict once a spot count is known: a plain
+project download is counted again from its mate-1 file and its file of unpaired reads, and a link into the
+store is compared with the read count its sidecar records, without reading any FASTQ file. Before that,
+reconcile fills a metadata block that has no spot count from `metadata/<ACCESSION>_metadata.xml`, so one
+run fills both; an XML without a spot count leaves the block unchanged. A project link that points into a
+store that is not mounted (the store's `sra/` folder that the link points into does not exist) is not
+marked missing: reconcile reports it as store unavailable, logs one warning and leaves the link and the
+registry record unchanged, while a dataset removed from a mounted store is still marked missing. A
+store-linked dataset an earlier reconcile marked missing is recorded as linked from the store again once
+its project entry is a symlink into the store.
+
+A download runs `prefetch` before `fasterq-dump`, with `--max-size` taken from the `prefetch_max_size`
+setting (default `100G`; also `METAQUEST_PREFETCH_MAX_SIZE` or `prefetch_max_size` in `[runtime]`); a run
+whose `.sra` archive is larger is not fetched. In the store, if the kept `.sra` archive or a temporary build
+folder grow past 1 GB combined, the download summary warns and names the folder, and `store_gc --dry-run`
+separately lists such leftovers as removal candidates. Without `--temp-folder`, `fasterq-dump`'s own scratch
+files default to `<data-root>/tmp/<ACCESSION>_fqtmp` (inside the store) when a store is configured.
 
 `--data-root` is accepted by `download_sra`, `download_metadata`, `status`, `sra_profile`, `sra_report`,
 `sra_validate` and `extract_target_reads`; it never replaces `--fastq-folder`, which still names
@@ -554,9 +611,41 @@ a warning and leaves the extracted reads in place). `--assembly-preset` selects 
 flag). Unless `--no-coverage`, the extracted reads are mapped back onto the assembled contigs to report a mapping rate
 and estimated mean depth alongside the other assembly statistics.
 
-A sample already extracted or assembled with the same genome FASTA, preset, and threshold is skipped
-on a rerun, including samples that mapped zero reads; an assembly folder with no contigs is reported
-as interrupted with a hint to rerun. Pass `--force` to redo extraction and assembly regardless.
+A sample already extracted with the same genome FASTA, preset, and threshold is skipped on a rerun,
+including samples that mapped zero reads. Pass `--force` to redo extraction and assembly regardless.
+Re-extracting a sample drops its recorded assembly from the registry, since that assembly was built from
+the reads being replaced; the assembly folder itself stays on disk.
+
+With `--assemble`, each assembly folder carries a marker, `.metaquest-assembly.json`, recording what the
+assembly was built from: the extracted read files (names and sizes), their extraction date, the megahit
+preset, the minimum contig length and the k values (the megahit version is kept too, but not compared). The
+registry's assembly record holds the same `inputs`. On a rerun an assembly whose marker matches is reused and
+reported as reused; one whose inputs differ is assembled again, with the reason logged. Deleting the
+extracted reads therefore leads to a re-extraction, a new extraction date and a new assembly. A folder
+without `final.contigs.fa`, as an interrupted megahit leaves it, is assembled again with a warning. An
+assembly folder written by an earlier version has no marker; it is accepted, and given a marker whose megahit
+version is recorded as unknown, only when its registry record matches the preset and minimum contig length
+and is not older than the extraction.
+
+megahit writes into a hidden staging folder beside `<genome_id>_assembly`, and the result replaces the
+previous folder by rename, so a failed or interrupted assembly leaves the earlier one in place; a staging
+folder left by a killed run is removed at the start of the next one. megahit exiting without writing
+`final.contigs.fa` is an error. A forced or stale redo that fails keeps the previous folder on disk, but
+without a registry record; a later run records it again from its marker if the marker still matches.
+
+Each sample is assembled on its own. A failure of megahit, or of the coverage mapping onto its contigs, is
+logged for that sample and the remaining samples continue; the run ends with one error line listing the
+failed samples and exits with status 1. A sample that another process is extracting or assembling is skipped
+and reported, and does not fail the run. The closing line counts the samples assembled, reused, failed and
+busy elsewhere. Each sample's assembly step loads the project registry once, also for a sample whose assembly
+is reused; on a registry of about 15,000 datasets that is about one second per sample, which is noticeable on
+a rerun in which every assembly is reused.
+
+`extract_target_reads` does not extract a sample whose download is known to be incomplete: one whose
+registry download verdict is `truncated`, or whose store copy is recorded by its sidecar as `partial` or
+`failed`, whatever the registry verdict says. The skip line gives the reason, for example
+`skipped SRR1: store copy partial (5 of 20 spots); use --allow-truncated`. `--allow-truncated` extracts such
+a sample anyway. A project download outside the store recorded as `unverified` is still extracted.
 
 ## Advanced SRA Operations
 
@@ -631,7 +720,9 @@ By default, `download_sra` runs `prefetch` before `fasterq-dump` (`--no-prefetch
 `fasterq-dump` directly) and gzip-compresses the resulting FASTQ files (`--no-compress` leaves them
 plain; pigz is used for compression when installed, otherwise Python's gzip module). `--sra-cache DIR`
 sets where prefetch keeps its downloaded `.sra` archives (default `<fastq-folder>/.sra-cache`); pass
-`--keep-sra` to retain a verified archive instead of deleting it after conversion.
+`--keep-sra` to keep the archive after conversion instead of deleting it. Only the archive of a `complete` or
+`unverified` download is kept; a `truncated` one is removed, and a redownload (`--force` or
+`--redownload-truncated`) always fetches the archive again rather than reusing a cached one.
 A project without a shared store also takes a per-accession lock (`<fastq-folder>/.locks/<ACCESSION>.lock`,
 same heartbeat and 10-minute takeover as the store's, bounded by `--lock-wait`), so two runs on one
 project download each accession once. Each download is built, verified and compressed under
@@ -647,9 +738,23 @@ verdict is `truncated` instead of skipping it on a rerun; a dataset held in the 
 carries the store's own verdict (`complete`, `partial`, or `unverified`, described in "Shared data
 store" above).
 
-`--temp-folder DIR` sets where `fasterq-dump` writes its scratch files while converting each accession;
-without it, a plain per-project download uses the system's temp directory, and a download into a shared
-store (see "Shared data store" above) defaults to `<store>/tmp/<ACCESSION>_fqtmp` instead.
+When the registry holds no spot count for an accession of the accessions file, `download_sra` reads it
+from `<ACCESSION>_metadata.xml` in the project's `metadata/` folder, then in the store's, so a plain
+download is verified rather than recorded `unverified`. An accession found on disk without a download
+record, as a run killed after its files were in place leaves it, is verified against its spot count before
+it is recorded (and recorded `unverified` when no count is known), and a truncated one is reported with a
+pointer to `--redownload-truncated`. Linking a
+dataset from the store keeps a recorded `complete` or `truncated` verdict, and recomputes it only when the
+sidecar's read count and a spot count are both known. `--no-verify-downloads` skips the check of the
+project's own downloads; a copy in the shared store is always judged against its recorded spot count, and a
+partial copy is still refused without `--accept-partial`.
+
+`--temp-folder DIR` sets where `fasterq-dump` writes its scratch files while converting each accession.
+Without it, a plain per-project download writes them to `<fastq-folder>/.metaquest-tmp/<ACCESSION>_fqtmp`,
+on the project's filesystem, and removes that folder when the accession finishes; a download into a shared
+store (see "Shared data store" above) uses `<store>/tmp/<ACCESSION>_fqtmp` instead. The free-space check
+and `doctor` measure the same location. When the project folder is on a network filesystem, as is common on
+a cluster, set `--temp-folder` or `METAQUEST_TEMP_FOLDER` to local scratch space on the node.
 `extract_target_reads` (see "Targeted Read Extraction Before Assembly" above) accepts the same flag for
 megahit's scratch files.
 
@@ -669,7 +774,9 @@ available to this job (the CPU affinity mask, which reflects a SLURM allocation,
 
 Before each accession starts, `download_sra` checks that the filesystems it writes to have room for it:
 the FASTQ folder (or the store's `tmp` folder), the `fasterq-dump` temporary folder and, with prefetch,
-the `.sra` cache. An accession whose run size is in the registry (from `download_metadata`) needs about
+the `.sra` cache. The temporary folder measured is the one `fasterq-dump` writes to: the `--temp-folder`
+given, otherwise `<fastq-folder>/.metaquest-tmp` (or the store's `tmp` folder); `doctor` reports the same
+location. An accession whose run size is in the registry (from `download_metadata`) needs about
 8 times that size for the temporary files, 10 times for the FASTQ folder (the uncompressed files and
 the gzip files written from them), plus the size itself for the cache; locations on one filesystem add
 up, and downloads already running are counted.

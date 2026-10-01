@@ -66,7 +66,11 @@ Notes on the template:
   divided by `--num-threads`, at most 4 (`METAQUEST_MAX_WORKERS_CAP`).
 - `--temp-folder "$TMPDIR"` puts the `fasterq-dump` temporary files on the node's local disk, when the
   site sets `TMPDIR` to one. Check that it is set, and large enough: the free-space check asks for about
-  8 times an accession's `.sra` size there while it converts.
+  8 times an accession's `.sra` size there while it converts. Without `--temp-folder` (or
+  `METAQUEST_TEMP_FOLDER`) the scratch files go to `fastq/.metaquest-tmp/<ACCESSION>_fqtmp` in a project
+  without a store, and to `<data-root>/tmp/<ACCESSION>_fqtmp` with one, that is, onto the project's or the
+  store's filesystem; when that is a network filesystem, point the scratch at local disk as here. The
+  free-space check and `doctor` measure whichever of these folders `fasterq-dump` writes to.
 - `--timeout 0` lets a tool run for as long as it needs; the walltime is the limit. This is the default
   and is written out here only to make it visible.
 - `--lock-wait 3600` gives up on an accession after one hour when another run holds its lock (a second
@@ -250,3 +254,27 @@ whole node. megahit uses `--threads` threads on Linux unless `--assembly-threads
 
 A sample already extracted or assembled with the same genome, preset and threshold is skipped, so the
 job can be resubmitted after the walltime limit to finish the remaining samples.
+
+Assemblies resume safely after a walltime signal or a kill. megahit writes into a hidden staging folder
+beside `<genome_id>_assembly`, and the finished result replaces the previous folder by rename, so an
+interrupted run never leaves a half-written assembly in place of a complete one. A staging folder left by a
+killed job is removed when the next job reaches that sample, and a folder without `final.contigs.fa` is
+assembled again. Each finished assembly carries a marker, `.metaquest-assembly.json`, recording the reads
+and settings it was built from; a resubmitted job reuses an assembly whose marker matches and redoes one
+whose reads or settings have changed (see "Targeted Read Extraction Before Assembly" in the README). A
+sample whose assembly fails is reported and the job continues with the next one, then exits with 1, so an
+`afterok` dependency on the job does not start; a sample another job is working on is skipped and does not
+fail the job. Each sample's assembly step loads the project registry once, also when its assembly is
+reused, which costs about one second per sample on a registry of about 15,000 datasets; a resubmitted job
+in which every assembly is reused spends that time and little else.
+
+## Reconciling after an upgrade to 0.8.0
+
+From 0.8.0, `status --reconcile` re-checks every download verdict recorded as `unverified` once a spot
+count is known for it. A store link costs nothing for this, since the read count comes from its sidecar,
+but a plain project download is counted again from its mate-1 file and its file of unpaired reads. The
+first reconcile after upgrading therefore reads, once, the mate-1 file of every `unverified` plain download
+that has a spot count; later runs read nothing again. On a large project, run that first reconcile as a job
+rather than on a login node. A project link into a store that is not mounted on the node is reported as
+store unavailable and left unchanged, so a reconcile on a node without the store mount does not mark its
+datasets missing.

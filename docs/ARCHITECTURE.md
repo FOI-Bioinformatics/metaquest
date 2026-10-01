@@ -47,7 +47,12 @@ Most commands are one module each under `metaquest/cli/commands/`. Two command g
 enough to be their own packages instead: `metaquest/cli/commands/store/` (one module per store
 command: `init`, `status`, `reindex`, `adopt`, `verify`, `link`, `usage`, `gc`, plus a shared
 `_shared.py`) and `metaquest/cli/commands/status/` (`command.py` for the `StatusCommand` class,
-`suggest.py` for the `--next` suggestions, `render_text.py` for the text-output formatters). Every
+`suggest.py` for the `--next` suggestions, `render_text.py` for the text-output formatters). Two
+commands keep part of their logic in a helper module beside them: `extract_target_reads`
+(`read_extraction.py`) assembles through `extraction_assembly.py` (`assemble_samples`, one sample at a
+time under its sample lock, with the per-sample outcome in `AssemblyOutcome`), and `download_sra`
+(`sra.py`) takes its registry inputs and download verdicts from `sra_verdicts.py` (`registry_inputs`,
+`present_verdicts`, `linked_verdict`). Every
 command writes to stdout through exactly one channel, `BaseCommand.emit`/`emit_raw`/`emit_json`
 (`metaquest/cli/base.py`); library modules log or return their output instead of printing, and a
 `make check` gate fails on any other `print(` call in `metaquest/`.
@@ -125,10 +130,15 @@ each other and each is small enough to test alone:
   WAL, since a store is expected to live on a network share and SQLite documents WAL as unsafe there;
   writers are serialised by `catalog.sqlite.lock`.
 - **link**: creates and removes the per-accession symlink from a project's `fastq/` folder into the
-  store, chooses a relative or absolute target, and detects a dangling link.
+  store, chooses a relative or absolute target, and detects a dangling link. In copy mode it refreshes an
+  earlier copy (a real folder holding `<accession>.json`) by staging: the new copy is made under a hidden
+  name, the earlier one is moved aside only then, and it is put back if the swap fails.
 - **adopt**: folds an existing per-project `fastq/` folder into the store: copies each accession in
   before removing anything from the project, so a copy always exists somewhere during the operation;
-  compares byte content when an accession is already in the store so nothing is duplicated.
+  compares byte content when an accession is already in the store so nothing is duplicated. The sidecar
+  is written into the staging folder before it is published, so a published folder always has one.
+  `rebuild_missing_sidecar` writes the sidecar `store_reindex` gives a folder that has none: built from
+  file names and sizes only, with state `failed` until `store_verify --rescan --fix-state` reads the files.
 - **usage**: writes one row per (accession, project, genome, stage) the first and last time each
   combination is used, along with the hostname it ran on, and reports stale projects (whose registry
   is gone, whose `project.id` no longer matches what the catalogue recorded, or that were last seen
@@ -249,6 +259,60 @@ no lock, and rehearses the reconcile on a deep copy of the snapshot) and `apply_
 the plan's conditions against the registry `registry_update` hands it, reading no files); `reconcile()`
 is `apply(scan(...))` for a caller that wants the old one-call behaviour.
 
+#### Download completeness verdicts
+
+A download's verdict compares the reads on disk with NCBI's spot count: `complete` at a ratio of 0.99 or
+more, `truncated` below it, `unverified` when no count is known. `metaquest/data/sra/spots.py` holds two
+rules. The store hand-off and `status --reconcile` use the lookup; `download_sra` applies the merge when it
+records a link into the store, and `status --reconcile` when it re-checks a verdict. A plain redownload
+that comes back `unverified` keeps a recorded `truncated` verdict, one that comes back `complete` replaces
+it, and a present download without a known count is recorded `unverified`. `download_sra` takes its counts from the
+registry, then from `<ACCESSION>_metadata.xml` in the project's and the store's `metadata/` folders
+(`cli/commands/sra_verdicts.py`, `registry_inputs`).
+
+- **Spot-count lookup** (`expected_spots(registry, accession, store=None, xml_folders=())`): the first
+  positive whole number among the registry's metadata block (`run_total_spots`), the store sidecar's
+  `ncbi.spots`, `<ACCESSION>_metadata.xml` in each of the given folders in order, and last the
+  `expected_spots` recorded with the previous download verdict. Zero, negative and non-numeric values count
+  as unknown. A caller that must not read files (the apply step of a reconcile) passes no store and no XML
+  folders.
+- **Verdict merge** (`merged_verdict(previous, new, reads_r1, expected)`): when the read count and the spot
+  count are both known, the verdict is computed again from them, so it may change in either direction;
+  otherwise a missing new verdict keeps the previous one, and a previous `complete` or `truncated` verdict is
+  never replaced by `unverified` or by a verdict without a value. A known verdict is never downgraded to
+  unknown, since the absence of a count is not evidence about the reads.
+
+In the store, a copy that is `partial` or `failed`, or `unverified` but short against a count known since,
+is never linked into a project without `--accept-partial`; such a copy is refetched, and a refetch that is
+not `complete` and holds fewer reads than the published copy does not replace it. The sidecar's optional
+`refetch` record counts refetches in a row that gained no reads; at `STORE_PARTIAL_REFETCH_LIMIT` (2,
+`store_handoff.py`) the copy is no longer fetched without `--force`.
+
+#### Assembly identity and staging
+
+`metaquest/data/assembly_identity.py` decides whether an assembly folder `<genome_id>_assembly` still
+belongs to the reads it would be built from now. A marker file in the folder, `.metaquest-assembly.json`
+(written with `write_text_atomic`), records `inputs` (the extracted read files as sorted name and size
+pairs, the extraction date, the megahit preset, the minimum contig length and the k values), plus the
+megahit version, the run parameters and the time written, which are kept for reference and not compared.
+The registry's assembly record carries the same `inputs` (`registry_assembly.set_assembly_inputs`).
+`assembly_state(out_dir, expected, accept_unmarked)` gives one of four states: `absent` (no folder),
+`incomplete` (no `final.contigs.fa`), `stale` (no marker, an unreadable marker, or inputs that differ,
+with the differing fields as the reason) or `current`. An unmarked folder of an earlier version is
+`current` only when the caller accepts it, which `extract_target_reads` does when the registry record
+matches the preset and minimum contig length and is not older than the extraction; it then writes a marker
+whose megahit version is empty.
+
+megahit never writes into the final folder. It writes into a hidden staging folder beside it (a
+`unique_temp_path` name, `.<name>.<host>.<pid>.<token>.tmp`), the marker is written there, and
+`publish_assembly` renames the existing folder aside, renames the staging folder into place, and removes
+the aside copy; if the second rename fails, the aside copy is renamed back. A failed run removes its
+staging folder, so the previous assembly stays in place. `sweep_staging`, called by `extract_target_reads`
+under the sample's extraction lock before it decides on a sample, removes staging and aside folders a
+killed run left behind, restoring the newest aside copy first when the final folder is missing (a run
+stopped between the two renames). Staging and aside names are hidden, so `scan_assemblies` and
+`visible_files` never list them.
+
 #### Atomic writes and temp names
 
 `metaquest/data/file_io.py` provides `atomic_path`, `write_text_atomic`, `write_bytes_atomic`,
@@ -304,9 +368,11 @@ The plugin system enables extensibility:
 - **sra** (`metaquest/data/sra/`): A package, not a single module, for downloading and working with
   SRA data: `fastq` (finding and reading FASTQ files, verifying a download), `cleanup` (transient
   folder handling), `accession` (running `prefetch`/`fasterq-dump` for one accession), `retry`
-  (parallel download with retries), `store_handoff` (linking a download into the shared store), and
-  `download` (the CLI-facing entry point); the package's `__init__.py` re-exports the public
-  functions other layers import, so `from metaquest.data.sra import download_accession` still works
+  (parallel download with retries), `store_handoff` (linking a download into the shared store),
+  `spots` (the expected spot count and the verdict merge rule, described in "Download completeness
+  verdicts" below), and `download` (the CLI-facing entry point); the package's `__init__.py` re-exports
+  the public functions other layers import, so `from metaquest.data.sra import download_accession` still
+  works
 - **registry**: The project journal (`metaquest_registry.json`); records dataset state and
   re-checks presence against the filesystem
 - **registry_blocks**: Typed dataclasses for every block the registry file holds, described in
@@ -323,6 +389,20 @@ The plugin system enables extensibility:
   (`insufficient-space: ...`). Only a tool's own out-of-space error aborts a download pass
 - **assembly**: the megahit step of `extract_target_reads` (`assemble_extracted_reads`,
   `_megahit_args`, `summarise_contigs`), split out of `read_extraction.py` and re-exported from it
+- **assembly_identity**: the assembly marker, staging and publish (`AssemblyInputs`, `assembly_state`,
+  `publish_assembly`, `sweep_staging`), described in "Assembly identity and staging" below
+- **registry_assembly**: the `inputs` entry of the registry's assembly record (`set_assembly_inputs`)
+  and the two checks that decide whether an unmarked assembly of an earlier version is accepted
+  (`legacy_assembly_current`, `assembly_predates_extraction`), kept out of `registry.py`, which is at
+  its size ceiling
+- **metadata_fields**: the mapping of NCBI metadata columns to registry metadata fields
+  (`metadata_fields`, used by the metadata commands in `cli/commands/metadata.py`), and
+  `fill_metadata_from_xml`, which fills a metadata block recorded without a spot count from
+  `<ACCESSION>_metadata.xml` when that file records a positive count; used by `status --init` and
+  `status --reconcile`
+- **registry_reconcile**: `scan_reconcile`/`apply_reconcile` for `status --reconcile` (see "Registry
+  write model" below); the report, `StoreReconcileReport`, adds `store_unavailable`, `metadata_filled`
+  and `verdicts_rechecked` to the fields of `ReconcileReport`
 - **store** (`metaquest/store/`): The shared data store package, described in "Shared data store"
   below; a project that never runs `store_init` never touches it
 
