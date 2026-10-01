@@ -564,7 +564,9 @@ class ExtractTargetReadsCommand(BaseCommand):
                 if term is not None and term.stop.is_set():
                     raise KeyboardInterrupt("extract_target_reads assembly stopped")
                 if assembly.failed:
-                    failed = ", ".join(f"{acc} ({reason})" for acc, reason in assembly.failed.items())
+                    # First line of each reason only; the per-sample ERROR line has the full text.
+                    lines = {acc: (why.splitlines() or [""])[0] for acc, why in assembly.failed.items()}
+                    failed = ", ".join(f"{acc} ({line})" for acc, line in lines.items())
                     self.logger.error("Assembly failed for %d sample(s): %s", len(assembly.failed), failed)
                     return 1
             return 0

@@ -18,7 +18,7 @@ from metaquest.cli.commands.status import StatusCommand
 from metaquest.core.exceptions import ProcessingError, SecurityError
 from metaquest.data.read_extraction import ExtractionResult
 from metaquest.data.registry import load_registry, record_extraction, save_registry
-from helpers_extraction import _fake_tools
+from helpers_extraction import _fake_tools, tools_present  # noqa: F401 (autouse fixture)
 from metaquest.utils import tools
 
 
@@ -139,22 +139,6 @@ def _two_sample_tree(tmp):
 
 
 class TestExtractTargetReadsCommand:
-    @pytest.fixture(autouse=True)
-    def _tools_present(self):
-        """Most of these tests exercise extraction logic with ``SecureSubprocess.run_secure``
-        mocked, on a machine that may genuinely lack minimap2/samtools/megahit; the
-        pre-flight tool check must not fail them. A test that specifically exercises a
-        missing tool applies its own, more specific ``shutil.which`` patch, which takes
-        precedence over this one for its duration. Version floors are checked in
-        tests/test_tools.py with fake tools on PATH; here the check looks tools up without
-        running them, so the mocked ``run_secure`` sees only the extraction's own calls."""
-        without_versions = functools.partial(tools.require_tools, check_versions=False)
-        with (
-            patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/tool"),
-            patch("metaquest.cli.commands.read_extraction.require_tools", without_versions),
-        ):
-            yield
-
     def test_command_properties(self):
         cmd = ExtractTargetReadsCommand()
         assert cmd.name == "extract_target_reads"
@@ -1658,7 +1642,8 @@ def test_assemble_loads_the_registry_at_most_once_per_sample(tmp_path):
     ):
         outcome = assemble_samples(ExtractTargetReadsCommand(), args, with_reads, results)
     assert outcome.reused == accessions
-    assert spy.call_count <= len(accessions)
+    # One load per sample, for its extraction date; a kept folder adds none.
+    assert spy.call_count == len(accessions)
     writes.assert_not_called()
 
 

@@ -11,6 +11,7 @@ reported and the remaining samples are still assembled.
 import argparse
 import logging
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -270,7 +271,8 @@ def _assemble_one(
         command.logger.info("%s: assembly against %s is in progress elsewhere; skipped", accession, args.genome_id)
         outcome.busy.append(accession)
         return
-    except (ProcessingError, OSError) as exc:
+    except (ProcessingError, OSError, subprocess.SubprocessError) as exc:
+        # megahit, publishing the folder, or the coverage mapping (minimap2/samtools) failed.
         command.logger.error("%s: assembly against %s failed: %s", accession, args.genome_id, exc)
         outcome.failed[accession] = str(exc)
         return

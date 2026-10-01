@@ -4,10 +4,15 @@ Used by read-extraction tests and by the download tests for the prefetch/split-3
 compression sequence in ``download_accession``.
 """
 
+import functools
 import gzip
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from metaquest.utils import tools
 
 UNEQUAL_WARNING = "[W::mm_bseq_read_frag2] query files have different number of records; extra records skipped."
 
@@ -21,6 +26,25 @@ COVERAGE_HEADER = "#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeand
 # Two contigs: 100 bp with 50 covered at mean depth 2, and 300 bp fully covered at mean
 # depth 10 (breadth 350/400 = 0.875, length-weighted mean depth 3200/400 = 8.0).
 DEFAULT_COVERAGE_ROWS = [("contig1", 100, 50, 2.0), ("contig2", 300, 300, 10.0)]
+
+
+@pytest.fixture(autouse=True)
+def tools_present():
+    """Let ``extract_target_reads``' pre-flight tool check pass without minimap2/samtools/megahit.
+
+    Autouse in every test module that imports it. These tests mock ``SecureSubprocess.run_secure``
+    and may run where the tools are genuinely absent (the pip-only CI job). A test that exercises a
+    missing tool applies its own, more specific ``shutil.which`` patch, which takes precedence for
+    its duration. Version floors are checked in tests/test_tools.py with fake tools on PATH; here
+    the check looks tools up without running them, so the mocked ``run_secure`` sees only the
+    command's own calls.
+    """
+    without_versions = functools.partial(tools.require_tools, check_versions=False)
+    with (
+        patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/tool"),
+        patch("metaquest.cli.commands.read_extraction.require_tools", without_versions),
+    ):
+        yield
 
 
 def sam_record(qname: str, flag: int, rname: str = "chr1", pos: int = 100) -> str:

@@ -14,7 +14,7 @@ import pytest
 
 import metaquest.cli.commands.extraction_assembly as asm_mod
 import metaquest.data.registry as registry_mod
-from helpers_extraction import _fake_tools
+from helpers_extraction import _fake_tools, tools_present  # noqa: F401 (autouse fixture)
 from metaquest.cli.commands.extraction_assembly import assemble_samples
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.data.assembly_identity import MARKER_NAME, read_marker
@@ -198,7 +198,32 @@ def test_one_failed_sample_does_not_stop_the_next_and_the_run_exits_1(mock_run, 
     assert _assembly(tmp_path, "SRR2")["contigs"] > 0
     errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
     assert any("SRR1" in line and "SRR2" not in line for line in errors)
+    summary = [line for line in errors if line.startswith("Assembly failed for 1 sample(s): SRR1 (")]
+    assert len(summary) == 1 and "\n" not in summary[0]
     assert not list((tmp_path / "targeted" / "SRR1").glob(".GCF_1_assembly.*"))
+
+
+@patch(RUN_SECURE)
+def test_failed_coverage_mapping_does_not_stop_the_next_sample(mock_run, tmp_path, caplog):
+    """minimap2 fails while mapping SRR1's reads onto its new contigs; SRR2 is still assembled."""
+    state = {}
+    fake = _fake_tools(state)
+
+    def run(executable, args, **kwargs):
+        if executable == "minimap2" and any("/SRR1/GCF_1_assembly/" in str(a) for a in args):
+            raise subprocess.CalledProcessError(1, ["minimap2"], stderr="mapping failed\nsecond line")
+        return fake(executable, args, **kwargs)
+
+    mock_run.side_effect = run
+    _project(tmp_path, samples=("SRR1", "SRR2"))
+    with caplog.at_level(logging.INFO):
+        rc = ExtractTargetReadsCommand().execute(_args(tmp_path, no_coverage=False))
+
+    assert rc == 1
+    assert len(_megahit_runs(state)) == 2
+    assert _assembly(tmp_path, "SRR1") is None
+    assert _assembly(tmp_path, "SRR2")["contigs"] > 0
+    assert any(r.levelname == "ERROR" and r.getMessage().startswith("SRR1: assembly") for r in caplog.records)
 
 
 @patch(RUN_SECURE)
