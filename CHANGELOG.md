@@ -30,12 +30,12 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   is reported as not kept. `runs` records nothing and exits 1 without a run log or for a selector that matches
   no run or more than one.
 - `project_report` (Environment group) writes one report of the project from its registry and run log:
-  `project_report.md` and `project_report.json` always, and `project_report.html` when the `interactive` extra
-  is installed (`--html auto|always|never`; `always` exits 3 without the extra and writes nothing). Sections:
-  project, funnel, genomes, extractions, downloads, failed downloads (with reason and attempts), timing
-  (totals, medians, quartiles, 90th percentile, extremes), environment (the `doctor` checks without network;
-  `--no-environment` leaves them out), outputs and the last 10 runs. Tables are cut to `--max-rows` (default
-  200, 0 for all) with the total shown. The export is recorded in the registry as `project_report` unless
+  `project_report.md` and `project_report.json` always, and `project_report.html` when the `interactive` extra is
+  installed (`--html auto|always|never`; `always` exits 3 without the extra and writes nothing). Sections: project,
+  funnel, genomes, extractions, downloads, failed downloads (with reason and `attempts_total`, the attempts over all
+  runs), timing (totals, medians, quartiles, 90th percentile, extremes), environment (the `doctor` checks without
+  network; `--no-environment` leaves them out), outputs and the last 10 runs. Tables are cut to `--max-rows`
+  (default 200, 0 for all) with the total shown. The export is recorded in the registry as `project_report` unless
   `--no-record`. It reads no FASTQ file and exits 1 without a registry; `--json` prints the written paths.
 - `status` reports a cross-stage funnel: one text line with the number of datasets screened, selected, downloaded
   (with the size of the downloaded data and, when any download was timed, their recorded download time), extracted

@@ -497,16 +497,18 @@ metaquest project_report --output-dir reports --max-rows 50
 metaquest project_report --html never --no-environment
 ```
 
-The report has ten sections: the project (registry path, last update, registry and MetaQuest
-versions), the funnel of `status` (datasets screened, selected, downloaded, analysed, extracted and
-assembled), per genome the datasets extracted, assembled and with no mapped reads with the median
-breadth and depth, the extraction rows of `results_table` sorted by genome and then by mapped reads,
-the download states and completeness verdicts with the truncated and unverified accessions, the failed
-downloads with their reason, attempts and date, timing (the totals and medians of `status` plus the
-minimum, quartiles, 90th percentile and maximum of each step), the environment checks of `doctor`
-without network access (left out with `--no-environment`), the recorded exports and analysis outputs,
-and the last 10 runs of the run log. Tables and accession lists are cut to `--max-rows` rows (200 by
-default, 0 for all) and say how many rows there were; `results_table` writes every extraction row.
+The report has ten sections: the project (registry path, last update, registry and MetaQuest versions),
+the funnel of `status` (datasets screened, selected, downloaded, analysed, extracted and assembled), per
+genome the datasets extracted, assembled and with no mapped reads with the median breadth and depth, the
+extraction rows of `results_table` sorted by genome and then by mapped reads, the download states and
+completeness verdicts of the downloaded datasets with the truncated and unverified ones among them, the
+failed downloads with their reason, the number of attempts over all runs (`attempts_total`; the report
+CSV and `download_run.json` of `download_sra` count the attempts of one run) and date, timing (the
+totals and medians of `status` plus the minimum, quartiles, 90th percentile and maximum of each step),
+the environment checks of `doctor` without network access (left out with `--no-environment`), the
+recorded exports and analysis outputs, and the last 10 runs of the run log. Tables and accession lists
+are cut to `--max-rows` rows (200 by default, 0 for all) and say how many rows there were;
+`results_table` writes every extraction row.
 
 `project_report.md` and `project_report.json` are always written. `project_report.html` needs the
 `interactive` extra: with `--html auto` (the default) a missing extra is reported in one line and

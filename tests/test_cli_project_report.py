@@ -5,6 +5,7 @@ import gzip
 import io
 import json
 import logging
+import os
 import sys
 
 import pytest
@@ -195,3 +196,27 @@ def test_no_fastq_file_is_opened(project, monkeypatch):
     assert opened, "the watch saw no file at all"
     assert not [path for path in opened if ".fastq" in path or path.endswith((".fq", ".fq.gz"))]
     assert any(path.endswith("project_report.json") or "metaquest_registry.json" in path for path in opened)
+
+
+def test_no_fastq_folder_is_listed(project, monkeypatch):
+    # Path.iterdir reaches os.listdir and glob reaches os.scandir: neither may list the FASTQ folder.
+    listed = []
+    real_scandir, real_listdir = os.scandir, os.listdir
+
+    def watch(real):
+        def wrapper(path=".", *args, **kwargs):
+            if isinstance(path, (str, bytes, os.PathLike)):
+                listed.append(os.path.abspath(os.fsdecode(path)))
+            return real(path, *args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(pr, "run_checks", run_checks)
+    monkeypatch.setattr(os, "scandir", watch(real_scandir))
+    monkeypatch.setattr(os, "listdir", watch(real_listdir))
+    fastq = os.path.abspath(project / "fastq")
+    assert os.path.isdir(fastq)
+    os.listdir(project)  # the watch is in place
+    assert listed == [os.path.abspath(project)]
+    assert _run() == 0
+    assert not [path for path in listed if path == fastq or path.startswith(fastq + os.sep)]

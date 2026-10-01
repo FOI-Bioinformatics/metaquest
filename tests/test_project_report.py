@@ -120,6 +120,34 @@ def test_downloads_section_counts_verdicts_and_lists(registry, no_checks):
     assert downloads["verdicts"] == {"complete": 1, "truncated": 1, "unverified": 1, "none": 0}
     assert downloads["truncated"] == ["SRR2"]
     assert downloads["unverified"] == ["SRR3"]
+    assert (downloads["truncated_total"], downloads["unverified_total"]) == (1, 1)
+    assert downloads["truncated_note"] is None and downloads["unverified_note"] is None
+
+
+def test_downloads_lists_and_counts_cover_the_same_downloaded_datasets(registry, no_checks):
+    # The Task 25 review's reproduction: SRR3 given a truncated verdict, then SRR2 (truncated)
+    # recorded as missing. The verdict table counts SRR3 only, so the list must name SRR3 too.
+    from metaquest.data.registry import record_download, set_download_verdict
+
+    set_download_verdict(registry, "SRR3", {"method": "spots", "verdict": "truncated", "ratio": 0.4})
+    record_download(registry, "SRR2", "missing", registry.path.parent / "fastq")
+    downloads = _report(registry, max_rows=1)["downloads"]
+    assert downloads["verdicts"]["truncated"] == 1
+    assert downloads["truncated"] == ["SRR3"]
+    assert downloads["truncated_total"] == 1
+    assert downloads["truncated_note"] is None
+
+
+def test_downloads_list_cut_by_max_rows_carries_its_total_and_a_note(registry, no_checks):
+    from metaquest.data.registry import set_download_verdict
+
+    set_download_verdict(registry, "SRR1", {"method": "spots", "verdict": "truncated", "ratio": 0.4})
+    downloads = _report(registry, max_rows=1)["downloads"]
+    assert downloads["truncated"] == ["SRR1"]
+    assert downloads["truncated_total"] == 2
+    assert downloads["truncated_note"] == "1 of 2 truncated datasets shown"
+    markdown = render_markdown(_report(registry, max_rows=1))
+    assert "Truncated (first 1 of 2): SRR1" in markdown
 
 
 def test_failures_section_gives_reason_attempts_and_date(registry, no_checks):
@@ -129,7 +157,8 @@ def test_failures_section_gives_reason_attempts_and_date(registry, no_checks):
     row = failures["rows"][0]
     assert row["accession"] == "SRR4"
     assert row["reason"] == "network"
-    assert row["attempts"] == 2
+    assert row["attempts_total"] == 2
+    assert "attempts" not in row
     assert row["message"] == FAILED_MESSAGE
     assert row["date"]
 
@@ -159,6 +188,30 @@ def test_distribution_of_nothing_is_all_none():
         "p75": None,
         "p90": None,
         "max": None,
+    }
+
+
+def test_distribution_of_one_value_is_that_value_everywhere():
+    assert pr.distribution([7.0]) == {
+        "count": 1,
+        "min": 7.0,
+        "p25": 7.0,
+        "median": 7.0,
+        "p75": 7.0,
+        "p90": 7.0,
+        "max": 7.0,
+    }
+
+
+def test_distribution_of_two_values_interpolates_linearly():
+    assert pr.distribution([7.0, 3.0]) == {
+        "count": 2,
+        "min": 3.0,
+        "p25": 4.0,
+        "median": 5.0,
+        "p75": 6.0,
+        "p90": 6.6,
+        "max": 7.0,
     }
 
 
@@ -244,6 +297,12 @@ def test_markdown_truncation_note(registry, no_checks):
     assert "1 of 4" in text and "metaquest results_table" in text
 
 
+def test_markdown_failures_name_attempts_over_all_runs(registry, no_checks):
+    text = render_markdown(_report(registry))
+    assert "| accession | reason | attempts_total | date | message |" in text
+    assert "attempts_total counts the attempts over all runs" in text
+
+
 def test_markdown_environment_not_included(registry, no_checks):
     assert "not included (--no-environment)" in render_markdown(_report(registry))
 
@@ -263,3 +322,4 @@ def test_html_has_every_section_id_and_escapes_text(registry, no_checks):
         assert f'id="{section}"' in html
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "attempts_total" in html and "over all runs" in html

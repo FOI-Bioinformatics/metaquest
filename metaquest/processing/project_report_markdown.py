@@ -113,7 +113,7 @@ def _downloads(section: Dict[str, Any]) -> List[Block]:
     for name in ("truncated", "unverified"):
         listed = section[name]
         if listed:
-            total = section["verdicts"][name]
+            total = section[f"{name}_total"]
             more = f" (first {len(listed)} of {total})" if len(listed) < total else ""
             blocks.append(_text(f"{name.capitalize()}{more}: {', '.join(listed)}"))
     return blocks
@@ -125,7 +125,7 @@ def _failures(section: Dict[str, Any]) -> List[Block]:
     reasons = ", ".join(f"{reason} {count}" for reason, count in section["by_reason"].items())
     columns = section["columns"]
     blocks = [
-        _text(f"Failed downloads by reason: {reasons}."),
+        _text(f"Failed downloads by reason: {reasons}. attempts_total counts the attempts over all runs."),
         _table(columns, [[row.get(column) for column in columns] for row in section["rows"]]),
     ]
     return blocks + _shown(len(section["rows"]), section["rows_total"])

@@ -25,7 +25,7 @@ from metaquest.data.sra.run_report import failure_reason
 from metaquest.processing.doctor_report import OK, overall_status, run_checks, summary_counts
 from metaquest.processing.project_funnel import funnel
 from metaquest.processing.results import results_rows
-from metaquest.processing.status_report import download_verdicts, genome_counts
+from metaquest.processing.status_report import genome_counts
 
 REPORT_VERSION = 1
 DEFAULT_MAX_ROWS = 200
@@ -62,7 +62,7 @@ EXTRACTION_COLUMNS = (
     "extraction_seconds",
     "assembly_seconds",
 )
-FAILURE_COLUMNS = ("accession", "reason", "attempts", "date", "message")
+FAILURE_COLUMNS = ("accession", "reason", "attempts_total", "date", "message")
 RUN_FIELDS = ("run_id", "command", "started", "seconds", "exit_code", "summary")
 DOWNLOAD_VERDICTS = ("complete", "truncated", "unverified")
 TIMING_KINDS = ("download", "extraction", "assembly")
@@ -174,10 +174,17 @@ def _extractions_section(registry: Registry, max_rows: int) -> Dict[str, Any]:
 
 
 def _downloads_section(registry: Registry, max_rows: int) -> Dict[str, Any]:
-    """Download states, completeness verdicts of the downloaded datasets, truncated and unverified lists."""
+    """Download states, completeness verdicts of the downloaded datasets, truncated and unverified lists.
+
+    The verdict counts and the two lists cover the same datasets, those whose download state is
+    ``downloaded`` (a verdict kept from an earlier download of a dataset now missing or failed is
+    not counted or listed). Each list is cut to ``max_rows``; ``<name>_total`` is its full length
+    and ``<name>_note`` says how many are shown when the cut removed any (None otherwise).
+    """
     states: Counter = Counter()
     verdicts: Dict[str, int] = {**{name: 0 for name in DOWNLOAD_VERDICTS}, "none": 0}
-    for accession in registry.datasets:
+    listed: Dict[str, List[str]] = {"truncated": [], "unverified": []}
+    for accession in sorted(registry.datasets):
         state = rb.raw(registry, accession, "download", "state")
         if not state:
             continue
@@ -187,17 +194,25 @@ def _downloads_section(registry: Registry, max_rows: int) -> Dict[str, Any]:
         complete = rb.raw(registry, accession, "download", "complete")
         verdict = complete.get("verdict") if isinstance(complete, dict) else None
         verdicts[verdict if verdict in DOWNLOAD_VERDICTS else "none"] += 1
-    listed = download_verdicts(registry)
-    return {
-        "states": dict(sorted(states.items())),
-        "verdicts": verdicts,
-        "truncated": _cut(listed["truncated"], max_rows),
-        "unverified": _cut(listed["unverified"], max_rows),
-    }
+        if verdict in listed:
+            listed[verdict].append(accession)
+    section: Dict[str, Any] = {"states": dict(sorted(states.items())), "verdicts": verdicts}
+    for name, accessions in listed.items():
+        shown = _cut(accessions, max_rows)
+        section[name] = shown
+        section[f"{name}_total"] = len(accessions)
+        section[f"{name}_note"] = (
+            f"{len(shown)} of {len(accessions)} {name} datasets shown" if len(shown) < len(accessions) else None
+        )
+    return section
 
 
 def _failures_section(registry: Registry, max_rows: int) -> Dict[str, Any]:
-    """Every dataset whose download state is ``failed``, with the reason read from its message."""
+    """Every dataset whose download state is ``failed``, with the reason read from its message.
+
+    ``attempts_total`` is the registry's attempt count, summed over all runs (``download_run.json``
+    and the report CSV of ``download_sra`` count the attempts of one run).
+    """
     rows = []
     for accession in sorted(registry.datasets):
         download = registry.datasets[accession].get("download")
@@ -208,7 +223,7 @@ def _failures_section(registry: Registry, max_rows: int) -> Dict[str, Any]:
             {
                 "accession": accession,
                 "reason": failure_reason(message),
-                "attempts": download.get("attempts"),
+                "attempts_total": download.get("attempts"),
                 "date": download.get("date") or None,
                 "message": message,
             }
