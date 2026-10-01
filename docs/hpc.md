@@ -277,4 +277,6 @@ first reconcile after upgrading therefore reads, once, the mate-1 file of every 
 that has a spot count; later runs read nothing again. On a large project, run that first reconcile as a job
 rather than on a login node. A project link into a store that is not mounted on the node is reported as
 store unavailable and left unchanged, so a reconcile on a node without the store mount does not mark its
-datasets missing.
+datasets missing. The same first reconcile drops every assembly record dated before its extraction record,
+which a 0.7.0 registry holds for a sample extracted again after its assembly, and lists it under
+`assemblies_dropped`; a later `extract_target_reads --assemble` job builds those assemblies again.

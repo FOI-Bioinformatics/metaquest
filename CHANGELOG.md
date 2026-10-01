@@ -6,19 +6,22 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 
 ### Added
 
-- One lookup for an accession's expected spot count, used by the store hand-off and `status --reconcile`: the
-  registry's metadata block, then the store sidecar, then the metadata XML, then the count recorded with the
-  previous download verdict (`data/sra/spots.py`, `expected_spots`).
+- One lookup for an accession's expected spot count, used by `download_sra` (with or without a store),
+  `store_link`, `store_adopt` and `status --reconcile`: the registry's metadata block, then the store sidecar,
+  then the metadata XML, then the count recorded with the previous download verdict (`data/sra/spots.py`,
+  `expected_spots`).
 - The `prefetch_max_size` setting (`METAQUEST_PREFETCH_MAX_SIZE`, `[runtime] prefetch_max_size`, default
   `100G`) sets `prefetch --max-size`, which was fixed at 100G.
 - `results_table` has a last column, `download_verdict`: the accession's recorded download completeness
   verdict (`complete`, `truncated` or `unverified`), empty where none was recorded.
 - `status --reconcile` names, inside the `drift` section of the report and of `--json`, every accession whose
   project link points into a data store that is not mounted (`store_unavailable`), every metadata block filled
-  from the project's metadata XML (`metadata_filled`) and every download verdict re-checked from `unverified`
-  to a known outcome (`verdicts_rechecked`); each is a list, empty when there is nothing to report. The text
-  report adds a warning naming the first five unmounted-store accessions, and a line each for the re-check and
-  fill counts, only when there is something to report.
+  from the project's metadata XML (`metadata_filled`), every download verdict re-checked from `unverified`
+  to a known outcome (`verdicts_rechecked`) and every assembly record dropped because it was dated before its
+  extraction (`assemblies_dropped`, as `ACC/GENOME`). The four keys are always present in the `--json` drift
+  object, as empty lists when there is nothing to report, so a reader need not test for them. The text report
+  adds a warning naming the first five unmounted-store accessions, and a line each for the re-check, fill and
+  dropped-assembly counts, only when there is something to report.
 - Store sidecars can carry an optional `refetch` record (see the refetch limit under Fixed); a sidecar without
   it is read and written unchanged (schema 1).
 
@@ -31,7 +34,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   registry without it is read and rewritten unchanged. An assembly that still matches is reused and reported
   as reused. An assembly folder written by an earlier version has no marker; it is accepted, and given a marker
   whose megahit version is recorded as unknown, only when its registry record matches the preset and minimum
-  contig length and is not older than the extraction.
+  contig length and is not older than the extraction. A value missing from the record matches any setting, but
+  a recorded preset, `default` included, matches only the same `--assembly-preset`.
 - Re-running a targeted read extraction for a sample drops that sample's recorded assembly from the registry,
   because the assembly was built from the reads the extraction replaces; the assembly folder on disk is left
   in place.
@@ -80,18 +84,40 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   refetch that comes back worse no longer links an earlier copy that is unverified but short against the
   expected spot count without `--accept-partial`.
 - A partial store copy is no longer downloaded again on every run. After two refetches in a row that gain no
-  reads (`STORE_PARTIAL_REFETCH_LIMIT`), it is linked with `--accept-partial` or refused with a message naming
-  `--force`, the only way to fetch it again. The counter is kept in the store sidecar, so it is shared by every
-  project that uses the store.
+  reads (`STORE_PARTIAL_REFETCH_LIMIT`; a refetch that again returns no reads at all gains none), it is linked
+  with `--accept-partial` or refused with a message naming `--force`, the only way to fetch it again. The
+  counter is kept in the store sidecar, so it is shared by every project that uses the store.
+- A store copy that `download_sra` keeps but does not link (a result starting `incomplete:` or
+  `partial in store;`) is a settled outcome and is no longer retried by the retry pass of the same run; before,
+  `--max-retries` fetched a partial copy a second time and used up one of its refetches.
 - The free-space check counts a store copy that is unverified but short and due for refetch, and exempts a
   copy that will not be fetched again.
 - Linking a dataset from the shared store, and `status --reconcile`, no longer replace a recorded `complete` or
   `truncated` download verdict with `unverified` when no spot count is known; the verdict is recomputed when the
   read count and the spot count are both known. A plain redownload that comes back `unverified` no longer
-  replaces a recorded `truncated` verdict; a redownload that comes back `complete` still replaces it.
-- `download_sra` takes an accession's expected spot count from its metadata XML (the project's `metadata`
-  folder, then the store's) when the registry records none, so a plain download is verified rather than
-  recorded `unverified`.
+  replaces a recorded `truncated` verdict; a redownload that comes back `complete` still replaces it. A
+  `truncated` record without a spot count is therefore fetched again by every `--redownload-truncated` run;
+  `download_metadata` for that accession gives it a count to be judged against.
+- `store_link` and `store_adopt` record the same verdict as `download_sra` for a store dataset: the sidecar's
+  read count judged against the project's spot count (registry metadata, sidecar, the project's and then the
+  store's metadata XML, previous verdict), merged with the verdict on file. Before, they recorded the sidecar's
+  verdict as it stood, so a relink turned a recorded `truncated` verdict into `unverified` and the copy was
+  then extracted. `store_link` also refuses, without `--accept-partial`, a copy whose sidecar is `unverified`
+  but short against that spot count, and records its sidecar as `partial`.
+- In a project linked with `--link-mode copy`, a store copy that a later `download_sra` run finds short (a
+  result starting `incomplete:` or `partial in store;`) is recorded with the store sidecar's verdict, so its
+  project copy, whose own sidecar still reads complete, is skipped by `extract_target_reads` through the
+  registry's `truncated` verdict.
+- `download_sra` takes an accession's expected spot count, when the registry's metadata records none, from the
+  store sidecar (with a store), then the metadata XML (the project's `metadata` folder, then the store's), then
+  the previous verdict, so a plain download is verified rather than recorded `unverified`. Before, the previous
+  verdict's count was used ahead of the store sidecar.
+- `status --reconcile` drops an assembly record dated before its extraction record, which 0.7.0 carried forward
+  when a sample was extracted again, so `status` and `results_table` no longer report contig statistics of an
+  assembly built from other reads. The assembly folder is left on disk, and the next
+  `extract_target_reads --assemble` builds the assembly again.
+- `results_table` no longer stops on a hand-edited registry whose download verdict is not a mapping; the
+  verdict reads as empty.
 - An accession found on disk without a download record, as a run killed after its files were in place leaves
   it, is verified against its spot count before it is recorded, and is recorded `unverified` when no count is
   known, rather than with no verdict. A truncated one is reported with a pointer to `--redownload-truncated`.
@@ -101,10 +127,13 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   the reason, for example `store copy partial (R of S spots)` or `store copy failed verification: <error>`.
   `--allow-truncated` extracts such a copy anyway. A project download outside the store recorded as
   `unverified` is still extracted, because only a store sidecar records a copy as short without reading its
-  files.
+  files. Only the selected samples' sidecars are read, so a malformed sidecar of another sample does not stop
+  the run.
 - A staging folder left by a killed assembly, or an assembly folder an interrupted megahit left without
   `final.contigs.fa`, no longer blocks the next run: the staging folder is removed and the sample is assembled
-  again (with a warning), where a contig-less folder used to stop the run with an error.
+  again (with a warning), where a contig-less folder used to stop the run with an error. An earlier folder
+  moved aside by a publish that was cut short is put back (or the finished new one, when its marker was
+  written); an assembly folder removed after a finished publish is not brought back.
 - `status --reconcile` no longer marks a download missing when its project link points into a data store that
   is not mounted. It reports such accessions as store unavailable and logs one warning. A dataset removed from
   a mounted store is still marked missing, and links are never removed.
@@ -114,15 +143,17 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - `store_gc` reports, and with `--yes` removes, a bare `tmp/<ACC>` staging folder a killed download left
   behind, once that accession's dataset lock is no longer held.
 - `store_link --link-mode copy` (and any copy-mode link) can refresh an earlier copy of the same accession: the
-  earlier copy is moved aside only after the new copy is complete, and put back if the swap fails. A project
-  folder without the store's `<ACC>.json` is still refused.
+  earlier copy is moved aside only after the new copy is complete, and put back if the swap does not happen,
+  also on an interrupt. A project folder without the store's `<ACC>.json` is still refused. A copy-mode link
+  first checks that the project's filesystem has room for the copy, and a shortfall or a failed copy is
+  reported as an error naming the accession.
 - `store_adopt` writes a dataset's sidecar into the staging folder before publishing it, so an adoption killed
   at any point no longer leaves a store folder without a sidecar.
 - `store_reindex` no longer refuses to run because a store folder has no sidecar. It rebuilds one from the file
   names and sizes, with state `failed` and an error that says to run `store_verify --rescan --fix-state <ACC>`,
   and catalogues it; such a dataset is not linked without `--accept-partial`, and when no project uses it,
-  `store_gc` offers it for removal. A folder whose lock is held is skipped with a warning. An unreadable
-  sidecar still stops the reindex.
+  `store_gc` offers it for removal. A folder whose lock is held is skipped with a warning, and so is a folder in
+  `sra/` whose name is not an SRA accession. An unreadable sidecar still stops the reindex.
 
 ## [0.7.0] - 2026-10-01
 

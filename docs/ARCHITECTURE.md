@@ -52,7 +52,7 @@ commands keep part of their logic in a helper module beside them: `extract_targe
 (`read_extraction.py`) assembles through `extraction_assembly.py` (`assemble_samples`, one sample at a
 time under its sample lock, with the per-sample outcome in `AssemblyOutcome`), and `download_sra`
 (`sra.py`) takes its registry inputs and download verdicts from `sra_verdicts.py` (`registry_inputs`,
-`present_verdicts`, `linked_verdict`). Every
+`present_verdicts`, `store_verdict`, which `store_link` and `store_adopt` record too). Every
 command writes to stdout through exactly one channel, `BaseCommand.emit`/`emit_raw`/`emit_json`
 (`metaquest/cli/base.py`); library modules log or return their output instead of printing, and a
 `make check` gate fails on any other `print(` call in `metaquest/`.
@@ -263,12 +263,17 @@ is `apply(scan(...))` for a caller that wants the old one-call behaviour.
 
 A download's verdict compares the reads on disk with NCBI's spot count: `complete` at a ratio of 0.99 or
 more, `truncated` below it, `unverified` when no count is known. `metaquest/data/sra/spots.py` holds two
-rules. The store hand-off and `status --reconcile` use the lookup; `download_sra` applies the merge when it
-records a link into the store, and `status --reconcile` when it re-checks a verdict. A plain redownload
-that comes back `unverified` keeps a recorded `truncated` verdict, one that comes back `complete` replaces
-it, and a present download without a known count is recorded `unverified`. `download_sra` takes its counts from the
-registry, then from `<ACCESSION>_metadata.xml` in the project's and the store's `metadata/` folders
-(`cli/commands/sra_verdicts.py`, `registry_inputs`).
+rules. `download_sra` (`cli/commands/sra_verdicts.py`, `registry_inputs`), the store hand-off,
+`store_link`, `store_adopt` and `status --reconcile` use the lookup, with the project's and then the store's
+`metadata/` folder as the XML folders. A plain redownload that comes back `unverified` keeps a recorded
+`truncated` verdict, one that comes back `complete` replaces it, and a present download without a known
+count is recorded `unverified`. For a store dataset, `sra_verdicts.store_verdict` is the one rule
+`download_sra` (a link, or a copy kept but not linked: a result starting with one of
+`store_handoff.SETTLED_PREFIXES`), `store_link` and `store_adopt` record: the sidecar's read count judged
+against the spot count (`store_spot_count`; the sidecar and the count are read before the registry lock is
+taken) and merged with the verdict on file. `store_link` refuses a copy whose sidecar is `unverified` but
+short against that count, as it refuses a `partial` one, and rewrites its sidecar as `partial` under the
+dataset lock.
 
 - **Spot-count lookup** (`expected_spots(registry, accession, store=None, xml_folders=())`): the first
   positive whole number among the registry's metadata block (`run_total_spots`), the store sidecar's
@@ -285,8 +290,10 @@ registry, then from `<ACCESSION>_metadata.xml` in the project's and the store's 
 In the store, a copy that is `partial` or `failed`, or `unverified` but short against a count known since,
 is never linked into a project without `--accept-partial`; such a copy is refetched, and a refetch that is
 not `complete` and holds fewer reads than the published copy does not replace it. The sidecar's optional
-`refetch` record counts refetches in a row that gained no reads; at `STORE_PARTIAL_REFETCH_LIMIT` (2,
-`store_handoff.py`) the copy is no longer fetched without `--force`.
+`refetch` record counts refetches in a row that gained no reads (a read count of 0 is a known count); at
+`STORE_PARTIAL_REFETCH_LIMIT` (2, `store_handoff.py`) the copy is no longer fetched without `--force`. A
+failure message starting with one of `SETTLED_PREFIXES` (`incomplete:`, `partial in store;`) is a settled
+outcome: the retry pass in `data/sra/retry.py` (`_split_not_found`) does not retry it.
 
 #### Assembly identity and staging
 
@@ -404,8 +411,9 @@ The plugin system enables extensibility:
   `<ACCESSION>_metadata.xml` when that file records a positive count; used by `status --init` and
   `status --reconcile`
 - **registry_reconcile**: `scan_reconcile`/`apply_reconcile` for `status --reconcile` (see "Registry
-  write model" below); the report, `StoreReconcileReport`, adds `store_unavailable`, `metadata_filled`
-  and `verdicts_rechecked` to the fields of `ReconcileReport`
+  write model" below); the report, `StoreReconcileReport`, adds `store_unavailable`, `metadata_filled`,
+  `verdicts_rechecked` and `assemblies_dropped` (assembly records dated before their extraction record,
+  which the apply step removes with `clear_assembly`) to the fields of `ReconcileReport`
 - **store** (`metaquest/store/`): The shared data store package, described in "Shared data store"
   below; a project that never runs `store_init` never touches it
 

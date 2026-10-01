@@ -136,23 +136,32 @@ registered under the "Store" group in `cli/main.py`:
   append-only journal under `<data-root>/journal/` to restore project and usage records that sidecars
   alone do not carry; if that replay restores no project while the rebuilt catalogue still holds
   datasets, it sets a `rebuilt_without_projects` catalogue flag (cleared once a project is restored,
-  by this or a later `store_reindex`)
+  by this or a later `store_reindex`); a store folder named like an SRA accession but with no sidecar
+  gets one rebuilt from its file names and sizes with state `failed` (pointing at
+  `store_verify --rescan --fix-state <ACC>`), a folder whose dataset lock is held is skipped with a
+  warning, so is a folder not named like an accession, and an unreadable sidecar still refuses the reindex
 - `store_adopt` - fold an existing project `fastq/` folder into the store (`--move` links the project
   folder to the store's copy; `--copy` leaves the project folder as it was, including on a duplicate,
   and still records the copying project as a user of the dataset; an empty accession folder is refused
-  either way)
+  either way); the sidecar is written into the staging folder before it is published
 - `store_verify` - check a dataset's files against its recorded size, md5 (`--md5`), or NCBI spot
   count (`--spots`, which also falls back to `<data-root>/metadata/` and the calling project's
   `metadata/` folder for an XML `download_metadata` wrote after the fact); `--fix-state` only promotes
   a dataset to `complete` after its files have actually been read through, not on size/md5 alone;
   `--rescan` rebuilds a dataset's recorded file list from what is on disk before checking
-- `store_link` / `store_unlink` - add or remove one accession's project symlink
+- `store_link` / `store_unlink` - add or remove one accession's project symlink; `store_link`, like
+  `store_adopt` and `download_sra`, records the verdict `cli/commands/sra_verdicts.store_verdict` gives (the
+  sidecar's read count against the project's spot count, merged with the verdict on file), and refuses
+  without `--accept-partial` a `partial`, `failed` or sidecar-less copy and one recorded `unverified` but
+  short against that spot count
 - `store_usage` - which projects and genomes used a given accession, or which datasets are unused
   (`--project`, `--organism`, `--unused`)
 - `store_gc` - report (or, with `--yes`, remove) datasets nothing references any more; refuses to run
   when the catalogue holds datasets but no project records at all (run `store_reindex` first), and
   also refuses on a `rebuilt_without_projects` catalogue flag until every project has re-registered
-  and `--accept-rebuilt` is given; `--json` prints the report (or a refusal) as one JSON object
+  and `--accept-rebuilt` is given; also lists leftover temp artifacts under `<data-root>/tmp/`, including
+  the bare `tmp/<ACC>` staging folder of a killed download once its dataset lock is free; `--json` prints
+  the report (or a refusal) as one JSON object
 
 Store discovery rules for agents:
 1. **Store required before linking**: `download_sra` only links a dataset and `store_adopt` only
@@ -166,11 +175,14 @@ Store discovery rules for agents:
 3. **Explicit-path staging**: `store_adopt` copies a dataset into the store before removing anything
    from the project, so adoption briefly holds up to three copies of one accession (the project's
    original, a staging copy, and the store's copy) and needs at least twice the folder's size free on
-   the store's filesystem before it starts (`metaquest/store/adopt.py`, the free-space check around
-   the `disk_usage` call), only replacing the project folder with a symlink once the store copy is
-   verified (and never for `--copy`, which leaves the project folder alone). New code that moves data
-   into or within the store should stage the same way rather than renaming in place, so an interruption
-   never leaves a dataset with no complete copy anywhere.
+   the store's filesystem before it starts (`_has_room_for` in `metaquest/store/adopt.py`, through
+   `room_shortfall` in `metaquest/store/link.py`), only replacing the project folder with a symlink once
+   the store copy is verified (and never for `--copy`, which leaves the project folder alone). A
+   copy-mode link (`--link-mode copy`) stages the same way in the project: the new copy is made under a
+   hidden name after the same free-space check, the earlier copy is moved aside only then, and put back
+   whenever the swap does not happen. New code that moves data into or within the store should stage the
+   same way rather than renaming in place, so an interruption never leaves a dataset with no complete
+   copy anywhere.
 4. **Journal replay for usage records**: sidecars record a dataset's own state but nothing about which
    projects used it; that lives only in the SQLite catalogue's `projects`/`usage` tables. `store_reindex`
    rebuilds the catalogue from sidecars and then replays `<data-root>/journal/*.jsonl` (append-only,
