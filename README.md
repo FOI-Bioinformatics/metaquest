@@ -394,7 +394,7 @@ quality grade), mapped reads, reference coverage and assembly statistics. The pr
 from the newer of the `profile` analysis of `sra_profile` and the `report` analysis of `sra_report`,
 with a value the newer one lacks filled from the other, so a project that only ran `sra_report` also
 has them. A registry written before 0.5.0 that holds neither still fills them from its `sra_stats`
-and `quality` analyses. It records the
+and `quality` analyses, which also supply a value that `profile` and `report` both lack. It records the
 export in the project registry when one exists, and does not create a registry when there is none.
 The columns `download_seconds`, `extraction_seconds` and `assembly_seconds` are the
 recorded run times, empty where a step was not timed (data recorded before 0.7.0, or a dataset linked

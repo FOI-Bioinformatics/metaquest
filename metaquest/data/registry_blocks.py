@@ -558,11 +558,12 @@ def quality_summary(registry: Registry, accession: str) -> Tuple[Dict[str, Any],
     ``sra_profile`` records the ``"profile"`` analysis; ``sra_report`` records ``"report"``, which
     also carries these three fields. Whichever is newer by ``datetime.fromisoformat`` (an
     unparsable date counts as the oldest; equal dates favour ``"profile"``) supplies the result,
-    with any field it leaves ``None`` filled in from the other one when both exist. When neither
-    exists, the pre-0.5.0 ``"sra_stats"``/``"quality"`` analyses are read instead (see
-    ``_legacy_quality_summary``). The second element of the pair names the source used:
-    ``"profile"``, ``"report"``, ``"legacy"``, or None when nothing was ever recorded (every
-    field is then None too).
+    with any field it leaves ``None`` filled in from the other one when both exist, and a field
+    still ``None`` after that filled in from the pre-0.5.0 analyses when the registry holds them
+    (the source stays ``"profile"`` or ``"report"``). When neither exists, the pre-0.5.0
+    ``"sra_stats"``/``"quality"`` analyses are read instead (see ``_legacy_quality_summary``).
+    The second element of the pair names the source used: ``"profile"``, ``"report"``,
+    ``"legacy"``, or None when nothing was ever recorded (every field is then None too).
     """
     profile_entry = _analysis_entry(registry, accession, "profile")
     report_entry = _analysis_entry(registry, accession, "report")
@@ -585,6 +586,9 @@ def quality_summary(registry: Registry, accession: str) -> Tuple[Dict[str, Any],
         summary = {
             key: value if value is not None else secondary_fields.get(key) for key, value in primary_fields.items()
         }
+        if any(value is None for value in summary.values()):
+            legacy, _ = _legacy_quality_summary(registry, accession)
+            summary = {key: value if value is not None else legacy.get(key) for key, value in summary.items()}
         return summary, source
     legacy, found = _legacy_quality_summary(registry, accession)
     return legacy, ("legacy" if found else None)

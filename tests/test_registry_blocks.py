@@ -227,6 +227,36 @@ def test_quality_summary_legacy_only_when_neither_profile_nor_report_exists():
     assert source == "legacy"
 
 
+def test_quality_summary_fills_a_field_still_none_from_the_legacy_analyses():
+    # A registry written before 0.5.0 (sra_stats with 100 reads) that sra_report later reported on:
+    # a "report" without total_reads keeps its own GC and grade and takes the legacy read count.
+    registry = R.Registry()
+    _analyses(
+        registry,
+        "SRR1",
+        sra_stats=("2024-05-01T00:00:00+00:00", {"total_reads": 100, "gc_content": 52.0}),
+        report=("2026-02-01T00:00:00+00:00", {"gc_percent": 41.5, "quality_grade": "good"}),
+    )
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 100, "gc_percent": 41.5, "quality_grade": "good"}
+    assert source == "report"
+
+
+def test_quality_summary_profile_and_report_values_take_precedence_over_legacy():
+    registry = R.Registry()
+    _analyses(
+        registry,
+        "SRR1",
+        sra_stats=("2024-05-01T00:00:00+00:00", {"total_reads": 100, "gc_content": 52.0}),
+        quality=("2024-05-01T00:00:00+00:00", {"grade": "poor", "gc_content": 0.52}),
+        profile=("2026-01-01T00:00:00+00:00", {"total_reads": 300, "gc_percent": None, "quality_grade": None}),
+        report=("2025-01-01T00:00:00+00:00", {"total_reads": 200, "gc_percent": 45.0}),
+    )
+    summary, source = B.quality_summary(registry, "SRR1")
+    assert summary == {"total_reads": 300, "gc_percent": 45.0, "quality_grade": "poor"}
+    assert source == "profile"
+
+
 def test_quality_summary_none_when_nothing_was_ever_recorded():
     registry = R.Registry()
     summary, source = B.quality_summary(registry, "SRR1")

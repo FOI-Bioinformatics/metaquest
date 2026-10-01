@@ -84,7 +84,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
 - `results_table` and `status --export-tsv` fill the quality columns (`total_reads`, `gc_percent`,
   `quality_grade`) from the `report` analysis of `sra_report` when `sra_profile` was never run for an accession;
   they used to stay empty. When both analyses exist, the newer one supplies the values and the other fills any
-  it lacks.
+  it lacks; a value both lack is taken from the pre-0.5.0 `sra_stats` and `quality` analyses when the registry
+  holds them.
 
 ### Removed
 
