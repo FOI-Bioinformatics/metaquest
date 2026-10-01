@@ -124,6 +124,8 @@ def check_tool(name: str, required: bool = False) -> Check:
     if not status.found:
         use = spec.note or f"used by {', '.join(spec.used_by)}"
         return Check(label, FAIL if required else WARN, f"{status.problem()} ({use})", data)
+    if status.not_runnable:
+        return Check(label, FAIL if required else WARN, status.problem() or "", data)
     if not status.meets_floor:
         return Check(label, FAIL, status.problem() or "", data)
     floor = f" (needs {spec.min_version} or later)" if spec.min_version else ""

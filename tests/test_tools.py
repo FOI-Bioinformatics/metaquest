@@ -103,7 +103,15 @@ def test_probe_of_a_tool_that_fails_without_a_version_records_the_error(tmp_path
     status = probe_tool("megahit")
     assert status.found and status.version is None
     assert "exited with code 2" in status.error
-    # An unreadable version is not a refusal: the floor cannot be judged.
+    # A tool that cannot even print its version is refused, naming the error and a reinstall hint.
+    assert "is not runnable, exited with code 2: boom" in status.problem()
+    assert "reinstall with: conda install" in status.problem()
+
+
+def test_a_version_that_cannot_be_read_otherwise_is_not_a_refusal(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(fake_tool(tmp_path, "megahit", "no digits here")))
+    status = probe_tool("megahit")
+    assert status.found and status.version is None and status.error == "printed no version number"
     assert status.problem() is None
 
 
@@ -114,7 +122,23 @@ def test_a_tool_that_exits_non_zero_has_no_version_even_if_its_error_names_one(t
     status = probe_tool("samtools")
     assert status.found and status.version is None
     assert status.error == f"not runnable, exited with code 127: {loader}"
-    assert status.problem() is None
+
+
+def test_require_tools_refuses_a_tool_that_cannot_run_with_exit_3(tmp_path, monkeypatch):
+    import argparse
+
+    from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
+
+    loader = "samtools: error while loading shared libraries: libcrypto.so.1.0.0: cannot open shared object file"
+    fake_tool(tmp_path, "minimap2", "2.28-r1209")
+    monkeypatch.setenv("PATH", str(fake_tool(tmp_path, "samtools", "", stderr=loader, rc=1)))
+    with pytest.raises(ConfigurationError, match="not runnable") as excinfo:
+        require_tools(["minimap2", "samtools"])
+    message = str(excinfo.value)
+    assert "missing, too old or not runnable" in message and "libcrypto.so.1.0.0" in message
+    assert "older than" not in message
+    args = argparse.Namespace(dry_run=False, assemble=False)
+    assert ExtractTargetReadsCommand().execute(args) == 3
 
 
 def test_probe_below_the_floor_is_a_problem_with_the_floor_and_hint(tmp_path, monkeypatch):

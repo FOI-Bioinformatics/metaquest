@@ -55,8 +55,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   (10 s each), `--for COMMAND` turns a missing tool that command needs into a failure, `--json` writes
   one JSON document. Exit code 0 without a failed check, 3 with one. It still runs, and reports the
   error once (as the config check), when `config.toml` does not parse. A tool that exits non-zero on
-  its version flag is reported as not runnable with its first error line, not given a version read
-  from that error; `--for` takes the command names `metaquest --help` lists. `SRAMetadataClient` has
+  its version flag (a broken install, such as a missing `libcrypto`) is not runnable: its first error
+  line is reported, not a version read from that error; it is a failed check for a tool `--for` needs
+  and a warning otherwise. `--for` takes the command names `metaquest --help` lists. `SRAMetadataClient` has
   `close()` and works as a context manager. See "Checking the environment" in the README.
 - Timing: the registry records when each download, extraction and assembly started and how many
   seconds it took (`started`, `seconds`; absent in registries written earlier). `download_sra
@@ -93,7 +94,9 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   each NCBI request, and of `extract_target_reads` for each sample, are now logged at DEBUG, replaced at
   INFO by the progress summaries. `--progress-every 0` logs them at INFO again. Still at INFO: the
   first "prefetch not found on PATH" line of a run (later accessions log it at DEBUG), and the lines
-  about an accession whose download was interrupted or redone with `--force`.
+  about an unusual event for one accession: a download interrupted or redone with `--force`, a truncated
+  archive removed for the next attempt, a wait for running downloads to free space, a wait for a lock
+  another run holds.
 - External tool timeout is now configurable and, by default, unlimited: `run_secure` used to give every
   external tool (`fasterq-dump`, `prefetch`, `minimap2`, `samtools`, `megahit`) a fixed one-hour limit
   (`MAX_SUBPROCESS_TIMEOUT`) even when a caller passed no timeout at all, and `timeout=0` was silently
@@ -107,10 +110,12 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   3.0, minimap2 2.17, samtools 1.10 (for `samtools coverage`), megahit 1.2.9, pigz 2.4 and
   ncbi-datasets-cli 16. `download_sra`, `extract_target_reads`, `genome_download` and `genome_prepare`
   check the tools they need before any work starts and exit with 3 (was 1 for `download_sra` and
-  `extract_target_reads`; `genome_download` and `genome_prepare` had no check and failed inside the first
-  `datasets` call) when one is missing or older than its floor, listing every problem with its `conda
-  install` command. The optional tools (`prefetch`, `pigz`, `seqkit`) are checked only by `doctor`.
-  The check runs each required tool's version probe at the start (up to 30 s per tool).
+  `extract_target_reads`; `genome_download` and `genome_prepare` had no check and failed inside the
+  first `datasets` call) when one is missing, older than its floor or not runnable (its version probe
+  exits non-zero), listing every problem with its `conda install` command. A version that cannot be read
+  for another reason (a probe timeout, no version number printed) is a warning. The optional tools
+  (`prefetch`, `pigz`, `seqkit`) are checked only by `doctor`. The check runs each required tool's
+  version probe at the start (up to 30 s per tool).
 - `environment.yml` pins the same floors as that table (`sra-tools>=3.0`, `minimap2>=2.17`,
   `samtools>=1.10`, `megahit>=1.2.9`, `pigz>=2.4`, `ncbi-datasets-cli>=16`; checked by
   `tests/test_environment_pins.py`); `seqkit` stays commented out and has no floor.

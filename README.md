@@ -87,15 +87,15 @@ Download and assembly steps call command-line tools that are not Python packages
 | `megahit` | 1.2.9 | `extract_target_reads --assemble` |
 | `seqkit` (optional) | any | `sra_profile`, `sra_report` (faster read statistics; else a Python reader) |
 
-`download_test_genome` fetches its genome over HTTPS and needs none of these tools.
-A command checks the tools it needs before it starts any work (`download_sra` checks `fasterq-dump`;
-`extract_target_reads` checks minimap2 and samtools, and megahit with `--assemble`; `genome_download`
-and `genome_prepare` check `datasets`). A missing tool, or one older than the version above, stops the
-command with exit code 3 and a message that lists every such tool with the `conda install` command that
-provides it. The optional tools (`prefetch`, `pigz`, `seqkit`) are not checked by the commands, which
-work without them; `metaquest doctor` (below) reports every tool in the table, and a tool older than
-its oldest supported version is a failed check there. The table lives in `metaquest/utils/tools.py`,
-and `environment.yml` pins the same versions.
+`download_test_genome` fetches its genome over HTTPS and needs none of these tools. A command checks the
+tools it needs before it starts any work (`download_sra` checks `fasterq-dump`; `extract_target_reads`
+checks minimap2 and samtools, and megahit with `--assemble`; `genome_download` and `genome_prepare`
+check `datasets`). A missing tool, one older than the version above, or one that cannot run (it exits
+with an error when asked for its version) stops the command with exit code 3 and a message that lists
+every such tool with the `conda install` command that provides it. The optional tools (`prefetch`,
+`pigz`, `seqkit`) are not checked by the commands, which work without them; `metaquest doctor` (below)
+reports every tool in the table, and a tool older than its oldest supported version is a failed check
+there. The table lives in `metaquest/utils/tools.py`, and `environment.yml` pins the same versions.
 
 `environment.yml` installs all of them together with MetaQuest:
 
@@ -736,8 +736,8 @@ whether to resubmit:
 | 4 | Retryable: a network failure, or a wait for a lock that reached its limit (see below) | Rerun later |
 | 130 | Interrupted by `SIGINT`, `SIGTERM` or `SIGHUP` | Rerun; finished work is kept |
 
-Code 3 covers a missing optional package; an external tool that is missing or older than the version in
-"External tools" above; a malformed `config.toml` or a setting that does not parse; a missing NCBI
+Code 3 covers a missing optional package; an external tool that is missing, cannot run, or is older than
+the version in "External tools" above; a malformed `config.toml` or a setting that does not parse; a missing NCBI
 email address; and a `--log-file` that cannot be opened.
 Code 4 covers an NCBI request of `sra_info` that could not connect, timed out or got HTTP 429 or 5xx
 after its retries, a `download_metadata` run that could not reach NCBI for any accession, and a wait
@@ -805,9 +805,10 @@ download_sra: finished 2000/2000 (1990 ok, 10 failed) in 10 h 45 min
 The lines about one accession or sample (a download starting, skipped or finished, its temporary
 folder, a store link, a retry, an NCBI metadata request, an extracted sample) are logged at DEBUG;
 `--progress-every 0` turns the summaries off and logs them at INFO instead. Warnings and errors about an
-accession are logged at their own level either way. Two kinds of per-accession line stay at INFO: the
-first "prefetch not found on PATH" of a run, and the lines about a download that was interrupted or
-redone with `--force`.
+accession are logged at their own level either way. Some per-accession lines stay at INFO: the first
+"prefetch not found on PATH" of a run, and the lines about an unusual event (a download interrupted or
+redone with `--force`, a truncated archive removed for the next attempt, a wait for running downloads to
+free space, a wait for a lock another run holds).
 
 ### Running on a cluster
 

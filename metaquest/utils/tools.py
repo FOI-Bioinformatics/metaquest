@@ -119,6 +119,10 @@ def version_at_least(version: Tuple[int, ...], floor: str) -> bool:
     return tuple(version) + (0,) * (width - len(version)) >= wanted + (0,) * (width - len(wanted))
 
 
+# Start of ``ToolStatus.error`` for a tool whose version probe exited non-zero.
+NOT_RUNNABLE = "not runnable"
+
+
 @dataclass(frozen=True)
 class ToolStatus:
     """What a probe found for one tool: its path, the line naming its version, and that version.
@@ -154,10 +158,21 @@ class ToolStatus:
         floor = self.spec.min_version
         return self.version is None or floor is None or version_at_least(self.version, floor)
 
+    @property
+    def not_runnable(self) -> bool:
+        """Whether the version probe exited non-zero (a broken install, such as a missing library)."""
+        return self.error.startswith(NOT_RUNNABLE)
+
     def problem(self) -> Optional[str]:
-        """Why this tool cannot be used (missing, or older than its floor), with an install hint; else None."""
+        """Why this tool cannot be used (missing, not runnable, or older than its floor), with an install hint.
+
+        None when it can be used, including when its version could not be read for another reason
+        (a probe timeout, no version number printed).
+        """
         if not self.found:
             return f"{self.name} not found on PATH; install with: {self.spec.install_hint()}"
+        if self.not_runnable:
+            return f"{self.name} at {self.path} is {self.error}; reinstall with: {self.spec.install_hint()}"
         if not self.meets_floor:
             return (
                 f"{self.name} {self.version_string} at {self.path} is older than the {self.spec.min_version} "
@@ -195,7 +210,7 @@ def probe_tool(name: str, timeout: float = VERSION_PROBE_TIMEOUT) -> ToolStatus:
         first = _output_text(result.stderr) + "\n" + _output_text(result.stdout)
         lines = [line.strip() for line in first.splitlines() if line.strip()]
         detail = f": {lines[0]}" if lines else ""
-        return ToolStatus(name, path, error=f"not runnable, exited with code {returncode}{detail}")
+        return ToolStatus(name, path, error=f"{NOT_RUNNABLE}, exited with code {returncode}{detail}")
     for line in output.splitlines():
         version = parse_version(line)
         if version is not None:
@@ -207,7 +222,8 @@ def require_tools(names: Iterable[str], check_versions: bool = True) -> None:
     """Check that every tool in ``names`` is on ``PATH`` and, with ``check_versions``, new enough.
 
     Raises one ``ConfigurationError`` listing every problem, each with its conda install hint,
-    so a user fixes them all at once. A version that cannot be read is logged, not refused.
+    so a user fixes them all at once. A tool whose version probe exits non-zero is refused as not
+    runnable; a version that cannot be read for another reason is logged, not refused.
     """
     problems = []
     for name in names:
@@ -216,7 +232,7 @@ def require_tools(names: Iterable[str], check_versions: bool = True) -> None:
             status = ToolStatus(name, shutil.which(name))
         else:
             status = probe_tool(name)
-            if status.found and status.version is None:
+            if status.found and status.version is None and not status.not_runnable:
                 logger.warning(
                     "Could not read the %s version (%s); continuing without checking it against %s",
                     name,
@@ -228,6 +244,6 @@ def require_tools(names: Iterable[str], check_versions: bool = True) -> None:
             problems.append(problem)
     if problems:
         raise ConfigurationError(
-            "External tools are missing or too old:\n  - " + "\n  - ".join(problems) + "\n"
+            "External tools are missing, too old or not runnable:\n  - " + "\n  - ".join(problems) + "\n"
             "Run 'metaquest doctor' to check every tool at once."
         )

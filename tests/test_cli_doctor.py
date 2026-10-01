@@ -314,3 +314,20 @@ def test_run_checks_is_usable_without_the_cli(tmp_path, monkeypatch):
     _tools_on_path(tmp_path, monkeypatch)
     checks = doctor_report.run_checks(project=tmp_path / "project")
     assert {check.name for check in checks} >= {"python", "config", "store", "registry", "resources"}
+
+
+def test_for_fails_a_required_tool_that_cannot_run(tmp_path, monkeypatch, capsys):
+    _tools_on_path(tmp_path, monkeypatch)
+    loader = "samtools: error while loading shared libraries: libcrypto.so.1.0.0: cannot open shared object file"
+    fake_tool(tmp_path, "samtools", "", stderr=loader, rc=1)
+    rc, report = _run_json(capsys, "--for", "extract_target_reads")
+    assert rc == 3
+    samtools = _by_name(report)["tool samtools"]
+    assert samtools["status"] == FAIL and "not runnable" in samtools["detail"]
+
+
+def test_a_tool_that_cannot_run_is_a_warning_when_not_required(tmp_path, monkeypatch, capsys):
+    _tools_on_path(tmp_path, monkeypatch)
+    fake_tool(tmp_path, "samtools", "", stderr="broken", rc=1)
+    rc, report = _run_json(capsys)
+    assert _by_name(report)["tool samtools"]["status"] == WARN
