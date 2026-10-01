@@ -9,6 +9,11 @@ exists yet, the report is reconstructed in memory from what is on disk.
 
 The report is built by `metaquest.processing.status_report`, the suggested next steps by
 `suggest` and the text output by `render_text`.
+
+`status --init` is the one place that parses metadata XML files under the registry lock
+(`fill_metadata_from_xml` inside the `registry_update` that writes the bootstrapped registry):
+the registry file did not exist before that write, so no other writer is waiting on it, and one
+write leaves no half-filled registry behind.
 """
 
 import argparse

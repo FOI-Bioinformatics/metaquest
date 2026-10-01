@@ -234,6 +234,8 @@ def _drift_report(drift: StoreReconcileReport) -> Dict[str, Any]:
         # unverified/missing download verdict was recomputed, by this reconcile.
         "metadata_filled": list(drift.metadata_filled),
         "verdicts_rechecked": list(drift.verdicts_rechecked),
+        # Assembly records ("ACC/GENOME") dated before their extraction, removed by this reconcile.
+        "assemblies_dropped": list(drift.assemblies_dropped),
     }
 
 

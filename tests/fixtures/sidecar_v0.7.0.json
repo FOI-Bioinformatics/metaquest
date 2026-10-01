@@ -1,0 +1,40 @@
+{
+  "accession": "SRR1",
+  "bases_total": 12000,
+  "completeness": {
+    "method": "spots",
+    "ratio": 0.4,
+    "verdict": "truncated"
+  },
+  "compression": "gzip",
+  "downloaded": "2026-09-30T12:00:00+00:00",
+  "error": null,
+  "files": [
+    {
+      "bytes": 1200,
+      "md5": "0123456789abcdef0123456789abcdef",
+      "name": "SRR1_1.fastq.gz",
+      "reads": 40
+    },
+    {
+      "bytes": 1210,
+      "md5": "fedcba9876543210fedcba9876543210",
+      "name": "SRR1_2.fastq.gz",
+      "reads": 40
+    }
+  ],
+  "layout": "PAIRED",
+  "ncbi": {
+    "bases": 30000,
+    "layout": "PAIRED",
+    "platform": "ILLUMINA",
+    "spots": 100
+  },
+  "reads_per_mate": 40,
+  "schema": 1,
+  "state": "partial",
+  "stats": {},
+  "stats_computed": null,
+  "tool": "fasterq-dump",
+  "tool_version": "3.1.1"
+}

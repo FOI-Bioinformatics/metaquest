@@ -119,13 +119,14 @@ def _dataset_fields(registry: Registry, accession: str) -> Dict[str, Any]:
     exclusion = rb.exclusion_block(registry, accession) or _NO_EXCLUSION
     excluded = bool(exclusion.excluded)
     metadata = rb.metadata_block(registry, accession) or _NO_METADATA
-    download = rb.download_block(registry, accession)
     profile = rb.profile_summary(registry, accession)
     return {
         "selected": bool((rb.selection_block(registry, accession) or _NO_SELECTION).selected),
         "excluded": excluded,
         "exclusion_reason": (exclusion.reason or None) if excluded else None,
-        "download_state": (download.state or None) if download is not None else None,
+        # Read raw, like download_verdict: a hand-edited verdict that is not a mapping must not
+        # stop the table, and the state is the only field of the download block used here.
+        "download_state": rb.raw(registry, accession, "download", "state") or None,
         "run_total_spots": to_int_or_none(metadata.run_total_spots),
         "run_size": to_int_or_none(metadata.run_size),
         "total_reads": to_int_or_none(profile["total_reads"]),
@@ -161,8 +162,18 @@ def _row(
         "assembly_seconds": assembly.get("seconds"),
         # Same rb.raw pattern as download_seconds; appended at the end, not grouped with the
         # other download fields, so existing column positions are kept.
-        "download_verdict": (rb.raw(registry, accession, "download", "complete") or {}).get("verdict"),
+        "download_verdict": _download_verdict(registry, accession),
     }
+
+
+def _download_verdict(registry: Registry, accession: str) -> Optional[str]:
+    """The recorded download verdict of ``accession``, or None when none is recorded.
+
+    A ``complete`` value that is not a mapping (a hand-edited registry) reads as no verdict, as in
+    ``metaquest.processing.status_report.download_verdicts``.
+    """
+    complete = rb.raw(registry, accession, "download", "complete")
+    return complete.get("verdict") if isinstance(complete, dict) else None
 
 
 def results_rows(

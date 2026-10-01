@@ -1460,9 +1460,9 @@ class TestStatusReportsStoreUnavailable:
         assert "not mounted" in out
 
 
-def test_reconcile_json_drift_always_carries_the_three_new_keys(tmp_path, capsys):
-    """Even when nothing is found, the JSON document names store_unavailable, metadata_filled
-    and verdicts_rechecked, so a reader does not have to special-case their absence."""
+def test_reconcile_json_drift_always_carries_the_new_keys(tmp_path, capsys):
+    """Even when nothing is found, the JSON document names store_unavailable, metadata_filled,
+    verdicts_rechecked and assemblies_dropped, so a reader does not have to special-case their absence."""
     _project_tree(tmp_path)
     StatusCommand().execute(_status_args(tmp_path, init=True))
     capsys.readouterr()
@@ -1474,6 +1474,7 @@ def test_reconcile_json_drift_always_carries_the_three_new_keys(tmp_path, capsys
     assert report["drift"]["store_unavailable"] == []
     assert report["drift"]["metadata_filled"] == []
     assert report["drift"]["verdicts_rechecked"] == []
+    assert report["drift"]["assemblies_dropped"] == []
 
 
 def test_text_report_unchanged_when_the_three_new_lists_are_empty(tmp_path, capsys):
@@ -1491,6 +1492,7 @@ def test_text_report_unchanged_when_the_three_new_lists_are_empty(tmp_path, caps
     assert "WARNING" not in out
     assert "Verdicts re-checked" not in out
     assert "Metadata filled from XML" not in out
+    assert "Assemblies older than their extraction" not in out
 
 
 def _setup_metadata_fill_and_verdict_recheck(tmp_path, capsys):
@@ -1545,3 +1547,73 @@ def test_reconcile_text_reports_metadata_filled_and_verdicts_rechecked(tmp_path,
     assert rc == 0
     assert "Metadata filled from XML" in out
     assert "Verdicts re-checked" in out
+
+
+def _seed_stale_assembly(tmp_path, capsys):
+    """A 0.7.0-shaped registry: SRR1's assembly for GCF_1 is dated before its (re-)extraction."""
+    _project_tree(tmp_path)
+    StatusCommand().execute(_status_args(tmp_path, init=True))
+    capsys.readouterr()
+    registry = load_registry(tmp_path / "metaquest_registry.json")
+    registry.datasets["SRR1"]["extractions"] = {
+        "GCF_1": {
+            "date": "2026-09-02T10:00:00+00:00",
+            "files": [],
+            "reads_mapped": 10,
+            "assembly": {"date": "2026-09-01T10:00:00+00:00", "contigs": 12, "total_bp": 9000, "n50": 900},
+        },
+        "GCF_2": {
+            "date": "2026-09-02T10:00:00+00:00",
+            "files": [],
+            "reads_mapped": 10,
+            "assembly": {"date": "2026-09-03T10:00:00+00:00", "contigs": 3, "total_bp": 3000, "n50": 1000},
+        },
+    }
+    save_registry(registry)
+
+
+def test_reconcile_drops_an_assembly_recorded_before_its_extraction(tmp_path, capsys, monkeypatch):
+    from metaquest.cli.commands.results import ResultsTableCommand
+
+    _seed_stale_assembly(tmp_path, capsys)
+
+    rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=True))
+    first = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert first["drift"]["assemblies_dropped"] == ["SRR1/GCF_1"]
+    registry = load_registry(tmp_path / "metaquest_registry.json")
+    assert registry.datasets["SRR1"]["extractions"]["GCF_1"].get("assembly") is None
+    assert registry.datasets["SRR1"]["extractions"]["GCF_1"]["reads_mapped"] == 10
+    assert registry.datasets["SRR1"]["extractions"]["GCF_2"]["assembly"]["contigs"] == 3
+
+    StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=True))
+    second = json.loads(capsys.readouterr().out)
+    assert second["drift"]["assemblies_dropped"] == []
+    assert load_registry(tmp_path / "metaquest_registry.json").datasets == registry.datasets
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(
+        output=str(tmp_path / "results.tsv"),
+        genome_id=None,
+        parsed_containment=str(tmp_path / "missing.txt"),
+        min_containment=0.0,
+        registry=str(tmp_path / "metaquest_registry.json"),
+        no_record=True,
+    )
+    assert ResultsTableCommand().execute(args) == 0
+    lines = (tmp_path / "results.tsv").read_text().splitlines()
+    header = lines[0].split("\t")
+    rows = {tuple(line.split("\t")[:2]): dict(zip(header, line.split("\t"))) for line in lines[1:]}
+    assert rows[("SRR1", "GCF_1")]["contigs"] == ""
+    assert rows[("SRR1", "GCF_1")]["n50"] == ""
+    assert rows[("SRR1", "GCF_2")]["contigs"] == "3"
+
+
+def test_reconcile_text_names_the_dropped_assemblies(tmp_path, capsys):
+    _seed_stale_assembly(tmp_path, capsys)
+
+    rc = StatusCommand().execute(_status_args(tmp_path, reconcile=True, json=False))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Assemblies older than their extraction  : 1 record(s) dropped: SRR1/GCF_1" in out

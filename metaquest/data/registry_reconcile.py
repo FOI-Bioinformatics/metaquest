@@ -24,6 +24,12 @@ A link into a store that is not mounted (the link's target and its ``sra`` folde
 absent) is reported in ``StoreReconcileReport.store_unavailable`` and its download is not
 marked missing; a dangling link into a mounted store, whose dataset folder is gone, is.
 
+An assembly record dated earlier than its extraction record was built from reads that a later
+extraction replaced (0.7.0 carried the old assembly block forward on re-extraction). Reconcile
+removes such a record (``clear_assembly``), so ``status`` and ``results_table`` no longer report
+it, and lists it in ``StoreReconcileReport.assemblies_dropped``; the assembly folder on disk is
+left alone and the next ``extract_target_reads --assemble`` builds the assembly again.
+
 The module sits next to ``metaquest.data.registry``, which is held at its current size by
 the module size ceiling; that module re-exports ``reconcile``.
 """
@@ -46,6 +52,7 @@ from metaquest.data.registry import (
     _genome_ids_on_disk,
     _infer_coverage,
     empty_assembly_dirs,
+    clear_assembly,
     query,
     record_assembly,
     record_download,
@@ -56,6 +63,7 @@ from metaquest.data.registry import (
     set_download_verdict,
     update_linked,
 )
+from metaquest.data.registry_assembly import assembly_predates_extraction
 from metaquest.data.sra import accession_has_fastq, count_fastq_reads, verify_download
 from metaquest.data.sra.spots import expected_spots, merged_verdict
 
@@ -65,8 +73,9 @@ _CONTIGS_NAME = "final.contigs.fa"
 # Returned by ReconcilePlan.value for a figure the scan did not compute.
 _NOT_SCANNED = object()
 _KNOWN_VERDICTS = ("complete", "truncated")
-# Accessions named in the warning about an unmounted store; the rest are counted.
-_NAMED_IN_WARNING = 5
+# Accessions named in the warning about an unmounted store, here and in the status text; the rest
+# are counted.
+NAMED_IN_WARNING = 5
 
 
 @dataclass
@@ -78,12 +87,15 @@ class StoreReconcileReport(ReconcileReport):
     are left as recorded rather than marked missing. They also appear in ``dangling_links``.
     ``metadata_filled`` lists accessions whose metadata block gained its fields, spot count
     included, from the project's metadata XML file. ``verdicts_rechecked`` lists accessions whose
-    ``unverified`` verdict became ``complete`` or ``truncated``. Each list is sorted.
+    ``unverified`` verdict became ``complete`` or ``truncated``. ``assemblies_dropped`` lists, as
+    ``"ACC/GENOME"``, the assembly records removed because they were dated earlier than their
+    extraction record. Each list is sorted.
     """
 
     store_unavailable: List[str] = field(default_factory=list)
     metadata_filled: List[str] = field(default_factory=list)
     verdicts_rechecked: List[str] = field(default_factory=list)
+    assemblies_dropped: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -205,7 +217,24 @@ def _reconcile(registry: Registry, plan: ReconcilePlan, compute: bool) -> StoreR
     report.store_unavailable = list(plan.unavailable_links)
     report.metadata_filled = sorted(_fill_metadata(registry, plan, compute))
     report.verdicts_rechecked = sorted(_fill_verdicts(registry, plan, compute))
+    report.assemblies_dropped = _drop_stale_assemblies(registry)
     return report
+
+
+def _drop_stale_assemblies(registry: Registry) -> List[str]:
+    """Remove each assembly record dated earlier than its extraction record; return them as sorted "ACC/GENOME".
+
+    Uses only the recorded dates (``assembly_predates_extraction``), so it reads no file and the
+    apply step needs nothing from the scan. A record without either date is kept.
+    """
+    dropped = []
+    for acc, entry in registry.datasets.items():
+        extractions = entry.get("extractions") if isinstance(entry, dict) else None
+        for genome_id in list(extractions) if isinstance(extractions, dict) else []:
+            if assembly_predates_extraction(registry, acc, genome_id):
+                clear_assembly(registry, acc, genome_id)
+                dropped.append(f"{acc}/{genome_id}")
+    return sorted(dropped)
 
 
 def _mark_missing(registry: Registry, plan: ReconcilePlan, report: StoreReconcileReport, warn: bool) -> None:
@@ -231,8 +260,8 @@ def _mark_missing(registry: Registry, plan: ReconcilePlan, report: StoreReconcil
         rb.set_download_block(registry, acc, download)
         report.recorded_missing.append(acc)
     if warn and left_alone:
-        named = ", ".join(sorted(left_alone)[:_NAMED_IN_WARNING])
-        more = len(left_alone) - _NAMED_IN_WARNING
+        named = ", ".join(sorted(left_alone)[:NAMED_IN_WARNING])
+        more = len(left_alone) - NAMED_IN_WARNING
         logger.warning(
             "%d downloaded dataset(s) link into a data store that is not mounted and were not marked missing: %s%s",
             len(left_alone),

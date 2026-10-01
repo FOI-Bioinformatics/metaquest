@@ -124,6 +124,15 @@ def test_download_verdict_is_none_without_a_recorded_verdict(tmp_path):
     assert rows[("SRR2", "GCF_A")]["download_verdict"] is None
 
 
+@pytest.mark.parametrize("value", ["complete", ["complete"], 1])
+def test_download_verdict_ignores_a_hand_edited_non_mapping_value(tmp_path, value):
+    """A ``complete`` that is not a mapping reads as no verdict, as in ``status``'s download verdicts."""
+    r = _registry(tmp_path)
+    r.datasets["SRR1"]["download"]["complete"] = value
+    rows = _by_pair(results_rows(r))
+    assert rows[("SRR1", "GCF_A")]["download_verdict"] is None
+
+
 def test_min_containment_drops_low_pairs(tmp_path):
     rows = results_rows(_registry(tmp_path), min_containment=0.5)
     assert {(row["accession"], row["genome_id"]) for row in rows} == {("SRR1", "GCF_A"), ("SRR2", "GCF_A")}

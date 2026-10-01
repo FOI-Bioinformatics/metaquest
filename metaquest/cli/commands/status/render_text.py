@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from metaquest.cli.commands.status.suggest import as_non_negative_int, as_positive_int
 from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry, STAGES, known_genome_ids, query
+from metaquest.data.registry_reconcile import NAMED_IN_WARNING
 from metaquest.processing.status_report import download_verdicts, stage_filter_accessions
 
 
@@ -182,22 +183,23 @@ def _print_gaps(registry: Registry, emit: Callable[[str], None]) -> None:
             emit(f"  Downloaded but not extracted for {genome_id} : " + ", ".join(gap))
 
 
-_NAMED_IN_TEXT = 5
+def _named(items: List[str]) -> str:
+    """The first ``NAMED_IN_WARNING`` of ``items``, then how many more there are."""
+    more = len(items) - NAMED_IN_WARNING
+    return ", ".join(items[:NAMED_IN_WARNING]) + (f" and {more} more" if more > 0 else "")
 
 
 def _print_reconcile_notes(drift: Dict[str, Any], emit: Callable[[str], None]) -> None:
-    """Warn about datasets an unmounted store left alone, and report re-checks and fills.
+    """Warn about datasets an unmounted store left alone, and report re-checks, fills and drops.
 
     Each line appears only when its count is non-zero, so a reconcile that finds none of these
     leaves the drift section's existing text exactly as before this was added.
     """
     unavailable = drift.get("store_unavailable") or []
     if unavailable:
-        named = ", ".join(unavailable[:_NAMED_IN_TEXT])
-        more = len(unavailable) - _NAMED_IN_TEXT
         emit(
             f"WARNING: {len(unavailable)} dataset(s) link into a data store that is not mounted "
-            "and were not marked missing: " + named + (f" and {more} more" if more > 0 else "")
+            "and were not marked missing: " + _named(unavailable)
         )
     rechecked = drift.get("verdicts_rechecked") or []
     if rechecked:
@@ -205,6 +207,9 @@ def _print_reconcile_notes(drift: Dict[str, Any], emit: Callable[[str], None]) -
     filled = drift.get("metadata_filled") or []
     if filled:
         emit(f"  Metadata filled from XML                : {len(filled)}")
+    dropped = drift.get("assemblies_dropped") or []
+    if dropped:
+        emit(f"  Assemblies older than their extraction  : {len(dropped)} record(s) dropped: " + _named(dropped))
 
 
 def _print_drift(drift: Dict[str, Any], emit: Callable[[str], None]) -> None:

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -367,3 +368,21 @@ def test_old_sidecar_json_round_trips_byte_identical(tmp_path):
 
     assert path.read_text() == original
     assert SIDECAR_SCHEMA == 1
+
+
+def test_v070_sidecar_fixture_round_trips_byte_identical(tmp_path):
+    """A sidecar written by MetaQuest 0.7.0 (``tests/fixtures/sidecar_v0.7.0.json``, produced by that
+    release's ``write_sidecar``) is read and rewritten byte for byte, with no ``refetch`` key added."""
+    fixture = Path(__file__).parent / "fixtures" / "sidecar_v0.7.0.json"
+    original = fixture.read_bytes()
+    path = tmp_path / "SRR1.json"
+    path.write_bytes(original)
+
+    sidecar = read_sidecar(path)
+    write_sidecar(path, sidecar)
+
+    assert path.read_bytes() == original
+    assert sidecar.state == "partial"
+    assert sidecar.reads_per_mate == 40
+    assert sidecar.refetch is None
+    assert "refetch" not in json.loads(original)
