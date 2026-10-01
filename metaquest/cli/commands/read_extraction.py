@@ -3,45 +3,35 @@
 import argparse
 import contextlib
 import logging
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
+from metaquest.cli.commands.extraction_assembly import assemble_samples
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
-from metaquest.core.exceptions import ConfigurationError, MetaQuestError
+from metaquest.core.exceptions import MetaQuestError
 from metaquest.core import settings
 from metaquest.core.settings import SETTINGS, setting_for
 from metaquest.data import registry_blocks as rb
-from metaquest.data.assembly import assembly_memory
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     ExtractionResult,
     _record_matches,
     _sample_reads,
-    assemble_extracted_reads,
-    assembly_coverage,
     extract_target_reads,
-    fasta_length,
-    megahit_version,
-    resolve_assembly_threads,
     resolve_index_path,
     selected_samples,
-    summarise_contigs,
 )
 from metaquest.data.registry import (
     Registry,
-    clear_assembly,
     load_registry,
     query,
-    record_assembly,
     record_extraction,
     registry_transaction,
     resolve_project_path,
     scan_downloads,
 )
-from metaquest.data.registry_timing import Stopwatch, set_assembly_timing, set_extraction_timing
+from metaquest.data.registry_timing import Stopwatch, set_extraction_timing
 from metaquest.data.sra import count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
 from metaquest.store.layout import StorePaths
@@ -471,12 +461,6 @@ class ExtractTargetReadsCommand(BaseCommand):
         block.files = [str(resolve_project_path(registry, p)) for p in block.files]
         return block.to_dict()
 
-    @staticmethod
-    def _has_assembly_record(registry: Registry, accession: str, genome_id: str) -> bool:
-        """True when ``registry`` already holds an assembly block for this sample and genome."""
-        block = rb.extraction_block(registry, accession, genome_id)
-        return block is not None and block.assembly is not None
-
     def _report_dry_run(self, args: argparse.Namespace, results: Dict[str, ExtractionResult]) -> None:
         """List the samples a real run would extract, and those it would skip."""
         would_skip = [acc for acc, r in results.items() if r.skipped]
@@ -500,143 +484,6 @@ class ExtractTargetReadsCommand(BaseCommand):
             )
         else:
             self.logger.error("No reads mapped to %s in any sample; check the FASTQ files and --preset", args.genome_id)
-
-    def _assembly_memory(self, args: argparse.Namespace) -> Optional[Any]:
-        """The megahit ``--memory`` value for ``--assembly-memory`` (or its setting), or None to omit it.
-
-        Raises:
-            ConfigurationError: If the value given is not a memory value.
-        """
-        value = setting_for(args, "assembly_memory")
-        try:
-            memory = assembly_memory(value)
-        except ValueError as e:
-            raise ConfigurationError(f"--assembly-memory: {e}") from e
-        if memory is None:
-            self.logger.info("No memory limit detected for this job; megahit uses its own default")
-        else:
-            self.logger.info("megahit --memory %s (--assembly-memory %s)", memory, value)
-        return memory
-
-    def _assemble(
-        self,
-        args: argparse.Namespace,
-        with_reads: Dict[str, List[Path]],
-        results: Dict[str, ExtractionResult],
-        store: Optional[StorePaths] = None,
-    ) -> None:
-        """Assemble every sample that has mapped reads, recording each assembly as it lands.
-
-        Checked before each sample: a signal (``args._termination.stop``) stops the loop there,
-        leaving every later sample unassembled and megahit never started for it. ``execute``
-        raises afterward if stopped, so ``BaseCommand.run`` returns 130 without costing the run
-        what it already assembled.
-        """
-        asm_threads = resolve_assembly_threads(args.assembly_threads, args.threads)
-        if args.assembly_threads is None and asm_threads < args.threads:
-            self.logger.info(
-                "Running megahit single-threaded on macOS (its parallel sort is unstable here); "
-                "override with --assembly-threads"
-            )
-        memory = self._assembly_memory(args)
-        version = megahit_version()
-        genome_length = fasta_length(args.genome_fasta)
-        recorded: Optional[Registry] = None
-        term = getattr(args, "_termination", None)
-        for accession, reads in with_reads.items():
-            if term is not None and term.stop.is_set():
-                self.logger.warning("Stopping before %s: interrupted", accession)
-                break
-            out_dir = Path(args.output_folder) / accession / f"{args.genome_id}_assembly"
-            if args.force:
-                # A forced redo replaces whatever assembly was recorded: assemble_extracted_reads
-                # removes the folder (if it is still there) before megahit reruns. If megahit
-                # then fails, the registry must not go on describing contigs that are no longer
-                # on disk, whether this run removed them or they were already gone, so the
-                # recorded assembly is cleared now rather than left to a record_assembly call
-                # that may never come.
-                with registry_transaction(args.registry) as reg:
-                    clear_assembly(reg, accession, args.genome_id)
-            # megahit needs FIFOs for its scratch files, which some filesystems (e.g. ExFAT)
-            # do not provide; --temp-folder points it elsewhere when given, else a fresh
-            # scratch directory is created for this run alone under the project's output
-            # root -- a sibling of every per-accession assembly directory, never inside one,
-            # since megahit refuses to run when its -o directory already exists -- and
-            # removed afterwards, even on failure. A directory unique to this run (rather
-            # than a fixed default name) keeps two concurrent runs sharing one output folder
-            # from removing each other's still-in-use scratch.
-            temp_folder = setting_for(args, "temp_folder")
-            uses_default_tmp_dir = not temp_folder
-            if temp_folder:
-                tmp_dir = Path(temp_folder)
-            else:
-                Path(args.output_folder).mkdir(parents=True, exist_ok=True)
-                tmp_dir = Path(tempfile.mkdtemp(dir=args.output_folder, prefix=".megahit-tmp-"))
-            watch = Stopwatch()
-            try:
-                _, ran = assemble_extracted_reads(
-                    reads,
-                    out_dir,
-                    threads=asm_threads,
-                    min_contig_len=args.min_contig_len,
-                    force=args.force,
-                    preset=args.assembly_preset,
-                    keep_intermediate=args.keep_intermediate,
-                    tmp_dir=tmp_dir,
-                    memory=memory,
-                )
-            finally:
-                if uses_default_tmp_dir:
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-            # megahit's own run time (and its scratch removal), not the contig summary or the
-            # coverage mapping below; None when it did not run (an assembly already on disk).
-            started, seconds = watch.lap() if ran else (None, None)
-            if not ran and not args.force:
-                # Loaded once per call, on the first sample megahit skipped: only this loop
-                # changes a sample's assembly record, and never before checking it here (a
-                # forced redo clears the record above, and megahit then always runs).
-                if recorded is None:
-                    recorded = load_registry(args.registry)
-                has_record = self._has_assembly_record(recorded, accession, args.genome_id)
-            else:
-                has_record = False
-            if has_record:
-                # megahit did not run, so the recorded version and parameters still describe
-                # the assembly on disk; leave them alone.
-                continue
-            contigs_path = out_dir / "final.contigs.fa"
-            stats: Dict[str, Any] = dict(summarise_contigs(contigs_path))
-            stats["genome_fraction_estimate"] = (stats["total_bp"] / genome_length) if genome_length else None
-            if not args.no_coverage:
-                coverage = assembly_coverage(
-                    contigs_path,
-                    reads,
-                    args.preset,
-                    asm_threads,
-                    out_dir,
-                    mapped_reads=results[accession].mapped_records,
-                )
-                stats.update(coverage)
-            with registry_transaction(args.registry) as reg:
-                record_assembly(
-                    reg,
-                    accession,
-                    args.genome_id,
-                    out_dir,
-                    stats,
-                    version,
-                    {
-                        "threads": asm_threads,
-                        "min_contig_len": args.min_contig_len,
-                        "preset": args.assembly_preset,
-                    },
-                )
-                set_assembly_timing(reg, accession, args.genome_id, started, seconds)
-            # Outside the registry lock, for the same reason as in _record_result.
-            record_usage_safe(
-                store, reg, accession, args.genome_id, "assembled", detail=f"{stats.get('contigs', 0)} contigs"
-            )
-        self.logger.info("Assembled %d sample(s)", len(with_reads))
 
     def _check_required_tools(self, args: argparse.Namespace) -> None:
         """Refuse to start when minimap2/samtools (and megahit with --assemble) are missing or too old.
@@ -712,10 +559,14 @@ class ExtractTargetReadsCommand(BaseCommand):
                 return 1
 
             if args.assemble:
-                self._assemble(args, with_reads, results, store)
+                assembly = assemble_samples(self, args, with_reads, results, store)
                 term = getattr(args, "_termination", None)
                 if term is not None and term.stop.is_set():
                     raise KeyboardInterrupt("extract_target_reads assembly stopped")
+                if assembly.failed:
+                    failed = ", ".join(f"{acc} ({reason})" for acc, reason in assembly.failed.items())
+                    self.logger.error("Assembly failed for %d sample(s): %s", len(assembly.failed), failed)
+                    return 1
             return 0
         except MetaQuestError as e:
             return self.fail(e, "Error extracting target reads")

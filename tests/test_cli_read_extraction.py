@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from metaquest.cli.commands.extraction_assembly import assemble_samples
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.cli.commands.status import StatusCommand
 from metaquest.core.exceptions import ProcessingError, SecurityError
@@ -722,7 +723,9 @@ class TestExtractTargetReadsCommand:
         with tempfile.TemporaryDirectory() as tmp:
             root, table, genome = _two_sample_tree(tmp)
             registry_file = root / "registry.json"
-            with patch("metaquest.cli.commands.read_extraction.assemble_extracted_reads", side_effect=fail_on_second):
+            with patch(
+                "metaquest.cli.commands.extraction_assembly.assemble_extracted_reads", side_effect=fail_on_second
+            ):
                 rc = cmd.execute(
                     _args(
                         tmp,
@@ -1281,8 +1284,8 @@ class TestExtractTargetReadsCommand:
             with_reads = {"SRR1": reads}
             results = {"SRR1": ExtractionResult(reads, 10, False, mapped_total=10)}
 
-            cmd._assemble(args, with_reads, results)
-            cmd._assemble(args, with_reads, results)
+            assemble_samples(cmd, args, with_reads, results)
+            assemble_samples(cmd, args, with_reads, results)
 
             tmp_dirs = [
                 Path(call_args[call_args.index("--tmp-dir") + 1])
@@ -1329,10 +1332,9 @@ class TestExtractTargetReadsCommand:
 
     @patch("metaquest.data.read_extraction.SecureSubprocess.run_secure")
     def test_forced_assembly_failure_clears_the_stale_record(self, mock_run):
-        """A forced --assemble redo removes the old assembly folder on disk (the megahit
-        output directory) before megahit reruns. If megahit then fails, the registry must
-        not keep describing contigs that no longer exist (audit deferred, Task 2 fix round
-        1, second item)."""
+        """A forced --assemble redo clears the recorded assembly before megahit reruns. If
+        megahit then fails, the previous folder stays on disk (the new one is published by
+        rename only on success) and the registry no longer describes it."""
         state = {}
         mock_run.side_effect = _fake_tools(state)
         cmd = ExtractTargetReadsCommand()
@@ -1587,7 +1589,7 @@ class TestExtractTargetReadsCommand:
     def test_signal_between_assembly_samples_stops_before_the_next_one(self, mock_run):
         """A stop noticed after SRR1's assembly is recorded ends the run before SRR2's
         megahit ever starts."""
-        import metaquest.cli.commands.read_extraction as cli_module
+        import metaquest.cli.commands.extraction_assembly as cli_module
 
         mock_run.side_effect = _fake_tools({})
         cmd = ExtractTargetReadsCommand()
@@ -1625,9 +1627,9 @@ class TestExtractTargetReadsCommand:
             assert not (root / "targeted" / "SRR2" / "GCF_1_assembly").exists()
 
 
-def test_assemble_loads_the_registry_at_most_once(tmp_path):
-    """Samples whose assembly megahit skipped are checked against one registry load, not one per sample."""
-    import metaquest.cli.commands.read_extraction as cli_mod
+def test_assemble_loads_the_registry_at_most_once_per_sample(tmp_path):
+    """A sample whose assembly is kept costs one registry load (for its extraction date) and no write."""
+    import metaquest.cli.commands.extraction_assembly as cli_mod
     from metaquest.data.registry import Registry, record_assembly
 
     registry_file = tmp_path / "registry.json"
@@ -1637,18 +1639,27 @@ def test_assemble_loads_the_registry_at_most_once(tmp_path):
         record_extraction(registry, accession, "GCF_1", [], 10, False, {})
         record_assembly(registry, accession, "GCF_1", tmp_path / accession, {"contigs": 1}, "1.2.9", {})
     save_registry(registry, registry_file)
+    for accession in accessions:
+        # A marker on disk: the kept folder needs no marker written and no inputs recorded.
+        marked = tmp_path / "targeted" / accession / "GCF_1_assembly"
+        marked.mkdir(parents=True)
+        (marked / ".metaquest-assembly.json").write_text("{}")
     args = _args(tmp_path, registry=str(registry_file), assemble=True, output_folder=str(tmp_path / "targeted"))
     with_reads = {accession: [tmp_path / f"{accession}.fq"] for accession in accessions}
     results = {accession: ExtractionResult(with_reads[accession], 10, False) for accession in accessions}
 
     with (
         patch.object(cli_mod, "assemble_extracted_reads", return_value=(None, False)),
+        patch.object(cli_mod, "assembly_state", return_value=("current", "marker matches")),
         patch.object(cli_mod, "megahit_version", return_value="1.2.9"),
         patch.object(cli_mod, "fasta_length", return_value=100),
+        patch.object(cli_mod, "registry_update") as writes,
         patch.object(cli_mod, "load_registry", wraps=cli_mod.load_registry) as spy,
     ):
-        ExtractTargetReadsCommand()._assemble(args, with_reads, results)
-    assert spy.call_count <= 1
+        outcome = assemble_samples(ExtractTargetReadsCommand(), args, with_reads, results)
+    assert outcome.reused == accessions
+    assert spy.call_count <= len(accessions)
+    writes.assert_not_called()
 
 
 @pytest.mark.parametrize("every", [1, 0])

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from metaquest.cli.commands import read_extraction as read_extraction_cmd
+from metaquest.cli.commands import extraction_assembly as assembly_cmd
 from metaquest.cli.commands.read_extraction import ExtractTargetReadsCommand
 from metaquest.core.exceptions import ConfigurationError
 from metaquest.data import assembly as assembly_mod
@@ -207,25 +207,29 @@ class TestMegahitMemory:
 
 
 class TestAssemblyMemoryFlag:
+    @staticmethod
+    def _memory(args):
+        return assembly_cmd.resolve_assembly_memory(args, ExtractTargetReadsCommand().logger)
+
     def _parse(self, *argv):
         parser = argparse.ArgumentParser()
         ExtractTargetReadsCommand().configure_parser(parser)
         return parser.parse_args(["--parsed-containment", "p.tsv", "--genome-id", "g", "--genome-fasta", "g.fa", *argv])
 
     def test_flag_value_in_bytes(self):
-        assert ExtractTargetReadsCommand()._assembly_memory(self._parse("--assembly-memory", "16G")) == 16 * GIB
+        assert self._memory(self._parse("--assembly-memory", "16G")) == 16 * GIB
 
     def test_setting_decides_without_the_flag(self, monkeypatch):
         monkeypatch.setenv("METAQUEST_ASSEMBLY_MEMORY", "0.5")
-        assert ExtractTargetReadsCommand()._assembly_memory(self._parse()) == 0.5
+        assert self._memory(self._parse()) == 0.5
 
     def test_auto_without_a_limit_leaves_the_flag_out(self, monkeypatch):
         monkeypatch.setattr(resources, "memory_limit_bytes", lambda: None)
-        assert ExtractTargetReadsCommand()._assembly_memory(self._parse()) is None
+        assert self._memory(self._parse()) is None
 
     def test_bad_value_is_a_configuration_error(self):
         with pytest.raises(ConfigurationError, match="--assembly-memory"):
-            ExtractTargetReadsCommand()._assembly_memory(self._parse("--assembly-memory", "2.5"))
+            self._memory(self._parse("--assembly-memory", "2.5"))
 
     def test_resolved_memory_reaches_megahit(self, tmp_path, monkeypatch):
         """The command passes the resolved value to assemble_extracted_reads."""
@@ -234,9 +238,8 @@ class TestAssemblyMemoryFlag:
         genome = tmp_path / "g.fa"
         genome.write_text(">g\nACGT\n")
         args.genome_fasta = str(genome)
-        with patch.object(read_extraction_cmd, "assemble_extracted_reads", return_value=(tmp_path, False)) as asm:
-            with patch.object(read_extraction_cmd, "megahit_version", return_value="1.2.9"):
-                with patch.object(read_extraction_cmd, "load_registry", side_effect=RuntimeError("stop here")):
-                    with pytest.raises(RuntimeError):
-                        ExtractTargetReadsCommand()._assemble(args, {"SRR1": [tmp_path / "r.fq"]}, {})
+        with patch.object(assembly_cmd, "assemble_extracted_reads", side_effect=RuntimeError("stop here")) as asm:
+            with patch.object(assembly_cmd, "megahit_version", return_value="1.2.9"):
+                with pytest.raises(RuntimeError):
+                    assembly_cmd.assemble_samples(ExtractTargetReadsCommand(), args, {"SRR1": [tmp_path / "r.fq"]}, {})
         assert asm.call_args.kwargs["memory"] == int(0.9 * 10 * GIB)
