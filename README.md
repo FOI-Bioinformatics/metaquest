@@ -420,6 +420,31 @@ top-N and run filter criteria) so rerunning it drops the excluded accessions fro
 Commit `metaquest_registry.json` with your project if you want the decisions to travel with the
 results.
 
+### Run history
+
+`runs` reads the run log described under "Project state" and records nothing itself. It finds the
+project the same way as `status` (the nearest `metaquest_registry.json`, or `--registry`).
+
+```bash
+metaquest runs                               # the last 20 runs, newest first (--limit 0 for all)
+metaquest runs --command sra_profile         # only the runs of one command
+metaquest runs --show latest                 # one run: arguments, times, summary and detail
+metaquest runs --diff previous latest        # compare two runs
+metaquest runs --accession SRR11011981       # the values recorded for one accession, run by run
+metaquest runs --diff previous latest --json # one JSON document, for scripts
+```
+
+A run is selected by its ID (`20261001T120501Z-sra_profile-3fa2`), by a prefix that matches only one
+run, or as `latest` or `previous`; with `--command`, these refer to that command's runs only.
+`--diff` lists every summary value of the two runs with the difference for numbers, then compares their
+details row by row (one row per accession, or per accession and genome) and lists the rows found in only
+one run and the fields that changed. Only the last 10 detail files of each command are kept, so an
+older run is reported with its detail as not kept and is compared on its summary alone. `--accession`
+lists the runs whose kept detail holds values for that accession, plus runs without a kept detail
+whose command line names it; the number of other runs that could not be searched is given at the end.
+`runs` exits 1 when the project has no run log, and also when a selector matches no run or more than
+one.
+
 ### Shared data store
 
 A second organism project studying the same metagenomes does not need its own copy of the reads.

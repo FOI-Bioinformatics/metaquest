@@ -66,6 +66,7 @@ from metaquest.cli.commands.advanced_analysis import (
     TaxonomicSummaryCommand,
 )
 from metaquest.cli.commands.renamed import renamed_commands
+from metaquest.cli.commands.runs import RunsCommand
 from metaquest.cli.commands.sra_enhanced import SRAInfoCommand, SRAValidateCommand
 from metaquest.cli.commands.sra_profile import SRAProfileCommand
 from metaquest.cli.commands.sra_report import SRAReportCommand
@@ -123,6 +124,7 @@ def register_all_commands() -> None:
         TaxonomicSummaryCommand(),
         # Environment commands
         DoctorCommand(),
+        RunsCommand(),
         # Former names (0.5.0), hidden from the help
         *renamed_commands(),
     ]
