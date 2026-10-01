@@ -585,6 +585,66 @@ class TestStoreGcRespectsLocksAndPlaceholders:
         assert any("SRR1_fqtmp" in entry for entry in report["removed_leftovers"])
         assert not scratch.exists()
 
+    def test_bare_staged_download_folder_is_listed_and_removed_with_yes(self, tmp_path, capsys):
+        """A killed download can leave a bare `<store>/tmp/<ACC>` staging folder behind
+        (``store_handoff._store_fetch`` stages into ``store.tmp / accession`` before the
+        dataset is published); once its lock is gone this is a plain leftover."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
+        staged = paths.tmp / "SRR1"
+        staged.mkdir(parents=True)
+        (staged / "SRR1.sra").write_bytes(b"x" * 10)
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert [entry["reason"] for entry in report["leftovers"] if "SRR1" in entry["path"]] == [
+            "leftover (staged download)"
+        ]
+        assert any("SRR1" in entry for entry in report["removed_leftovers"])
+        assert not staged.exists()
+
+    def test_bare_staged_download_folder_is_kept_while_its_lock_is_live(self, tmp_path, capsys):
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
+        staged = paths.tmp / "SRR1"
+        staged.mkdir(parents=True)
+        (staged / "SRR1.sra").write_bytes(b"x" * 10)
+        self._hold(paths, "SRR1")
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["leftovers"] == []
+        assert report["removed_leftovers"] == []
+        assert staged.is_dir()
+
+    def test_other_tmp_folder_names_are_untouched(self, tmp_path, capsys):
+        """A folder under `tmp/` that is neither a known transient suffix nor a bare
+        accession name (e.g. not matching SRA_ACCESSION_PATTERN) is left alone entirely,
+        not even listed."""
+        root = tmp_path / "store"
+        paths = init_store(root)
+        with catalog_write(paths):
+            pass
+        other = paths.tmp / "notanaccession"
+        other.mkdir(parents=True)
+        (other / "file.txt").write_text("keep me")
+
+        rc = StoreGcCommand().execute(_gc_args(data_root=str(root), yes=True, json=True))
+        report = json.loads(capsys.readouterr().out)
+
+        assert rc == 0
+        assert report["leftovers"] == []
+        assert report["removed_leftovers"] == []
+        assert other.is_dir()
+
     def test_a_placeholder_row_is_never_a_candidate(self, tmp_path, capsys):
         """A usage row for an accession that is not catalogued yet inserts a state="unknown"
         placeholder; it stands for no files, so gc must not offer to remove it."""

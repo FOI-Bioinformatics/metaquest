@@ -5,6 +5,7 @@
 import argparse
 import logging
 import os
+import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand, emit_error_json
 from metaquest.cli.commands.store._shared import _no_store_hint, _stale_project_row
-from metaquest.core.constants import GC_RECENT_USE_GRACE_SECONDS
+from metaquest.core.constants import GC_RECENT_USE_GRACE_SECONDS, SRA_ACCESSION_PATTERN
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
 from metaquest.data.file_io import is_hidden_name
@@ -71,10 +72,11 @@ class StoreGcCommand(BaseCommand):
 
     Leftover temp artifacts (``<store>/tmp/*_temp`` from an interrupted download,
     ``<store>/tmp/*_adopt`` from an interrupted adopt, ``<store>/tmp/*_old`` from a publish,
-    ``<store>/tmp/*_gc`` from an interrupted removal by this command, the ``.sra-cache``
-    archive cache under ``tmp`` or ``sra``) are reported and removed independently of the
-    dataset check, minus anything whose accession lock is held. Nothing is removed unless
-    ``--yes`` is given; the default is a dry-run report only.
+    ``<store>/tmp/*_gc`` from an interrupted removal by this command, a bare ``<store>/tmp/<ACC>``
+    from a killed download's staging folder, the ``.sra-cache`` archive cache under ``tmp`` or
+    ``sra``) are reported and removed independently of the dataset check, minus anything whose
+    accession lock is held. Nothing is removed unless ``--yes`` is given; the default is a
+    dry-run report only.
 
     With ``--yes``, a candidate is removed only under its own accession lock, taken without
     waiting, and only once a fresh re-check right before removal still agrees with the
@@ -320,11 +322,17 @@ class StoreGcCommand(BaseCommand):
 
     @classmethod
     def _leftover_candidates(cls, paths: StorePaths) -> List[Dict[str, Any]]:
-        """Leftover build folders and cached archives, minus anything a live run is using.
+        """Leftover build folders, cached archives and staged downloads, minus anything a live
+        run is using.
 
         A ``<ACC>_temp`` build folder, an ``<ACC>_fqtmp`` fasterq-dump scratch folder or a cached
         ``.sra`` archive whose accession lock is held is a download in progress, not a leftover:
-        removing it would pull the files out from under a running fasterq-dump.
+        removing it would pull the files out from under a running fasterq-dump. A bare
+        ``tmp/<ACC>`` folder (matching ``SRA_ACCESSION_PATTERN``) is where a download is staged
+        before being published into the store (see ``data/sra/store_handoff.py``); a killed
+        download can leave one behind, and since it is only ever created under the accession's
+        lock, an unheld lock means the download that made it is gone, with no age check needed.
+        Any other folder name under ``tmp/`` is left untouched.
         """
         candidates: List[Dict[str, Any]] = []
         tmp = paths.tmp
@@ -340,11 +348,15 @@ class StoreGcCommand(BaseCommand):
                     continue
                 if not entry.is_dir():
                     continue
-                if not (is_transient_folder(entry.name) or entry.name.endswith(("_adopt", "_old", "_gc"))):
+                if is_transient_folder(entry.name) or entry.name.endswith(("_adopt", "_old", "_gc")):
+                    reason = "leftover"
+                elif re.fullmatch(SRA_ACCESSION_PATTERN, entry.name):
+                    reason = "leftover (staged download)"
+                else:
                     continue
                 if lock_is_held(paths, cls._accession_of_leftover(entry.name)):
                     continue
-                candidates.append({"path": entry, "bytes": _path_bytes(entry), "reason": "leftover"})
+                candidates.append({"path": entry, "bytes": _path_bytes(entry), "reason": reason})
         sra_cache = paths.sra / ".sra-cache"
         if sra_cache.exists():
             candidates.append({"path": sra_cache, "bytes": _path_bytes(sra_cache), "reason": "leftover"})
