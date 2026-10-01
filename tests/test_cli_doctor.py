@@ -331,3 +331,18 @@ def test_a_tool_that_cannot_run_is_a_warning_when_not_required(tmp_path, monkeyp
     fake_tool(tmp_path, "samtools", "", stderr="broken", rc=1)
     rc, report = _run_json(capsys)
     assert _by_name(report)["tool samtools"]["status"] == WARN
+
+
+def test_the_temp_location_is_where_a_download_puts_its_scratch(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    locations = dict(doctor_report.space_locations(project, None))
+    assert locations["temp"] == project / "fastq" / ".metaquest-tmp"
+    assert locations["sra-cache"] == project / "fastq" / ".sra-cache"
+
+    store_root = tmp_path / "store"
+    with_store = dict(doctor_report.space_locations(project, str(store_root)))
+    assert with_store["temp"] == store_root / "tmp"
+
+    monkeypatch.setenv("METAQUEST_TEMP_FOLDER", str(tmp_path / "local"))
+    settings.reset_for_tests()
+    assert dict(doctor_report.space_locations(project, None))["temp"] == tmp_path / "local"

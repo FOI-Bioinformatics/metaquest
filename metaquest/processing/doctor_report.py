@@ -275,9 +275,14 @@ def check_free_space(label: str, path: Path, min_free_gb: float) -> Check:
 
 
 def space_locations(project: Path, store_root: Optional[str]) -> List[tuple]:
-    """``(label, path)`` for the project, the temporary folder and the ``.sra`` cache."""
-    temp = _setting("temp_folder") or tempfile.gettempdir()
-    cache = store_paths(Path(store_root)).tmp if store_root else project / "fastq" / ".sra-cache"
+    """``(label, path)`` for the project, the temporary folder and the ``.sra`` cache.
+
+    The temporary folder is ``temp_folder`` when set, else where a download puts fasterq-dump's
+    scratch: the store's ``tmp`` folder, or the project's staging folder ``fastq/.metaquest-tmp``.
+    """
+    store_tmp = store_paths(Path(store_root)).tmp if store_root else None
+    temp = _setting("temp_folder") or store_tmp or project / "fastq" / ".metaquest-tmp"
+    cache = store_tmp or project / "fastq" / ".sra-cache"
     return [("project", project), ("temp", Path(temp)), ("sra-cache", cache)]
 
 

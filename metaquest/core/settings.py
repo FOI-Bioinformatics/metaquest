@@ -33,6 +33,7 @@ from metaquest.core.constants import (
     CONFIG_FILENAME,
     DATASET_LOCK_STALE_SECONDS,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_PREFETCH_MAX_SIZE,
     LOCK_HEARTBEAT_SECONDS,
     LOG_LEVELS,
     SHORT_LOCK_HEARTBEAT_SECONDS,
@@ -207,6 +208,17 @@ def _memory(text: str) -> str:
     return value
 
 
+_PREFETCH_SIZE_PATTERN = re.compile(r"^\d+[KMGTkmgt]?$")
+
+
+def _prefetch_size(text: str) -> str:
+    """A size for prefetch ``--max-size``: whole bytes, or a whole number with a K, M, G or T suffix."""
+    value = _text(text)
+    if not _PREFETCH_SIZE_PATTERN.match(value):
+        raise ValueError("expected a whole number with an optional K, M, G or T suffix, such as 100G")
+    return value
+
+
 # --- the settings table ------------------------------------------------------
 
 
@@ -302,6 +314,12 @@ _SPECS = (
         10.0,
         "Free space, in GB, a download of unknown size needs on each filesystem; 0 disables",
         cli_dest="min_free_gb",
+    ),
+    _spec(
+        "prefetch_max_size",
+        _prefetch_size,
+        DEFAULT_PREFETCH_MAX_SIZE,
+        "Largest .sra archive prefetch fetches (its --max-size), such as 100G",
     ),
     _spec(
         "assembly_memory",
@@ -424,6 +442,7 @@ class RuntimeSettings:
     progress_every: int
     log_host: bool
     min_free_gb: float
+    prefetch_max_size: str
     assembly_memory: str
     sources: Mapping[str, str] = field(default_factory=dict)
     # Messages about the config file (unknown keys) for the caller to log; activate() runs

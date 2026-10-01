@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import AbstractSet, Callable, List, Optional, Tuple, Union
 
 from metaquest.core.constants import DATASET_LOCK_STALE_SECONDS, LOCK_HEARTBEAT_SECONDS
+from metaquest.core import settings
 from metaquest.core.settings import settings_or
 from metaquest.core.exceptions import DataAccessError, SecurityError
 from metaquest.data.sra import cleanup as cleanup_mod
@@ -310,15 +311,19 @@ def _cached_sra_archive(acc_cache_dir: Path, accession: str) -> Path:
     return candidates[0] if candidates else expected
 
 
-def _discard_cached_archive(cache_path: Path, accession: str, message: str) -> None:
+def _discard_cached_archive(cache_path: Path, accession: str, message: str, keep: bool = False) -> None:
     """Remove the prefetched ``.sra`` archive once its FASTQ files are on disk.
 
-    A truncated download drops the archive too: keeping it would make the next attempt dump
-    the same short archive again rather than fetch the run afresh.
+    The verdict is the one ``_handle_download_output`` put in ``message``. A truncated download
+    drops the archive even when ``keep`` (``--keep-sra``) asks for it to be kept: keeping it
+    would make the next attempt dump the same short archive again rather than fetch the run
+    afresh. With ``keep``, a complete or unverified archive stays.
     """
     verdict = fastq_mod.parse_verdict_message(message)
     verdict_name = verdict.get("verdict") if verdict else None
     if verdict_name not in ("complete", "unverified", "truncated"):
+        return
+    if keep and verdict_name != "truncated":
         return
     cleanup_mod._safe_rmtree(cache_path / accession)
     if verdict_name == "truncated":
@@ -381,8 +386,9 @@ def download_accession(
         use_prefetch: If True and ``prefetch`` is on PATH, download the ``.sra`` archive
             first and run fasterq-dump against it; otherwise fasterq-dump is run directly
             against the accession, as before this became configurable
-        keep_sra: If True, keep the downloaded ``.sra`` archive after a successful,
-            verified download rather than deleting it
+        keep_sra: If True, keep the downloaded ``.sra`` archive after a complete or
+            unverified download rather than deleting it; a truncated archive is removed
+            either way, and a redownload never reuses a cached archive
         compress: If True, gzip each downloaded FASTQ file once the completeness verdict
             has been computed
         staging_folder: Folder the ``<accession>_temp`` build directory is created in;
@@ -407,8 +413,9 @@ def download_accession(
         return True, ALREADY_EXISTS
 
     # A redownload must not reuse a cached archive: prefetch treats an existing <acc>.sra as
-    # already fetched, so a truncated archive would be dumped again and stay truncated.
-    if redownload and not keep_sra and (cache_path / accession).exists():
+    # already fetched, so a truncated archive would be dumped again and stay truncated. This
+    # holds with keep_sra too, which keeps an archive after a download, never across a redownload.
+    if redownload and (cache_path / accession).exists():
         cleanup_mod._safe_rmtree(cache_path / accession)
         logger.info(f"Removed the cached archive for {accession} so the redownload fetches it again")
 
@@ -432,7 +439,7 @@ def download_accession(
             SecureSubprocess.add_allowed_root(cache_path)
             _run_download_tool(
                 "prefetch",
-                ["-O", str(cache_path), "--max-size", "100G", "--progress", accession],
+                ["-O", str(cache_path), "--max-size", settings.active().prefetch_max_size, "--progress", accession],
                 stop,
             )
             source = str(_cached_sra_archive(cache_path / accession, accession))
@@ -456,8 +463,8 @@ def download_accession(
             stop=stop,
         )
 
-        if success and using_prefetch and not keep_sra:
-            _discard_cached_archive(cache_path, accession, message)
+        if success and using_prefetch:
+            _discard_cached_archive(cache_path, accession, message, keep=keep_sra)
 
         return success, message
 
@@ -493,6 +500,16 @@ def download_accession(
 def project_lock_path(fastq_folder: Union[str, Path], accession: str) -> Path:
     """The per-accession lock of a project without a shared store: ``<fastq>/.locks/<ACC>.lock``."""
     return Path(fastq_folder) / PROJECT_LOCK_FOLDER / f"{accession}.lock"
+
+
+def project_scratch_path(fastq_folder: Union[str, Path], accession: str) -> Path:
+    """fasterq-dump's scratch folder in a project without a shared store, when no temp folder is given.
+
+    ``<fastq>/.metaquest-tmp/<ACC>_fqtmp``: on the project's own filesystem rather than the
+    system temporary folder, which on a cluster node is often small. The ``_fqtmp`` suffix
+    makes it a transient folder (``is_transient_folder``), as is the store's scratch folder.
+    """
+    return Path(fastq_folder) / cleanup_mod.PROJECT_STAGING_FOLDER / f"{accession}_fqtmp"
 
 
 def _project_lock_policy(accession: str, wait_seconds: float) -> LockPolicy:
@@ -570,6 +587,9 @@ def _project_download(
     accession in ``truncated`` (the registry's truncated verdicts); without that set,
     ``redownload_truncated`` skips it for every accession, as ``download_accession`` does.
 
+    Without ``temp_folder``, fasterq-dump's scratch is ``project_scratch_path`` (under the
+    staging folder), wiped under the lock before the download and again once it ends.
+
     The prefetch cache defaults to ``<fastq>/.sra-cache`` as before. A ``sra_cache`` folder
     the caller supplies and shares with another project is not covered by this lock (only a
     shared store locks across projects). ``stop`` is the run's stop token: when it (or the
@@ -591,9 +611,17 @@ def _project_download(
             if not redownload and _check_existing_download(fastq / accession, False):
                 logger.log(active_item_level(), f"Skipping {accession}, FASTQ files already exist")
                 return True, ALREADY_EXISTS
-            return _stage_and_publish(
-                accession, fastq, lock, num_threads, force, temp_folder, download_kwargs, stop=stop
-            )
+            scratch = None if temp_folder else project_scratch_path(fastq, accession)
+            if scratch is not None:
+                # Left by an interrupted attempt; this lock's holder is the only writer.
+                cleanup_mod._safe_rmtree(scratch)
+            try:
+                return _stage_and_publish(
+                    accession, fastq, lock, num_threads, force, scratch or temp_folder, download_kwargs, stop=stop
+                )
+            finally:
+                if scratch is not None:
+                    cleanup_mod._safe_rmtree(scratch)
     except LockWaitStopped:
         logger.info(f"Stopped waiting for the lock on {accession}: the run was interrupted")
         return False, "interrupted"

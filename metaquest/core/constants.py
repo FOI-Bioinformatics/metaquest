@@ -32,6 +32,9 @@ FAILED_ACCESSIONS_FILE = "failed_accessions.txt"
 DEFAULT_NUM_THREADS = 4
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_TOP_N = 100
+# prefetch's --max-size: a run whose .sra archive is larger is not fetched. The
+# prefetch_max_size setting (METAQUEST_PREFETCH_MAX_SIZE, config [runtime]) overrides it.
+DEFAULT_PREFETCH_MAX_SIZE = "100G"
 
 # Visualization Defaults
 DEFAULT_PLOT_COLUMN = "max_containment"

@@ -541,3 +541,33 @@ def test_concurrent_first_calls_build_the_settings_once(monkeypatch):
         thread.join()
     assert len(built) == 1
     assert all(result is results[0] for result in results)
+
+
+# --- prefetch_max_size --------------------------------------------------------
+
+
+def test_prefetch_max_size_defaults_to_the_constant():
+    from metaquest.core.constants import DEFAULT_PREFETCH_MAX_SIZE
+
+    assert DEFAULT_PREFETCH_MAX_SIZE == "100G"
+    assert settings.resolve_setting("prefetch_max_size").value == "100G"
+
+
+@pytest.mark.parametrize("value", ["100G", "20g", "500M", "1T", "4096k", "1000000"])
+def test_prefetch_max_size_accepts_a_size(monkeypatch, value):
+    monkeypatch.setenv("METAQUEST_PREFETCH_MAX_SIZE", value)
+    assert settings.resolve_setting("prefetch_max_size").value == value
+
+
+@pytest.mark.parametrize("value", ["lots", "1.5G", "-1G", "10GB", "G", "10 G"])
+def test_prefetch_max_size_rejects_other_forms(monkeypatch, value):
+    monkeypatch.setenv("METAQUEST_PREFETCH_MAX_SIZE", value)
+    with pytest.raises(ConfigurationError, match="METAQUEST_PREFETCH_MAX_SIZE"):
+        settings.resolve_setting("prefetch_max_size")
+
+
+def test_prefetch_max_size_from_the_config_file(tmp_path):
+    _write_config(tmp_path, '[runtime]\nprefetch_max_size = "50G"\n')
+    resolved = settings.resolve_setting("prefetch_max_size")
+    assert resolved.value == "50G"
+    assert resolved.source == "config [runtime] prefetch_max_size"

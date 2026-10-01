@@ -196,7 +196,10 @@ class DownloadSraCommand(BaseCommand):
         parser.add_argument(
             "--keep-sra",
             action="store_true",
-            help="Keep the downloaded .sra archive after a successful, verified download",
+            help=(
+                "Keep the downloaded .sra archive after a complete or unverified download; a truncated archive "
+                "is removed, and a redownload (--force, --redownload-truncated) always fetches the archive again"
+            ),
         )
         parser.add_argument(
             "--compress",

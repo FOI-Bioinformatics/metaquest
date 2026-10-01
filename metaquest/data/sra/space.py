@@ -27,10 +27,11 @@ errs toward starting the next accession a little later.
 import logging
 import os
 import shutil
-import tempfile
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+
+from metaquest.data.sra.cleanup import PROJECT_STAGING_FOLDER
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: metaquest.store imports this package
     from metaquest.store.layout import StorePaths
@@ -109,10 +110,11 @@ def download_locations(
 ) -> Dict[str, Path]:
     """Where a download writes: the output, temporary and ``.sra`` cache folders.
 
-    Mirrors the defaults of ``download_accession`` and the store downloader: with a store the
-    files are built in the store's ``tmp`` folder, which also holds the cache and temporary
-    folder unless they are given; without one they are built under ``fastq_path``, the cache
-    defaults to ``<fastq>/.sra-cache`` and the temporary folder to the system's.
+    Mirrors the defaults of the project and store downloaders: with a store the files are built
+    in the store's ``tmp`` folder, which also holds the cache and temporary folder unless they
+    are given; without one they are built under ``fastq_path``, the cache defaults to
+    ``<fastq>/.sra-cache`` and the temporary folder to the staging folder
+    ``<fastq>/.metaquest-tmp``, which holds each accession's ``<ACC>_fqtmp`` scratch.
     """
     if store is not None:
         output = Path(store.tmp)
@@ -124,7 +126,7 @@ def download_locations(
     fastq = Path(fastq_path)
     return {
         OUTPUT: fastq,
-        TEMP: Path(temp_folder) if temp_folder else Path(tempfile.gettempdir()),
+        TEMP: Path(temp_folder) if temp_folder else fastq / PROJECT_STAGING_FOLDER,
         CACHE: Path(sra_cache) if sra_cache else fastq / ".sra-cache",
     }
 

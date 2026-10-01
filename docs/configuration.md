@@ -56,6 +56,7 @@ and, for most, with a flag. An empty environment variable counts as not set.
 | `progress_every` | whole number, 0 or more | 50 | `METAQUEST_PROGRESS_EVERY` | `--progress-every` |
 | `log_host` | true or false | false | `METAQUEST_LOG_HOST` | none |
 | `min_free_gb` | number, 0 or more | 10 | `METAQUEST_MIN_FREE_GB` | `--min-free-gb` |
+| `prefetch_max_size` | whole number with optional K, M, G or T suffix | 100G | `METAQUEST_PREFETCH_MAX_SIZE` | none |
 | `assembly_memory` | `auto`, a fraction, or a size | auto | `METAQUEST_ASSEMBLY_MEMORY` | `--assembly-memory` |
 
 The flags exist on these commands:
@@ -91,11 +92,16 @@ What each setting does:
   code 3 when no email address is set by any of the three routes. The key is never written to a log;
   it is shown as `(set)`.
 - `temp_folder`: where `fasterq-dump` writes its temporary files, and where `extract_target_reads`
-  writes its intermediate alignments.
+  writes its intermediate alignments. When it is not set, `download_sra` gives each accession a scratch
+  folder of its own beside the download: `fastq/.metaquest-tmp/<accession>_fqtmp` in a project without a
+  store, `<data-root>/tmp/<accession>_fqtmp` with one. Set it to a local disk when the project or store
+  is on a network filesystem and the node has local scratch space.
 - `log_file`, `log_level`, `progress_every`, `log_host`: see "Logging" in the README.
   `progress_every` 0 turns the progress summaries off and logs one INFO line per item instead.
 - `min_free_gb`: the free space a download of unknown size needs on each filesystem it writes to;
   0 turns the free-space check off. See "Downloading reads" in the README.
+- `prefetch_max_size`: the value passed to `prefetch --max-size`; a run whose `.sra` archive is larger is
+  not fetched. A whole number of bytes, or a whole number with a K, M, G or T suffix (in either case).
 - `assembly_memory`: the value passed to megahit `--memory`. `auto` gives 90% of the memory limit detected
   for the job (cgroup v2, cgroup v1, else `SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and leaves
   megahit's own default when no limit is found. A size such as `32G` or `32000M` (binary units) or a whole

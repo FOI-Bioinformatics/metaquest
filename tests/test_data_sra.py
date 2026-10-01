@@ -4058,3 +4058,190 @@ class TestPublishFolder:
         from metaquest.data.sra.cleanup import publish_folder
 
         assert store_handoff_mod._publish_store_dataset is publish_folder
+
+
+# --- cached archive, fasterq-dump scratch and prefetch size (plain project) --------------
+
+
+def _with_prefetch(tool):
+    """``shutil.which`` stand-in: prefetch and fasterq-dump are on PATH."""
+    return f"/usr/bin/{tool}"
+
+
+class TestCachedArchiveWithKeepSra:
+    """A redownload always refetches the archive; ``keep_sra`` keeps only a complete or unverified one."""
+
+    def _download(self, output_folder, run=None, state=None, **kwargs):
+        fake = run or _fake_tools(state if state is not None else {"reads": 4})
+        with patch("metaquest.data.sra.accession.shutil.which", side_effect=_with_prefetch):
+            with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=fake):
+                return download_accession("SRR123", output_folder, compress=False, **kwargs)
+
+    @pytest.mark.parametrize("flag", ["force", "redownload_truncated"])
+    def test_a_redownload_wipes_the_cached_archive_even_with_keep_sra(self, tmp_path, flag):
+        output_folder = tmp_path / "downloads"
+        cache_dir = output_folder / ".sra-cache" / "SRR123"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "SRR123.sra").write_bytes(b"short archive")
+        fake = _fake_tools({"reads": 4})
+        seen = []
+
+        def run(executable, args, **kwargs):
+            if executable == "prefetch":
+                seen.append((cache_dir / "SRR123.sra").exists())
+            return fake(executable, args, **kwargs)
+
+        success, message = self._download(output_folder, run=run, keep_sra=True, **{flag: True})
+        assert success is True, message
+        assert seen == [False]
+
+    def test_keep_sra_keeps_a_complete_archive(self, tmp_path):
+        output_folder = tmp_path / "downloads"
+        success, message = self._download(output_folder, keep_sra=True, expected_spots=4)
+        assert success is True and "complete" in message, message
+        assert (output_folder / ".sra-cache" / "SRR123" / "SRR123.sra").exists()
+
+    def test_keep_sra_keeps_an_unverified_archive(self, tmp_path):
+        output_folder = tmp_path / "downloads"
+        success, message = self._download(output_folder, keep_sra=True)
+        assert success is True and "unverified" in message, message
+        assert (output_folder / ".sra-cache" / "SRR123" / "SRR123.sra").exists()
+
+    def test_keep_sra_does_not_keep_a_truncated_archive(self, tmp_path):
+        output_folder = tmp_path / "downloads"
+        success, message = self._download(output_folder, keep_sra=True, expected_spots=1000)
+        assert success is True and "truncated" in message, message
+        assert not (output_folder / ".sra-cache" / "SRR123").exists()
+
+    def test_discard_keeps_on_request_only_a_complete_or_unverified_archive(self, tmp_path):
+        cases = {
+            "Downloaded 2 files, complete (4 of 4 spots)": True,
+            "Downloaded 2 files, unverified": True,
+            "Downloaded 2 files, truncated (4 of 1000 spots)": False,
+        }
+        for message, kept in cases.items():
+            archive = tmp_path / "SRR1" / "SRR1.sra"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_bytes(b"x")
+            accession_mod._discard_cached_archive(tmp_path, "SRR1", message, keep=True)
+            assert archive.exists() is kept, message
+            accession_mod._discard_cached_archive(tmp_path, "SRR1", message)
+            assert not archive.exists(), message
+
+
+class TestProjectScratchFolder:
+    """Without ``--temp-folder``, fasterq-dump's scratch is ``<fastq>/.metaquest-tmp/<ACC>_fqtmp``."""
+
+    def _run(self, fastq, state, **kwargs):
+        with patch("metaquest.data.sra.accession.shutil.which", side_effect=lambda tool: None):
+            with patch("metaquest.data.sra.fastq.shutil.which", side_effect=_no_prefetch_with_pigz):
+                with patch(
+                    "metaquest.utils.security.SecureSubprocess.run_secure", side_effect=_scratch_recording_tools(state)
+                ):
+                    with patch("tempfile.mkdtemp", side_effect=AssertionError("mkdtemp must not be called")):
+                        return accession_mod._project_download("SRR1", fastq, 1, compress=False, **kwargs)
+
+    def test_scratch_is_under_the_staging_folder_and_removed_afterwards(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        scratch = fastq / ".metaquest-tmp" / "SRR1_fqtmp"
+        scratch.mkdir(parents=True)
+        (scratch / "left-over").write_text("from an interrupted run")
+        state = {}
+        success, message = self._run(fastq, state)
+        assert success is True, message
+        assert state["temp"] == str(scratch.absolute())
+        assert state["temp_existed"] is True
+        assert state["left_over_present"] is False
+        assert not scratch.exists()
+        assert list((fastq / ".metaquest-tmp").iterdir()) == []
+
+    def test_scratch_is_removed_after_a_failed_download(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        state = {"fail": True}
+        success, message = self._run(fastq, state)
+        assert success is False, message
+        assert state["temp"] == str((fastq / ".metaquest-tmp" / "SRR1_fqtmp").absolute())
+        assert not (fastq / ".metaquest-tmp" / "SRR1_fqtmp").exists()
+
+    def test_a_given_temp_folder_is_used_and_left_in_place(self, tmp_path):
+        fastq = tmp_path / "fastq"
+        own = tmp_path / "local-scratch"
+        state = {}
+        success, message = self._run(fastq, state, temp_folder=own)
+        assert success is True, message
+        assert state["temp"] == str(own.absolute())
+        assert own.is_dir()
+        assert not (fastq / ".metaquest-tmp" / "SRR1_fqtmp").exists()
+
+    def test_the_scratch_name_is_a_transient_folder(self):
+        assert is_transient_folder("SRR1_fqtmp")
+
+    def test_the_space_guard_counts_the_scratch_on_the_project_filesystem(self, tmp_path):
+        from metaquest.data.sra import space as space_mod
+
+        locations = space_mod.download_locations(tmp_path / "fastq")
+        assert locations[space_mod.TEMP] == tmp_path / "fastq" / ".metaquest-tmp"
+        given = space_mod.download_locations(tmp_path / "fastq", tmp_path / "local")
+        assert given[space_mod.TEMP] == tmp_path / "local"
+
+
+def _scratch_recording_tools(state):
+    """A ``run_secure`` stand-in for fasterq-dump that records its ``--temp`` folder.
+
+    It notes whether that folder existed and whether an earlier run's file was still in it,
+    then writes a FASTQ pair into its ``-O`` folder, or fails when ``state["fail"]`` is set.
+    """
+    import subprocess as subprocess_module
+
+    def run(executable, args, **kwargs):
+        state.setdefault("calls", []).append((executable, list(args)))
+        if executable == "fasterq-dump":
+            temp = Path(args[args.index("--temp") + 1])
+            state["temp"] = str(temp)
+            state["temp_existed"] = temp.is_dir()
+            state["left_over_present"] = (temp / "left-over").exists()
+            (temp / "scratch-file").parent.mkdir(parents=True, exist_ok=True)
+            (temp / "scratch-file").write_text("scratch")
+            if state.get("fail"):
+                raise subprocess_module.CalledProcessError(1, ["fasterq-dump"], stderr="connection reset")
+            out_dir = Path(args[args.index("-O") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for mate in ("1", "2"):
+                (out_dir / f"SRR1_{mate}.fastq").write_text("@r\nACGT\n+\nIIII\n")
+        return Mock(returncode=0, stdout="", stderr="")
+
+    return run
+
+
+class TestPrefetchMaxSize:
+    """prefetch's ``--max-size`` comes from the ``prefetch_max_size`` setting."""
+
+    def _prefetch_args(self, tmp_path):
+        state = {"reads": 4}
+        with patch("metaquest.data.sra.accession.shutil.which", side_effect=_with_prefetch):
+            with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
+                success, message = download_accession("SRR123", tmp_path / "downloads", compress=False)
+        assert success is True, message
+        args = state["calls"][0][1]
+        assert state["calls"][0][0] == "prefetch"
+        return args[args.index("--max-size") + 1]
+
+    def test_the_default_is_100g(self, tmp_path):
+        assert self._prefetch_args(tmp_path) == "100G"
+
+    def test_the_environment_variable_reaches_prefetch(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("METAQUEST_PREFETCH_MAX_SIZE", "250G")
+        assert self._prefetch_args(tmp_path) == "250G"
+
+    def test_the_config_value_reaches_prefetch(self, tmp_path):
+        config = tmp_path / "config" / "metaquest" / "config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('[runtime]\nprefetch_max_size = "500g"\n')
+        assert self._prefetch_args(tmp_path) == "500g"
+
+    def test_an_invalid_value_stops_the_download_with_the_settings_error(self, tmp_path, monkeypatch):
+        from metaquest.core.exceptions import ConfigurationError
+
+        monkeypatch.setenv("METAQUEST_PREFETCH_MAX_SIZE", "lots")
+        with pytest.raises(ConfigurationError, match="METAQUEST_PREFETCH_MAX_SIZE"):
+            self._prefetch_args(tmp_path)

@@ -113,8 +113,9 @@ message) or skipped (blacklisted or cut by `--max-downloads`). Failed accessions
 `fastq/failed_accessions.txt` for a retry, and `--report-file` writes one row per accession. A rerun
 skips accessions already on disk; `--force` downloads them again. `--dry-run` reports the plan and
 touches neither the disk nor the registry. `--temp-folder DIR` sets where `fasterq-dump` writes scratch
-files; without it, a plain per-project download uses the system temp directory, while a store-backed one
-(below) defaults to `<data-root>/tmp/<accession>_fqtmp`. Ctrl-C cancels downloads not yet started and
+files; without it, a plain per-project download uses `fastq/.metaquest-tmp/<accession>_fqtmp`, while a
+store-backed one (below) defaults to `<data-root>/tmp/<accession>_fqtmp`; either is removed once the
+accession's download ends. Ctrl-C cancels downloads not yet started and
 stops the running `prefetch`/`fasterq-dump` processes for the ones in progress.
 
 When a shared data store is configured (`--data-root`, `METAQUEST_DATA`, or the project's recorded
