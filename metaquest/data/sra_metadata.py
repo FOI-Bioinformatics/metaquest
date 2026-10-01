@@ -212,11 +212,9 @@ class SRAMetadataClient:
         raw XML), every RUN in every package is returned, matching the historical behaviour.
         """
         try:
-            # xml.etree (expat), not metaquest.utils.xml's lxml parser: expat does not resolve
-            # an external entity or fetch a DTD over the network, so XXE does not apply here; it
-            # is not hardened against entity-expansion ("billion laughs") the way SAFE_PARSER is,
-            # but this parses NCBI's own small API response, not an arbitrary stored file, so
-            # that residual risk is accepted for this call site.
+            # xml.etree (expat), not metaquest.utils.xml's lxml parser: ElementTree never resolves
+            # an external entity or fetches a DTD, so XXE does not apply, and expat 2.4.1 and later
+            # rejects entity amplification such as billion laughs. This is NCBI's own API response.
             root = ET.fromstring(xml_content)
         except ET.ParseError as e:
             logger.error(f"Failed to parse SRA XML: {e}")

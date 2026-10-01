@@ -130,10 +130,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   HTTP session (`metaquest.utils.http.retrying_session()`); `SRAMetadataClient` used to call
   `requests.get` without retries, and now retries a connection failure, HTTP 429 or 5xx with backoff
   before it raises `NetworkError`.
-- `DEFAULT_MEMORY_LIMIT_GB`, `MAX_FILE_SIZE_MB`, `DEFAULT_PLUGIN_TIMEOUT`, `ERROR_MESSAGES` and
-  `SUCCESS_MESSAGES` are removed from `metaquest/core/constants.py`: none was read anywhere outside its
-  own definition. The console log level choices and default come from `constants.LOG_LEVELS` and
-  `DEFAULT_LOG_LEVEL` alone.
+- `DEFAULT_MEMORY_LIMIT_GB`, `MAX_FILE_SIZE_MB`, `DEFAULT_PLUGIN_TIMEOUT`, `ERROR_MESSAGES`,
+  `SUCCESS_MESSAGES` and `DEFAULT_MAX_WORKERS` are removed from `metaquest/core/constants.py`: none was
+  read anywhere outside its own definition. The console log level choices and default come from
+  `constants.LOG_LEVELS` and `DEFAULT_LOG_LEVEL` alone.
 
 ### Security
 
@@ -143,10 +143,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   XXE (external entity reading a local file or the network) risk that lxml's defaults leave open; a
   "billion laughs" document is rejected by libxml2's entity-amplification limit. The stdlib
   `xml.etree.ElementTree` parse sites elsewhere (`data/metadata.py`'s batch parse,
-  `data/sra_metadata.py`, `data/taxonomy.py`) are unchanged: expat does not resolve external entities
-  or fetch a DTD, so XXE does not apply to them. It is not hardened against entity expansion the way
-  `SAFE_PARSER` is; those sites parse small responses fetched directly from NCBI, not stored files, and
-  that remaining risk is accepted there.
+  `data/sra_metadata.py`, `data/taxonomy.py`), which parse small responses fetched directly from NCBI,
+  are unchanged: ElementTree does not resolve external entities (an undefined-entity error) or fetch a
+  DTD, so XXE does not apply to them, and expat 2.4.1 and later rejects entity amplification such as
+  billion laughs (tested).
 - The `--api-key` value is replaced by `***` in the command line logged at DEBUG, also when the flag is
   abbreviated (`--api-k`), and shown as `(set)` in the settings list and in `doctor`.
 

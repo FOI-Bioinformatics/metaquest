@@ -1,6 +1,7 @@
-"""One retrying HTTP session builder, shared by every client that calls an external API.
+"""One retrying HTTP session builder, shared by the NCBI taxonomy, GTDB and SRA metadata clients.
 
-NCBI, GTDB and Branchwater are all flaky in the same way: an occasional connection failure, a 429
+(The Branchwater client and the Entrez calls of ``data/metadata.py`` handle their own retries.)
+NCBI and GTDB are flaky in the same way: an occasional connection failure, a 429
 (rate limited) or a 5xx while the service recovers. ``retrying_session`` mounts one urllib3
 ``Retry`` policy on both ``http://`` and ``https://`` so a caller's ``session.get(...)`` retries
 those failures with backoff automatically, without each client re-implementing the same few lines

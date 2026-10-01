@@ -111,11 +111,9 @@ def _split_efetch_packages(xml_text: str, wanted: Set[str]) -> Dict[str, str]:
     Returns ``{accession: xml_string}`` for the wanted accessions actually found; accessions
     absent from the response are simply missing from the result.
     """
-    # xml.etree (expat) is used here, not metaquest.utils.xml's lxml parser: expat does not
-    # resolve an external entity or fetch a DTD over the network, so XXE does not apply here; it
-    # is not hardened against entity-expansion ("billion laughs") the way SAFE_PARSER is, but
-    # this parses NCBI's own small efetch response, not an arbitrary stored file, so that
-    # residual risk is accepted for this call site.
+    # xml.etree (expat), not metaquest.utils.xml's lxml parser: ElementTree never resolves an
+    # external entity or fetches a DTD, so XXE does not apply, and expat 2.4.1 and later rejects
+    # entity amplification such as billion laughs. This is NCBI's own small efetch response.
     root = ET.fromstring(xml_text)
     found: Dict[str, str] = {}
 

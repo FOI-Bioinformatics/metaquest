@@ -48,7 +48,7 @@ _INTERNAL_ENTITY = """<?xml version="1.0"?>
 
 
 def test_billion_laughs_is_rejected_quickly(tmp_path):
-    """A billion-laughs document raises (DTDs are refused) in well under 2 seconds, not a hang."""
+    """A billion-laughs document raises (libxml2's entity-amplification limit) in under 2 s, not a hang."""
     path = tmp_path / "billion_laughs.xml"
     path.write_text(_BILLION_LAUGHS, encoding="utf-8")
 
@@ -107,3 +107,27 @@ def test_well_formed_document_without_a_dtd_still_parses(tmp_path):
 def test_module_exposes_one_shared_parser_instance():
     """Every caller parses with the same ``SAFE_PARSER`` instance, not a fresh one per call."""
     assert isinstance(SAFE_PARSER, etree.XMLParser)
+
+
+@pytest.mark.skipif(
+    tuple(int(part) for part in __import__("pyexpat").version_info) < (2, 4, 1),
+    reason="expat's amplification limit arrived in 2.4.1",
+)
+def test_stdlib_elementtree_rejects_billion_laughs_quickly():
+    """The stdlib parse sites (NCBI responses) rely on expat's input amplification limit."""
+    import xml.etree.ElementTree as ET
+
+    started = time.monotonic()
+    with pytest.raises(ET.ParseError):
+        ET.fromstring(_BILLION_LAUGHS)
+    assert time.monotonic() - started < 2.0
+
+
+def test_stdlib_elementtree_does_not_resolve_an_external_entity(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET")
+    document = f'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file://{secret}">]><r>&x;</r>'
+    with pytest.raises(ET.ParseError, match="undefined entity"):
+        ET.fromstring(document)

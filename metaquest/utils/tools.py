@@ -93,7 +93,8 @@ _SPECS = (
         "seqkit",
         "seqkit",
         None,
-        ("download_sra", "sra_profile", "sra_report"),
+        # Through the store statistics (store.stats.compute_dataset_stats) of these two only.
+        ("sra_profile", "sra_report"),
         optional=True,
         version_args=("version",),
         note="without it read and base counts are computed in Python, which is slower",

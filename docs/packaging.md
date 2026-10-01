@@ -52,7 +52,7 @@ for the trusted-publisher step, a PyPI account with rights over the project (or 
 ## Bioconda recipe template
 
 A starting point for the pull request to `bioconda-recipes`, once the checklist above is done.
-Bioconda's own linter (`conda-smithy`) and reviewers will ask for changes; this is a template, not
+Bioconda's own linter (`bioconda-utils lint`) and reviewers will ask for changes; this is a template, not
 a recipe ready to submit as-is, and it is not stored anywhere else in this repository.
 
 ```yaml
@@ -124,12 +124,12 @@ Notes on the template:
   `pyproject.toml`) are left out of this base recipe, the same way `pip install metaquest` (no
   `[extra]`) leaves them out. A later, separate recipe or `run_constrained` block could offer
   them; that is a decision for whoever submits the bioconda pull request, not fixed here.
-  - `optional` tools in `TOOLS` (`prefetch`, `pigz`, `seqkit`, `megahit`) are still run
+- `optional` tools in `TOOLS` (`prefetch`, `pigz`, `seqkit`, `megahit`) are still run
   dependencies here because bioconda recipes do not have MetaQuest's own "falls back to a slower
   Python path" concept; the README's tool table documents which of them a user can skip and what
   happens then. `seqkit` is left out entirely, the same way it is commented out (not installed by
   default) in `environment.yml`.
-  - `matplotlib-base` (no Qt/GTK backend pulled in) is the usual bioconda choice for a
+- `matplotlib-base` (no Qt/GTK backend pulled in) is the usual bioconda choice for a
   headless CLI tool; confirm this still matches how MetaQuest calls it
   (`metaquest/visualization/`) before relying on it.
 - The `sha256` and `home`/`recipe-maintainers` placeholders are filled in at submission time, once
