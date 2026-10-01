@@ -67,6 +67,15 @@ def metadata_fields_from_xml(xml_path: Union[str, Path]) -> Dict[str, Any]:
     return metadata_fields(row)
 
 
+def _has_positive_spots(fields: Mapping[str, Any]) -> bool:
+    """True when ``fields`` carries a ``run_total_spots`` that is a positive whole number."""
+    value: Any = fields.get("run_total_spots")
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def fill_metadata_from_xml(registry: Registry, metadata_folder: Union[str, Path]) -> List[str]:
     """Fill in metadata for every dataset recorded without a spot count, from its XML file.
 
@@ -74,8 +83,9 @@ def fill_metadata_from_xml(registry: Registry, metadata_folder: Union[str, Path]
     still ``None``, and whose ``<accession>_metadata.xml`` exists in ``metadata_folder``, parses
     that file and records its fields with ``record_metadata``, keeping the block's ``inferred``
     mark if it was already set. Returns the accessions filled, in registry order. An accession
-    with no metadata block, a block already holding a spot count, a missing XML file, or an XML
-    file that fails to parse, is left untouched.
+    with no metadata block, a block already holding a spot count, a missing XML file, an XML
+    file that fails to parse, or one that records no positive spot count (e.g. a run NCBI has not
+    loaded) is left untouched, so filling the same folder again writes nothing new.
     """
     folder = Path(metadata_folder)
     filled: List[str] = []
@@ -87,7 +97,7 @@ def fill_metadata_from_xml(registry: Registry, metadata_folder: Union[str, Path]
         if not xml_path.is_file():
             continue
         fields = metadata_fields_from_xml(xml_path)
-        if not fields:
+        if not _has_positive_spots(fields):
             continue
         was_inferred = block.inferred
         record_metadata(registry, accession, xml_path, fields)

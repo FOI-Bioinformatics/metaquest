@@ -6,6 +6,8 @@ mounted alone. Every store lives under ``tmp_path``; no real store, tool or netw
 """
 
 import copy
+import itertools
+import json
 import logging
 import os
 import shutil
@@ -17,6 +19,7 @@ import pytest
 import metaquest.data.registry_reconcile as rr
 from metaquest.data import registry as reg
 from metaquest.data import registry_blocks as rb
+from metaquest.data.registry_batch import registry_update
 from metaquest.data.registry_reconcile import StoreReconcileReport, apply_reconcile, reconcile, scan_reconcile
 from metaquest.data.sra import fastq as fastq_module
 from metaquest.data.sra.spots import verdict_for_count
@@ -242,14 +245,15 @@ class TestStoreNotMounted:
     def test_links_into_an_unmounted_store_are_not_marked_missing(self, tmp_path, caplog):
         registry, paths, _store = _linked_download(tmp_path, "SRR1", reads_per_mate=2, spots=2)
         reg.set_download_verdict(registry, "SRR1", verdict_for_count(2, 2))
+        before = copy.deepcopy((registry.datasets, registry.store))
         # Unmounting the volume takes the whole store, sra/ folder included, out of reach.
         os.rename(tmp_path / "vol", tmp_path / "vol-unmounted")
 
         with caplog.at_level(logging.WARNING, logger=rr.__name__):
             report = reconcile(registry, paths)
 
-        assert rb.download_block(registry, "SRR1").state == "downloaded"
-        assert rb.download_verdict(registry, "SRR1").verdict == "complete"
+        # Nothing about the dataset or the store link changes: state, dates, verdict, linked list.
+        assert (registry.datasets, registry.store) == before
         assert report.recorded_missing == []
         assert report.store_unavailable == ["SRR1"]
         assert report.dangling_links == ["SRR1"]
@@ -286,6 +290,25 @@ class TestReRecordKeepsTheStoreSource:
         assert block.source == "store"
         assert block.store_name == "SRR1"
         assert "SRR1" in rb.store_block(registry).linked
+
+    def test_a_real_folder_replacing_a_store_link_is_recorded_as_a_plain_download(self, tmp_path):
+        registry, paths, _store = _linked_download(tmp_path, "SRR1", reads_per_mate=2, spots=2)
+        download = rb.download_block(registry, "SRR1")
+        download.state = "missing"
+        rb.set_download_block(registry, "SRR1", download)
+        reg.update_linked(registry, "SRR1", add=False)
+        # Outside MetaQuest, the link was replaced by a folder of the project's own reads.
+        (paths.fastq / "SRR1").unlink()
+        _fastq(paths.fastq / "SRR1" / "SRR1_1.fastq", 2)
+
+        report = reconcile(registry, paths)
+
+        assert report.untracked_fastq == ["SRR1"]
+        block = rb.download_block(registry, "SRR1")
+        assert block.state == "downloaded"
+        assert block.source is None
+        assert block.store_name is None
+        assert "SRR1" not in (rb.store_block(registry).linked or [])
 
     def test_a_plain_download_back_on_disk_has_no_source(self, tmp_path):
         paths = _paths(tmp_path)
@@ -365,3 +388,50 @@ class TestScanApplySplit:
         assert report.metadata_filled == []
         # The scan counted SRR2 against 100 spots, not 7, so its verdict waits for the next run.
         assert rb.download_verdict(registry, "SRR2").verdict == "unverified"
+
+
+class TestReconcileIsIdempotent:
+    """A second ``status --reconcile`` on an unchanged project writes nothing new."""
+
+    @staticmethod
+    def _status_reconcile(registry_file: Path, paths: reg.ProjectPaths) -> StoreReconcileReport:
+        # What the status command does: scan a snapshot without the lock, apply under it.
+        plan = scan_reconcile(reg.load_registry(registry_file), paths)
+        return registry_update(registry_file, lambda registry: apply_reconcile(registry, plan))
+
+    @staticmethod
+    def _content(registry_file: Path) -> dict:
+        # Every save stamps "updated"; everything else in the file must stay as it was.
+        data = json.loads(registry_file.read_text())
+        data.pop("updated")
+        return data
+
+    def test_a_second_reconcile_changes_nothing(self, tmp_path, monkeypatch):
+        ticks = itertools.count()
+        monkeypatch.setattr(reg, "_now", lambda: f"2026-10-01T00:00:{next(ticks) % 60:02d}+00:00")
+        registry, paths, _store = _linked_download(tmp_path, "SRR5", reads_per_mate=10, spots=10)
+        _paired_download(registry, paths, "SRR1", 4)
+        _paired_download(registry, paths, "SRR2", None)
+        _paired_download(registry, paths, "SRR3", None)
+        paths.metadata.mkdir(parents=True, exist_ok=True)
+        (paths.metadata / "SRR2_metadata.xml").write_text(_XML.format(accession="SRR2", spots=100))
+        # An XML for a run NCBI has not loaded: no spot count, so nothing to fill, now or later.
+        no_spots = _XML.replace('total_spots="{spots}" ', "").format(accession="SRR3")
+        (paths.metadata / "SRR3_metadata.xml").write_text(no_spots)
+        _fastq(paths.fastq / "SRR7" / "SRR7_1.fastq", 2)
+        registry_file = registry.path
+        reg.save_registry(registry, registry_file)
+
+        first = self._status_reconcile(registry_file, paths)
+        after_first = self._content(registry_file)
+        second = self._status_reconcile(registry_file, paths)
+
+        assert first.metadata_filled == ["SRR2"]
+        assert first.verdicts_rechecked == ["SRR1", "SRR2", "SRR5"]
+        assert first.untracked_fastq == ["SRR7"]
+        assert self._content(registry_file) == after_first
+        assert second.metadata_filled == []
+        assert second.verdicts_rechecked == []
+        assert second.untracked_fastq == []
+        assert second.recorded_missing == []
+        assert rb.metadata_block(reg.load_registry(registry_file), "SRR3").run_total_spots is None

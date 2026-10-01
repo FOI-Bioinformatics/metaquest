@@ -22,7 +22,7 @@ from metaquest.data import registry_blocks as rb
 from metaquest.data.registry_batch import registry_update
 from metaquest.data.registry_reconcile import StoreReconcileReport, apply_reconcile, reconcile, scan_reconcile
 from metaquest.data.sra import verify_download
-from metaquest.data.sra.spots import verdict_for_count
+from metaquest.data.sra.spots import expected_spots, verdict_for_count
 
 # ------------------------------------------------------------- reference (pre-split)
 
@@ -67,8 +67,10 @@ def _reference_fill(registry: reg.Registry, paths: reg.ProjectPaths) -> None:
         if download.source == "store":
             complete = _reference_store_verdict(registry, acc)
             if complete is not None:
-                if complete["reads_r1"] is not None and complete["expected_spots"]:
-                    complete = verdict_for_count(complete["reads_r1"], complete["expected_spots"])
+                # The spot count in the order every caller uses: registry metadata, then the sidecar.
+                spots = expected_spots(registry, acc, store=rb.store_block(registry).root)
+                if complete["reads_r1"] is not None and spots:
+                    complete = verdict_for_count(complete["reads_r1"], spots)
                 reg.set_download_verdict(registry, acc, complete)
             continue
         spots = (rb.metadata_block(registry, acc) or rb.MetadataBlock()).run_total_spots

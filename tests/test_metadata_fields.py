@@ -137,6 +137,24 @@ class TestFillMetadataFromXml:
         assert filled == []
         assert rb.metadata_block(registry, "SRR1").run_total_spots == 999
 
+    @pytest.mark.parametrize("spots_attribute", ["", 'total_spots="0"', 'total_spots="unknown"'])
+    def test_xml_without_a_positive_spot_count_changes_nothing(self, tmp_path, monkeypatch, spots_attribute):
+        registry = reg.load_registry(tmp_path / "metaquest_registry.json")
+        monkeypatch.setattr(reg, "_now", lambda: "2026-10-01T00:00:00+00:00")
+        reg.record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {})
+        before = dict(registry.datasets["SRR1"]["metadata"])
+        # A rewrite of the block would carry this later date.
+        monkeypatch.setattr(reg, "_now", lambda: "2026-10-02T00:00:00+00:00")
+        folder = tmp_path / "metadata"
+        folder.mkdir(parents=True, exist_ok=True)
+        xml = _VALID_XML.replace('total_spots="{spots}"', spots_attribute).format(accession="SRR1")
+        (folder / "SRR1_metadata.xml").write_text(xml)
+
+        filled = fill_metadata_from_xml(registry, folder)
+
+        assert filled == []
+        assert registry.datasets["SRR1"]["metadata"] == before
+
     def test_accession_without_xml_is_skipped(self, tmp_path):
         registry = reg.load_registry(tmp_path / "metaquest_registry.json")
         reg.record_metadata(registry, "SRR1", tmp_path / "metadata" / "SRR1_metadata.xml", {})

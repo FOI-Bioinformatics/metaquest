@@ -241,12 +241,28 @@ def _mark_missing(registry: Registry, plan: ReconcilePlan, report: StoreReconcil
         )
 
 
+def _links_into_store(registry: Registry, entry: Path) -> bool:
+    """True when the project entry ``entry`` is a symlink, into the registry's store when one is recorded."""
+    if not entry.is_symlink():
+        return False
+    root = rb.store_block(registry).root
+    if not root:
+        return True
+    # Imported here, not at module level: metaquest.store imports the data registry.
+    from metaquest.store.layout import store_paths
+    from metaquest.store.link import is_store_link
+
+    return is_store_link(entry, store_paths(Path(root)))
+
+
 def _record_untracked(registry: Registry, plan: ReconcilePlan, report: StoreReconcileReport) -> None:
     """Record FASTQ found on disk that the registry does not record as downloaded, marked inferred.
 
     An accession whose previous download record says it came from the shared store (e.g. one an
     earlier reconcile marked missing while the store was unmounted) is recorded as linked from the
-    store again, with its ``store_name``, and put back on the registry's list of linked datasets.
+    store again, with its ``store_name``, and put back on the registry's list of linked datasets,
+    provided its project entry is still a symlink into the store; a real folder that replaced the
+    link is recorded as a plain download.
     """
     tracked = set(query(registry, "downloaded"))
     # Checked on disk again, the mirror of the check in _mark_missing: an accession unlinked or
@@ -255,7 +271,7 @@ def _record_untracked(registry: Registry, plan: ReconcilePlan, report: StoreReco
     report.untracked_fastq = sorted(acc for acc in untracked if accession_has_fastq(plan.paths.fastq / acc))
     for acc in report.untracked_fastq:
         previous = rb.download_block(registry, acc)
-        if previous is not None and previous.source == "store":
+        if previous is not None and previous.source == "store" and _links_into_store(registry, plan.paths.fastq / acc):
             store_name = previous.store_name or acc
             record_download(
                 registry, acc, "downloaded", plan.paths.fastq, attempt=False, source="store", store_name=store_name
