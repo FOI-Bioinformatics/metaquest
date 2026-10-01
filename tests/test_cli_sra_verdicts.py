@@ -357,12 +357,12 @@ def test_present_store_link_keeps_a_recorded_truncated_verdict(tmp_path):
     assert block.complete.reads_r1 == 5
 
 
-def _redownload(tmp_path, monkeypatch, message):
-    """Run download_sra over a recorded truncated ``ACC`` with a fake download reporting ``message``."""
+def _redownload(tmp_path, monkeypatch, message, recorded=TRUNCATED):
+    """Run download_sra over ``ACC`` recorded with ``recorded`` with a fake download reporting ``message``."""
     install_fake_tools(tmp_path / "bin", tmp_path / "barrier")
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
     _write_fastq(tmp_path / "fastq" / ACC, reads=10)
-    _write_registry(tmp_path, {ACC: {"download": {"attempts": 1, "state": "downloaded", "complete": TRUNCATED}}})
+    _write_registry(tmp_path, {ACC: {"download": {"attempts": 1, "state": "downloaded", "complete": recorded}}})
 
     def fake_download_sra(**kwargs):
         kwargs["on_result"](ACC, True, message)
@@ -379,6 +379,17 @@ def test_unverified_redownload_keeps_a_recorded_truncated_verdict(tmp_path, monk
     assert block.attempts == 2
     assert block.complete.verdict == "truncated"
     assert block.complete.reads_r1 == 5
+
+
+def test_unverified_redownload_keeps_a_recorded_complete_verdict(tmp_path, monkeypatch):
+    """A plain re-download with no spot count is no evidence either way: ``complete`` stays."""
+    recorded = {"verdict": "complete", "ratio": 1.0, "expected_spots": 10, "reads_r1": 10}
+    block = _redownload(tmp_path, monkeypatch, "Downloaded 2 files, unverified", recorded=recorded)
+
+    assert block.attempts == 2
+    assert block.complete.verdict == "complete"
+    assert block.complete.reads_r1 == 10
+    assert block.complete.expected_spots == 10
 
 
 def test_complete_redownload_replaces_a_recorded_truncated_verdict(tmp_path, monkeypatch):

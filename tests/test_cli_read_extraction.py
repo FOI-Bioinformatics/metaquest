@@ -1800,3 +1800,31 @@ def test_unverified_download_in_a_plain_project_is_not_skipped(tmp_path, isolate
     rc, ran = _run_extraction(root, table, genome, registry_file, None)
     assert rc == 0
     assert ran
+
+
+def test_partial_copy_mode_folder_is_skipped_through_its_own_sidecar(tmp_path, isolated_store, caplog):
+    """A copy-mode link is a real folder holding ``<ACC>.json``; that sidecar is read in place."""
+    from metaquest.store.sidecar import Sidecar, write_sidecar
+
+    root, table, genome = _gzip_tree(tmp_path)
+    write_sidecar(root / "fastq" / "SRR1" / "SRR1.json", Sidecar(accession="SRR1", layout="PAIRED", **_PARTIAL))
+    registry_file = root / "registry.json"
+    registry = load_registry(registry_file)
+    record_download(registry, "SRR1", "downloaded", root / "fastq", complete={"verdict": "unverified", "reads_r1": 5})
+    save_registry(registry)
+    with caplog.at_level(logging.WARNING):
+        rc, ran = _run_extraction(root, table, genome, registry_file, None)
+    assert rc == 1
+    assert not ran
+    assert "skipped SRR1: store copy partial (5 of 20 spots); use --allow-truncated" in caplog.text
+
+
+def test_a_malformed_sidecar_of_an_unselected_sample_does_not_stop_the_run(tmp_path, isolated_store):
+    """Only the selected samples' sidecars are read: SRR2 (containment 0.05) is not selected."""
+    root, table, genome = _gzip_tree(tmp_path)
+    unselected = root / "fastq" / "SRR2"
+    unselected.mkdir()
+    (unselected / "SRR2.json").write_text("[1, 2]\n")
+    rc, ran = _run_extraction(root, table, genome, root / "registry.json", None)
+    assert rc == 0
+    assert ran

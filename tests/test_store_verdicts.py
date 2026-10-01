@@ -328,7 +328,7 @@ def test_copy_mode_project_records_truncated_for_an_incomplete_store_result(tmp_
     assert block.complete.expected_spots == 100
     # The project copy still carries its old, complete-looking sidecar; the registry verdict skips it.
     assert read_sidecar(project / "fastq" / ACC / f"{ACC}.json").state == "complete"
-    assert ACC in ExtractTargetReadsCommand._unusable_downloads(registry, project / "fastq")
+    assert ACC in ExtractTargetReadsCommand._unusable_downloads(registry, project / "fastq", [ACC])
 
 
 def test_a_partial_store_result_is_fetched_once_per_run(tmp_path, monkeypatch):

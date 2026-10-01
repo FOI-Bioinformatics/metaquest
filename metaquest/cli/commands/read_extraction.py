@@ -4,7 +4,7 @@ import argparse
 import contextlib
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.extraction_assembly import assemble_samples
@@ -31,7 +31,6 @@ from metaquest.data.registry import (
     resolve_project_path,
     scan_downloads,
 )
-from metaquest.data.file_io import visible_files
 from metaquest.data.registry_timing import Stopwatch, set_extraction_timing
 from metaquest.data.sra import STORE_READY_STATES, count_fastq_reads
 from metaquest.data.sra_metadata import _resolved_sidecar_path
@@ -345,22 +344,29 @@ class ExtractTargetReadsCommand(BaseCommand):
         return recorded | set(scan_downloads(Path(args.fastq_folder)))
 
     @staticmethod
-    def _unusable_downloads(registry: Registry, fastq_folder: Path) -> Dict[str, Dict[str, Any]]:
+    def _unusable_downloads(
+        registry: Registry, fastq_folder: Path, accessions: Iterable[str]
+    ) -> Dict[str, Dict[str, Any]]:
         """Accession -> why its download is skipped unless ``--allow-truncated`` is given.
 
         Holds every accession whose registry verdict is ``"truncated"`` (its verdict, as
-        before) and every store copy in ``fastq_folder`` whose sidecar records a state outside
-        ``STORE_READY_STATES``, with a ``reason``. The sidecar is consulted whatever the
-        registry verdict says: a record written as ``"unverified"`` may point at a store copy
-        found short or failed since. Only sidecars are read, never a FASTQ file, so a plain
-        project download recorded as ``"unverified"`` is not skipped.
+        before) and every store copy among ``accessions`` (the selected samples) in
+        ``fastq_folder`` whose sidecar records a state outside ``STORE_READY_STATES``, with a
+        ``reason``. The sidecar is consulted whatever the registry verdict says: a record written
+        as ``"unverified"`` may point at a store copy found short or failed since. Only the
+        selected samples' sidecars are read, never a FASTQ file, so the cost follows the
+        selection rather than the folder, a malformed sidecar of an unselected sample cannot stop
+        the run, and a plain project download recorded as ``"unverified"`` is not skipped.
         """
         unusable: Dict[str, Dict[str, Any]] = {}
         for accession in registry.datasets:
             verdict = rb.download_verdict(registry, accession)
             if verdict is not None and verdict.verdict == "truncated":
                 unusable[accession] = verdict.to_dict()
-        for acc_dir in visible_files(fastq_folder, dirs=True):
+        for accession in dict.fromkeys(accessions):
+            acc_dir = fastq_folder / accession
+            if not acc_dir.is_dir():
+                continue
             sidecar_file = _resolved_sidecar_path(acc_dir) or acc_dir / f"{acc_dir.name}.json"
             sidecar = read_sidecar(sidecar_file) if sidecar_file.is_file() else None
             if sidecar is not None and sidecar.state not in STORE_READY_STATES:
@@ -539,13 +545,14 @@ class ExtractTargetReadsCommand(BaseCommand):
                 if (rec := self._resolved_extraction_record(registry, acc, args.genome_id)) is not None
             }
 
-            truncated_downloads = self._unusable_downloads(registry, Path(args.fastq_folder))
+            # Computed once: the unusable-download check reads only these samples' sidecars.
+            selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
+            truncated_downloads = self._unusable_downloads(registry, Path(args.fastq_folder), selected)
             available = self._available_accessions(args, registry)
 
             mate_counts: Dict[str, Any] = {}
             progress: Optional[ProgressReporter] = None
             if not args.dry_run:
-                selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
                 to_count = self._samples_needing_mate_counts(selected, already_done, truncated_downloads, args)
                 mate_counts = self._mate_counts(args, registry, to_count)
                 progress = self._progress_reporter(selected, available, already_done)
