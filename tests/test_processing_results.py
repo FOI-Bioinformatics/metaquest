@@ -54,6 +54,14 @@ def test_columns_in_stated_order():
         "extraction_seconds",
         "assembly_seconds",
         "download_verdict",
+        "quality_source",
+        "assembly_largest",
+        "assembly_n90",
+        "assembly_gc_percent",
+        "assembly_contigs_ge_1kb",
+        "assembly_mean_depth_estimate",
+        "assembly_dir",
+        "coverage_tsv",
     ]
 
 
@@ -171,6 +179,39 @@ def test_older_extraction_without_coverage_keys_gives_empty_values(tmp_path):
     r.datasets["SRR4"] = {"extractions": {"GCF_A": {"mapped_reads": 5, "files": []}}}
     row = results_rows(r)[0]
     assert row["breadth"] is None and row["mean_depth"] is None and row["contigs"] is None
+    assert row["assembly_largest"] is None and row["assembly_n90"] is None
+    assert row["assembly_gc_percent"] is None and row["assembly_contigs_ge_1kb"] is None
+    assert row["assembly_mean_depth_estimate"] is None
+    assert row["assembly_dir"] is None and row["coverage_tsv"] is None
+
+
+def test_assembly_extra_stats_give_the_new_columns(tmp_path):
+    r = _registry(tmp_path)
+    stats = {
+        "contigs": 12,
+        "total_bp": 90000,
+        "n50": 8000,
+        "largest": 25000,
+        "n90": 1500,
+        "gc": 0.4123,
+        "contigs_ge_1kb": 7,
+        "mean_depth_estimate": 33.5,
+    }
+    reg.record_assembly(r, "SRR1", "GCF_A", tmp_path / "targeted" / "SRR1" / "GCF_A_assembly", stats, "v1", {})
+    row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
+    assert row["assembly_largest"] == 25000
+    assert row["assembly_n90"] == 1500
+    assert row["assembly_gc_percent"] == 41.23
+    assert row["assembly_contigs_ge_1kb"] == 7
+    assert row["assembly_mean_depth_estimate"] == 33.5
+    # Project-relative: tmp_path is the registry's own folder, so "targeted/..." not an absolute path.
+    assert row["assembly_dir"] == "targeted/SRR1/GCF_A_assembly"
+    assert row["coverage_tsv"] == "targeted/cov.tsv"
+
+
+def test_quality_source_is_none_without_any_quality_analysis(tmp_path):
+    row = _by_pair(results_rows(_registry(tmp_path)))[("SRR1", "GCF_A")]
+    assert row["quality_source"] is None
 
 
 def test_parsed_table_adds_pairs_the_registry_capped(tmp_path):
@@ -245,6 +286,7 @@ def test_profile_columns_come_from_the_profile_analysis(tmp_path):
     reg.record_analysis(r, "SRR1", "profile", tmp_path / "profiles" / "SRR1_quality_profile.json", summary)
     row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
     assert (row["total_reads"], row["gc_percent"], row["quality_grade"]) == (2000, 41.5, "good")
+    assert row["quality_source"] == "profile"
 
 
 def test_profile_columns_read_an_old_registrys_quality_summary(tmp_path):
@@ -264,6 +306,7 @@ def test_profile_columns_read_an_old_registrys_sra_stats_summary(tmp_path):
     reg.record_analysis(r, "SRR1", "sra_stats", tmp_path / "s.csv", {"total_reads": 900, "gc_content": 52.0})
     row = _by_pair(results_rows(r))[("SRR1", "GCF_A")]
     assert (row["total_reads"], row["gc_percent"], row["quality_grade"]) == (900, 52.0, None)
+    assert row["quality_source"] == "legacy"
 
 
 def _reference_row(r, accession, genome_id, containment):
@@ -277,8 +320,9 @@ def _reference_row(r, accession, genome_id, containment):
     assembly = extraction.assembly.to_dict() if extraction.assembly is not None else {}
     spots = reg.to_int_or_none(metadata.run_total_spots)
     mapped = reg.to_int_or_none(extraction.mapped_reads)
-    profile = rb.profile_summary(r, accession)
+    profile, quality_source = rb.quality_summary(r, accession)
     excluded = bool(exclusion.excluded)
+    gc = assembly.get("gc")
     return {
         "accession": accession,
         "genome_id": genome_id,
@@ -309,6 +353,14 @@ def _reference_row(r, accession, genome_id, containment):
         "download_verdict": (
             download.complete.verdict if download is not None and download.complete is not None else None
         ),
+        "quality_source": quality_source,
+        "assembly_largest": assembly.get("largest"),
+        "assembly_n90": assembly.get("n90"),
+        "assembly_gc_percent": (round(gc * 100, 2) if gc is not None else None),
+        "assembly_contigs_ge_1kb": assembly.get("contigs_ge_1kb"),
+        "assembly_mean_depth_estimate": assembly.get("mean_depth_estimate"),
+        "assembly_dir": assembly.get("dir"),
+        "coverage_tsv": extraction.coverage_tsv,
     }
 
 

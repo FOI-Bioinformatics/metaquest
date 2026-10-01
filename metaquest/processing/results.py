@@ -1,12 +1,22 @@
 """The consolidated results table: one row per screened (accession, genome) pair.
 
 Joins what the project registry records for each pair (screening, selection, exclusion,
-download, run metadata, the dataset profile of ``sra_profile``, read extraction, reference
-coverage and assembly) with the containment values of the parsed containment table, which
-are unrounded and not limited by ``cap_screening``. The next-to-last three columns are the
-seconds the download, the extraction and the assembly took, when the registry records them.
-The last column, ``download_verdict``, is the accession's recorded download completeness
+download, run metadata, the dataset quality summary of ``sra_profile``/``sra_report``, read
+extraction, reference coverage and assembly) with the containment values of the parsed
+containment table, which are unrounded and not limited by ``cap_screening``. Three columns
+before the end are the seconds the download, the extraction and the assembly took, when the
+registry records them; ``download_verdict`` is the accession's recorded download completeness
 verdict (``complete``, ``truncated`` or ``unverified``), empty when none was recorded.
+
+The last eight columns were added after ``download_verdict`` and are empty wherever the
+registry has nothing to report: ``quality_source`` names which analysis supplied the
+``total_reads``/``gc_percent``/``quality_grade`` columns (``profile``, ``report``, ``legacy``,
+or empty when neither ran); ``assembly_largest``, ``assembly_n90``, ``assembly_gc_percent``
+(the assembly's GC fraction as a percent, two decimals) and ``assembly_contigs_ge_1kb`` are
+extra contig statistics beyond ``contigs``/``total_bp``/``n50``, empty without an assembly;
+``assembly_mean_depth_estimate`` is empty unless the assembly's coverage mapping was run;
+``assembly_dir`` and ``coverage_tsv`` are the assembly folder and the coverage table's path,
+each relative to the project root (the registry file's folder) like every other path column.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,6 +53,14 @@ RESULTS_COLUMNS = [
     "extraction_seconds",
     "assembly_seconds",
     "download_verdict",
+    "quality_source",
+    "assembly_largest",
+    "assembly_n90",
+    "assembly_gc_percent",
+    "assembly_contigs_ge_1kb",
+    "assembly_mean_depth_estimate",
+    "assembly_dir",
+    "coverage_tsv",
 ]
 
 Pair = Tuple[str, str]
@@ -63,6 +81,14 @@ def _positive_float(value: Any) -> Optional[float]:
     if pd.isna(number) or number <= 0:
         return None
     return number
+
+
+def _assembly_gc_percent(gc: Any) -> Optional[float]:
+    """``gc`` (the assembly's 0-1 GC fraction from ``extra``) as a percent, two decimals, or None."""
+    try:
+        return round(float(gc) * 100, 2)
+    except (TypeError, ValueError):
+        return None
 
 
 def screened_pairs(registry: Registry, parsed_table: Optional[pd.DataFrame] = None) -> Dict[Pair, Optional[float]]:
@@ -114,13 +140,19 @@ def _mapping_rate(mapped_reads: Optional[int], spots: Optional[int]) -> Optional
     return round(mapped_reads / spots, 4)
 
 
-def _dataset_fields(registry: Registry, accession: str) -> Dict[str, Any]:
-    """The columns of a results row that depend on the accession only, shared by all its genomes."""
+def _dataset_fields(registry: Registry, accession: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """The columns of a results row that depend on the accession only, shared by all its genomes.
+
+    Returned as ``(fields, quality_source)`` rather than one dict with ``quality_source`` folded
+    in: ``_row`` spreads ``fields`` early (to keep the existing columns' positions), but
+    ``quality_source`` belongs at the end of ``RESULTS_COLUMNS``, alongside the other columns
+    added after ``download_verdict``, so it is kept out of the spread and placed explicitly.
+    """
     exclusion = rb.exclusion_block(registry, accession) or _NO_EXCLUSION
     excluded = bool(exclusion.excluded)
     metadata = rb.metadata_block(registry, accession) or _NO_METADATA
-    profile = rb.profile_summary(registry, accession)
-    return {
+    profile, quality_source = rb.quality_summary(registry, accession)
+    fields = {
         "selected": bool((rb.selection_block(registry, accession) or _NO_SELECTION).selected),
         "excluded": excluded,
         "exclusion_reason": (exclusion.reason or None) if excluded else None,
@@ -133,10 +165,16 @@ def _dataset_fields(registry: Registry, accession: str) -> Dict[str, Any]:
         "gc_percent": profile["gc_percent"],
         "quality_grade": profile["quality_grade"],
     }
+    return fields, quality_source
 
 
 def _row(
-    registry: Registry, accession: str, genome_id: str, containment: Optional[float], dataset: Dict[str, Any]
+    registry: Registry,
+    accession: str,
+    genome_id: str,
+    containment: Optional[float],
+    dataset: Dict[str, Any],
+    quality_source: Optional[str],
 ) -> Dict[str, Any]:
     extraction = rb.extraction_block(registry, accession, genome_id) or _NO_EXTRACTION
     # A missing assembly reads as None in every column, unlike a recorded one whose stats are 0.
@@ -163,6 +201,17 @@ def _row(
         # Same rb.raw pattern as download_seconds; appended at the end, not grouped with the
         # other download fields, so existing column positions are kept.
         "download_verdict": _download_verdict(registry, accession),
+        # Appended after download_verdict (see RESULTS_COLUMNS); quality_source is per accession
+        # but, like download_verdict, is placed here rather than in `dataset` so the dict's key
+        # order matches RESULTS_COLUMNS instead of landing next to total_reads/gc_percent/quality_grade.
+        "quality_source": quality_source,
+        "assembly_largest": assembly.get("largest"),
+        "assembly_n90": assembly.get("n90"),
+        "assembly_gc_percent": _assembly_gc_percent(assembly.get("gc")),
+        "assembly_contigs_ge_1kb": assembly.get("contigs_ge_1kb"),
+        "assembly_mean_depth_estimate": assembly.get("mean_depth_estimate"),
+        "assembly_dir": assembly.get("dir"),
+        "coverage_tsv": extraction.coverage_tsv,
     }
 
 
@@ -191,7 +240,7 @@ def results_rows(
     """
     rows = []
     # Built once per accession and reused for each of its genomes.
-    datasets: Dict[str, Dict[str, Any]] = {}
+    datasets: Dict[str, Tuple[Dict[str, Any], Optional[str]]] = {}
     for (accession, genome), containment in screened_pairs(registry, parsed_table).items():
         if genome_id is not None and genome != genome_id:
             continue
@@ -199,7 +248,8 @@ def results_rows(
             continue
         if accession not in datasets:
             datasets[accession] = _dataset_fields(registry, accession)
-        rows.append(_row(registry, accession, genome, containment, datasets[accession]))
+        dataset, quality_source = datasets[accession]
+        rows.append(_row(registry, accession, genome, containment, dataset, quality_source))
     rows.sort(
         key=lambda row: (
             row["containment"] is None,

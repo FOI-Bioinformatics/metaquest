@@ -815,6 +815,7 @@ class TestStatusWithRegistry:
         assert (tmp_path / "registry_datasets.tsv").exists() and (tmp_path / "registry_extractions.tsv").exists()
         ext = (tmp_path / "registry_extractions.tsv").read_text().splitlines()[0]
         assert ext.startswith("accession\t")
+        assert ext.split("\t")[-4:] == ["coverage_tsv", "n90", "largest", "assembly_dir"]
         assert "registry_datasets.tsv" in caplog.text and "registry_extractions.tsv" in caplog.text
 
     def test_text_report_shows_stage_matrix(self, tmp_path, capsys):
@@ -1397,6 +1398,32 @@ def test_export_tsv_carries_the_timing_columns(tmp_path, capsys):
     assert datasets.loc["SRR1", "download_seconds"] == 10.0 and datasets.loc["SRR2", "download_seconds"] == 30.0
     row = extractions.set_index("accession").loc["SRR1"]
     assert (row["extraction_seconds"], row["assembly_seconds"]) == (2.5, 45.0)
+
+
+def test_export_tsv_extractions_gain_coverage_and_assembly_extra_columns(tmp_path):
+    """``to_dataframes``'s extractions frame appends coverage_tsv, n90, largest, assembly_dir,
+    all empty for an extraction with no assembly and, for one with an assembly, project-relative."""
+    import pandas as pd
+
+    from metaquest.data.registry import record_assembly
+    from metaquest.processing.status_report import to_dataframes
+
+    r = load_registry(tmp_path / "metaquest_registry.json")
+    coverage = {"breadth": 0.8, "mean_depth": 12.5, "coverage_tsv": tmp_path / "targeted" / "SRR1" / "cov.tsv"}
+    record_extraction(r, "SRR1", "GCF_1", [], 50, False, {}, coverage=coverage)
+    stats = {"contigs": 5, "total_bp": 40000, "n50": 3000, "n90": 900, "largest": 9000, "gc": 0.4123}
+    record_assembly(r, "SRR1", "GCF_1", tmp_path / "targeted" / "SRR1" / "GCF_1_assembly", stats, "v1", {})
+    record_extraction(r, "SRR2", "GCF_1", [], 5, False, {})  # no assembly, no coverage
+    _, extractions = to_dataframes(r)
+    rows = extractions.set_index("accession")
+    assembled = rows.loc["SRR1"]
+    assert assembled["coverage_tsv"] == "targeted/SRR1/cov.tsv"
+    assert (assembled["n90"], assembled["largest"]) == (900, 9000)
+    assert assembled["assembly_dir"] == "targeted/SRR1/GCF_1_assembly"
+    bare = rows.loc["SRR2"]
+    assert bare["coverage_tsv"] is None or pd.isna(bare["coverage_tsv"])
+    assert pd.isna(bare["n90"]) and pd.isna(bare["largest"])
+    assert bare["assembly_dir"] is None or pd.isna(bare["assembly_dir"])
 
 
 # -------------------------------------------- --init fills metadata; reconcile's new report fields

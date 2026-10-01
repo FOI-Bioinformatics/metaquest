@@ -372,6 +372,13 @@ def to_dataframes(registry: Registry) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
                     "assembly_date": asm.date if asm else None,
                     "extraction_seconds": ext.seconds,
                     "assembly_seconds": asm.seconds if asm else None,
+                    # Appended after the existing columns so earlier exports stay byte-identical;
+                    # coverage_tsv is the extraction's own field, the other three come from the
+                    # assembly's extra contig stats (n90, largest) and its folder (dir).
+                    "coverage_tsv": ext.coverage_tsv,
+                    "n90": asm.extra.get("n90") if asm else None,
+                    "largest": asm.largest if asm else None,
+                    "assembly_dir": asm.dir if asm else None,
                 }
             )
     datasets = pd.DataFrame(rows).set_index("accession") if rows else pd.DataFrame()
