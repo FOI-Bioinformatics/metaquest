@@ -270,7 +270,9 @@ def _record_run_if_wanted(
         if project is not None:
             seconds = time.monotonic() - clock
             run_log.record_run(project, command.name, argv, parsed_args, started, seconds, exit_code)
-    except (OSError, DataAccessError, ValueError, TypeError) as e:
+    except (OSError, DataAccessError, ValueError, TypeError, AttributeError, KeyError) as e:
+        # AttributeError and KeyError: a records_run override reading an argument the parsed
+        # namespace lacks must not change the exit code either.
         logging.warning("This run was not recorded in the run log: %s", e)
 
 

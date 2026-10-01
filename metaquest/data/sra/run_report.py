@@ -275,6 +275,21 @@ def run_document(
     }
 
 
+def run_log_entries(document: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The run-log summary and detail of one ``run_document``.
+
+    The summary holds the totals, the failure count per reason and the abort cause; the detail one
+    row per failed accession (reason, attempts, message) under ``"failed"``, empty without a failure.
+    """
+    summary = {
+        **document["totals"],
+        "failures_by_reason": document["failures_by_reason"],
+        "aborted": document["aborted"],
+    }
+    rows = {entry["accession"]: {k: v for k, v in entry.items() if k != "accession"} for entry in document["failed"]}
+    return summary, ({"failed": rows} if rows else {})
+
+
 def write_run_document(fastq_dir: Union[str, Path], document: Dict[str, Any]) -> Path:
     """Write ``document`` to ``<fastq_dir>/download_run.json`` atomically and return that path."""
     target = Path(fastq_dir) / DOWNLOAD_RUN_FILE

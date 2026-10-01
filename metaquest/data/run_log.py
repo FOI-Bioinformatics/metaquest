@@ -179,6 +179,25 @@ def note_run(
             setattr(args, attribute, merged)
 
 
+def note_rows(args: argparse.Namespace, rows: Dict[str, Dict[str, Any]], *section: str) -> None:
+    """Add per-item ``rows`` under the nested ``section`` of this run's detail, keeping earlier rows.
+
+    ``note_rows(args, {"SRR1/G1": {...}}, "extractions")`` gives ``{"extractions": {"SRR1/G1": {...}}}``.
+    A row is a mapping of plain values keyed by accession (or ``accession/genome``), the form ``runs``
+    compares; a command that notes one row at a time keeps every row noted before it.
+    """
+    if not rows or not section:
+        return
+    detail = dict(getattr(args, "_run_detail", None) or {})
+    node = detail
+    for name in section:
+        child = node.get(name)
+        node[name] = dict(child) if isinstance(child, dict) else {}
+        node = node[name]
+    node.update(rows)
+    args._run_detail = detail
+
+
 def _parse_lines(text: str) -> Tuple[List[Tuple[str, Optional[RunRecord]]], int]:
     """Each non-empty line of ``text`` with its record (None for an unreadable one), and that count."""
     parsed: List[Tuple[str, Optional[RunRecord]]] = []
