@@ -53,6 +53,7 @@ def test_columns_in_stated_order():
         "download_seconds",
         "extraction_seconds",
         "assembly_seconds",
+        "download_verdict",
     ]
 
 
@@ -100,6 +101,27 @@ def test_row_fields_come_from_registry(tmp_path):
     assert excluded["selected"] is False and excluded["excluded"] is True
     assert excluded["exclusion_reason"] == "16S amplicon"
     assert excluded["download_state"] is None and excluded["mapped_reads"] is None
+
+
+def test_download_verdict_comes_from_the_registry(tmp_path):
+    r = _registry(tmp_path)
+    reg.set_download_verdict(r, "SRR1", {"method": "spots", "ratio": 1.0, "verdict": "complete"})
+    reg.record_download(r, "SRR2", "downloaded", tmp_path / "fastq", attempt=False)
+    reg.set_download_verdict(r, "SRR2", {"method": "spots", "ratio": 0.4, "verdict": "truncated"})
+    reg.record_extraction(r, "SRR9", "GCF_C", [], 7, False, {})
+    reg.record_download(r, "SRR9", "downloaded", tmp_path / "fastq", attempt=False)
+    reg.set_download_verdict(r, "SRR9", {"verdict": "unverified"})
+    rows = _by_pair(results_rows(r))
+    assert rows[("SRR1", "GCF_A")]["download_verdict"] == "complete"
+    assert rows[("SRR2", "GCF_A")]["download_verdict"] == "truncated"
+    assert rows[("SRR9", "GCF_C")]["download_verdict"] == "unverified"
+    assert rows[("SRR1", "GCF_B")]["download_verdict"] == "complete"
+
+
+def test_download_verdict_is_none_without_a_recorded_verdict(tmp_path):
+    rows = _by_pair(results_rows(_registry(tmp_path)))
+    assert rows[("SRR1", "GCF_A")]["download_verdict"] is None
+    assert rows[("SRR2", "GCF_A")]["download_verdict"] is None
 
 
 def test_min_containment_drops_low_pairs(tmp_path):
@@ -275,6 +297,9 @@ def _reference_row(r, accession, genome_id, containment):
         "download_seconds": download.seconds if download is not None else None,
         "extraction_seconds": extraction.seconds,
         "assembly_seconds": assembly.get("seconds"),
+        "download_verdict": (
+            download.complete.verdict if download is not None and download.complete is not None else None
+        ),
     }
 
 

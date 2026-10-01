@@ -376,6 +376,8 @@ for the first sample it includes reading the containment table and building the 
 assembly time is the megahit run alone, without the contig summary and the coverage mapping.
 `status --json` summarises the same times under `timing` (counts, totals and medians), the text report
 adds one timing line when anything was timed, and `status --export-tsv` adds the same columns.
+The last column, `download_verdict`, is the accession's recorded download completeness verdict
+(`complete`, `truncated` or `unverified`), empty where none was recorded.
 
 `extract_target_reads` skips samples already extracted or assembled with the same genome, preset
 and threshold; pass `--force` to redo them.

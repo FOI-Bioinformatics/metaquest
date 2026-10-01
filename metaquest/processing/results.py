@@ -3,8 +3,10 @@
 Joins what the project registry records for each pair (screening, selection, exclusion,
 download, run metadata, the dataset profile of ``sra_profile``, read extraction, reference
 coverage and assembly) with the containment values of the parsed containment table, which
-are unrounded and not limited by ``cap_screening``. The last three columns are the seconds
-the download, the extraction and the assembly took, when the registry records them.
+are unrounded and not limited by ``cap_screening``. The next-to-last three columns are the
+seconds the download, the extraction and the assembly took, when the registry records them.
+The last column, ``download_verdict``, is the accession's recorded download completeness
+verdict (``complete``, ``truncated`` or ``unverified``), empty when none was recorded.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,6 +42,7 @@ RESULTS_COLUMNS = [
     "download_seconds",
     "extraction_seconds",
     "assembly_seconds",
+    "download_verdict",
 ]
 
 Pair = Tuple[str, str]
@@ -156,6 +159,9 @@ def _row(
         "download_seconds": rb.raw(registry, accession, "download", "seconds"),
         "extraction_seconds": extraction.seconds,
         "assembly_seconds": assembly.get("seconds"),
+        # Same rb.raw pattern as download_seconds; appended at the end, not grouped with the
+        # other download fields, so existing column positions are kept.
+        "download_verdict": (rb.raw(registry, accession, "download", "complete") or {}).get("verdict"),
     }
 
 
