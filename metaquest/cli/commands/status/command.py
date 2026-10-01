@@ -25,6 +25,7 @@ from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.status.render_text import print_report
 from metaquest.cli.commands.status.suggest import next_steps
 from metaquest.core.exceptions import DataAccessError, MetaQuestError
+from metaquest.data import run_log
 from metaquest.data.file_io import write_csv
 from metaquest.data.metadata_fields import fill_metadata_from_xml
 from metaquest.data.registry import (
@@ -126,6 +127,21 @@ class StatusCommand(BaseCommand):
         parser.add_argument("--list-missing", action="store_true", help="Also print the accessions that are missing")
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
 
+    def records_run(self, args: argparse.Namespace) -> bool:
+        """Only ``--init`` and ``--reconcile``, which write the registry, are added to the run log."""
+        return bool(getattr(args, "init", False) or getattr(args, "reconcile", False))
+
+    @staticmethod
+    def _note_run(args: argparse.Namespace, registry: Registry, report: Dict[str, Any]) -> None:
+        """What ``--init`` or ``--reconcile`` did: the dataset count and, for a reconcile, each finding's count."""
+        if not (args.init or args.reconcile):
+            return
+        summary: Dict[str, Any] = {"action": "reconcile" if args.reconcile else "init"}
+        summary["datasets"] = len(registry.datasets)
+        if args.reconcile:
+            summary["drift"] = {key: len(found) for key, found in (report.get("drift") or {}).items()}
+        run_log.note_run(args, summary=summary)
+
     def _export_tsv(self, registry: Registry, prefix: str) -> None:
         datasets_df, extractions_df = to_dataframes(registry)
         datasets_path = f"{prefix}_datasets.tsv"
@@ -192,6 +208,7 @@ class StatusCommand(BaseCommand):
                 drift, registry = registry_update(registry_file, partial(_apply_plan, plan=plan))
 
             report = build_report(registry, args, paths, registry_file, existed, drift)
+            self._note_run(args, registry, report)
             if args.next:
                 report["next"] = next_steps(registry, paths)
             if args.export_tsv:

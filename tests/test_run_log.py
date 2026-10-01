@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from metaquest.cli.commands.blacklist import BlacklistCommand
+from metaquest.cli.commands.doctor import DoctorCommand
 from metaquest.cli.commands.metadata import DownloadMetadataCommand
 from metaquest.cli.main import main
 from metaquest.core import settings
@@ -289,4 +290,4 @@ def test_cli_masks_api_key(project, run_log_on, monkeypatch):
 
 
 def test_records_run_defaults_to_false():
-    assert BlacklistCommand().records_run(_args()) is False
+    assert DoctorCommand().records_run(_args()) is False

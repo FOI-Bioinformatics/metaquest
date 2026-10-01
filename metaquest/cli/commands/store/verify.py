@@ -11,6 +11,7 @@ from metaquest.cli.base import BaseCommand
 from metaquest.cli.commands.store._shared import _no_store_hint
 from metaquest.core.exceptions import DataAccessError
 from metaquest.data import registry_blocks as rb
+from metaquest.data import run_log
 from metaquest.data.file_io import visible_files
 from metaquest.data.registry import load_registry, project_root
 from metaquest.data.sra import count_fastq_reads, fastq_files, orphan_fastq, primary_fastq, verify_download
@@ -491,6 +492,28 @@ class StoreVerifyCommand(BaseCommand):
             "fixed": fixed,
         }
 
+    def records_run(self, args: argparse.Namespace) -> bool:
+        """Every run is added to the project's run log (one with no project registry writes nothing)."""
+        return True
+
+    @staticmethod
+    def _note_run(args: argparse.Namespace, document: Dict[str, Any]) -> None:
+        """The verdict tally and the number fixed for the run-log summary; one row per dataset for its detail."""
+        datasets = document["datasets"]
+        run_log.note_run(
+            args, summary={"datasets": len(datasets), "counts": document["counts"], "fixed": len(document["fixed"])}
+        )
+        rows = {
+            row["accession"]: {
+                "verdict": row["verdict"],
+                "state_before": row.get("state_before"),
+                "state_after": row.get("state"),
+                "fix": (row.get("fix") or {}).get("action"),
+            }
+            for row in datasets
+        }
+        run_log.note_rows(args, rows, "verify")
+
     def execute(self, args: argparse.Namespace) -> int:
         """Run the command; return the exit code."""
         try:
@@ -520,8 +543,10 @@ class StoreVerifyCommand(BaseCommand):
         except DataAccessError as e:
             return self.fail(e, self.name)
 
+        document = self._json_document(root, args, results)
+        self._note_run(args, document)
         if args.json:
-            self.emit_json(self._json_document(root, args, results))
+            self.emit_json(document)
         else:
             self._print_table(results)
             if args.fix_state:

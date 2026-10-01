@@ -17,6 +17,7 @@ from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import DataAccessError, ExitCode, MetaQuestError
 from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
+from metaquest.data import run_log
 from metaquest.data.registry import Registry, load_registry, project_root, record_download, update_linked
 from metaquest.data.registry_batch import RegistryBatch, registry_batch
 from metaquest.data.registry_timing import set_download_timing
@@ -83,6 +84,9 @@ class DownloadSraCommand(BaseCommand):
     @property
     def group(self) -> str:
         return "Reads"
+
+    def records_run(self, args: argparse.Namespace) -> bool:
+        return not getattr(args, "dry_run", False)
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -331,6 +335,7 @@ class DownloadSraCommand(BaseCommand):
                 settings=rr.run_settings(args),
                 paths=rr.run_paths(args, outcomes.stats),
             )
+            run_log.note_run(args, *rr.run_log_entries(document))
             write_run_document(args.fastq_folder, document)
         except (OSError, MetaQuestError) as e:
             self.logger.warning("Could not write the download run summary: %s", e)

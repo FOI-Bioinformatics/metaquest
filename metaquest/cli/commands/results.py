@@ -9,6 +9,7 @@ import pandas as pd
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_PARSED_CONTAINMENT_FILE
 from metaquest.core.exceptions import MetaQuestError
+from metaquest.data import run_log
 from metaquest.data.file_io import write_csv
 from metaquest.data.registry import load_registry, record_export, registry_transaction
 from metaquest.processing.results import results_dataframe, results_rows
@@ -30,6 +31,9 @@ class ResultsTableCommand(BaseCommand):
     @property
     def group(self) -> str:
         return "Reads"
+
+    def records_run(self, args: argparse.Namespace) -> bool:
+        return not getattr(args, "no_record", False)
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--output", default="results.tsv", help="Output table (tab-separated)")
@@ -83,6 +87,17 @@ class ResultsTableCommand(BaseCommand):
                 accessions,
                 genomes,
                 output,
+            )
+            run_log.note_run(
+                args,
+                summary={
+                    "rows": len(rows),
+                    "accessions": accessions,
+                    "genomes": genomes,
+                    "genome_id": args.genome_id,
+                    "min_containment": args.min_containment,
+                    "output": str(output),
+                },
             )
 
             if args.no_record:

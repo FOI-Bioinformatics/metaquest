@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from metaquest.cli.base import BaseCommand, emit_error_json
 from metaquest.core.exceptions import ConfigurationError, DataAccessError, MetaQuestError
+from metaquest.data import run_log
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.registry import load_registry, record_export, registry_path, registry_transaction
 from metaquest.processing.project_report import DEFAULT_MAX_ROWS, SECTIONS, build_project_report
@@ -117,6 +118,10 @@ class ProjectReportCommand(BaseCommand):
         self._report_written(args, output_dir, list(texts), recorded)
         return 0
 
+    def records_run(self, args: argparse.Namespace) -> bool:
+        """Every run is added to the project's run log, unless ``--no-record``."""
+        return not getattr(args, "no_record", False)
+
     def _html_available(self, choice: str) -> bool:
         """Whether to write HTML: ``never`` no; ``always`` yes or a ConfigurationError; ``auto`` when installed."""
         if choice == "never":
@@ -148,6 +153,7 @@ class ProjectReportCommand(BaseCommand):
             "environment": report["environment"].get("status"),
             "max_rows": args.max_rows,
         }
+        run_log.note_run(args, summary=summary)
         with registry_transaction(registry_file) as locked:
             record_export(locked, EXPORT_NAME, output_dir / MARKDOWN_FILE, summary)
         return True

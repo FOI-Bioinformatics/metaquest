@@ -7,6 +7,7 @@ from typing import Dict, List
 from metaquest.cli.base import BaseCommand
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data import registry_blocks as rb
+from metaquest.data import run_log
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.registry import Registry, clear_exclusion, load_registry, query, record_exclusion
 from metaquest.data.registry_batch import registry_update
@@ -47,6 +48,9 @@ class BlacklistCommand(BaseCommand):
     def group(self) -> str:
         return "Reads"
 
+    def records_run(self, args: argparse.Namespace) -> bool:
+        return not getattr(args, "list", False)
+
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         action = parser.add_mutually_exclusive_group(required=True)
         action.add_argument("--add", nargs="+", metavar="ACCESSION", help="Accessions to exclude")
@@ -75,7 +79,7 @@ class BlacklistCommand(BaseCommand):
                 accessions = args.add or _read_plain_list(Path(args.from_file))
             blacklist_path = Path(args.blacklist_file)
 
-            def update(registry: Registry) -> None:
+            def update(registry: Registry) -> int:
                 # blacklist.txt is read and rewritten inside the registry lock, so two blacklist
                 # runs serialise on that lock and neither loses the other's edits to either file.
                 entries = read_blacklist_file(blacklist_path)
@@ -86,8 +90,18 @@ class BlacklistCommand(BaseCommand):
                     record_exclusion(registry, acc, args.reason)
                     entries[acc] = args.reason
                 write_blacklist_file(blacklist_path, entries)
+                return len(query(registry, "excluded"))
 
-            registry_update(args.registry, update)
+            excluded = registry_update(args.registry, update)
+            run_log.note_run(
+                args,
+                summary={
+                    "action": "remove" if args.remove else "add",
+                    "accessions": len(args.remove or accessions),
+                    "reason": None if args.remove else args.reason,
+                    "excluded": excluded,
+                },
+            )
             if args.remove:
                 self.logger.info("Removed %d accession(s) from the blacklist", len(args.remove))
             else:

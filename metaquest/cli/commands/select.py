@@ -3,11 +3,13 @@
 import argparse
 from functools import partial
 from pathlib import Path
+from typing import Any, Dict, List
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD, DEFAULT_TOP_N
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data import registry_blocks as rb
+from metaquest.data import run_log
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.defaults import resolve_metadata_table
 from metaquest.data.registry import Registry, load_registry, project_root, query, record_selection
@@ -72,6 +74,18 @@ def _recorded_selection_files(registry: Registry) -> set:
     return files
 
 
+def _note_run(
+    args: argparse.Namespace, ranked: List[Dict[str, Any]], downloaded_count: int, excluded_count: int
+) -> None:
+    """Counts and criteria for the run-log summary; rank, column and value per accession for its detail."""
+    summary: Dict[str, Any] = {"selected": len(ranked), "already_downloaded": downloaded_count}
+    summary["excluded"] = excluded_count
+    summary["column"] = ranked[0]["column"] if ranked else (args.genome_id or "max_containment")
+    run_log.note_run(args, summary={**summary, "threshold": args.threshold, "top_n": args.top_n})
+    rows = {r["accession"]: {"rank": r["rank"], "column": r["column"], "value": r["value"]} for r in ranked}
+    run_log.note_rows(args, rows, "selection")
+
+
 class SelectDatasetsCommand(BaseCommand):
     """Write the accessions that meet a containment threshold (and optional metadata filter)."""
 
@@ -86,6 +100,9 @@ class SelectDatasetsCommand(BaseCommand):
     @property
     def group(self) -> str:
         return "Reads"
+
+    def records_run(self, args: argparse.Namespace) -> bool:
+        return not getattr(args, "no_record", False)
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -239,6 +256,7 @@ class SelectDatasetsCommand(BaseCommand):
                 {"accession": accession, "rank": i + 1, "column": column, "value": value}
                 for i, (accession, column, value) in enumerate(ranked)
             ]
+            _note_run(args, ranked_records, downloaded_count, excluded_count)
             record = partial(
                 record_selection,
                 accessions=accessions,

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from metaquest.cli.base import BaseCommand, accessions_from_args, resolve_command_store
 from metaquest.core.exceptions import MetaQuestError, ValidationError
+from metaquest.data import run_log
 from metaquest.data.file_io import visible_files, write_text_atomic
 from metaquest.data.registry import load_registry, record_analysis
 from metaquest.data.registry_batch import registry_batch
@@ -74,6 +75,19 @@ def _flag_lines(profile: QualityProfile) -> List[str]:
     return lines
 
 
+def _analysis_summary(profile: QualityProfile) -> Dict[str, Any]:
+    """The figures recorded for one accession: the registry's "profile" analysis and its run-log row."""
+    return {
+        "total_reads": profile.total_reads,
+        "total_bases": profile.total_bases,
+        "reads_sampled": profile.reads_sampled,
+        "sampled": profile.sampled,
+        "gc_percent": profile.gc_percent,
+        "avg_read_length": profile.avg_read_length,
+        "quality_grade": profile.quality_grade,
+    }
+
+
 class SRAProfileCommand(BaseCommand):
     """Profile downloaded SRA datasets: one statistics table, one profile JSON per accession."""
 
@@ -91,6 +105,10 @@ class SRAProfileCommand(BaseCommand):
     def group(self) -> str:
         """Pipeline step."""
         return "Reads"
+
+    def records_run(self, args: argparse.Namespace) -> bool:
+        """Every run is added to the project's run log, one row per profiled accession."""
+        return True
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         """Add the command's options."""
@@ -221,15 +239,6 @@ class SRAProfileCommand(BaseCommand):
         with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
             for dataset in profiled:
                 profile = dataset.profile
-                summary = {
-                    "total_reads": profile.total_reads,
-                    "total_bases": profile.total_bases,
-                    "reads_sampled": profile.reads_sampled,
-                    "sampled": profile.sampled,
-                    "gc_percent": profile.gc_percent,
-                    "avg_read_length": profile.avg_read_length,
-                    "quality_grade": profile.quality_grade,
-                }
                 json_path = output_dir / f"{profile.accession}_quality_profile.json"
                 batch.apply(
                     partial(
@@ -237,13 +246,22 @@ class SRAProfileCommand(BaseCommand):
                         accession=profile.accession,
                         analysis=ANALYSIS_NAME,
                         output=json_path,
-                        summary=summary,
+                        summary=_analysis_summary(profile),
                     ),
                     profile.accession,
                 )
         if batch.registry is not None:
             rows = [(d.profile.accession, "", "analysed", ANALYSIS_NAME) for d in profiled]
             record_usage_many(store, batch.registry, rows)
+
+    def _note_run(
+        self, args: argparse.Namespace, accessions: List[str], profiles: List[QualityProfile], failed: List[str]
+    ) -> None:
+        """Counts and totals for the run-log summary; one row per profiled accession for its detail."""
+        summary = {"accessions": len(accessions), "profiled": len(profiles), "failed": len(failed)}
+        summary.update(self._summary_stats(profiles) or {})
+        run_log.note_run(args, summary=summary)
+        run_log.note_rows(args, {p.accession: _analysis_summary(p) for p in profiles}, "analyses", ANALYSIS_NAME)
 
     def _run(self, args: argparse.Namespace) -> int:
         folder = Path(args.fastq_folder)
@@ -259,6 +277,7 @@ class SRAProfileCommand(BaseCommand):
         for line in generate_statistics_report(rows, args.output_report):
             self.emit(line)
         profiles = [d.profile for d in profiled]
+        self._note_run(args, accessions, profiles, failed)
         flagged = [p.accession for p in profiles if _flag_lines(p)]
         if flagged:
             self.emit(f"\n{len(flagged)} dataset(s) with quality warnings: {', '.join(flagged)}")

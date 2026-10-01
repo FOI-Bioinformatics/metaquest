@@ -18,6 +18,7 @@ from metaquest.cli.base import BaseCommand, read_accessions_file, resolve_comman
 from metaquest.cli.commands.sra_profile import add_sampling_arguments
 from metaquest.core.exceptions import MetaQuestError, ValidationError
 from metaquest.core.optional import require
+from metaquest.data import run_log
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.registry import load_registry, record_analysis
 from metaquest.data.registry_batch import registry_batch
@@ -55,6 +56,24 @@ def load_groups(path: str) -> Dict[str, List[str]]:
     return groups
 
 
+def _analysis_summaries(
+    profiles: Dict[str, QualityProfile], anomalies: AnomalyReport, groups: Optional[Dict[str, List[str]]]
+) -> Dict[str, Dict[str, Any]]:
+    """Accession -> the figures recorded for it: the registry's "report" analysis and its run-log row."""
+    group_of = {acc: name for name, accs in (groups or {}).items() for acc in accs}
+    return {
+        accession: {
+            "quality_grade": profile.quality_grade,
+            "gc_percent": profile.gc_percent,
+            "total_reads": profile.total_reads,
+            "total_bases": profile.total_bases,
+            "group": group_of.get(accession),
+            "anomalous": accession in anomalies.anomalous_datasets,
+        }
+        for accession, profile in profiles.items()
+    }
+
+
 class SRAReportCommand(BaseCommand):
     """Write one HTML report on the quality of SRA datasets and, with groups, their comparison."""
 
@@ -72,6 +91,10 @@ class SRAReportCommand(BaseCommand):
     def group(self) -> str:
         """Pipeline step."""
         return "Reads"
+
+    def records_run(self, args: argparse.Namespace) -> bool:
+        """Every run is added to the project's run log, one row per reported accession."""
+        return True
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         """Add the command's options."""
@@ -231,17 +254,8 @@ class SRAReportCommand(BaseCommand):
         # A snapshot, only to find the store; the records go through a batch that loads the
         # registry inside the lock, and the catalogue is written once that lock is released.
         store = resolve_command_store(args, load_registry(args.registry))
-        group_of = {acc: name for name, accs in (groups or {}).items() for acc in accs}
         with registry_batch(args.registry, flush_every=None, flush_seconds=None) as batch:
-            for accession, profile in profiles.items():
-                summary = {
-                    "quality_grade": profile.quality_grade,
-                    "gc_percent": profile.gc_percent,
-                    "total_reads": profile.total_reads,
-                    "total_bases": profile.total_bases,
-                    "group": group_of.get(accession),
-                    "anomalous": accession in anomalies.anomalous_datasets,
-                }
+            for accession, summary in _analysis_summaries(profiles, anomalies, groups).items():
                 batch.apply(
                     partial(
                         record_analysis, accession=accession, analysis=ANALYSIS_NAME, output=output, summary=summary
@@ -295,6 +309,16 @@ class SRAReportCommand(BaseCommand):
             comparison = reporter.analyzer.compare_datasets(profiled_groups, profiles=profiles)
             self._print_comparison(comparison)
 
+        summary = {
+            "accessions": len(accessions),
+            "reported": len(profiles),
+            "failed": len(failed),
+            "anomalous": len(anomalies.anomalous_datasets),
+            "groups": len(groups) if groups is not None else 0,
+            "html": not args.no_report,
+        }
+        run_log.note_run(args, summary=summary)
+        run_log.note_rows(args, _analysis_summaries(profiles, anomalies, groups), "analyses", ANALYSIS_NAME)
         output = self._write_json(output_dir, profiles, failed, anomalies, comparison)
         self.emit(f"\nReport figures saved to: {output}")
         if not args.no_report:

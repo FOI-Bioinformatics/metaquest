@@ -13,6 +13,7 @@ from metaquest.core.exceptions import MetaQuestError
 from metaquest.core import settings
 from metaquest.core.settings import SETTINGS, setting_for
 from metaquest.data import registry_blocks as rb
+from metaquest.data import run_log
 from metaquest.data.read_extraction import (
     MINIMAP2_PRESETS,
     ExtractionResult,
@@ -95,6 +96,9 @@ class ExtractTargetReadsCommand(BaseCommand):
     @property
     def group(self) -> str:
         return "Reads"
+
+    def records_run(self, args: argparse.Namespace) -> bool:
+        return not getattr(args, "dry_run", False)
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -387,6 +391,10 @@ class ExtractTargetReadsCommand(BaseCommand):
         """
         if outcome.skipped:
             return
+        coverage = outcome.coverage or {}
+        row = {"mapped_reads": outcome.mapped_records, "breadth": coverage.get("breadth")}
+        row["mean_depth"] = coverage.get("mean_depth")
+        run_log.note_rows(args, {f"{accession}/{args.genome_id}": row}, "extractions")
         index_dir = Path(args.output_folder) / ".index"
         with registry_transaction(args.registry) as reg:
             record_extraction(
@@ -593,12 +601,17 @@ class ExtractTargetReadsCommand(BaseCommand):
             # they are not reads that mapped, and must never reach the assembler.
             with_reads = {acc: r.files for acc, r in results.items() if r.files and r.mapped_records > 0}
             self.logger.info("Extracted reads for %d of %d sample(s)", len(with_reads), len(results))
+            skipped = sum(1 for r in results.values() if r.skipped)
+            summary = {"genome_id": args.genome_id, "samples": len(results), "extracted": len(results) - skipped}
+            run_log.note_run(args, summary={**summary, "with_reads": len(with_reads), "skipped": skipped})
             if not with_reads:
                 self._report_no_reads(args, results)
                 return 1
 
             if args.assemble:
                 assembly = assemble_samples(self, args, with_reads, results, store)
+                counts = {"assembled": len(assembly.assembled), "reused": len(assembly.reused)}
+                run_log.note_run(args, summary={**counts, "assembly_failed": len(assembly.failed)})
                 term = getattr(args, "_termination", None)
                 if term is not None and term.stop.is_set():
                     raise KeyboardInterrupt("extract_target_reads assembly stopped")
