@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from metaquest.data import registry_blocks as rb
 from metaquest.data.registry import Registry
 from metaquest.data.sra import expected_spots, merged_verdict, spots_from_xml, verdict_for_count, verify_download
 from metaquest.store.layout import sidecar_path, store_paths
@@ -132,10 +133,24 @@ def test_expected_spots_accepts_a_numeric_string_in_metadata():
     assert expected_spots(_registry(metadata={"run_total_spots": "600"}), ACC) == 600
 
 
-def test_expected_spots_falls_back_to_previous_verdict(tmp_path):
+def test_expected_spots_sidecar_wins_over_previous_verdict(tmp_path):
     registry = _registry(metadata={"run_total_spots": None}, verdict={"verdict": "truncated", "expected_spots": 400})
     store = _store_with_spots(tmp_path, 300)
-    assert expected_spots(registry, ACC, store=store) == 400
+    folder = _xml_folder(tmp_path, total_spots="200")
+    assert expected_spots(registry, ACC, store=store, xml_folders=[folder]) == 300
+
+
+def test_expected_spots_xml_wins_over_previous_verdict(tmp_path):
+    registry = _registry(verdict={"verdict": "truncated", "expected_spots": 400})
+    folder = _xml_folder(tmp_path, total_spots="200")
+    assert expected_spots(registry, ACC, store=store_paths(tmp_path / "store"), xml_folders=[folder]) == 200
+
+
+def test_expected_spots_previous_verdict_is_the_last_resort(tmp_path):
+    registry = _registry(metadata={"run_total_spots": None}, verdict={"verdict": "truncated", "expected_spots": 400})
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert expected_spots(registry, ACC, store=store_paths(tmp_path / "store"), xml_folders=[empty]) == 400
 
 
 def test_expected_spots_falls_back_to_sidecar(tmp_path):
@@ -196,8 +211,39 @@ def test_merged_verdict_keeps_a_new_definite_verdict():
     assert merged_verdict(COMPLETE, TRUNCATED, None, None) == TRUNCATED
 
 
-def test_merged_verdict_lets_unverified_replace_complete():
-    assert merged_verdict(COMPLETE, UNVERIFIED, None, None) == UNVERIFIED
+def test_merged_verdict_never_downgrades_complete_to_unverified():
+    assert merged_verdict(COMPLETE, UNVERIFIED, None, None) == COMPLETE
+    assert merged_verdict(COMPLETE, None, None, None) == COMPLETE
+
+
+def test_merged_verdict_relink_without_read_count_keeps_complete():
+    """A relink to a store copy whose sidecar records no read count keeps the recorded verdict."""
+    relinked = {"verdict": "unverified", "ratio": None, "expected_spots": None, "reads_r1": None}
+    assert merged_verdict(COMPLETE, relinked, None, None) == COMPLETE
+
+
+def test_merged_verdict_recompute_wins_over_a_recorded_complete():
+    result = merged_verdict(COMPLETE, UNVERIFIED, 50, 100)
+    assert result["verdict"] == "truncated"
+    assert result["ratio"] == 0.5
+
+
+def test_merged_verdict_unverified_over_unverified_takes_new():
+    newer = dict(UNVERIFIED, reads_r1=60)
+    assert merged_verdict(UNVERIFIED, newer, None, None) == newer
+
+
+def test_merged_verdict_accepts_registry_verdict_blocks():
+    previous = rb.Verdict(method="spots", ratio=0.5, verdict="truncated", expected_spots=100, reads_r1=50)
+    result = merged_verdict(previous, rb.Verdict(verdict="unverified"), None, None)
+    assert isinstance(result, dict)
+    assert result == TRUNCATED
+    assert merged_verdict(None, previous, None, None) == TRUNCATED
+
+
+def test_merged_verdict_rejects_a_value_that_is_not_a_verdict():
+    with pytest.raises(TypeError):
+        merged_verdict("complete", None, None, None)
 
 
 def test_merged_verdict_nothing_known_is_none():

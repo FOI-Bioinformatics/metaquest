@@ -2,11 +2,11 @@
 
 A download's completeness verdict compares the reads on disk with NCBI's recorded spot count
 (``Run_Total_Spots``). That count can be known in several places: the project registry's metadata
-block, an earlier download verdict, the store sidecar's ``ncbi`` block, or a metadata XML file on
-disk. ``expected_spots`` is the one lookup that consults them in a fixed order, so every caller
+block, the store sidecar's ``ncbi`` block, a metadata XML file on disk, or an earlier download
+verdict. ``expected_spots`` is the one lookup that consults them in a fixed order, so every caller
 gets the same count for the same accession, and ``merged_verdict`` is the one rule for combining a
-new verdict with the recorded one: a ``truncated`` verdict is never replaced by ``unverified``,
-since the absence of a spot count is not evidence that the reads are now complete.
+new verdict with the recorded one: a known verdict (``complete`` or ``truncated``) is never replaced
+by ``unverified``, since the absence of a count is not evidence about the reads either way.
 """
 
 import logging
@@ -125,9 +125,12 @@ def expected_spots(
     The sources are consulted in this order, and the first positive count wins:
 
     1. the registry's metadata block (``run_total_spots``);
-    2. the ``expected_spots`` of the download verdict the registry already records;
-    3. ``ncbi.spots`` in the store sidecar, when ``store`` (a ``StorePaths`` or a store root) is given;
-    4. ``Run_Total_Spots`` in ``<accession>_metadata.xml`` in each of ``xml_folders``, in order.
+    2. ``ncbi.spots`` in the store sidecar, when ``store`` (a ``StorePaths`` or a store root) is given;
+    3. ``Run_Total_Spots`` in ``<accession>_metadata.xml`` in each of ``xml_folders``, in order;
+    4. the ``expected_spots`` of the download verdict the registry already records.
+
+    The first three read NCBI's count directly; the recorded verdict holds a copy made by an earlier
+    run, so it comes last and a fresh sidecar or XML corrects a wrong copy.
     """
     if registry is not None:
         metadata = rb.metadata_block(registry, accession)
@@ -135,16 +138,15 @@ def expected_spots(
             spots = _positive_int(metadata.run_total_spots)
             if spots is not None:
                 return spots
-        previous = rb.download_verdict(registry, accession)
-        if previous is not None:
-            spots = _positive_int(previous.expected_spots)
-            if spots is not None:
-                return spots
     if store is not None:
         spots = _sidecar_spots(accession, store)
         if spots is not None:
             return spots
-    return spots_from_xml(accession, xml_folders)
+    spots = spots_from_xml(accession, xml_folders)
+    if spots is not None or registry is None:
+        return spots
+    previous = rb.download_verdict(registry, accession)
+    return _positive_int(previous.expected_spots) if previous is not None else None
 
 
 def _as_dict(verdict: Any) -> Optional[Dict[str, Any]]:
@@ -167,11 +169,12 @@ def merged_verdict(
     """The completeness verdict to record, given the ``previous`` one and a ``new`` one.
 
     When both ``reads_r1`` and a spot count ``expected`` are known, the verdict is recomputed from
-    them with ``verdict_for_count``, which may turn a recorded ``truncated`` into ``complete``.
-    Otherwise ``new`` is taken, except that a ``previous`` ``truncated`` verdict is never replaced by
-    an ``unverified`` (or missing) one: an unknown spot count says nothing about whether the reads
-    are now complete. A missing ``new`` keeps ``previous``. Returns None when neither is known. The
-    result is always a new dict; the arguments are not modified.
+    them with ``verdict_for_count``, which may turn a recorded verdict into the other known one
+    (``truncated`` into ``complete`` or the reverse). Otherwise ``new`` is taken, except that a known
+    ``previous`` verdict (``complete`` or ``truncated``) is never replaced by an ``unverified`` (or
+    missing) one: without a count there is no evidence about the reads either way, e.g. a relink to
+    a store copy whose sidecar records no read count. A missing ``new`` keeps ``previous``. Returns
+    None when neither is known. The result is always a new dict; the arguments are not modified.
     """
     if reads_r1 is not None and _positive_int(expected) is not None:
         return verdict_for_count(reads_r1, _positive_int(expected))
@@ -179,6 +182,7 @@ def merged_verdict(
     after = _as_dict(new)
     if after is None:
         return before
-    if before is not None and before.get("verdict") == "truncated" and after.get("verdict") in (None, _UNVERIFIED):
+    known_before = before is not None and before.get("verdict") in ("complete", "truncated")
+    if known_before and after.get("verdict") in (None, _UNVERIFIED):
         return before
     return after
