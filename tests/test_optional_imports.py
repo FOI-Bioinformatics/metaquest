@@ -118,17 +118,6 @@ def test_sra_dashboard_without_plotly_is_an_error_not_a_degraded_file(monkeypatc
     assert list((tmp_path / "reports").iterdir()) == []
 
 
-def test_html_report_without_jinja2_is_an_error(monkeypatch, tmp_path):
-    from metaquest.visualization.reporting import generate_report
-
-    summary = tmp_path / "summary.tsv"
-    summary.write_text("accession\tg1\nSRR1\t0.5\n")
-    monkeypatch.setitem(sys.modules, "jinja2", None)
-    with pytest.raises(ConfigurationError, match=r"metaquest\[interactive\]"):
-        generate_report("t", summary, output_file=tmp_path / "r.html", format="html")
-    assert not (tmp_path / "r.html").exists()
-
-
 def test_explorer_without_plotly_is_an_error(monkeypatch, tmp_path):
     from metaquest.visualization import explorer
 

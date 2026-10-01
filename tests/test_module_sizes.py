@@ -26,7 +26,6 @@ MIN_MAINTAINABILITY = 20.0
 KNOWN_EXCEPTIONS: Dict[str, Tuple[int, float]] = {
     "metaquest/data/read_extraction.py": (964, 29.6),
     "metaquest/data/registry.py": (1001, MIN_MAINTAINABILITY),
-    "metaquest/visualization/reporting.py": (813, MIN_MAINTAINABILITY),
 }
 
 
