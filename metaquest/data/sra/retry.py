@@ -15,6 +15,7 @@ from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import MetaQuestError
 from metaquest.data.file_io import write_text_atomic
 from metaquest.data.sra import accession as accession_mod
+from metaquest.data.sra.space import INSUFFICIENT_SPACE_PREFIX
 from metaquest.utils.progress import ProgressReporter, item_level
 from metaquest.utils.security import SecureSubprocess
 
@@ -133,16 +134,18 @@ def _process_download_results(futures_results, accessions_to_download, download_
 
 
 def _split_not_found(failed_accessions: List[str], download_results: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    """Split failed accessions into (worth retrying, not-found).
+    """Split failed accessions into (worth retrying, not worth retrying).
 
     An accession classified as not-found from its last attempt's message will not succeed on
-    retry (the run genuinely does not exist, or the ID is invalid); it is kept in the failed
-    list rather than burning a retry round on it.
+    retry (the run genuinely does not exist, or the ID is invalid), and one the free-space guard
+    refused does not fit even with no other download running; each is kept in the failed list
+    rather than burning a retry round (and, for a refusal, a wait for running downloads) on it.
     """
     retry_batch: List[str] = []
     not_found: List[str] = []
     for accession in failed_accessions:
-        if accession_mod.classify_download_error(download_results.get(accession, "")) == "not-found":
+        message = download_results.get(accession, "")
+        if INSUFFICIENT_SPACE_PREFIX in message or accession_mod.classify_download_error(message) == "not-found":
             not_found.append(accession)
         else:
             retry_batch.append(accession)

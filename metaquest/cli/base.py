@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 from metaquest.core.constants import DEFAULT_LOG_LEVEL, LOG_LEVELS
 from metaquest.core.exceptions import DataAccessError, exit_code_for
+from metaquest.utils.logging import log_traceback_hint
 from metaquest.utils.security import SecureSubprocess
 from metaquest.utils.termination import EXIT_INTERRUPTED, graceful_termination
 
@@ -253,9 +254,11 @@ class BaseCommand(ABC):
         configuration problem, 4 for a retryable one (network, a lock wait that gave up) and 1
         for any other failure (see ``metaquest.core.exceptions.ExitCode``). The traceback is
         always attached: the console handler shows only the one-line message unless the
-        console is at DEBUG, and a log file (``--log-file``) keeps the traceback.
+        console is at DEBUG, and a log file (``--log-file``) keeps the traceback; without either,
+        a line points to ``--log-level DEBUG``.
         """
         self.logger.error("%s: %s", context, error, exc_info=error)
+        log_traceback_hint()
         return exit_code_for(error)
 
     # Output. stdout carries the command's result (tables, JSON); stderr carries logging.

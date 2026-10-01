@@ -326,9 +326,9 @@ class TestFirstPassDiskFullAbort:
         assert failed == ["SRR1"]
         assert "SRR1" not in timings
         assert results["SRR2"] == results["SRR3"] == "ok"
-        # The retry pass still ran and asked the guard again.
-        assert [c.args[0] for c in guard.reserve.call_args_list].count("SRR1") == 2
-        assert results["SRR1"].startswith("Retry 1: insufficient-space:")
+        # The retry pass skips a refusal, as it does a not-found accession: no second reservation.
+        assert [c.args[0] for c in guard.reserve.call_args_list].count("SRR1") == 1
+        assert results["SRR1"].startswith("insufficient-space:")
 
     def test_retry_pass_uses_the_instrumented_worker(self, tmp_path):
         attempts = Counter()

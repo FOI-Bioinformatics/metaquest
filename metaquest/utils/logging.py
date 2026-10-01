@@ -72,6 +72,15 @@ def _remove_own_handlers(root_logger: logging.Logger) -> None:
             handler.close()
 
 
+def log_traceback_hint() -> None:
+    """After an error: point to ``--log-level DEBUG`` unless a log file keeps the traceback or DEBUG shows it."""
+    root_logger = logging.getLogger()
+    if any(isinstance(h, logging.FileHandler) and getattr(h, "_metaquest", False) for h in root_logger.handlers):
+        return
+    if not root_logger.isEnabledFor(logging.DEBUG):
+        logging.info("Use --log-level DEBUG for full traceback.")
+
+
 def _file_handler(log_file: str, level: int) -> logging.Handler:
     """A handler appending to ``log_file`` (its folder created) at ``level`` or INFO, whichever is lower."""
     path = Path(log_file).expanduser()

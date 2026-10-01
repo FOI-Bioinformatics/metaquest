@@ -15,7 +15,7 @@ from metaquest import __version__
 from metaquest.cli.base import BaseCommand, DefaultsHelpFormatter, add_global_options, command_registry
 from metaquest.core import settings
 from metaquest.core.exceptions import ConfigurationError, MetaQuestError, exit_code_for
-from metaquest.utils.logging import setup_logging
+from metaquest.utils.logging import log_traceback_hint, setup_logging
 
 # Import all command modules to register them
 from metaquest.cli.commands import (
@@ -247,11 +247,10 @@ def _configure_logging(runtime: settings.RuntimeSettings) -> Optional[int]:
     return None
 
 
-def _log_failure(message: str, error: BaseException, log_file: Optional[str]) -> None:
+def _log_failure(message: str, error: BaseException) -> None:
     """Log a failure that left the command: one line on the console, the traceback in the log file."""
     logging.error(message, exc_info=error)
-    if not log_file and not logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.info("Use --log-level DEBUG for full traceback.")
+    log_traceback_hint()
 
 
 def main(args: Optional[List[str]] = None) -> int:
@@ -295,10 +294,10 @@ def main(args: Optional[List[str]] = None) -> int:
         # Execute the chosen command
         return parsed_args.func(parsed_args)
     except MetaQuestError as e:
-        _log_failure(f"Error: {e}", e, runtime.log_file)
+        _log_failure(f"Error: {e}", e)
         return exit_code_for(e)
     except Exception as e:
-        _log_failure(f"{type(e).__name__}: {e}", e, runtime.log_file)
+        _log_failure(f"{type(e).__name__}: {e}", e)
         return exit_code_for(e)
     except KeyboardInterrupt as e:
         # Only a command with graceful_shutdown False gets here; BaseCommand.run handles the rest.

@@ -26,6 +26,35 @@ def item_level(every: int) -> int:
     return logging.INFO if every == 0 else logging.DEBUG
 
 
+def active_item_level() -> int:
+    """``item_level`` for the active run's ``progress_every`` setting (``--progress-every``)."""
+    from metaquest.core import settings
+
+    return item_level(settings.active().progress_every)
+
+
+class DemoteInfo(logging.Filter):
+    """Log the INFO records whose message template is in ``templates`` at ``level`` instead.
+
+    Attached to a module's logger for the length of a run, it moves that module's per-item INFO
+    lines to ``item_level`` without editing the module (``data/read_extraction.py`` is held at a
+    line ceiling).
+    """
+
+    def __init__(self, templates, level: int) -> None:
+        """Remember the message templates to match and the level to give them."""
+        super().__init__()
+        self.templates = frozenset(templates)
+        self.level = level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Lower a matching INFO record to ``level``; every record is kept for the handlers to judge."""
+        if record.levelno == logging.INFO and record.msg in self.templates:
+            record.levelno = self.level
+            record.levelname = logging.getLevelName(self.level)
+        return True
+
+
 def format_duration(seconds: float) -> str:
     """``seconds`` rounded to the minute, as ``N min`` or ``H h M min`` (``less than 1 min`` below 60 s)."""
     if seconds < 60:

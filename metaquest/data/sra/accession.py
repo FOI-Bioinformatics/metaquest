@@ -17,9 +17,13 @@ from metaquest.data.sra import cleanup as cleanup_mod
 from metaquest.data.sra import fastq as fastq_mod
 from metaquest.utils.lockfile import LockHeld, LockLost, LockPolicy, LockWaitStopped, held_lock, verify_held
 from metaquest.utils import tools
+from metaquest.utils.progress import active_item_level
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
+
+# Set once the missing-prefetch fallback was logged at INFO; later accessions log it at item level.
+_PREFETCH_FALLBACK_LOGGED = threading.Event()
 
 
 # Regexes used by classify_download_error to sort a failure message into a coarse class that
@@ -220,7 +224,7 @@ def _handle_download_output(
     except OSError as e:
         logger.warning(f"Could not remove temp directory {temp_path}: {e}")
 
-    logger.info(f"Successfully downloaded: {len(found)} files")
+    logger.log(active_item_level(), f"Successfully downloaded: {len(found)} files")
 
     # Compute the verdict on the plain files first: counting reads in an uncompressed
     # file is cheaper, and the verdict message format must stay stable either way.
@@ -329,6 +333,20 @@ def _staging_root(output_folder: Union[str, Path], staging_folder: Optional[Unio
     return root
 
 
+def _log_prefetch_fallback(accession: str) -> None:
+    """Say that fasterq-dump runs without prefetch: at INFO for a run's first accession, then at item level.
+
+    Where the data comes from changes, so the first time is worth a line a user sees.
+    """
+    level = active_item_level() if _PREFETCH_FALLBACK_LOGGED.is_set() else logging.INFO
+    _PREFETCH_FALLBACK_LOGGED.set()
+    logger.log(
+        level,
+        f"prefetch not found on PATH; running fasterq-dump directly against {accession}, "
+        "which downloads and dumps in one step",
+    )
+
+
 def download_accession(
     accession: str,
     output_folder: Union[str, Path],
@@ -385,7 +403,7 @@ def download_accession(
     # Check if already downloaded
     redownload = force or redownload_truncated
     if _check_existing_download(output_path, redownload):
-        logger.info(f"Skipping {accession}, FASTQ files already exist")
+        logger.log(active_item_level(), f"Skipping {accession}, FASTQ files already exist")
         return True, ALREADY_EXISTS
 
     # A redownload must not reuse a cached archive: prefetch treats an existing <acc>.sra as
@@ -401,17 +419,14 @@ def download_accession(
 
     temp_folder_path = None
     try:
-        logger.info(f"Downloading SRA for {accession}")
+        logger.log(active_item_level(), f"Downloading SRA for {accession}")
 
         # Handle temp folder for fasterq-dump
         temp_folder_path = cleanup_mod._prepare_temp_folder(temp_folder)
 
         using_prefetch = use_prefetch and shutil.which("prefetch") is not None
         if use_prefetch and not using_prefetch:
-            logger.info(
-                f"prefetch not found on PATH; running fasterq-dump directly against {accession}, "
-                "which downloads and dumps in one step"
-            )
+            _log_prefetch_fallback(accession)
 
         if using_prefetch:
             SecureSubprocess.add_allowed_root(cache_path)
@@ -574,7 +589,7 @@ def _project_download(
         (fastq / cleanup_mod.PROJECT_STAGING_FOLDER).mkdir(parents=True, exist_ok=True)
         with held_lock(lock, policy, should_stop=functools.partial(stop_requested, stop)):
             if not redownload and _check_existing_download(fastq / accession, False):
-                logger.info(f"Skipping {accession}, FASTQ files already exist")
+                logger.log(active_item_level(), f"Skipping {accession}, FASTQ files already exist")
                 return True, ALREADY_EXISTS
             return _stage_and_publish(
                 accession, fastq, lock, num_threads, force, temp_folder, download_kwargs, stop=stop

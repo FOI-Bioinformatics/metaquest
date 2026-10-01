@@ -1,7 +1,8 @@
 """``metaquest/core/constants.py``: nothing in the tree still names the constants removed from it.
 
 ``DEFAULT_MEMORY_LIMIT_GB``, ``MAX_FILE_SIZE_MB``, ``DEFAULT_PLUGIN_TIMEOUT``, ``ERROR_MESSAGES``
-and ``SUCCESS_MESSAGES`` were never read anywhere outside their own definitions; this guards
+and ``SUCCESS_MESSAGES`` were never read anywhere outside their own definitions, and
+``DEFAULT_MAX_WORKERS`` stopped being read when the worker count moved to the CPU detection; this guards
 against one being reintroduced (or half-removed, with a stray reference left behind) later.
 """
 
@@ -16,6 +17,7 @@ REMOVED_CONSTANTS = (
     "DEFAULT_PLUGIN_TIMEOUT",
     "ERROR_MESSAGES",
     "SUCCESS_MESSAGES",
+    "DEFAULT_MAX_WORKERS",
 )
 
 # Source trees that ship with the package or its tests; docs and the plan/report archive under

@@ -1,14 +1,17 @@
 """CLI command for targeted read extraction before assembly."""
 
 import argparse
+import contextlib
+import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
 from metaquest.core.constants import DEFAULT_CONTAINMENT_THRESHOLD
 from metaquest.core.exceptions import ConfigurationError, MetaQuestError
+from metaquest.core import settings
 from metaquest.core.settings import SETTINGS, setting_for
 from metaquest.data import registry_blocks as rb
 from metaquest.data.assembly import assembly_memory
@@ -46,7 +49,18 @@ from metaquest.store.link import dangling_links
 from metaquest.store.resolve import resolve_optional_store
 from metaquest.store.stats import cached_stats
 from metaquest.store.usage import record_usage_safe
+from metaquest.utils.progress import DemoteInfo, ProgressReporter
 from metaquest.utils.tools import require_tools
+
+# The per-sample INFO lines of data/read_extraction.py (held at a line ceiling), logged at the
+# item level while a run reports progress; tests/test_cli_read_extraction.py checks they exist.
+SAMPLE_LINE_TEMPLATES = (
+    "%s: kept %d of %d mapped records (secondary/supplementary%s removed: %d)",
+    "Extracted %d mapped records for %s -> %s",
+    "%s already extracted against %s (%d mapped reads); use --force to redo",
+    "%s: extraction against %s is in progress elsewhere; skipped",
+    "%s: redoing extraction, %s",
+)
 
 
 def _non_negative_int(value: str) -> int:
@@ -382,8 +396,9 @@ class ExtractTargetReadsCommand(BaseCommand):
         outcome: ExtractionResult,
         store: Optional[StorePaths],
         clock: Optional[Stopwatch] = None,
+        progress: Optional[ProgressReporter] = None,
     ) -> None:
-        """Checkpoint one sample, then stop the run if a signal arrived during or after it.
+        """Checkpoint one sample, count it on ``progress``, then stop the run if a signal arrived.
 
         ``clock`` times each sample from the moment the previous one was checkpointed (or the
         extraction started) until its result arrives here: the time ``extract_target_reads``
@@ -400,12 +415,42 @@ class ExtractTargetReadsCommand(BaseCommand):
         """
         timing = clock.lap() if clock is not None else None
         self._record_result(args, accession, outcome, store, timing)
+        if progress is not None:
+            if outcome.skipped:
+                state = "skipped"
+            else:
+                state = f"{outcome.mapped_records} mapped reads" if outcome.files else "no reads mapped"
+            self.logger.log(progress.item_level, "%s: %s", accession, state)
+            progress.update(True)
         if clock is not None:
             # The registry write above is bookkeeping, not part of the next sample's extraction.
             clock.restart()
         term = getattr(args, "_termination", None)
         if term is not None and term.stop.is_set():
             raise KeyboardInterrupt(f"extract_target_reads stopped after {accession}")
+
+    @staticmethod
+    def _progress_reporter(selected: List[str], available: Set[str], already_done: Dict[str, Any]) -> ProgressReporter:
+        """A reporter over the selected samples that have reads or a recorded extraction."""
+        total = sum(1 for acc in selected if acc in available or acc in already_done)
+        return ProgressReporter(
+            "extract_target_reads", total, settings.active().progress_every, logger=logging.getLogger(__name__)
+        )
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _sample_lines_at_item_level(progress: Optional[ProgressReporter]) -> Iterator[None]:
+        """Log the data module's per-sample INFO lines at ``progress``'s item level while in the block."""
+        if progress is None or progress.item_level == logging.INFO:
+            yield
+            return
+        data_logger = logging.getLogger("metaquest.data.read_extraction")
+        demote = DemoteInfo(SAMPLE_LINE_TEMPLATES, progress.item_level)
+        data_logger.addFilter(demote)
+        try:
+            yield
+        finally:
+            data_logger.removeFilter(demote)
 
     @staticmethod
     def _resolved_extraction_record(registry: Registry, accession: str, genome_id: str) -> Optional[Dict[str, Any]]:
@@ -617,35 +662,40 @@ class ExtractTargetReadsCommand(BaseCommand):
             available = self._available_accessions(args, registry)
 
             mate_counts: Dict[str, Any] = {}
+            progress: Optional[ProgressReporter] = None
             if not args.dry_run:
                 selected = selected_samples(args.parsed_containment, args.genome_id, args.threshold)
                 to_count = self._samples_needing_mate_counts(selected, already_done, truncated_downloads, args)
                 mate_counts = self._mate_counts(args, registry, to_count)
+                progress = self._progress_reporter(selected, available, already_done)
 
             clock = Stopwatch()
-            results = extract_target_reads(
-                parsed_containment=args.parsed_containment,
-                genome_id=args.genome_id,
-                genome_fasta=args.genome_fasta,
-                fastq_folder=args.fastq_folder,
-                output_folder=args.output_folder,
-                threshold=args.threshold,
-                preset=args.preset,
-                threads=args.threads,
-                dry_run=args.dry_run,
-                force=args.force,
-                already_done=already_done,
-                on_result=lambda accession, outcome: self._record_result_and_check_stop(
-                    args, accession, outcome, store, clock
-                ),
-                min_mapq=args.min_mapq,
-                temp_folder=setting_for(args, "temp_folder"),
-                allow_truncated=args.allow_truncated,
-                mate_counts=mate_counts,
-                truncated_downloads=truncated_downloads,
-                keep_sam=args.debug_keep_sam,
-                available=available,
-            )
+            with self._sample_lines_at_item_level(progress):
+                results = extract_target_reads(
+                    parsed_containment=args.parsed_containment,
+                    genome_id=args.genome_id,
+                    genome_fasta=args.genome_fasta,
+                    fastq_folder=args.fastq_folder,
+                    output_folder=args.output_folder,
+                    threshold=args.threshold,
+                    preset=args.preset,
+                    threads=args.threads,
+                    dry_run=args.dry_run,
+                    force=args.force,
+                    already_done=already_done,
+                    on_result=lambda accession, outcome: self._record_result_and_check_stop(
+                        args, accession, outcome, store, clock, progress
+                    ),
+                    min_mapq=args.min_mapq,
+                    temp_folder=setting_for(args, "temp_folder"),
+                    allow_truncated=args.allow_truncated,
+                    mate_counts=mate_counts,
+                    truncated_downloads=truncated_downloads,
+                    keep_sam=args.debug_keep_sam,
+                    available=available,
+                )
+            if progress is not None:
+                progress.finish()
 
             if args.dry_run:
                 self._report_dry_run(args, results)

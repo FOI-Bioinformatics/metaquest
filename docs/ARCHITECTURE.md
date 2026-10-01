@@ -364,8 +364,8 @@ The plugin system enables extensibility:
   `conda install` command for each. Commands call it before any work; `doctor` reads the same table
 - **resources** (`utils/resources.py`): `available_cpus` (affinity mask, then `SLURM_CPUS_PER_TASK`,
   then the CPU count), `memory_limit_bytes` (cgroup v2, cgroup v1, then `SLURM_MEM_PER_NODE` or
-  `SLURM_MEM_PER_CPU`; None on macOS or without a limit) and `parse_memory` for `--assembly-memory`. The default download worker
-  count and the megahit `--memory` value come from here
+  `SLURM_MEM_PER_CPU`; None on macOS or without a limit) and `parse_memory` for `--assembly-memory`.
+  The default download worker count and the megahit `--memory` value come from here
 - **xml** (`utils/xml.py`): `SAFE_PARSER` and `parse_xml_file`, the lxml parser every lxml call site
   uses, with entity resolution, network access and external DTD loading refused. The standard
   library `ElementTree` call sites use expat, which does not resolve external entities (so XXE does
@@ -464,9 +464,11 @@ missing ones.
 - Per-item lines (one per accession or request) are logged at `progress.item_level(every)`, which is
   DEBUG; a `ProgressReporter` logs one summary line every `progress_every` items and at least every
   5 minutes at INFO. `--progress-every 0` turns the summaries off and puts the per-item lines back at
-  INFO. Warnings and errors about one item keep their level. `data/sra/retry.py` and
-  `data/metadata.py` follow this; the per-accession INFO lines left in `data/sra/accession.py` and
-  `store/link.py` are being moved to DEBUG.
+  INFO. Warnings and errors about one item keep their level. `data/sra/retry.py`,
+  `data/metadata.py`, `data/sra/accession.py`, `data/sra/cleanup.py` and `store/link.py` follow this
+  (`progress.active_item_level()` reads the setting). `extract_target_reads` reports from its
+  `on_result` callback, and a `progress.DemoteInfo` filter moves the per-sample INFO lines of
+  `data/read_extraction.py`, held at its line ceiling, to the item level for the length of the run.
 - At DEBUG `main()` logs the version, the command line (with the `--api-key` value hidden), host,
   process ID, the SLURM job and array task IDs when set, and every runtime setting with its source.
 

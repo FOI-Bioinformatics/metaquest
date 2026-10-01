@@ -20,10 +20,10 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   cannot be combined and override `--log-level`. At DEBUG a run logs the version, its command line (the
   `--api-key` value hidden), host, process ID and SLURM job and array task IDs. `METAQUEST_LOG_HOST=true`
   adds host and process ID to console lines. See "Logging" in the README.
-- Progress summaries for `download_sra` and `download_metadata`: one line every `--progress-every N`
-  items (default 50; also `METAQUEST_PROGRESS_EVERY` or `progress_every` in `[runtime]`) and at least every
-  5 minutes, such as `download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left`,
-  and a closing line with the totals and the time taken.
+- Progress summaries for `download_sra`, `download_metadata` and `extract_target_reads`: one line every
+  `--progress-every N` items (default 50; also `METAQUEST_PROGRESS_EVERY` or `progress_every` in
+  `[runtime]`) and at least every 5 minutes, such as `download_sra: 150/2000 done (148 ok, 2 failed),
+  3.1/min, about 9 h 57 min left`, and a closing line with the totals and the time taken.
 - Free-space check for `download_sra`: before each accession starts, the filesystems it writes to (FASTQ
   or store `tmp` folder, `fasterq-dump` temporary folder, `.sra` cache) must have room for it, counting
   the downloads already running. An accession with a registry run size needs 8 times that size for its
@@ -33,6 +33,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   10; `METAQUEST_MIN_FREE_GB`, `[runtime] min_free_gb`); 0 turns the check off. An accession that does
   not fit while others run waits for them to release their space; one that would not fit even alone
   fails with `insufficient-space: not enough free space on <mount>: ...`, and the others continue.
+  Before the first download a warning names a filesystem that the downloads of known size may not fit
+  on together; it does not stop the run.
 - `--assembly-memory` on `extract_target_reads` (also `METAQUEST_ASSEMBLY_MEMORY`, `[runtime]
   assembly_memory`): `auto`, the default, passes megahit `--memory` as 90% of the memory limit detected
   for the job (cgroup v2 or v1, else `SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and omits it when none is
@@ -55,7 +57,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `extraction_seconds` and `assembly_seconds`, `status --json` has a `timing` block (counts, totals
   and medians), the text report one timing line, and `status --export-tsv` the same columns. An
   extraction's time runs from the previous sample's checkpoint, so the first sample's includes building
-  the minimap2 index; an assembly's time is the megahit run.
+  the minimap2 index; an assembly's time is the megahit run. A failed download attempt's time is
+  recorded too and counted in the totals.
 - `pypi`, a second job in the release workflow (`.github/workflows/release.yml`), publishes the
   distribution the `build` job already produces to PyPI via PyPI's trusted-publisher mechanism (no
   token in the repository). It only runs once the repository variable `PYPI_PUBLISH` is set to
@@ -71,13 +74,15 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   was a network one), 130 for an interrupt, 1 for any other failure. `download_metadata` still logs each
   accession NCBI did not return and exits with 0. See "Exit codes" in the README.
 - A command failure is one line on the console unless it is at DEBUG; the traceback now always goes to
-  the log file when there is one. The hint "Use --log-level DEBUG for full traceback" is shown only when
-  there is no log file.
-- The per-accession INFO lines of `download_sra` for a download or a retry that succeeded, and of
-  `download_metadata` for each NCBI request, are now logged at DEBUG, replaced at INFO by the progress
-  summaries. `--progress-every 0` logs them at INFO again. Three per-accession lines of `download_sra`
-  ("Downloading SRA for ...", "Skipping ..., FASTQ files already exist", and "Linked ... to the store
-  copy" in a store) are still at INFO in this release.
+  the log file when there is one. The hint "Use --log-level DEBUG for full traceback" follows a failure
+  only when there is no log file and the console is not at DEBUG.
+- Error messages of the store commands start with the command name (`store_status: ...`).
+- The per-accession INFO lines of `download_sra` (starting, skipping, the temporary folder, the files
+  downloaded, the store link or copy, a download or a retry that succeeded), of `download_metadata` for
+  each NCBI request, and of `extract_target_reads` for each sample, are now logged at DEBUG, replaced at
+  INFO by the progress summaries. `--progress-every 0` logs them at INFO again. Still at INFO: the
+  first "prefetch not found on PATH" line of a run (later accessions log it at DEBUG), and the lines
+  about an accession whose download was interrupted or redone with `--force`.
 - External tool timeout is now configurable and, by default, unlimited: `run_secure` used to give every
   external tool (`fasterq-dump`, `prefetch`, `minimap2`, `samtools`, `megahit`) a fixed one-hour limit
   (`MAX_SUBPROCESS_TIMEOUT`) even when a caller passed no timeout at all, and `timeout=0` was silently
@@ -85,6 +90,8 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `extract_target_reads` (also `METAQUEST_TIMEOUT` or `[runtime] timeout` in `config.toml`) now sets it;
   0, the default, means no limit. A `--version` probe always uses a fixed 30-second timeout regardless of
   this setting, so a hung tool cannot stall version detection.
+- Two runtime settings are checked against each other: a `lock_heartbeat` not below
+  `dataset_lock_stale`, or a `registry_lock_stale` of 5 s or less, stops the command with exit code 3.
 - One table of external tools (`metaquest/utils/tools.py`) with the oldest supported versions: sra-tools
   3.0, minimap2 2.17, samtools 1.10 (for `samtools coverage`), megahit 1.2.9, pigz 2.4 and
   ncbi-datasets-cli 16. `download_sra`, `extract_target_reads`, `genome_download` and `genome_prepare`
@@ -92,6 +99,7 @@ All notable changes to MetaQuest are documented in this file. Dates are in YYYY-
   `extract_target_reads`; `genome_download` and `genome_prepare` had no check and failed inside the first
   `datasets` call) when one is missing or older than its floor, listing every problem with its `conda
   install` command. The optional tools (`prefetch`, `pigz`, `seqkit`) are checked only by `doctor`.
+  The check runs each required tool's version probe at the start (up to 30 s per tool).
 - `environment.yml` pins the same floors as that table (`sra-tools>=3.0`, `minimap2>=2.17`,
   `samtools>=1.10`, `megahit>=1.2.9`, `pigz>=2.4`, `ncbi-datasets-cli>=16`; checked by
   `tests/test_environment_pins.py`); `seqkit` stays commented out and has no floor.

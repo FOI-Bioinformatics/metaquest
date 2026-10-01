@@ -18,6 +18,7 @@ from metaquest.core.exceptions import DataAccessError
 from metaquest.data.file_io import unique_temp_path
 from metaquest.store.layout import StorePaths, sra_dir
 from metaquest.store.locks import touch_dataset_use
+from metaquest.utils.progress import active_item_level
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ def link_dataset(
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         touch_dataset_use(paths, accession)
-        logger.info("Copied %s from the store into %s", accession, link)
+        logger.log(active_item_level(), "Copied %s from the store into %s", accession, link)
         return link
 
     if mode == "auto":
@@ -146,7 +147,7 @@ def link_dataset(
     except OSError as e:
         raise DataAccessError(f"Cannot link {accession} into {project_path}: {e}") from e
     touch_dataset_use(paths, accession)
-    logger.info("Linked %s to the store copy at %s", link, target)
+    logger.log(active_item_level(), "Linked %s to the store copy at %s", link, target)
     return link
 
 

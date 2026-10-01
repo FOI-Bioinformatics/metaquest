@@ -1216,17 +1216,24 @@ class TestDownloadAccession:
         assert not (output_folder / ".sra-cache").exists()
         assert accession_has_fastq(output_folder / "SRR123")
 
-    def test_download_accession_logs_the_direct_call_when_prefetch_is_missing(self, tmp_path, caplog):
-        """The fallback changes where the data comes from, so it is recorded at info level."""
+    def test_download_accession_logs_the_direct_call_when_prefetch_is_missing(self, tmp_path, caplog, monkeypatch):
+        """The fallback changes where the data comes from: INFO for the first accession, then item level."""
+        import threading
+
+        from metaquest.data.sra import accession as accession_mod
+
+        monkeypatch.setattr(accession_mod, "_PREFETCH_FALLBACK_LOGGED", threading.Event())
         state = {"reads": 4}
 
         with patch("metaquest.data.sra.accession.shutil.which", return_value=None):
             with patch("metaquest.data.sra.accession.SecureSubprocess.run_secure", side_effect=_fake_tools(state)):
-                with caplog.at_level("INFO", logger="metaquest.data.sra"):
-                    success, message = download_accession("SRR123", tmp_path / "downloads", compress=False)
+                with caplog.at_level("DEBUG", logger="metaquest.data.sra"):
+                    for accession in ("SRR123", "SRR124"):
+                        success, message = download_accession(accession, tmp_path / "downloads", compress=False)
+                        assert success is True, message
 
-        assert success is True, message
-        assert "prefetch not found on PATH" in caplog.text
+        levels = [r.levelname for r in caplog.records if "prefetch not found on PATH" in r.getMessage()]
+        assert levels == ["INFO", "DEBUG"]
 
     def test_download_accession_dumps_a_sralite_archive(self, tmp_path):
         """Some runs are served only as .sralite; fasterq-dump must be pointed at that file."""

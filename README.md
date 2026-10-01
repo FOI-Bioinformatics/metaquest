@@ -79,13 +79,13 @@ Download and assembly steps call command-line tools that are not Python packages
 
 | Tool (conda package) | Oldest version | Used by |
 |---|---|---|
-| `fasterq-dump`, `prefetch` (sra-tools) | 3.0 | `download_sra` (prefetch first, then fasterq-dump; `--no-prefetch` skips prefetch) |
-| `pigz` (optional) | 2.4 | `download_sra`, `store_adopt` (parallel gzip; falls back to Python's gzip module when absent) |
+| `fasterq-dump`, `prefetch` (sra-tools) | 3.0 | `download_sra` (prefetch, then fasterq-dump; or `--no-prefetch`) |
+| `pigz` (optional) | 2.4 | `download_sra`, `store_adopt` (parallel gzip; else Python's gzip module) |
 | `datasets` (ncbi-datasets-cli) | 16 | `genome_download`, `genome_prepare` |
 | `minimap2` | 2.17 (first with `--sam-hit-only`) | `extract_target_reads` |
 | `samtools` | 1.10 (first with `samtools coverage`) | `extract_target_reads` |
 | `megahit` | 1.2.9 | `extract_target_reads --assemble` |
-| `seqkit` (optional) | any | `sra_profile`, `sra_report` (faster read statistics; falls back to a plain Python reader when absent) |
+| `seqkit` (optional) | any | `sra_profile`, `sra_report` (faster read statistics; else a Python reader) |
 
 `download_test_genome` fetches its genome over HTTPS and needs none of these tools.
 A command checks the tools it needs before it starts any work (`download_sra` checks `fasterq-dump`;
@@ -526,9 +526,9 @@ is unstable on recent macOS releases (mapping with minimap2/samtools still uses 
 the assembly thread count explicitly with `--assembly-threads` if your megahit build handles more.
 `--assembly-memory` sets megahit's `--memory`: `auto` (the default; also `METAQUEST_ASSEMBLY_MEMORY` or
 `assembly_memory` in `[runtime]`) gives 90% of the memory limit detected for the job (a cgroup limit, or
-`SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and leaves megahit's own default when no limit is found, as on macOS; a size such
-as `32G` or `32000M` is passed in bytes; a fraction such as `0.5` is passed as it is, and megahit applies
-it to the whole node's memory, so under a scheduler give a size instead. A
+`SLURM_MEM_PER_NODE` or `SLURM_MEM_PER_CPU`) and leaves megahit's own default when no limit is found, as
+on macOS; a size such as `32G` or `32000M` is passed in bytes; a fraction such as `0.5` is passed as it
+is, and megahit applies it to the whole node's memory, so under a scheduler give a size instead. A
 megahit failure is reported with the tool's own error message (the last few lines of its stderr), not
 just the exit code. megahit needs FIFOs for its scratch files, which some filesystems do not provide
 (ExFAT, some network shares); `--temp-folder DIR` points megahit's scratch elsewhere, at a local POSIX
@@ -788,21 +788,21 @@ logs the MetaQuest version, its command line (with the `--api-key` value hidden)
 ID and, under SLURM, `SLURM_JOB_ID` and `SLURM_ARRAY_TASK_ID`. `METAQUEST_LOG_HOST=true` (or
 `log_host = true` in `[runtime]`) puts the host and process ID on console lines too.
 
-`download_sra` and `download_metadata` log a progress summary every `--progress-every` items (50 by
-default) and at least every 5 minutes while items are finishing, then one closing line with the totals
-and the time taken:
+`download_sra`, `download_metadata` and `extract_target_reads` log a progress summary every
+`--progress-every` items (50 by default) and at least every 5 minutes while items are finishing, then
+one closing line with the totals and the time taken:
 
 ```
 download_sra: 150/2000 done (148 ok, 2 failed), 3.1/min, about 9 h 57 min left
 download_sra: finished 2000/2000 (1990 ok, 10 failed) in 10 h 45 min
 ```
 
-The line for each finished download, retry and NCBI metadata request is logged at DEBUG;
-`--progress-every 0` turns the summaries off and logs one INFO line per accession instead. Warnings and
-errors about an accession are logged at their own level either way. The intended default is summary
-lines only at INFO; a few per-accession lines ("Downloading SRA for ...", "Skipping ..., FASTQ files
-already exist", and "Linked ... to the store copy" for a store) are still logged at INFO in this release
-and are being moved to DEBUG.
+The lines about one accession or sample (a download starting, skipped or finished, its temporary
+folder, a store link, a retry, an NCBI metadata request, an extracted sample) are logged at DEBUG;
+`--progress-every 0` turns the summaries off and logs them at INFO instead. Warnings and errors about an
+accession are logged at their own level either way. Two kinds of per-accession line stay at INFO: the
+first "prefetch not found on PATH" of a run, and the lines about a download that was interrupted or
+redone with `--force`.
 
 ### Running on a cluster
 
@@ -1030,7 +1030,8 @@ For comprehensive documentation including advanced features and technical detail
 - **[Configuration](docs/configuration.md)** - Every runtime setting with its type, default,
   environment variable and flag
 - **[Architecture](docs/ARCHITECTURE.md)** - Technical architecture and design decisions
-- **[Packaging](docs/packaging.md)** - PyPI and bioconda distribution, and the checklist before turning on PyPI publishing
+- **[Packaging](docs/packaging.md)** - PyPI and bioconda distribution, and the checklist before turning on
+  PyPI publishing
 - **[CLAUDE.md](CLAUDE.md)** - Development guidelines, testing strategies, and architectural patterns for contributors
 
 ## Development & Testing

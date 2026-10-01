@@ -280,3 +280,26 @@ def test_ncbi_request_failures_are_network_errors_only_when_retryable(error, exp
         with pytest.raises(DataAccessError) as excinfo:
             client._make_request("https://example.org/efetch", {})
     assert type(excinfo.value) is expected
+
+
+def test_fail_points_to_debug_when_no_log_file_keeps_the_traceback(caplog):
+    with caplog.at_level(logging.INFO):
+        _Failing(ValidationError("bad")).execute(argparse.Namespace())
+    assert [r.getMessage() for r in caplog.records][-2:] == [
+        "Doing the thing: bad",
+        "Use --log-level DEBUG for full traceback.",
+    ]
+
+
+def test_fail_gives_no_hint_when_a_log_file_keeps_the_traceback(tmp_path, caplog):
+    from metaquest.utils.logging import _file_handler
+
+    handler = _file_handler(str(tmp_path / "run.log"), logging.INFO)
+    logging.getLogger().addHandler(handler)
+    try:
+        with caplog.at_level(logging.INFO):
+            _Failing(ValidationError("bad")).execute(argparse.Namespace())
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+    assert "Use --log-level DEBUG" not in caplog.text

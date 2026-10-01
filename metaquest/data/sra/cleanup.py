@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from metaquest.core.exceptions import SecurityError
+from metaquest.utils.progress import active_item_level
 from metaquest.utils.security import SecureSubprocess
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ def _prepare_temp_folder(temp_folder):
         # Create a temporary directory
         try:
             temp_dir = tempfile.mkdtemp()
-            logger.info(f"Created temporary folder: {temp_dir}")
+            logger.log(active_item_level(), f"Created temporary folder: {temp_dir}")
             return Path(temp_dir)
         except OSError as e:
             logger.warning(f"Could not create temporary folder: {e}")
@@ -110,7 +111,7 @@ def _prepare_temp_folder(temp_folder):
             logger.warning(f"Temp folder {temp_folder} exists but is not writable, " "using default temp location")
             return None
         else:
-            logger.info(f"Using temp folder: {temp_path_obj.absolute()}")
+            logger.log(active_item_level(), f"Using temp folder: {temp_path_obj.absolute()}")
             SecureSubprocess.add_allowed_root(temp_path_obj)
             return temp_path_obj
     except (OSError, SecurityError) as e:

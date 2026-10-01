@@ -30,7 +30,6 @@ FAILED_ACCESSIONS_FILE = "failed_accessions.txt"
 
 # Threading and Performance Defaults
 DEFAULT_NUM_THREADS = 4
-DEFAULT_MAX_WORKERS = 4
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_TOP_N = 100
 

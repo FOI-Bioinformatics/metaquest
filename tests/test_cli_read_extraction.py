@@ -1648,3 +1648,52 @@ def test_assemble_loads_the_registry_at_most_once(tmp_path):
     ):
         ExtractTargetReadsCommand()._assemble(args, with_reads, results)
     assert spy.call_count <= 1
+
+
+@pytest.mark.parametrize("every", [1, 0])
+def test_extraction_reports_progress_and_moves_per_sample_lines_to_the_item_level(tmp_path, caplog, monkeypatch, every):
+    """With summaries on, per-sample lines (the command's own and the data module's) are DEBUG."""
+    monkeypatch.setenv("METAQUEST_PROGRESS_EVERY", str(every))
+    root, table, genome = _two_sample_tree(tmp_path)
+    args = _args(
+        tmp_path,
+        parsed_containment=str(table),
+        genome_fasta=str(genome),
+        fastq_folder=str(root / "fastq"),
+        output_folder=str(root / "targeted"),
+        threshold=0.5,
+    )
+    without_versions = functools.partial(tools.require_tools, check_versions=False)
+    with (
+        patch("metaquest.utils.tools.shutil.which", return_value="/usr/bin/tool"),
+        patch("metaquest.cli.commands.read_extraction.require_tools", without_versions),
+        patch("metaquest.data.read_extraction.SecureSubprocess.run_secure", side_effect=_fake_tools({})),
+        caplog.at_level(logging.DEBUG),
+    ):
+        assert ExtractTargetReadsCommand().execute(args) == 0
+
+    summaries = [r for r in caplog.records if r.getMessage().startswith("extract_target_reads: ")]
+    assert all(r.levelno == logging.INFO for r in summaries)
+    per_sample = [r for r in caplog.records if r.getMessage().startswith(("SRR1: ", "SRR2: ", "Extracted 10 mapped"))]
+    assert per_sample
+    if every:
+        assert [r.getMessage().split(" (")[0] for r in summaries] == [
+            "extract_target_reads: 1/2 done",
+            "extract_target_reads: finished 2/2",
+        ]
+        assert all(r.levelno == logging.DEBUG for r in per_sample)
+    else:
+        assert [r.getMessage().split(" (")[0] for r in summaries] == ["extract_target_reads: finished 2/2"]
+        assert all(r.levelno == logging.INFO for r in per_sample)
+    # The filter is removed after the run.
+    assert not logging.getLogger("metaquest.data.read_extraction").filters
+
+
+def test_sample_line_templates_exist_in_the_data_module():
+    """Each template the command moves to the item level is still logged by the data module."""
+    import metaquest.data.read_extraction as data_mod
+    from metaquest.cli.commands.read_extraction import SAMPLE_LINE_TEMPLATES
+
+    source = Path(data_mod.__file__).read_text()
+    for template in SAMPLE_LINE_TEMPLATES:
+        assert f'"{template}"' in source, template

@@ -231,7 +231,8 @@ def test_two_runs_download_one_accession_into_one_project_once(harness):
     harness.hold("SRR1")
     first = harness.download(project)
     harness.wait_started("SRR1", proc=first)
-    second = harness.download(project)
+    # --progress-every 0 logs the per-accession lines (here "Skipping ...") at INFO.
+    second = harness.download(project, "--progress-every", "0")
     wait_for(
         lambda: _waiting_logged(second, "SRR1"),
         what="the second run to wait for SRR1",
