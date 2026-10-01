@@ -115,21 +115,26 @@ registry file:
   runs finished: run ID, command, start and finish times in UTC, seconds, exit code, the argument list
   and parsed arguments with secret values replaced by `***`, MetaQuest version, host, process ID, a
   summary and the name of the detail file. Lines are appended under `runs.jsonl.lock` with flush and
-  fsync; a line cut short by an interrupted append is skipped on reading, with one warning.
+  fsync; a line cut short by an interrupted append, or one holding a byte that is not UTF-8 outside a
+  JSON string (the file is read with `errors="replace"`), is skipped on reading, with one warning.
 - `<run_id>.json`: the detail of one run, written atomically, only when the run noted one. After each
   append, the detail files of that command beyond the last `DETAILS_KEPT_PER_COMMAND` (10) are pruned:
-  `runs.jsonl` is first rewritten atomically with `"detail": null` on the pruned lines, then the files
+  `runs.jsonl` is first rewritten atomically with `"detail": null` on the pruned lines (each line's own
+  JSON is edited, so keys a later schema adds are kept), then the files
   are removed. A pruned run and a run that never noted a detail therefore look the same, and `runs`
   reports both as "not kept".
 
 A command opts in by overriding `BaseCommand.records_run(args)` (False by default) and notes its figures
-during `execute` with `run_log.note_run(args, summary=..., detail=...)`, or `note_rows` for rows noted one
-item at a time. `cli/main.py` records the run in a `finally` after the command returns, also after an
-interrupt (exit 130), when `records_run` is true, the `run_log` setting is on and a registry file
-exists (`run_log.project_for`); a failure to record, including a `records_run` override that raises, is
-logged as one warning and never changes the exit code. A detail holds rows only: mappings of plain
-values keyed by accession or by `accession/genome`, under one section per command, which is the form
-`processing/run_diff.py` compares in `runs --diff` and follows in `runs --accession`. Readers use
+during `execute` with `run_log.note_run(args, summary=..., detail=...)`, or `note_rows` for rows noted
+one item at a time. `cli/main.py` records the run in a `finally` after the command returns, also after
+an interrupt (exit 130) or a `SystemExit` (recorded with its own code), when `records_run` is true, the
+`run_log` setting is on and a registry file exists (`run_log.project_for`); a failure to record,
+including a `records_run` override that raises, is logged as one warning and never changes the exit
+code. A detail holds rows only: mappings of plain values keyed by accession or by `accession/genome`,
+under one section per kind of result (`download_sra` keeps `failed` and `downloaded`), which is the form
+`processing/run_diff.py` compares in `runs --diff` and follows in `runs --accession`. A section is a
+mapping whose mapping values are all rows; a flat mapping beside the sections is not a row, and a row
+key found in more than one section has its fields prefixed with the section's full path. Readers use
 `read_runs` (oldest first; `project_report`'s run section takes the last 10 from it), `resolve_run` (an
 ID, a unique prefix, `latest` or `previous`, as `runs` selects a run) and `read_detail`.
 
