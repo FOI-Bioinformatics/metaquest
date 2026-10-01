@@ -3,9 +3,9 @@ SRA-related CLI commands.
 """
 
 import argparse
-import csv
 import functools
 import time
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from metaquest.cli.base import BaseCommand
@@ -17,7 +17,6 @@ from metaquest.core.constants import FAILED_ACCESSIONS_FILE
 from metaquest.core.exceptions import DataAccessError, ExitCode, MetaQuestError
 from metaquest.core.settings import setting_for
 from metaquest.data import registry_blocks as rb
-from metaquest.data.file_io import open_atomic
 from metaquest.data.registry import Registry, load_registry, project_root, record_download, update_linked
 from metaquest.data.registry_batch import RegistryBatch, registry_batch
 from metaquest.data.registry_timing import set_download_timing
@@ -31,6 +30,8 @@ from metaquest.data.sra import (
     parse_verdict_message,
     transient_bytes,
 )
+from metaquest.data.sra import run_report as rr
+from metaquest.data.sra.run_report import RunOutcomes, Timings, attempt_timing, write_run_document
 from metaquest.store.layout import StorePaths, store_paths
 from metaquest.store.link import LINK_MODES, is_store_link
 from metaquest.store.resolve import resolve_store_root
@@ -48,10 +49,6 @@ STORE_SAVED_SUFFIX = "; stored"
 # run's candidate folders, are worth a warning: they are easy to forget about and can
 # quietly use up a lot of disk.
 TRANSIENT_BYTES_WARN_THRESHOLD = 1024**3
-
-# Accession -> (start as ISO 8601 UTC, seconds) of its last download attempt, filled by download_sra.
-Timings = Dict[str, Tuple[str, float]]
-
 
 # Seconds to wait before retrying a final registry flush that failed (a lock held by another
 # process, for example); module-level so tests can set it to zero.
@@ -144,9 +141,10 @@ class DownloadSraCommand(BaseCommand):
             "--report-file",
             default=None,
             help=(
-                "Write a CSV of accession,status,message after the run "
-                "(statuses: downloaded, failed, already_present, blacklisted, skipped); "
-                "accessions skipped by --max-downloads get a skipped row"
+                "Write a CSV of accession,status,message,seconds,reason,attempts after the run, an "
+                "interrupted one included (statuses: downloaded, failed, already_present, blacklisted, "
+                "skipped; reason for a failed row only); a summary of every run that is not a dry run "
+                "is also written to <fastq-folder>/download_run.json"
             ),
         )
         parser.add_argument(
@@ -309,36 +307,33 @@ class DownloadSraCommand(BaseCommand):
             return int(ExitCode.TRANSIENT)
         return int(ExitCode.FAILURE)
 
-    @staticmethod
-    def _attempt_timing(accession: str, success: bool, message: str, timings: Timings) -> Optional[Tuple[str, float]]:
-        """``(started, seconds)`` of this run's download of ``accession``, or None when it ran none.
+    def _write_run_summary(
+        self, args: argparse.Namespace, outcomes: RunOutcomes, started: datetime, code: int, aborted: Optional[str]
+    ) -> None:
+        """Write the ``--report-file`` CSV and ``<fastq>/download_run.json`` for a run that is not a dry run.
 
-        A dataset linked from the store was not downloaded, so it has no time even when the
-        worker that linked it was timed.
+        Called after every such run, an interrupted one or one whose final registry flush failed
+        included; statistics come from ``download_sra`` when it returned them, else from the
+        outcomes observed. A summary that cannot be written is logged and leaves ``code`` as it is.
         """
-        if success and message.startswith(STORE_LINKED_PREFIX):
-            return None
-        return timings.get(accession)
-
-    @classmethod
-    def _write_report(cls, report_file: str, stats: dict, timings: Optional[Timings] = None) -> None:
-        """Write one row per accession with its outcome and, for a download this run timed, its seconds."""
-        failed = set(stats.get("failed_accessions", []))
-        rows = []
-        for accession, message in stats.get("results", {}).items():
-            success = accession not in failed
-            timing = cls._attempt_timing(accession, success, message, timings or {})
-            seconds = str(timing[1]) if timing is not None else ""
-            rows.append((accession, "downloaded" if success else "failed", message, seconds))
-        rows.extend((acc, "already_present", "", "") for acc in stats.get("already_downloaded_accessions", []))
-        rows.extend((acc, "blacklisted", "", "") for acc in stats.get("blacklisted_accessions", []))
-        rows.extend((acc, "skipped", "--max-downloads", "") for acc in stats.get("skipped_accessions", []))
-        path = Path(report_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open_atomic(path, newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(["accession", "status", "message", "seconds"])
-            writer.writerows(sorted(rows))
+        stats = outcomes.stats if outcomes.stats is not None else rr.stats_from_outcomes(outcomes)
+        try:
+            if args.report_file:
+                rr.write_report_csv(args.report_file, rr.report_rows(stats, outcomes.timings, outcomes.attempts))
+                self.logger.info("Download report written to %s", args.report_file)
+            document = rr.run_document(
+                stats=stats,
+                outcomes=outcomes,
+                started=started,
+                finished=datetime.now(timezone.utc),
+                exit_code=code,
+                aborted=aborted or stats.get("aborted"),
+                settings=rr.run_settings(args),
+                paths=rr.run_paths(args, outcomes.stats),
+            )
+            write_run_document(args.fastq_folder, document)
+        except (OSError, MetaQuestError) as e:
+            self.logger.warning("Could not write the download run summary: %s", e)
 
     @staticmethod
     def _record_skip(reg: Registry, acc: str, message: str, fastq_dir: Path) -> None:
@@ -525,7 +520,7 @@ class DownloadSraCommand(BaseCommand):
             # (sra_verdicts.store_verdict); the sidecar is read here, outside the flush's lock.
             use_sidecar = complete is None and (from_store or (not success and message.startswith(SETTLED_PREFIXES)))
             sidecar = self._sidecar_completeness(store, accession) if use_sidecar else None
-            started, seconds = self._attempt_timing(accession, success, message, timings) or (None, None)
+            started, seconds = attempt_timing(accession, success, message, timings) or (None, None)
 
             def _mutation(reg: Registry) -> None:
                 if from_store:
@@ -628,6 +623,7 @@ class DownloadSraCommand(BaseCommand):
         max_workers: int,
         timings: Optional[Timings] = None,
         inputs: Optional[Tuple[set, dict, set, dict]] = None,
+        outcomes: Optional[RunOutcomes] = None,
     ) -> Optional[dict]:
         """Run ``download_sra`` with its outcomes queued in a registry batch; return its statistics.
 
@@ -638,6 +634,8 @@ class DownloadSraCommand(BaseCommand):
         ``DataAccessError`` is retried once; None means the retry failed too, after the outcomes
         still queued have been logged. ``timings`` receives each download attempt's start and
         seconds; ``inputs`` is ``registry_inputs``'s result, computed here when not given.
+        ``outcomes`` observes every result before it is recorded and receives the statistics,
+        so the run summary has them even when the flush fails or the run is interrupted.
         """
         timings = timings if timings is not None else {}
         verify_downloads = getattr(args, "verify_downloads", True)
@@ -653,6 +651,7 @@ class DownloadSraCommand(BaseCommand):
             with _termination_raises_interrupt(run_term.stop if run_term is not None else None) as term, batch:
                 if not args.dry_run:
                     on_result = self._result_recorder(args, fastq_dir, store, batch, timings, expected_spots)
+                    on_result = outcomes.wrap(on_result) if outcomes is not None else on_result
                 download_stats = download_sra(
                     fastq_folder=args.fastq_folder,
                     accessions_file=args.accessions_file,
@@ -679,6 +678,8 @@ class DownloadSraCommand(BaseCommand):
                     timings=timings,
                     **self._store_options(args, store, project_registry),
                 )
+                if outcomes is not None:
+                    outcomes.stats = download_stats
                 body_done = True
         except DataAccessError as e:
             if not body_done:
@@ -713,14 +714,18 @@ class DownloadSraCommand(BaseCommand):
         return True
 
     def execute(self, args: argparse.Namespace) -> int:
+        outcomes, started, aborted = RunOutcomes(), datetime.now(timezone.utc), None
         try:
-            return self._run(args)
+            code = self._run(args, outcomes)
         except KeyboardInterrupt:
             # download_sra has already cancelled pending downloads and stopped running tools.
             self.logger.error("Download interrupted by the user")
-            return 130
+            code, aborted = 130, "interrupted"
+        if not args.dry_run:
+            self._write_run_summary(args, outcomes, started, code, aborted)
+        return code
 
-    def _run(self, args: argparse.Namespace) -> int:
+    def _run(self, args: argparse.Namespace, outcomes: RunOutcomes) -> int:
         try:
             if not args.dry_run:
                 require_tools(["fasterq-dump"])
@@ -729,10 +734,9 @@ class DownloadSraCommand(BaseCommand):
             fastq_dir = Path(args.fastq_folder)
             project_registry = load_registry(args.registry)
             store = self._resolve_store(args, project_registry)
-            timings: Timings = {}
             inputs = registry_inputs(args, project_registry, store)
             download_stats = self._download_batched(
-                args, fastq_dir, store, project_registry, max_workers, timings, inputs
+                args, fastq_dir, store, project_registry, max_workers, outcomes.timings, inputs, outcomes
             )
             if download_stats is None:
                 return 1
@@ -741,10 +745,6 @@ class DownloadSraCommand(BaseCommand):
             else:
                 self._record_run_outcomes(args, download_stats, fastq_dir, store, inputs[1])
                 self._warn_if_transient_bytes_large(args, fastq_dir, store)
-
-                if args.report_file:
-                    self._write_report(args.report_file, download_stats, timings)
-                    self.logger.info("Download report written to %s", args.report_file)
 
             if not args.dry_run and download_stats.get("aborted"):
                 self.logger.error(

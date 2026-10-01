@@ -734,9 +734,15 @@ metaquest download_sra --accessions-file accessions.txt --report-file download_r
 ```
 
 `--report-file` writes one row per accession with the status `downloaded`, `failed`, `already_present`,
-`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). The last column, `seconds`, is how
+`blacklisted`, or `skipped` (accessions skipped by `--max-downloads`). The column `seconds` is how
 long that accession's download took in this run; it is empty for a dataset linked from the store and
-for accessions that were not downloaded. To see sizes and sequencing
+for accessions that were not downloaded. Two columns follow it: `reason`, for a failed accession only
+(`network`, `not-found`, `disk-full`, `insufficient-space`, `locked`, `interrupted` or `unknown`), and
+`attempts`, the number of attempts in this run that started a download (a retry counts again; an
+accession refused for lack of space, cancelled by a disk-full abort, already present or linked from the
+store counts 0). Every run that is not a dry run also writes `fastq/download_run.json`, with the totals,
+the failures by reason, each failed accession, the settings, the exit code and whether the run was
+aborted. Both files are written after an interrupt as well. To see sizes and sequencing
 technology before downloading, use `sra_info` (needs an email for NCBI); see
 `docs/SRA_ENHANCED_FEATURES.md`. `sra_info` filters per experiment package, not per run: it lists every
 run of each experiment package that a requested run, experiment, sample, study, BioProject or BioSample

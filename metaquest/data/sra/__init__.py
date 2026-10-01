@@ -12,6 +12,8 @@ concern:
 - ``store_handoff``: routing a download through the shared data store
 - ``retry``: running many downloads in parallel and retrying the failures
 - ``download``: ``download_sra``, the entry point for a whole accession list
+- ``run_report``: a run's failure reasons and attempt counts, its report CSV and ``download_run.json``
+  (imported from the submodule, not re-exported here)
 
 The public names other packages import are re-exported here. Private names are imported from
 their submodule, and each submodule refers to a sibling's names through the sibling module

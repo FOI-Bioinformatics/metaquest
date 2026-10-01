@@ -100,9 +100,10 @@ On the first `SIGTERM` (or `SIGINT`, `SIGHUP`) `download_sra`:
   into place only when complete, so it is not reported as present and the next run downloads it again;
 - exits with status 130.
 
-It does not write `--report-file` or `fastq/failed_accessions.txt` for an interrupted run; the registry
-and the log file hold what was done. A second signal is logged and does not interrupt the registry
-write; a third stops at once.
+It still writes `--report-file` and `fastq/download_run.json` for an interrupted run, listing the
+accessions that reported a result before the signal (`aborted` is `"interrupted"`, exit code 130). It
+does not write `fastq/failed_accessions.txt` for an interrupted run; the registry and the log file hold
+what was done. A second signal is logged and does not interrupt the registry write; a third stops at once.
 
 `extract_target_reads` records each sample in the registry as it finishes. On a signal it stops the
 running tool, keeps every sample recorded so far and exits with 130. The sample that was cut off is done

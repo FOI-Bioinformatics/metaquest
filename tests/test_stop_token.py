@@ -476,9 +476,9 @@ class TestCliWiring:
                 "aborted": None,
             }
 
-        def execute(parsed):
+        def execute(parsed, *rest):
             seen["term"] = parsed._termination
-            return original_run(parsed)
+            return original_run(parsed, *rest)
 
         original_run = command._run
         with patch("metaquest.cli.commands.sra.require_tools"):

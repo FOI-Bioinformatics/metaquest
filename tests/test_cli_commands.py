@@ -1428,11 +1428,13 @@ class TestDownloadSraCommand:
         )
         DownloadSraCommand().execute(args)
         assert report.read_text().splitlines() == [
-            "accession,status,message,seconds",
-            "SRR1,downloaded,Downloaded 2 files,12.5",
-            "SRR2,failed,Download failed: timeout,",
-            "SRR3,already_present,,",
-            "SRR4,blacklisted,,",
+            # The first four columns are unchanged; reason and attempts follow. This fake reports no
+            # outcome through on_result, so no attempt is counted.
+            "accession,status,message,seconds,reason,attempts",
+            "SRR1,downloaded,Downloaded 2 files,12.5,,0",
+            "SRR2,failed,Download failed: timeout,,network,0",
+            "SRR3,already_present,,,,0",
+            "SRR4,blacklisted,,,,0",
         ]
 
     @patch("metaquest.cli.commands.sra.require_tools")
@@ -1526,7 +1528,7 @@ class TestDownloadSraCommand:
         download = json.loads(registry_file.read_text())["datasets"]["SRR1"]["download"]
         assert download["source"] == "store"
         assert "started" not in download and "seconds" not in download
-        assert report.read_text().splitlines()[1] == f'SRR1,downloaded,"{message}",'
+        assert report.read_text().splitlines()[1] == f'SRR1,downloaded,"{message}",,,0'
 
     @patch("metaquest.cli.commands.sra.require_tools")
     @patch("metaquest.cli.commands.sra.download_sra")
